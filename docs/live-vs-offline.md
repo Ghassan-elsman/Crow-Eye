@@ -78,6 +78,28 @@ below `SAM\SAM`, and SECURITY denies its own root. The live parser exports them 
 for the duration of the parse. Offline reads them if they were collected. Never ask an analyst to
 `reg save` these by hand — the product does it.
 
+### Which hives get walked and carved
+
+Both sides now cover the same nine machine hives plus the per-user pair:
+
+```
+SYSTEM  SOFTWARE  SAM  SECURITY  DEFAULT  COMPONENTS  DRIVERS  BBI  ELAM
+        + NTUSER.DAT and UsrClass.dat, once per user profile
+```
+
+The last four were added after a case showed the walk covering about 136 MB of hive while leaving
+roughly 64 MB unopened. `COMPONENTS` is the servicing store — installed packages, update and
+component history — and at ~53 MB it is the second largest hive on a stock machine; `DRIVERS`
+carries third-party driver installs. They are walked to be **carved**, not read by key path: nothing
+in the engine looks up a value in `COMPONENTS`, but its freed cells hold records no API can reach.
+`BBI` is under a megabyte and still carved 8 keys and 91 values on the machine this was measured on,
+which is a fifth of everything recovered.
+
+Live acquires them by explicit path under `%SystemRoot%\System32\config`; offline picks them up from
+the collected `Registry_Hives` directory, and `crow_claw` collects them and their `.LOG1`/`.LOG2`.
+A hive that will not open is a recorded failure in `registry_hive_state` and the other eight still
+walk. Cost measured on this machine: about 2 seconds on a 32-second live parse.
+
 ---
 
 ## 2. Decisions one parser can make and the other must not
@@ -155,15 +177,27 @@ One row per hive the parse touched, whether anything was replayed or not:
 | `was_dirty` | 1 if Windows had it open mid-transaction |
 | `logs_found`, `log_format` | which logs were beside it, and `new` (HvLE) or `old` (DIRT) |
 | `replayed`, `entries_applied`, `pages_applied` | what recovery did |
+| `source_sha256` | what the file hashed to as found |
+| `acquisition_route` | how the hive was reached — see below |
+| `reorganized_at` | when Windows last compacted it, `''` if never, `NULL` if not walked |
 | `reason` | why it did or did not happen, in words |
 
 **Read this table before trusting a timeline built from an offline registry parse.** A row with
 `was_dirty = 1` and `replayed = 0` means every other table may be missing that hive's last
 transactions.
 
-A live parse creates the table and leaves it empty: there is no hive file to be dirty, so "no rows"
-is the true answer. The table is created either way so a case has the same shape however it was
-parsed - a missing table would look like an older build instead of an answer.
+**Both parses write rows, and each side fills a different half.** An offline parse fills the replay
+columns, because a collected hive can be mid-transaction. A live parse leaves those empty — the
+running registry *is* the state — and fills `acquisition_route` and `reorganized_at` instead. Those
+two are what decide whether the carved tables could have found anything: carving needs the hive as a
+FILE, so a hive that came back by `api:winreg` or `export:NtSaveKeyEx` cannot carve at all, and a
+hive Windows reorganized last week has already had its deleted records discarded. Without both
+columns an empty `registry_carved_keys` has three possible meanings and no way to choose between
+them.
+
+`reorganized_at` distinguishes all three states deliberately: `NULL` the hive was not walked so this
+is unknown, `''` it has never been reorganized so an empty carve is a real absence, a timestamp it
+was compacted then so the carved counts are a floor.
 
 It is shown in the GUI as the **Hive State** tab, and it is deliberately *not* in the Feather
 Builder's artifact list. Correlation rules are built on evidence with times and actors; this is

@@ -13,7 +13,7 @@ class ThreatIntelService:
     
     def __init__(self, context_manager=None):
         self.cm_service = context_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.credential_mgr = CredentialManager()
         self._api_key = None
 

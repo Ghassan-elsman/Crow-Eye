@@ -51,6 +51,14 @@ class UBADialog(QDialog):
         self.setWindowFlags(
             Qt.Window | Qt.WindowMinimizeButtonHint |
             Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         self.showMaximized()
         self.setStyleSheet("QDialog { background-color: #070911; }")
 

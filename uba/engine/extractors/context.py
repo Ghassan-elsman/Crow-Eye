@@ -36,10 +36,10 @@ class ExtractorContext:
         if conn is None or not self.pool.has_table("logs", "SecurityLogs"):
             return index
         try:
-            for rowid, ts, keywords in conn.execute(
-                    "SELECT rowid, EventTimestampUTC, Keywords "
+            for rowid, ts, keywords, desc in conn.execute(
+                    "SELECT rowid, EventTimestampUTC, Keywords, EventDescription "
                     "FROM SecurityLogs WHERE EventID = 4688"):
-                info = log_parser.parse_payload(4688, keywords)
+                info = log_parser.parse_payload(4688, keywords, desc)
                 proc = info.get("new_process_name", "")
                 epoch = epoch_seconds(normalize_ts(ts))
                 if proc and epoch is not None:

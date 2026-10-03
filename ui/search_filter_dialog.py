@@ -237,7 +237,7 @@ class SearchFilterDialog(QtWidgets.QDialog):
             ("Time Zone", "TimeZone_table"),
             ("System Services", "tableWidget_2"),
             ("Installed Software", "tableWidget"),
-            ("Browser History", "Browser_history_table"),
+            ("Browser History", "RegistryBrowserHistory_table"),
             ("USB Devices", "USBDevices_table"),
             ("USB Properties", "USBProperties_table"),
             ("USB Instances", "USBInstances_table"),

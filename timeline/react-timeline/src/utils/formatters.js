@@ -148,6 +148,10 @@ export const ARTIFACT_CONFIG = {
   // log cleared, account change, RDP - is on; everything else is behind the
   // pill below, because one ID alone is half the log.
   event_logs: { label: 'Event Logs',       color: '#0ea5e9', icon: 'clipboard' },
+  // Browser activity gets its own lane: it is the highest-volume artifact
+  // set in the product and would otherwise bury the eight types that share
+  // the unified artifacts lane.
+  browser:    { label: 'Browser',          color: '#38bdf8', icon: 'globe' },
   all_event_ids: { label: 'All event IDs', color: '#475569', icon: 'clipboard' },
 };
 
@@ -217,8 +221,14 @@ export function getName(p) {
     p.app_id || p.process_path || p.executable_path ||
     p.search_term || p.program_path || p.command || p.network_name || 
     p.application || p.filename || p.name || p.driver_name ||
-    p.program_name || p.displayName || p.file_path || p.target_path || 
-    p.path || p.friendly_name || p.value_name || p.app_path || 'Unknown';
+    p.program_name || p.displayName || p.file_path || p.target_path ||
+    p.path || p.friendly_name || p.value_name || p.app_path ||
+    // Browser rows carry none of the file-ish names above. Without these
+    // every browser marker reads "Unknown".
+    p.url || p.title || p.page_url || p.origin_url || p.resource_url ||
+    p.host_key || p.host || p.hostname || p.site || p.text ||
+    p.short_name || p.field_name || p.device_name || p.original_path ||
+    'Unknown';
 
   if (initialName === null || initialName === undefined) return 'Unknown';
   if (typeof initialName !== 'string') return String(initialName);
@@ -227,8 +237,14 @@ export function getName(p) {
   let cleaned = initialName;
   if (cleaned.includes('}')) cleaned = cleaned.split('}').pop();
   if (cleaned.includes('\\')) cleaned = cleaned.split('\\').pop();
-  if (cleaned.includes('/')) cleaned = cleaned.split('/').pop();
-  
+  // Keep the last NON-EMPTY segment: a URL ending in '/' - which most site
+  // roots do - otherwise cleans down to '' and the marker reads 'Unknown'
+  // although the row carries a perfectly good address.
+  if (cleaned.includes('/')) {
+    const segs = cleaned.split('/').filter(Boolean);
+    if (segs.length) cleaned = segs[segs.length - 1];
+  }
+
   return cleaned || 'Unknown';
 }
 
@@ -279,7 +295,19 @@ export const FORENSIC_TS_FIELDS = [
   'last_used_start', 'last_used_stop',
   'first_install_date_utc', 'driver_ver_date_utc', 'date_utc',
   'Last_Run_Time_0', 'Last_Run_Time_1', 'Last_Run_Time_2', 'Last_Run_Time_3',
-  'Last_Run_Time_4', 'Last_Run_Time_5', 'Last_Run_Time_6', 'Last_Run_Time_7'
+  'Last_Run_Time_4', 'Last_Run_Time_5', 'Last_Run_Time_6', 'Last_Run_Time_7',
+  // Browser. Visits, downloads, cookies, cache fetches, saved logins, form
+  // values, extensions, bookmarks, favicons and the tracker (DIPS) times, for
+  // both engines. `last_visit_time` is deliberately absent: it is the per-URL
+  // most-recent visit, and plotting it beside `visit_time` would draw every
+  // URL once per visit AND again at its last one.
+  'visit_time', 'start_time', 'end_time', 'last_access_time',
+  'request_time', 'response_time', 'date_modified', 'date_created',
+  'date_last_used', 'use_date', 'install_time', 'last_updated',
+  'date_added', 'date_last_opened', 'last_seen', 'mtime',
+  'first_site_storage_time', 'last_site_storage_time',
+  'first_user_interaction_time', 'last_user_interaction_time',
+  'last_accessed', 'time_created', 'time_last_used', 'last_used'
 ];
 
 /**
@@ -371,7 +399,15 @@ export function getPrimaryTimestamp(obj) {
     obj.EventTimestampUTC || obj.creation_time || obj.created_on || obj.modified_on || obj.accessed_on ||
     obj.task_registered || obj.last_run || obj.last_completed ||
     obj.changed_at || obj.last_written || obj.last_write ||
-    obj.shutdown_time;
+    obj.shutdown_time ||
+    // Browser. Without these every browser row has a null primary time and
+    // sorts to the front, which no test catches.
+    obj.visit_time || obj.start_time || obj.response_time || obj.request_time ||
+    obj.last_access_time || obj.last_accessed || obj.date_created ||
+    obj.date_last_used || obj.time_last_used || obj.time_created ||
+    obj.date_added || obj.date_last_opened || obj.install_time ||
+    obj.last_updated || obj.last_used || obj.use_date || obj.end_time ||
+    obj.last_user_interaction_time || obj.last_seen || obj.mtime;
 
   return cleanForensicDate(raw);
 }

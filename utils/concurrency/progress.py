@@ -14,6 +14,11 @@ class Progress_Reporter(QThread):
     
     # Generic update for simple percentage and status string
     simple_progress_updated = pyqtSignal(int, str)
+
+    # A real count of finished work: (completed, total, label). Distinct from
+    # simple_progress_updated, which carries a parser's hard-coded step CONSTANT
+    # and so runs backwards whenever tasks finish out of order.
+    task_progress_updated = pyqtSignal(int, int, str)
     
     # Log message update
     log_updated = pyqtSignal(str)
@@ -21,6 +26,10 @@ class Progress_Reporter(QThread):
     # Task completion signals
     task_completed = pyqtSignal(str, object)  # task_id, result
     task_error = pyqtSignal(str, str, str)    # task_id, error_msg, traceback
+
+    # One artifact's parse outcome (utils.parse_status.ArtifactOutcome as a
+    # dict), produced in the collector process and recorded by the GUI.
+    parse_status_reported = pyqtSignal(object)
     
     def __init__(self, message_queue: multiprocessing.Queue):
         super().__init__()
@@ -48,10 +57,17 @@ class Progress_Reporter(QThread):
                             self.progress_updated.emit(update)
                     elif msg_type == "simple_progress":
                         self.simple_progress_updated.emit(msg.get("step_index", 0), msg.get("message", ""))
+                    elif msg_type == "task_progress":
+                        self.task_progress_updated.emit(
+                            int(msg.get("completed", 0)),
+                            int(msg.get("total", 0)),
+                            msg.get("message", ""))
                     elif msg_type == "log_message":
                         self.log_updated.emit(msg.get("message", ""))
                     elif msg_type == "task_complete":
                         self.task_completed.emit(msg.get("task_id", ""), msg.get("result"))
+                    elif msg_type == "parse_status":
+                        self.parse_status_reported.emit(msg.get("outcome") or {})
                     elif msg_type == "task_error":
                         self.task_error.emit(msg.get("task_id", ""), msg.get("error", ""), msg.get("traceback", ""))
                 elif isinstance(msg, str) and msg == "DONE":

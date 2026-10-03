@@ -77,7 +77,8 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
 # timestamp identically.
 from Artifacts_Collectors import registry_transaction_log
 from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
-                                            decode_binary_sid)
+                                            decode_binary_sid, SRUM_EXTRA_COLUMNS,
+                                            dedupe_exact)
 
 # Try to import Registry library for registry hive parsing
 try:
@@ -92,11 +93,12 @@ except ImportError:
 # ============================================================================
 
 # Configure logging for forensic analysis
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [SRUM-Offline] %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Deliberately no logging.basicConfig() here. This module is imported into the
+# PyQt app, and basicConfig at import time seeds the ROOT logger before any
+# case exists - then silently does nothing once a case has added its own
+# handlers, so the file it thinks it is writing never appears. The root
+# configuration belongs to utils.logging_setup; this module just asks for a
+# logger and lets its records propagate.
 logger = logging.getLogger(__name__)
 
 # ============================================================================
@@ -243,6 +245,9 @@ SCHEMA_APP_TIMELINE = """
 """
 
 # Metadata Table Schema
+# Kept column-for-column identical to the live parser's srum_metadata, including
+# the recovery/checkpoint columns, so a case opened from an image and one parsed
+# live present the same shape.
 SCHEMA_METADATA = """
     CREATE TABLE IF NOT EXISTS srum_metadata (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -251,9 +256,24 @@ SCHEMA_METADATA = """
         total_records_parsed INTEGER,
         parsing_duration_seconds REAL,
         windows_version TEXT,
+        jfm_collected INTEGER,
+        jfm_path TEXT,
+        jfm_size INTEGER,
+        jfm_modified TEXT,
+        log_files_collected INTEGER,
+        db_state TEXT,
+        recovery_notes TEXT,
         notes TEXT
     )
 """
+
+# Columns added after srum_metadata first shipped (see the live parser). Added in
+# place on a pre-recovery database rather than recreating the table.
+ADDED_METADATA_COLUMNS = (
+    ('jfm_collected', 'INTEGER'), ('jfm_path', 'TEXT'), ('jfm_size', 'INTEGER'),
+    ('jfm_modified', 'TEXT'), ('log_files_collected', 'INTEGER'),
+    ('db_state', 'TEXT'), ('recovery_notes', 'TEXT'),
+)
 
 # Index Creation Statements
 INDEX_STATEMENTS = [
@@ -390,7 +410,36 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         cursor.execute(SCHEMA_ENERGY_USAGE)
         cursor.execute(SCHEMA_APP_TIMELINE)
         cursor.execute(SCHEMA_METADATA)
-        
+
+        # Bring a pre-recovery srum_metadata up to the current column set.
+        try:
+            cursor.execute("PRAGMA table_info(srum_metadata)")
+            present = {row[1] for row in cursor.fetchall()}
+            for column, coltype in ADDED_METADATA_COLUMNS:
+                if column not in present:
+                    cursor.execute("ALTER TABLE srum_metadata ADD COLUMN %s %s"
+                                   % (column, coltype))
+        except sqlite3.Error as e:
+            logger.warning(f"Could not migrate srum_metadata columns: {e}")
+
+        # Add every native provider column beyond the structured set (shared with
+        # the live parser via SRUM_EXTRA_COLUMNS), so live and offline output the
+        # identical column set and nothing SRUM records is dropped.
+        _extra_tables = {
+            'NETWORK_DATA_USAGE': 'srum_network_data_usage',
+            'ENERGY_USAGE': 'srum_energy_usage',
+            'APPLICATION_TIMELINE': 'srum_app_timeline',
+        }
+        for _ttype, _table in _extra_tables.items():
+            try:
+                cursor.execute("PRAGMA table_info(%s)" % _table)
+                _present = {row[1] for row in cursor.fetchall()}
+                for _native, _sql in SRUM_EXTRA_COLUMNS.get(_ttype, ()):
+                    if _sql not in _present:
+                        cursor.execute("ALTER TABLE %s ADD COLUMN %s INTEGER" % (_table, _sql))
+            except sqlite3.Error as e:
+                logger.warning(f"Could not add native columns to {_table}: {e}")
+
         # Create indexes for performance
         for index_sql in INDEX_STATEMENTS:
             cursor.execute(index_sql)
@@ -693,7 +742,45 @@ class ESEDatabaseParser:
         self.srudb_path = srudb_path
         self.ese_db = None
         self.temp_recovery_dir = None  # For dirty state recovery
-    
+        # Checkpoint/log facts and open state, written to srum_metadata. Populated
+        # from whatever the collector placed next to the database on the image.
+        self.recovery_info = {
+            'jfm_collected': 0, 'jfm_path': '', 'jfm_size': 0, 'jfm_modified': '',
+            'log_files_collected': 0, 'db_state': 'clean', 'recovery_notes': '',
+        }
+        self._scan_recovery_siblings()
+
+    def _scan_recovery_siblings(self):
+        """Record the checkpoint/flush-map/log set collected beside SRUDB.dat.
+
+        The image collector copies the whole sru directory, so the logs that soft
+        recovery needs sit next to the database. This only records what is
+        present (for the metadata row and to decide whether recovery is even
+        possible); nothing is copied until a dirty open forces it.
+        """
+        try:
+            src_dir = os.path.dirname(os.path.abspath(self.srudb_path))
+            if not os.path.isdir(src_dir):
+                return
+            logs = 0
+            for name in os.listdir(src_dir):
+                low = name.lower()
+                if low == 'srudb.jfm':
+                    p = os.path.join(src_dir, name)
+                    self.recovery_info['jfm_collected'] = 1
+                    self.recovery_info['jfm_path'] = p
+                    try:
+                        self.recovery_info['jfm_size'] = os.path.getsize(p)
+                        self.recovery_info['jfm_modified'] = format_forensic_timestamp(
+                            datetime.datetime.utcfromtimestamp(os.path.getmtime(p)))
+                    except Exception:
+                        pass
+                elif low.endswith('.log') or low.endswith('.jrs'):
+                    logs += 1
+            self.recovery_info['log_files_collected'] = logs
+        except Exception as e:
+            logger.debug(f"Recovery-sibling scan skipped: {e}")
+
     def open_database(self):
         """
         Open ESE database file and validate structure.
@@ -764,8 +851,51 @@ class ESEDatabaseParser:
                     
                     logger.info(f"Creating temporary copy for repair: {temp_srudb}")
                     shutil.copy2(self.srudb_path, temp_srudb)
-                    
-                    # Run esentutl repair (not recovery, since we don't have log files)
+
+                    # Prefer SOFT RECOVERY over /p repair when the logs were
+                    # collected: replaying the transaction logs restores committed
+                    # rows, where /p can discard whole damaged pages. Copy the
+                    # checkpoint/flush-map/log set next to the copy and replay them
+                    # with the 'SRU' log base name.
+                    src_dir = os.path.dirname(os.path.abspath(self.srudb_path))
+                    logs_copied = 0
+                    try:
+                        for name in os.listdir(src_dir):
+                            low = name.lower()
+                            if low == 'srudb.dat':
+                                continue
+                            if low.endswith(('.jfm', '.chk', '.log', '.jrs')):
+                                shutil.copy2(os.path.join(src_dir, name),
+                                             os.path.join(temp_dir, name))
+                                if low.endswith(('.log', '.jrs')):
+                                    logs_copied += 1
+                    except Exception as copy_err:
+                        logger.debug(f"Could not stage recovery logs: {copy_err}")
+
+                    if logs_copied:
+                        logger.info("Attempting soft recovery (esentutl /r SRU) with %d log file(s)...", logs_copied)
+                        try:
+                            rec = subprocess.run('esentutl /r SRU /l"{d}" /s"{d}" /d"{d}" /i'.format(d=temp_dir),
+                                                 shell=True, capture_output=True, text=True, timeout=180)
+                            if rec.returncode == 0:
+                                if ESEDB_LIBRARY == "dissect":
+                                    self.ese_db = EseDB(open(temp_srudb, 'rb'))
+                                elif ESEDB_LIBRARY == "pyesedb":
+                                    self.ese_db = pyesedb.open(temp_srudb)
+                                else:
+                                    self.ese_db = libesedb.file(); self.ese_db.open(temp_srudb)
+                                logger.info("Soft recovery succeeded; opened recovered database")
+                                self.temp_recovery_dir = temp_dir
+                                self.recovery_info['db_state'] = 'recovered'
+                                self.recovery_info['recovery_notes'] = (
+                                    'Database was dirty; soft recovery replayed the collected '
+                                    'transaction logs before reading.')
+                                return
+                            logger.warning("Soft recovery failed (rc=%s); falling back to /p repair", rec.returncode)
+                        except Exception as rec_err:
+                            logger.warning(f"Soft recovery error, falling back to /p repair: {rec_err}")
+
+                    # Run esentutl /p repair as a last resort (may discard pages).
                     logger.info("Running esentutl /p (repair mode) on database...")
                     result = subprocess.run(
                         ["esentutl", "/p", temp_srudb, "/o"],
@@ -774,10 +904,10 @@ class ESEDatabaseParser:
                         text=True,
                         timeout=120
                     )
-                    
+
                     if result.returncode == 0 or "Operation completed successfully" in result.stdout:
                         logger.info("Database repair completed successfully")
-                        
+
                         # Try to open the repaired database
                         if ESEDB_LIBRARY == "dissect":
                             self.ese_db = EseDB(open(temp_srudb, 'rb'))
@@ -786,9 +916,13 @@ class ESEDatabaseParser:
                         else:
                             self.ese_db = libesedb.file()
                             self.ese_db.open(temp_srudb)
-                        
+
                         logger.info("Successfully opened repaired database")
                         self.temp_recovery_dir = temp_dir
+                        self.recovery_info['db_state'] = 'repaired'
+                        self.recovery_info['recovery_notes'] = (
+                            'Database was dirty and soft recovery was unavailable or failed; '
+                            'repaired with esentutl /p, which can discard damaged pages.')
                         return
                     else:
                         logger.warning(f"esentutl returned code {result.returncode}")
@@ -1403,6 +1537,9 @@ class ESEDatabaseParser:
                             'bytes_sent': record.get('BytesSent'),
                             'bytes_received': record.get('BytesRecvd')
                         }
+                        for _native, _sql in SRUM_EXTRA_COLUMNS.get('NETWORK_DATA_USAGE', ()):
+                            _v = record.get(_native)
+                            parsed_record[_sql] = _v if _v is not None else 0
 
                         records.append(parsed_record)
                         record_count += 1
@@ -1534,6 +1671,9 @@ class ESEDatabaseParser:
                             'charge_level': record.get('ChargeLevel') if record.get('ChargeLevel') is not None else 0,
                             'cycle_count': record.get('CycleCount') if record.get('CycleCount') is not None else 0
                         }
+                        for _native, _sql in SRUM_EXTRA_COLUMNS.get('ENERGY_USAGE', ()):
+                            _v = record.get(_native)
+                            parsed_record[_sql] = _v if _v is not None else 0
 
                         records.append(parsed_record)
                         record_count += 1
@@ -1628,7 +1768,8 @@ class ESEDatabaseParser:
         ('disk_raw', 'DiskRaw'),
         ('network_bytes_raw', 'NetworkBytesRaw'),
         ('network_tail_raw', 'NetworkTailRaw'),
-    )
+    ) + tuple((sql, native) for native, sql
+              in SRUM_EXTRA_COLUMNS.get('APPLICATION_TIMELINE', ()))
 
     def parse_app_timeline(self, resolver: 'IDResolver') -> List[Dict]:
         """
@@ -1855,7 +1996,32 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             # Insert Application Resource Usage records into database
             if app_usage_records:
                 logger.info(f"Inserting {len(app_usage_records)} Application Resource Usage records into database...")
-                for record in app_usage_records:
+                rows = [(
+                    record['timestamp'],
+                    record['app_name'],
+                    record['app_path'],
+                    record['user_sid'],
+                    record['user_name'],
+                    record['foreground_cycle_time'],
+                    record['background_cycle_time'],
+                    record['face_time'],
+                    record['foreground_context_switches'],
+                    record['background_context_switches'],
+                    record['foreground_bytes_read'],
+                    record['foreground_bytes_written'],
+                    record['foreground_num_read_operations'],
+                    record['foreground_num_write_operations'],
+                    record['foreground_number_of_flushes'],
+                    record['background_bytes_read'],
+                    record['background_bytes_written'],
+                    record['background_num_read_operations'],
+                    record['background_num_write_operations'],
+                    record['background_number_of_flushes'],
+                ) for record in app_usage_records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] application_usage: removed %d exact-duplicate rows", removed)
+                for row in rows:
                     try:
                         cursor.execute("""
                             INSERT INTO srum_application_usage (
@@ -1868,32 +2034,11 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                                 background_bytes_written, background_num_read_operations,
                                 background_num_write_operations, background_number_of_flushes
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            record['timestamp'],
-                            record['app_name'],
-                            record['app_path'],
-                            record['user_sid'],
-                            record['user_name'],
-                            record['foreground_cycle_time'],
-                            record['background_cycle_time'],
-                            record['face_time'],
-                            record['foreground_context_switches'],
-                            record['background_context_switches'],
-                            record['foreground_bytes_read'],
-                            record['foreground_bytes_written'],
-                            record['foreground_num_read_operations'],
-                            record['foreground_num_write_operations'],
-                            record['foreground_number_of_flushes'],
-                            record['background_bytes_read'],
-                            record['background_bytes_written'],
-                            record['background_num_read_operations'],
-                            record['background_num_write_operations'],
-                            record['background_number_of_flushes']
-                        ))
+                        """, row)
                     except Exception as e:
                         logger.error(f"Error inserting Application Resource Usage record: {e}")
                         stats['errors'] += 1
-                
+
                 conn.commit()
                 logger.info("Application Resource Usage records inserted successfully")
             
@@ -1906,7 +2051,22 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             # Insert Network Connectivity records into database
             if network_conn_records:
                 logger.info(f"Inserting {len(network_conn_records)} Network Connectivity records into database...")
-                for record in network_conn_records:
+                rows = [(
+                    record['timestamp'],
+                    record['app_name'],
+                    record['app_path'],
+                    record['user_sid'],
+                    record['user_name'],
+                    record['interface_luid'],
+                    record['l2_profile_id'],
+                    record['l2_profile_flags'],
+                    record['connected_time'],
+                    record['connect_start_time'],
+                ) for record in network_conn_records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] network_connectivity: removed %d exact-duplicate rows", removed)
+                for row in rows:
                     try:
                         cursor.execute("""
                             INSERT INTO srum_network_connectivity (
@@ -1914,22 +2074,11 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                                 interface_luid, l2_profile_id, l2_profile_flags,
                                 connected_time, connect_start_time
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            record['timestamp'],
-                            record['app_name'],
-                            record['app_path'],
-                            record['user_sid'],
-                            record['user_name'],
-                            record['interface_luid'],
-                            record['l2_profile_id'],
-                            record['l2_profile_flags'],
-                            record['connected_time'],
-                            record['connect_start_time']
-                        ))
+                        """, row)
                     except Exception as e:
                         logger.error(f"Error inserting Network Connectivity record: {e}")
                         stats['errors'] += 1
-                
+
                 conn.commit()
                 logger.info("Network Connectivity records inserted successfully")
             
@@ -1942,28 +2091,22 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             # Insert Network Data Usage records into database
             if network_data_records:
                 logger.info(f"Inserting {len(network_data_records)} Network Data Usage records into database...")
-                for record in network_data_records:
+                nd_columns = ['timestamp', 'app_name', 'app_path', 'user_sid', 'user_name',
+                              'interface_luid', 'l2_profile_id', 'bytes_sent', 'bytes_received'] + \
+                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('NETWORK_DATA_USAGE', ())]
+                nd_stmt = "INSERT INTO srum_network_data_usage (%s) VALUES (%s)" % (
+                    ", ".join(nd_columns), ", ".join("?" * len(nd_columns)))
+                rows = [tuple(record.get(c, 0) for c in nd_columns) for record in network_data_records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
+                for row in rows:
                     try:
-                        cursor.execute("""
-                            INSERT INTO srum_network_data_usage (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                interface_luid, l2_profile_id, bytes_sent, bytes_received
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            record['timestamp'],
-                            record['app_name'],
-                            record['app_path'],
-                            record['user_sid'],
-                            record['user_name'],
-                            record['interface_luid'],
-                            record['l2_profile_id'],
-                            record['bytes_sent'],
-                            record['bytes_received']
-                        ))
+                        cursor.execute(nd_stmt, row)
                     except Exception as e:
                         logger.error(f"Error inserting Network Data Usage record: {e}")
                         stats['errors'] += 1
-                
+
                 conn.commit()
                 logger.info("Network Data Usage records inserted successfully")
             
@@ -1976,28 +2119,22 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             # Insert Energy Usage records into database
             if energy_records:
                 logger.info(f"Inserting {len(energy_records)} Energy Usage records into database...")
-                for record in energy_records:
+                en_columns = ['timestamp', 'app_name', 'app_path', 'user_sid', 'user_name',
+                              'event_timestamp', 'state_transition', 'charge_level', 'cycle_count'] + \
+                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('ENERGY_USAGE', ())]
+                en_stmt = "INSERT INTO srum_energy_usage (%s) VALUES (%s)" % (
+                    ", ".join(en_columns), ", ".join("?" * len(en_columns)))
+                rows = [tuple(record.get(c, 0) for c in en_columns) for record in energy_records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
+                for row in rows:
                     try:
-                        cursor.execute("""
-                            INSERT INTO srum_energy_usage (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                event_timestamp, state_transition, charge_level, cycle_count
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
-                            record['timestamp'],
-                            record['app_name'],
-                            record['app_path'],
-                            record['user_sid'],
-                            record['user_name'],
-                            record['event_timestamp'],
-                            record['state_transition'],
-                            record['charge_level'],
-                            record['cycle_count']
-                        ))
+                        cursor.execute(en_stmt, row)
                     except Exception as e:
                         logger.error(f"Error inserting Energy Usage record: {e}")
                         stats['errors'] += 1
-                
+
                 conn.commit()
                 logger.info("Energy Usage records inserted successfully")
 
@@ -2013,9 +2150,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                           [column for column, _source in parser.APP_TIMELINE_FIELDS]
                 statement = "INSERT INTO srum_app_timeline (%s) VALUES (%s)" % (
                     ", ".join(columns), ", ".join("?" * len(columns)))
-                for record in timeline_records:
+                rows = [tuple(record[c] for c in columns) for record in timeline_records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
+                for row in rows:
                     try:
-                        cursor.execute(statement, tuple(record[c] for c in columns))
+                        cursor.execute(statement, row)
                     except Exception as e:
                         logger.error(f"Error inserting Application Timeline record: {e}")
                         stats['errors'] += 1
@@ -2030,11 +2171,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             duration = (end_time - start_time).total_seconds()
             
             # Insert metadata
+            ri = parser.recovery_info
             cursor.execute("""
                 INSERT INTO srum_metadata
                 (parsed_at, srudb_path, total_records_parsed, parsing_duration_seconds,
-                 windows_version, notes)
-                VALUES (?, ?, ?, ?, ?, ?)
+                 windows_version, jfm_collected, jfm_path, jfm_size, jfm_modified,
+                 log_files_collected, db_state, recovery_notes, notes)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 get_current_forensic_timestamp(),
                 srudb_path,
@@ -2044,6 +2187,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 # column NULL; this is an image, so the analyst's own Windows
                 # version would be the wrong answer, not a better one.
                 'Unknown',
+                ri.get('jfm_collected', 0),
+                ri.get('jfm_path', ''),
+                ri.get('jfm_size', 0),
+                ri.get('jfm_modified', ''),
+                ri.get('log_files_collected', 0),
+                ri.get('db_state', 'clean'),
+                ri.get('recovery_notes', ''),
                 f"Parsed with {ESEDB_LIBRARY}"
             ))
             

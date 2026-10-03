@@ -79,6 +79,43 @@ def _json_list(value) -> list:
     return [parsed] if parsed else []
 
 
+def _matches_by_feather(feather_statistics, limit=10):
+    """What a chart titled "Matches by Feather" should plot.
+
+    A chart titled "Matches" plots matches. It used to read `identities_found`
+    first and fall back to `matches_created`, because the time-window engine
+    left identities at 0 and the feathers would otherwise have vanished - and
+    once the engine started filling both in, the chart quietly began drawing
+    identity counts under a "Matches" axis.
+
+    **The fallback is decided once per run, not per feather**, which is what
+    the first attempt at this got wrong. Deciding it per feather means a
+    feather with no matches but plenty of identities substitutes one for the
+    other and keeps the bug alive for exactly the rows where it matters:
+    measured on one real run, 10 of 14 feathers had zero matches, and `mft_usn`
+    drew 132,446 identities on a chart whose largest real bar was 1,029.
+
+    So: if ANY feather in this run reports matches, the database records match
+    counts, and a feather reporting none contributed none - it is left off the
+    chart rather than filled in with something else. Only a database that
+    records no matches at all - written before the engine kept per-feather
+    counts - falls back to identities, wholesale.
+    """
+    stats = {fid: s for fid, s in (feather_statistics or {}).items()
+             if not str(fid).startswith('_') and isinstance(s, dict)}
+    records_matches = any((s.get('matches_created') or 0) > 0 for s in stats.values())
+
+    data = {}
+    for fid, s in stats.items():
+        if records_matches:
+            count = s.get('matches_created') or 0
+        else:
+            count = (s.get('identities_found') or 0) or (s.get('identities_final') or 0)
+        if count > 0:
+            data[fid] = count
+    return dict(sorted(data.items(), key=lambda kv: kv[1], reverse=True)[:limit])
+
+
 class PyQt5BarChart(QWidget):
     """
     A simple bar chart widget using pure PyQt5.
@@ -3364,30 +3401,10 @@ class DynamicResultsTabWidget(QWidget):
                 charts_row.setSpacing(10)
                 
                 # Chart 1: Matches by Feather (Bar Chart)
-                matches_data = {}
-                for feather_id, stats in feather_statistics.items():
-                    if feather_id.startswith('_'):
-                        continue
-                    # A chart titled "Matches by Feather" plots matches.
-                    #
-                    # It used to read `identities_found` first and fall back to
-                    # `matches_created`, because the time-window engine left
-                    # identities_found at 0 and the feathers would otherwise
-                    # have vanished from the chart. The engine now fills both
-                    # in, so that fallback stopped firing and the chart quietly
-                    # started plotting identity counts under a "Matches" axis -
-                    # srum_app drew 206 (its identities) where it contributed
-                    # to 2,094 matches.
-                    matches = stats.get('matches_created', 0)
-                    if not matches:
-                        # Older databases, written before the engine recorded
-                        # per-feather match counts.
-                        matches = stats.get('identities_found', 0)
-                    if matches > 0:
-                        matches_data[feather_id] = matches
-                
+                matches_data = _matches_by_feather(feather_statistics)
+
                 if matches_data:
-                    sorted_data = dict(sorted(matches_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                    sorted_data = matches_data        # already sorted and capped
                     chart1 = PyQt5BarChart()
                     chart1.set_data(sorted_data, "Matches by Feather", "Matches")
                     chart1.setMinimumHeight(180)
@@ -4135,22 +4152,15 @@ class DynamicResultsTabWidget(QWidget):
                     charts_row = QHBoxLayout()
                     charts_row.setSpacing(10)
                     
-                    # Chart 1: Identities/Matches Found per Feather (Bar Chart)
-                    # Use identities_found for identity engine, matches_created for time-based engine
-                    identities_data = {}
-                    for feather_id, stats in feather_statistics.items():
-                        if not feather_id.startswith('_'):
-                            # Try identities_found first, then identities_final, then matches_created
-                            count = stats.get('identities_found', 0)
-                            if count == 0:
-                                count = stats.get('identities_final', 0)
-                            if count == 0:
-                                count = stats.get('matches_created', 0)
-                            if count > 0:
-                                identities_data[feather_id] = count
-                    
-                    if identities_data:
-                        sorted_data = dict(sorted(identities_data.items(), key=lambda x: x[1], reverse=True)[:10])
+                    # Chart 1: Matches by Feather (Bar Chart)
+                    # The second of two copies of this chart. Both go
+                    # through the same helper so they cannot drift
+                    # apart again - this one carried the bug for a
+                    # release after the other was fixed.
+                    matches_data = _matches_by_feather(feather_statistics)
+
+                    if matches_data:
+                        sorted_data = matches_data    # already sorted and capped
                         chart1 = PyQt5BarChart()
                         chart1.set_data(sorted_data, "Matches by Feather", "Matches")
                         chart1.setMinimumHeight(180)

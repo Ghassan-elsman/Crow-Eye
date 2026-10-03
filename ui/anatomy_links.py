@@ -6,10 +6,10 @@ explanation, and every section of every anatomy page is addressable by a
 fragment - so a table can point at the section that discusses its own records
 rather than at the top of a page and a scroll.
 
-Only tables a page genuinely documents appear here. SRUM, browser history,
-firewall rules and the rest have no anatomy page yet, and a button that landed
-on a directory instead of an explanation would teach an examiner to stop
-trusting the button.
+Only tables a page genuinely documents appear here. Browser history, firewall
+rules and the rest have no anatomy page yet, and a button that landed on a
+directory instead of an explanation would teach an examiner to stop trusting the
+button.
 
 The anchors are a contract with the site. `test_anatomy_links_resolve.py`
 checks every one of them against the pages themselves whenever the site tree
@@ -27,7 +27,7 @@ BASE_URL = "https://crow-eye.com/Eye-Describe/"
 ANATOMY_LINKS = {
     # --- artifacts with a page of their own --------------------------------
     "Shellbags_table": (
-        "shellbags_anatomy", "what-they-are",
+        "shell-items-shellbags-anatomy", "what-they-are",
         "What a shell item is, byte by byte - and why a bag records a view "
         "rather than a person"),
     "ShimCache_main_table": (
@@ -52,6 +52,28 @@ ANATOMY_LINKS = {
     "USN_table": (
         "usn_anatomy", "dissection",
         "One USN record field by field, and what each reason code means"),
+
+    # --- SRUM: one tab per provider table, each its own section --------------
+    "SRUM_application_usage_table": (
+        "srum_anatomy", "tbl-application-usage",
+        "The Application Resource Usage columns field by field - the CPU and "
+        "disk cost of running, per app, per hour"),
+    "SRUM_network_data_table": (
+        "srum_anatomy", "tbl-network-data",
+        "Bytes sent and received per app, per interface - the cleanest "
+        "data-exfiltration signal SRUM carries"),
+    "SRUM_network_connectivity_table": (
+        "srum_anatomy", "tbl-network-connectivity",
+        "When an interface was connected and for how long - placing a machine "
+        "on a network at a time"),
+    "SRUM_energy_usage_table": (
+        "srum_anatomy", "tbl-energy",
+        "Battery charge and power-state columns, and why they are mostly "
+        "populated on laptops"),
+    "SRUM_app_timeline_table": (
+        "srum_anatomy", "tbl-app-timeline",
+        "Focus, keyboard and mouse seconds - the provider that shows a human "
+        "was present, and the only one carrying hosted services"),
 
     # --- the MFT, one tab per attribute ------------------------------------
     "MFT_table": (
@@ -209,6 +231,62 @@ ANATOMY_LINKS = {
     "hivelist_table": (
         "registry-internals", "hives",
         "Which hive files exist, and which of them a reader must open"),
+
+    # Browser forensics. The tab is built from BROWSER_TABS, and each table is
+    # also set as Browser_<name>_table so these resolve.
+    "Browser_history_table": (
+        "browser-forensics", "navigation",
+        "How a visit is recorded, and what the transition type separates - a "
+        "typed URL from a redirect"),
+    "Browser_gecko_history_table": (
+        "browser-forensics", "navigation",
+        "Firefox visits: moz_places and moz_historyvisits, and how PRTime "
+        "differs from Chromium's epoch"),
+    "Browser_shortcuts_table": (
+        "browser-forensics", "navigation",
+        "What the user actually typed into the omnibox - intent, even for a "
+        "site that was never opened"),
+    "Browser_downloads_table": (
+        "browser-forensics", "navigation",
+        "What landed on disk, from where, and whether the browser flagged it"),
+    "Browser_cookies_table": (
+        "browser-forensics", "identity",
+        "Cookie lifetimes, and why the value is ciphertext rather than text"),
+    "Browser_credentials_table": (
+        "browser-forensics", "crypto",
+        "The key chain behind a saved password, and what has to be preserved "
+        "to decrypt one later"),
+    "Browser_cache_table": (
+        "browser-forensics", "anatomy",
+        "The blockfile cache byte by byte - the index, the cache address and "
+        "the EntryStore record a status code comes from"),
+    "Browser_service_worker_table": (
+        "browser-forensics", "anatomy",
+        "CacheStorage metadata: a protobuf stored after the body, not an "
+        "HTTP response head"),
+    "Browser_sessions_table": (
+        "browser-forensics", "sessions",
+        "SNSS session records, and the two commands that say which window and "
+        "tab a navigation belonged to"),
+    "Browser_local_storage_table": (
+        "browser-forensics", "webapp",
+        "LevelDB, including the write-ahead log that still holds deleted keys"),
+    "Browser_indexeddb_table": (
+        "browser-forensics", "webapp",
+        "The IndexedDB key prefix, and how object stores are named"),
+    "Browser_search_engines_table": (
+        "browser-forensics", "providers",
+        "Which providers a profile knows, and which one was the default"),
+    "Browser_dips_table": (
+        "browser-forensics", "tracking",
+        "Bounce-tracking interaction and storage times"),
+    "Browser_network_state_table": (
+        "browser-forensics", "tracking",
+        "Alt-Svc, HSTS and Reporting/NEL - sites contacted with no history row"),
+    "Browser_metadata_table": (
+        "browser-forensics", "crypto",
+        "The DPAPI-wrapped master key, the scheme label, and the browser build "
+        "that last wrote the profile"),
 }
 
 

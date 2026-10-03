@@ -156,7 +156,7 @@ class ContextManager:
         self.rag_service = rag_service
         self.report_engine = report_engine
         self.case_directory = case_directory
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Thread lock for process_query to prevent race conditions during history updates
         self._lock = threading.RLock()

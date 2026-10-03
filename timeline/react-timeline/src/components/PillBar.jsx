@@ -15,7 +15,7 @@ function PillBar({ state, data }) {
       sessions: 0, srum_app: 0, srum_net: 0, mft_usn: 0,
       prefetch: 0, lnk: 0, bam: 0, registry: 0, amcache: 0,
       shimcache: 0, recyclebin: 0, key_times: 0, event_logs: 0,
-      all_event_ids: 0
+      all_event_ids: 0, browser: 0
     };
 
     const countDots = (arr) => {
@@ -31,6 +31,7 @@ function PillBar({ state, data }) {
     c.srum_app = countDots(data.srum_app);
     c.srum_net = countDots(data.srum_net?.connectivity) + countDots(data.srum_net?.data_usage);
     c.mft_usn = countDots(data.mft_usn);
+    c.browser = countDots(data.browser);
 
     // 2. Artifact Lane - Global Discovery Summation
     const sources = getArtifactSources(data);
@@ -44,6 +45,9 @@ function PillBar({ state, data }) {
       else if (src.type === 'shimcache') c.shimcache += dots;
       else if (src.type === 'recyclebin') c.recyclebin += dots;
       else if (src.type === 'keytime') c.key_times += dots;
+      // Browser is counted from its own lane above. Without this it
+      // falls through to the else and inflates the Registry pill.
+      else if (src.type === 'browser') { /* counted as a lane */ }
       else {
         // Anything else in registry is counted towards 'Registry'
         c.registry += dots;

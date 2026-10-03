@@ -40,7 +40,14 @@ const P = {
 }
 
 const ALIASES = {
-  logon: 'login', logoff: 'logout', app_launch: 'appWindow', program_run: 'run',
+  // Browser activities reuse existing glyphs - no new art, per the
+  // no-emoji / shared-icon-set rule.
+  web_browsing: 'globe', file_download: 'download',
+  application_state: 'power', configuration_change: 'settings',
+  account_sync: 'refresh', extension_install: 'chip',
+  credential_storage: 'shield', anti_forensics: 'alert',
+  logon: 'login', logoff: 'logout', failed_logon: 'alert',
+  app_launch: 'appWindow', program_run: 'run',
   process_created: 'terminal', app_usage: 'appWindow', program_presence: 'box',
   app_installed: 'download', folder_browsing: 'folder', file_opened: 'file',
   file_created: 'filePlus', file_edited: 'edit', file_renamed: 'edit',

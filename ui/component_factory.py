@@ -16,7 +16,7 @@ class ComponentFactory:
             styles: Dictionary of style names to CSS styles
         """
         self.styles = styles or {}
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
     
     def create_button(self, 
                      text: str = "", 

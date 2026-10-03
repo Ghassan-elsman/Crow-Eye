@@ -77,6 +77,12 @@ def _map_driven_tables():
     # `getEventLogData` loops over EVENT_LOG_TABLES rather than naming each.
     if "EVENT_LOG_TABLES" in BRIDGE_SRC:
         tables.update(M.EVENT_LOG_TABLES)
+    # `getBrowserData` derives its table list from TIMESTAMP_MAPPINGS["Browser"]
+    # in the same way, so every mapped browser table is read by construction.
+    # Keyed on the slot's own name: delete the slot and this check fails again,
+    # which is the point.
+    if "def getBrowserData" in BRIDGE_SRC:
+        tables.update(e[0] for e in M.TIMESTAMP_MAPPINGS.get("Browser", []))
     return tables
 
 

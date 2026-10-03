@@ -11,7 +11,8 @@ ordered list of candidate relative paths and the first existing one wins.
 import os
 import sqlite3
 import logging
-from typing import Dict, List, Optional
+import threading
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ DB_CANDIDATES: Dict[str, List[str]] = {
     "mft": ["mft_claw_analysis.db", os.path.join("MFT_USN", "MFT_data.db")],
     "usn": ["USN_journal.db", os.path.join("MFT_USN", "USN_journal.db")],
     "mft_usn_correlated": ["mft_usn_correlated_analysis.db"],
+    # Browser_Claw writes this flat in Target_Artifacts (Browser_Claw.py's
+    # OUTPUT_DB_NAME beside case_artifacts_dir), the same place the timeline
+    # module resolves it from.
+    "browser": ["browser_analysis.db"],
 }
 
 # Tables whose row counts indicate "there is parsed data" for getStatus().
@@ -49,6 +54,12 @@ KEY_TABLES: Dict[str, List[str]] = {
     "mft": ["mft_records", "filename_changes"],
     "usn": ["journal_events"],
     "mft_usn_correlated": ["mft_usn_correlated"],
+    # Chromium and Gecko side by side: a case can have either, or both. Without
+    # an entry here data_status() reports the database present with zero rows,
+    # and the React empty state says the case has no parsed data.
+    "browser": ["browser_history", "browser_downloads", "browser_cookies",
+                "browser_extensions", "browser_sessions",
+                "browser_gecko_history"],
 }
 
 
@@ -88,25 +99,54 @@ def row_count(conn: sqlite3.Connection, table: str) -> int:
 
 
 class DbPool:
-    """Lazy pool of read-only connections keyed by logical DB name.
+    """Lazy pool of read-only connections, one per thread per logical DB.
 
     Missing databases are remembered as None so rules can degrade cleanly
     without repeated filesystem probing.
+
+    **Why the pool is keyed by thread.** A ``sqlite3.Connection`` may only be
+    used by the thread that opened it. UBA runs its analysis on
+    ``AnalysisWorker`` (a QThread) and then answers the React UI from the GUI
+    thread, so a pool keyed on the logical name alone hands the GUI thread a
+    connection the worker opened. That is not theoretical - it crashed
+    Crow-Eye on UBA -> Sessions:
+
+        sqlite3.ProgrammingError: SQLite objects created in a thread can only
+        be used in that same thread.
+
+    ``check_same_thread=False`` would silence it and is the wrong answer: it
+    permits two threads to interleave on one connection. The timeline module
+    reached the same conclusion and wrote it down - see
+    ``timeline/data/timeline_data_manager.py`` line 373, "BUG FIX #1: Removed
+    check_same_thread=False for thread safety". This is that module's
+    ``(thread_id, key)`` pool, scaled down to UBA's needs.
     """
 
     def __init__(self, artifacts_dir: str):
         self.artifacts_dir = artifacts_dir
-        self._conns: Dict[str, Optional[sqlite3.Connection]] = {}
+        # (thread id, logical name) -> connection or None. Never keyed on the
+        # name alone; see the class docstring.
+        self._conns: Dict[Tuple[int, str], Optional[sqlite3.Connection]] = {}
+        # Resolved paths are just strings, so they are shared across threads -
+        # a database that is missing is missing for everyone, and probing the
+        # filesystem once per thread would be waste.
         self._paths: Dict[str, Optional[str]] = {}
+        self._lock = threading.Lock()
 
     def path(self, logical_name: str) -> Optional[str]:
-        if logical_name not in self._paths:
-            self._paths[logical_name] = resolve_db_path(self.artifacts_dir, logical_name)
-        return self._paths[logical_name]
+        with self._lock:
+            if logical_name not in self._paths:
+                self._paths[logical_name] = resolve_db_path(self.artifacts_dir, logical_name)
+            return self._paths[logical_name]
 
     def get(self, logical_name: str) -> Optional[sqlite3.Connection]:
-        if logical_name in self._conns:
-            return self._conns[logical_name]
+        """The connection for this logical DB **on the calling thread**."""
+        key = (threading.get_ident(), logical_name)
+        with self._lock:
+            if key in self._conns:
+                return self._conns[key]
+        # Resolve and open outside the lock: opening a file should not block
+        # another thread that only wants a connection it already has.
         path = self.path(logical_name)
         conn = None
         if path:
@@ -115,7 +155,18 @@ class DbPool:
             except sqlite3.Error as e:
                 logger.warning("UBA: cannot open %s (%s): %s", logical_name, path, e)
                 conn = None
-        self._conns[logical_name] = conn
+        with self._lock:
+            # Another call on this same thread may have won the race; keep the
+            # first connection so the thread only ever has one per database.
+            if key in self._conns:
+                existing = self._conns[key]
+                if conn is not None and conn is not existing:
+                    try:
+                        conn.close()
+                    except sqlite3.Error:
+                        pass
+                return existing
+            self._conns[key] = conn
         return conn
 
     def has_table(self, logical_name: str, table: str) -> bool:
@@ -139,14 +190,56 @@ class DbPool:
         except sqlite3.Error:
             return False
 
+    def cleanup_thread_connections(self, thread_id: Optional[int] = None):
+        """Close the connections belonging to one thread. Defaults to this one.
+
+        A worker calls this as it finishes, so its connections go away with it
+        rather than lingering until the pool is dropped - the same contract as
+        ``timeline/data/query_worker.py``, which calls the timeline manager's
+        method of this name at the end of ``run()``.
+        """
+        if thread_id is None:
+            thread_id = threading.get_ident()
+        with self._lock:
+            keys = [k for k in self._conns if k[0] == thread_id]
+            conns = [self._conns.pop(k) for k in keys]
+        mine = threading.get_ident() == thread_id
+        for conn in conns:
+            if conn is None:
+                continue
+            if not mine:
+                # Closing another thread's connection raises ProgrammingError.
+                # Dropping the reference is the whole job: CPython finalises it
+                # when the last reference goes.
+                continue
+            try:
+                conn.close()
+            except sqlite3.Error as e:
+                logger.warning("UBA: closing a pooled connection failed: %s", e)
+
     def close(self):
-        for conn in self._conns.values():
-            if conn is not None:
-                try:
-                    conn.close()
-                except sqlite3.Error:
-                    pass
-        self._conns.clear()
+        """Release every connection this pool holds, from any thread.
+
+        Connections owned by other threads are dropped rather than closed. The
+        previous version called ``close()`` on them inside ``except
+        sqlite3.Error``, which also catches ProgrammingError - so every
+        cross-thread close failed silently and the handles leaked while the
+        code looked like it was tidying up.
+        """
+        with self._lock:
+            keys = list(self._conns)
+            conns = [self._conns.pop(k) for k in keys]
+        me = threading.get_ident()
+        for (thread_id, name), conn in zip(keys, conns):
+            if conn is None:
+                continue
+            if thread_id != me:
+                logger.debug("UBA: leaving %s to thread %s to finalise", name, thread_id)
+                continue
+            try:
+                conn.close()
+            except sqlite3.Error as e:
+                logger.warning("UBA: closing %s failed: %s", name, e)
 
 
 def data_status(artifacts_dir: str) -> dict:

@@ -45,6 +45,7 @@ class EventRenderer:
         'Amcache': '#8b5cf6',
         'Shimcache': '#ec4899',
         'RecycleBin': '#e74c3c',
+        'Browser': '#38bdf8',
         'Unknown': '#95a5a6'      # Gray (fallback)
     }
 

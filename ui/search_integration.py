@@ -33,7 +33,7 @@ class SearchIntegration:
         self.table_widget = table_widget
         self.search_method = search_method
         self.load_all_method = load_all_method
-        self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.logger = logger or logging.getLogger(__name__)
         
         self._original_data_cache = None
         self._search_active = False

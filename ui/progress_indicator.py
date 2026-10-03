@@ -53,8 +53,14 @@ class ProgressIndicator(QtWidgets.QWidget):
         self.message_label.setWordWrap(True)
         main_layout.addWidget(self.message_label)
         
-        # Progress bar (for determinate mode)
-        self.progress_bar = QtWidgets.QProgressBar()
+        # Progress bar (for determinate mode). Animated: keeps sweeping while a
+        # table loads, so the overlay never looks frozen.
+        try:
+            from ui.animated_progress_bar import AnimatedProgressBar
+        except ImportError:
+            AnimatedProgressBar = None
+        self.progress_bar = (AnimatedProgressBar(accent="#00FFFF") if AnimatedProgressBar
+                             else QtWidgets.QProgressBar())
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)

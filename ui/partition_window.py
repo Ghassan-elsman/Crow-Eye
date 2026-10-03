@@ -389,6 +389,14 @@ class PartitionWindow(QDialog):
         """Initialize the user interface"""
         self.setWindowTitle("Partition & Volume Analysis - Crow Eye")
         self.setMinimumSize(1200, 800)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         
         # Set window style
         self.setStyleSheet("""

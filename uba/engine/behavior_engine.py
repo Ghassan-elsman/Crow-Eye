@@ -149,5 +149,182 @@ class BehaviorEngine:
         return [{"app": r[0], "event_count": r[1], "records": r[2] or 0}
                 for r in rows]
 
+    def rules_catalog(self) -> list:
+        """Every rule with its coverage status and its event count.
+
+        Counts are deliberately UNFILTERED: they drive the rule picker, and an
+        option that disappeared as soon as it was deselected would be unusable.
+
+        A rule that is 'active' and still has a count of 0 is worth seeing — it
+        means the data was there and the rule found nothing in it, which is a
+        different statement from "no data" and the only place it shows up.
+        """
+        counts = {}
+        if self.store is not None:
+            for rule_id, n, recs in self.store.conn.execute(
+                    "SELECT rule_id, COUNT(*), SUM(aggregate_count) "
+                    "FROM events GROUP BY rule_id"):
+                counts[rule_id] = (n, recs or 0)
+
+        severity_of = {r["id"]: r.get("severity", "routine")
+                       for r in self.rules_config["rules"]}
+        out = []
+        for entry in (self.coverage_report or {}).get("rules", []):
+            n, recs = counts.get(entry["rule_id"], (0, 0))
+            out.append({
+                "rule_id": entry["rule_id"],
+                "title": entry["title"],
+                "activity": entry["activity"],
+                "behavior_class": entry["behavior_class"],
+                "severity": severity_of.get(entry["rule_id"], "routine"),
+                "status": entry["status"],
+                "how": entry.get("how", ""),
+                "artifacts": entry.get("artifacts", []),
+                "note": entry.get("note", ""),
+                "event_count": n,
+                "records": recs,
+            })
+        out.sort(key=lambda r: (-r["event_count"], r["title"]))
+        return out
+
+    def sessions_report(self) -> dict:
+        """Sign-in sessions, the accounts behind them, and machine uptime.
+
+        Everything the Sign-ins view needs in one call. Sessions carry their own
+        honesty flags (``end_basis``, ``duration_seconds`` of None when no
+        sign-out was recorded) — see uba/engine/sessions.py.
+        """
+        sessions = self.sessions.to_list() if self.sessions is not None else []
+        for session in sessions:
+            session["event_count"] = self._events_in_window(
+                session["start_ts"], session["end_ts"] or session["context_end_ts"])
+            session["failed_before"] = self._failed_logons_before(
+                session["username"], session["start_ts"])
+        return {
+            "sessions": sessions,
+            "accounts": self._accounts(),
+            "uptime": self._uptime_windows(),
+            "auditing": self._auditing_note(),
+        }
+
+    # ------------------------------------------------------------------ #
+    def _events_in_window(self, start, end) -> int:
+        if self.store is None or not start:
+            return 0
+        if end:
+            row = self.store.conn.execute(
+                "SELECT COUNT(*) FROM events WHERE ts_start IS NOT NULL "
+                "AND ts_start >= ? AND ts_start <= ?", (start, end)).fetchone()
+        else:
+            row = self.store.conn.execute(
+                "SELECT COUNT(*) FROM events WHERE ts_start IS NOT NULL "
+                "AND ts_start >= ?", (start,)).fetchone()
+        return row[0] if row else 0
+
+    def _failed_logons_before(self, username, start, window_seconds=3600) -> int:
+        """Failed sign-ins for this account in the hour before it succeeded."""
+        if self.store is None or not username or not start:
+            return 0
+        from uba.utils.timeparse import epoch_seconds
+        start_epoch = epoch_seconds(start)
+        if start_epoch is None:
+            return 0
+        total = 0
+        for ts, count in self.store.conn.execute(
+                "SELECT ts_start, aggregate_count FROM events "
+                "WHERE activity = 'failed_logon' AND actor_name = ? "
+                "AND ts_start IS NOT NULL", (username,)):
+            epoch = epoch_seconds(ts)
+            if epoch is not None and 0 <= start_epoch - epoch <= window_seconds:
+                total += count or 1
+        return total
+
+    def _accounts(self) -> list:
+        """Per-account sign-in history from the SAM/ProfileList UserAccounts table.
+
+        This survives a Security log that has already rolled over, so it is often
+        the only record that an account ever signed in at all. apply_identity()
+        rewrites SID columns to "SID (MACHINE\\username)", so never match on a
+        bare SID here — the values are read, not joined on.
+        """
+        if not self.db_pool.has_table("registry", "UserAccounts"):
+            return []
+        wanted = ["user_sid", "username", "account_type", "account_enabled",
+                  "last_logon", "login_count", "bad_password_count",
+                  "last_incorrect_password", "password_last_set", "source"]
+        columns = [c for c in wanted
+                   if self.db_pool.has_column("registry", "UserAccounts", c)]
+        if "username" not in columns:
+            return []
+        conn = self.db_pool.get("registry")
+        try:
+            rows = conn.execute("SELECT {} FROM UserAccounts".format(
+                ",".join('"{}"'.format(c) for c in columns))).fetchall()
+        except Exception as e:
+            logger.warning("UBA: UserAccounts read failed: %s", e)
+            return []
+        known = set((self.resolver.known_users if self.resolver else {}).values())
+        out = []
+        for row in rows:
+            entry = {c: row[i] for i, c in enumerate(columns)}
+            entry["has_profile"] = entry.get("username") in known
+            out.append(entry)
+        out.sort(key=lambda a: (a.get("last_logon") or "", a.get("username") or ""),
+                 reverse=True)
+        return out
+
+    def _uptime_windows(self) -> list:
+        """Pair machine start events with the next stop to give uptime spans.
+
+        An unmatched start is reported with end=None rather than being closed at
+        a guess — the same rule the sessions follow.
+        """
+        if self.store is None:
+            return []
+        rows = self.store.conn.execute(
+            "SELECT ts_start, details_json FROM events "
+            "WHERE activity = 'boot_shutdown' AND ts_start IS NOT NULL "
+            "ORDER BY ts_start").fetchall()
+        import json as _json
+        windows, open_start = [], None
+        for ts, details_json in rows:
+            try:
+                transition = (_json.loads(details_json or "{}")
+                              .get("transition", "stop"))
+            except ValueError:
+                transition = "stop"
+            if transition == "start":
+                if open_start is not None:
+                    windows.append({"start_ts": open_start, "end_ts": None})
+                open_start = ts
+            elif open_start is not None:
+                windows.append({"start_ts": open_start, "end_ts": ts})
+                open_start = None
+        if open_start is not None:
+            windows.append({"start_ts": open_start, "end_ts": None})
+        return windows
+
+    def _auditing_note(self) -> dict:
+        """Whether logon/logoff auditing was configured on this machine.
+
+        A thin session list must be readable as "auditing was off", not as
+        "nobody signed in".
+        """
+        note = {"audit_policy_available": False, "entries": []}
+        if not self.db_pool.has_table("registry", "audit_policy"):
+            return note
+        conn = self.db_pool.get("registry")
+        try:
+            rows = conn.execute(
+                "SELECT name, decoded FROM audit_policy "
+                "WHERE name LIKE '%ogon%' OR name LIKE '%ogoff%' "
+                "OR name LIKE '%ccount%'").fetchall()
+        except Exception as e:
+            logger.debug("UBA: audit_policy read failed: %s", e)
+            return note
+        note["audit_policy_available"] = True
+        note["entries"] = [{"name": r[0], "decoded": r[1]} for r in rows]
+        return note
+
     def close(self):
         self.db_pool.close()

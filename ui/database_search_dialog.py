@@ -106,7 +106,7 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
         """Initialize the time period filter widget with preset buttons and custom date/time pickers."""
         super().__init__(parent)
         
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.current_preset = 'custom'
         self.is_filter_enabled = False
         
@@ -539,7 +539,7 @@ class SearchWorker(QObject):
         self.start_time = start_time
         self.end_time = end_time
         self.timeout_seconds = timeout_seconds
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
     def run(self):
         """
@@ -698,7 +698,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         """
         super().__init__(parent)
         
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Use the provided search engine
         self.search_engine = search_engine
@@ -751,7 +751,68 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         # Load search history
         self._load_search_history()
-    
+
+        # Crow-Eye-wide busy state (ui/busy_guard.py). A search reads the case
+        # databases, so it must not run while a parse or load rewrites them -
+        # and while it runs, its own section makes parsers and case switching
+        # wait for it.
+        self._search_busy_token = None
+        self._busy_banner = QtWidgets.QLabel("")
+        self._busy_banner.setWordWrap(True)
+        self._busy_banner.setStyleSheet(
+            "QLabel { background: rgba(245,158,11,0.12); color: #FBBF24;"
+            " border: 1px solid #F59E0B; border-radius: 6px; padding: 8px 10px;"
+            " font-weight: 600; }")
+        self._busy_banner.hide()
+        try:
+            self.layout().insertWidget(0, self._busy_banner)
+        except Exception:
+            pass
+        try:
+            from ui import busy_guard
+            busy_guard.add_listener(self._on_app_busy_changed)
+        except Exception:
+            pass
+        self._on_app_busy_changed(None)
+
+    def _other_work_running(self):
+        """(reason, elapsed) of busy work other than this dialog's own search."""
+        try:
+            from ui import busy_guard
+            if busy_guard.is_busy(exclude=self._search_busy_token):
+                return busy_guard.current(exclude=self._search_busy_token)
+        except Exception:
+            pass
+        return None
+
+    def _on_app_busy_changed(self, _state):
+        """Disable searching while Crow-Eye parses or loads; restore after."""
+        try:
+            other = self._other_work_running()
+            if other:
+                reason, _elapsed = other
+                self._busy_banner.setText(
+                    "Crow-Eye is still working (%s). Searching is paused until the "
+                    "data has finished parsing and loading." % (reason or "parsing"))
+                self._busy_banner.show()
+                if not self.search_in_progress and self.search_button is not None:
+                    self.search_button.setEnabled(False)
+            else:
+                self._busy_banner.hide()
+                if self.search_button is not None:
+                    self.search_button.setEnabled(True)
+        except RuntimeError:
+            pass                                  # dialog already destroyed
+
+    def _release_search_busy(self):
+        token, self._search_busy_token = getattr(self, "_search_busy_token", None), None
+        if token is not None:
+            try:
+                from ui import busy_guard
+                busy_guard.end(token)
+            except Exception:
+                pass
+
     def closeEvent(self, event):
         """
         Handle dialog close event to ensure proper cleanup.
@@ -777,7 +838,13 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             
             # Clean up thread and worker
             self._cleanup_search_thread()
-            
+            self._release_search_busy()
+            try:
+                from ui import busy_guard
+                busy_guard.remove_listener(self._on_app_busy_changed)
+            except Exception:
+                pass
+
             # Save settings (including window state)
             self._save_settings()
             
@@ -839,6 +906,14 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         # Requirements: 7.1, 7.2, 7.3, 7.4
         window_flags = Qt.Window | Qt.WindowMinimizeButtonHint | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint
         self.setWindowFlags(window_flags)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         
         # Restore window geometry from settings
         # Requirements: 7.5
@@ -2760,6 +2835,11 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         Requirements: 1.1, 1.2, 4.5, 8.1, 8.2, 8.5, 9.1, 9.2, 9.3, 11.1, 11.2, 11.3
         """
+        # Not while a parse or load is rewriting the databases.
+        if self._other_work_running():
+            self._on_app_busy_changed(None)        # shows why, disables Search
+            return
+
         search_term = self.search_input.text().strip()
         
         if not search_term:
@@ -2923,6 +3003,14 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
 
         # Start the search
         self.thread.start()
+        # Held while the search runs, so a parse or a case switch waits for it.
+        try:
+            from ui import busy_guard
+            self._release_search_busy()
+            self._search_busy_token = busy_guard.begin(
+                "Database Search", alive=self.thread.isRunning)
+        except Exception:
+            pass
     
     def _on_search_progress(self, message: str):
         """
@@ -3206,6 +3294,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         This method is called when the thread finishes to properly clean up
         resources and prevent crashes from accessing deleted objects.
         """
+        # The search is over: Crow-Eye may parse or switch case again.
+        self._release_search_busy()
         try:
             # Disconnect all signals first to prevent callbacks during cleanup
             if hasattr(self, 'worker') and self.worker is not None:
@@ -4833,7 +4923,7 @@ class SavedSearchesDialog(QtWidgets.QDialog):
         self.saved_searches = saved_searches
         self.search_engine = search_engine
         self.selected_search = None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         self._setup_ui()
         self._populate_searches()

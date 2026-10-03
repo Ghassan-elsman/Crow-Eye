@@ -22,6 +22,19 @@ _LOG_TABLES = ("SecurityLogs", "SystemLogs", "ApplicationLogs")
 
 # Friendly artifact-source names for the "what artifacts are used" list.
 _SOURCE_LABEL = {
+    # Browser databases. Without these the Coverage panel prints the bare SQL
+    # table name at the analyst.
+    "browser_history": "Browser — history",
+    "browser_gecko_history": "Browser — history (Firefox)",
+    "browser_downloads": "Browser — downloads",
+    "browser_preferences": "Browser — profile preferences",
+    "browser_extensions": "Browser — extensions",
+    "browser_credentials": "Browser — saved logins",
+    "browser_gecko_credentials": "Browser — saved logins (Firefox)",
+    "browser_payments": "Browser — payment data",
+    "browser_addresses": "Browser — saved addresses",
+    "browser_cookies": "Browser — cookies",
+    "browser_dips": "Browser — site engagement",
     "SecurityLogs": "Event Log — Security", "SystemLogs": "Event Log — System",
     "ApplicationLogs": "Event Log — Application", "journal_events": "USN Journal",
     "mft_usn_correlated": "MFT + USN (correlated)", "UserAssist": "UserAssist",
@@ -55,6 +68,14 @@ _SOURCE_LABEL = {
     "OfficeDocuments": "Registry — Office document history",
     "system_configuration": "Registry — system configuration",
     "RunMRU": "Registry — Run history", "TimeZoneInfo": "Registry — time zone",
+}
+
+# Rules may name a provider rather than a table when several rules read the same
+# log table for unrelated reasons; without this the panel would say only
+# "Event Log - System" for Winlogon's sign-in records.
+_PROVIDER_LABEL = {
+    "winlogon_logon_notification": "Event Log — System (Winlogon sign-in)",
+    "winlogon_logoff_notification": "Event Log — System (Winlogon sign-in)",
 }
 
 
@@ -169,6 +190,11 @@ class CoverageAnalyzer:
             "note": rule.get("degrade_note", ""),
             "artifacts": _rule_artifacts(rule),
         }
+        provider = _PROVIDER_LABEL.get(rule["id"])
+        if provider:
+            entry["artifacts"] = [
+                provider if a.startswith("Event Log — System") else a
+                for a in entry["artifacts"]]
         entry["how"] = _rule_how(rule, entry["artifacts"])
 
         tables_ok = self._has_tables(requires.get("tables"))

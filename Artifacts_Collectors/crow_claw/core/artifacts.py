@@ -160,6 +160,23 @@ def create_registry_artifact() -> Artifact:
             r"{PARTITION}\Windows\System32\config\SECURITY.LOG2",
             r"{PARTITION}\Windows\System32\config\DEFAULT.LOG1",
             r"{PARTITION}\Windows\System32\config\DEFAULT.LOG2",
+            # COMPONENTS is the servicing store - installed packages, update
+            # and component history - and at some fifty megabytes it is the
+            # second largest hive on a stock machine; DRIVERS carries
+            # third-party driver installs. Neither was collected, so an offline
+            # case could not carve their deleted keys however hard it tried.
+            r"{PARTITION}\Windows\System32\config\COMPONENTS",
+            r"{PARTITION}\Windows\System32\config\DRIVERS",
+            r"{PARTITION}\Windows\System32\config\BBI",
+            r"{PARTITION}\Windows\System32\config\ELAM",
+            r"{PARTITION}\Windows\System32\config\COMPONENTS.LOG1",
+            r"{PARTITION}\Windows\System32\config\COMPONENTS.LOG2",
+            r"{PARTITION}\Windows\System32\config\DRIVERS.LOG1",
+            r"{PARTITION}\Windows\System32\config\DRIVERS.LOG2",
+            r"{PARTITION}\Windows\System32\config\BBI.LOG1",
+            r"{PARTITION}\Windows\System32\config\BBI.LOG2",
+            r"{PARTITION}\Windows\System32\config\ELAM.LOG1",
+            r"{PARTITION}\Windows\System32\config\ELAM.LOG2",
             # RegBack holds an older copy of the same hives. Empty by default
             # since Windows 10 1803, but present on earlier builds and free
             # to ask for.
@@ -170,7 +187,9 @@ def create_registry_artifact() -> Artifact:
         ],
         description="Windows Registry hives containing system configuration, software installations, user activity, and security settings",
         required_admin=True,
-        estimated_size=100_000_000  # ~100 MB average
+        # COMPONENTS alone measured 53 MB on the machine this was revised
+        # against, and DRIVERS 10 MB.
+        estimated_size=165_000_000  # ~165 MB average
     )
 
 
@@ -338,6 +357,14 @@ def create_srum_artifact() -> Artifact:
         artifact_type=ArtifactType.SRUM_DATABASE,
         default_paths=[
             r"{PARTITION}\Windows\System32\sru\SRUDB.dat",
+            # The ESE checkpoint, flush map and transaction logs. Collected with
+            # the database so a dirty SRUDB.dat can be soft-recovered (logs
+            # replayed) instead of only repaired with esentutl /p, which discards
+            # damaged pages. Wildcards so only the files that exist are taken.
+            r"{PARTITION}\Windows\System32\sru\SRUDB.jfm",
+            r"{PARTITION}\Windows\System32\sru\SRU*.chk",
+            r"{PARTITION}\Windows\System32\sru\SRU*.log",
+            r"{PARTITION}\Windows\System32\sru\SRU*.jrs",
         ],
         description="System Resource Usage Monitor database tracking application network usage, power usage, and resource consumption history",
         required_admin=True,

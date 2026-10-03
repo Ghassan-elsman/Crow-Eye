@@ -19,6 +19,13 @@ SRUM aggregates into roughly hourly windows and typically retains 30-60 days, so
 Both read `SRUDB.dat` (an ESE database) and resolve the numeric `AppId` and `UserId` on every row
 through `SruDbIdMapTable`.
 
+Crow-Eye collects the ESE checkpoint set - `SRU.chk` (checkpoint), `SRUDB.jfm` (flush map) and the
+`SRU*.log` transaction logs - alongside `SRUDB.dat`. A database that was not cleanly shut down is
+**soft-recovered** by replaying those logs (`esentutl /r`) before any `esentutl /p` repair, because
+replay restores committed rows where repair can discard damaged pages. `srum_metadata.db_state`
+records which happened (`clean` / `recovered` / `repaired`), and `jfm_collected` /
+`log_files_collected` record what was collected.
+
 ## Database Schema
 Database: `srum_data.db`. There is no single `srum_data` table - each SRUM provider becomes its own
 table:
@@ -26,11 +33,18 @@ table:
 | Table | Holds |
 |---|---|
 | `srum_application_usage` | CPU cycles, context switches, bytes read and written, per app per hour |
-| `srum_network_data_usage` | Bytes sent and received, per app, per interface |
+| `srum_network_data_usage` | Bytes sent and received, per app, per interface; plus `wake_count`, `l2_profile_flags` |
 | `srum_network_connectivity` | Interface connection windows: `connected_time`, `connect_start_time` |
-| `srum_energy_usage` | Battery charge level, state transitions, `event_timestamp` |
-| `srum_app_timeline` | Focus, keyboard and mouse seconds, duration, `hosted_services` |
-| `srum_metadata` | One row per parse: `parsed_at`, source path, record counts |
+| `srum_energy_usage` | Battery charge level, state transitions, `event_timestamp`; plus battery health: `designed_capacity`, `full_charged_capacity` (the two together are battery wear), `battery_count`, `configuration_hash`, `battery_charge_limited` |
+| `srum_app_timeline` | Focus, keyboard and mouse seconds, duration, `hosted_services`; plus the full native `*_timeline` and `*_breakdown` packed counters (`cpu_timeline`, `disk_timeline`, `network_timeline`, `cycles_breakdown`, `mbb_*`, etc.) |
+| `srum_metadata` | One row per parse: `parsed_at`, source path, record counts, and the recovery record (`jfm_collected`, `log_files_collected`, `db_state`, `recovery_notes`) |
+
+Crow-Eye captures **every native column** each provider table defines (not a fixed subset), so nothing
+SRUM records is dropped; live and offline emit the identical column set. All metrics are stored as raw
+integers - format in the display/query layer, never in the column. `db_state` is `clean` when the ESE
+header reads *Clean Shutdown / Log Required 0-0* (everything was already flushed to SRUDB.dat, nothing
+left in the logs), or `recovered`/`repaired` when a dirty database's logs had to be replayed; the exact
+state is quoted in `recovery_notes`.
 
 ## Timestamp Interpretation
 `timestamp` is the **event time** - the SRUM aggregation window, taken from the provider's own
@@ -51,6 +65,11 @@ Two identity forms appear, and which one is used decides how svchost.exe is told
 - `srum_app_timeline` uses the `!!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]` form.
   Crow-Eye splits it: the executable into `app_name`, the service list into `hosted_services`.
   `app_path` is empty on those rows because that form names no path.
+- `srum_app_timeline` also uses the modern Store / packaged form
+  `PackageFamily!PRAID!SomeApp.exe!2026/07/28:21:01:46!e276f`. Crow-Eye takes the `.exe` token as
+  `app_name` and the package family name as `app_path`. (An earlier build ran `os.path.basename` over
+  this and, because the launch timestamp contains `/`, returned a timestamp fragment like
+  `28:21:01:46!e276f` as the app name; that is fixed - `app_name` is now the real executable.)
 
 ## Sparse columns are sparse for a reason
 In `srum_app_timeline`, `in_focus_s`, `keyboard_input_s` and `mouse_input_s` are set on only a small

@@ -296,7 +296,7 @@ class ToolCapabilityProbe:
 
     def __init__(self, router, cache_path: Optional[Path] = None):
         self.router = router
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self._cache_path = Path(cache_path) if cache_path else self._default_cache_path()
         self._cache: Optional[Dict[str, Any]] = None
 

@@ -23,11 +23,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [PartitionDetector] %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Deliberately no logging.basicConfig() here. This module is imported into the
+# PyQt app, and basicConfig at import time seeds the ROOT logger before any
+# case exists - then silently does nothing once a case has added its own
+# handlers, so the file it thinks it is writing never appears. The root
+# configuration belongs to utils.logging_setup; this module just asks for a
+# logger and lets its records propagate.
 logger = logging.getLogger(__name__)
 
 

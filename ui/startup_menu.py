@@ -415,7 +415,9 @@ class StartupMenuDialog(QtWidgets.QDialog):
         
         # Add icon to create button
         icon_new_case = QtGui.QIcon()
-        icon_new_case.addPixmap(QtGui.QPixmap(":/Icons/icons/new-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "new-case-icon.svg")
+        if _px is not None:
+            icon_new_case.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         create_button.setIcon(icon_new_case)
         create_button.setIconSize(QtCore.QSize(20, 20))
         
@@ -428,7 +430,9 @@ class StartupMenuDialog(QtWidgets.QDialog):
         
         # Add icon to open button
         icon_open_case = QtGui.QIcon()
-        icon_open_case.addPixmap(QtGui.QPixmap(":/Icons/icons/open-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "open-case-icon.svg")
+        if _px is not None:
+            icon_open_case.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         open_button.setIcon(icon_open_case)
         open_button.setIconSize(QtCore.QSize(20, 20))
         

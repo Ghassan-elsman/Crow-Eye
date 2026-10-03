@@ -49,12 +49,20 @@ class ActorResolver:
             except Exception as e:
                 logger.warning("UBA: UserProfiles load failed: %s", e)
 
+        # AmCache's user inventory. The columns are 'original_name' (the account
+        # name) and 'user_id' (the SID) — this query used to ask for
+        # 'user_name, user_sid', which do not exist, so it raised on every case
+        # and the except below swallowed it: the fallback had never once run.
+        # has_column is what keeps a schema guess from failing silently again.
         conn = self.db_pool.get("amcache")
-        if conn is not None and self.db_pool.has_table(
-                "amcache", "InventoryMiscellaneousUser"):
+        if (conn is not None
+                and self.db_pool.has_column("amcache", "InventoryMiscellaneousUser",
+                                            "original_name")
+                and self.db_pool.has_column("amcache", "InventoryMiscellaneousUser",
+                                            "user_id")):
             try:
                 for username, sid in conn.execute(
-                        "SELECT user_name, user_sid FROM InventoryMiscellaneousUser"):
+                        "SELECT original_name, user_id FROM InventoryMiscellaneousUser"):
                     sid = sid_utils.normalize_sid(sid)
                     if (sid and username
                             and sid_utils.classify_sid(sid) == "human_candidate"

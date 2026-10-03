@@ -33,6 +33,21 @@ def artifacts_dir(tmp_path):
     _mk(str(d / "registry_data.db"), """
         CREATE TABLE UserProfiles (user_sid TEXT, username TEXT, profile_path TEXT,
             profile_image_path TEXT, profile_loaded TEXT, timestamp TEXT);
+        -- SAM / ProfileList account history (user_identity.py). Note the SID is
+        -- stored in the "SID (MACHINE\\username)" form apply_identity() rewrites
+        -- it into, so nothing may join on a bare SID here.
+        CREATE TABLE UserAccounts (user_sid TEXT PRIMARY KEY, rid INTEGER,
+            username TEXT, display_name TEXT, full_name TEXT, comment TEXT,
+            account_type TEXT, well_known TEXT, account_enabled INTEGER,
+            account_flags TEXT, last_logon TEXT, password_last_set TEXT,
+            account_expires TEXT, last_incorrect_password TEXT,
+            login_count INTEGER, bad_password_count INTEGER, profile_path TEXT,
+            profile_loaded INTEGER, source TEXT, parsed_at TEXT);
+        -- SECURITY hive audit policy (security_hive.py) - proves whether Windows
+        -- was configured to record sign-ins at all.
+        CREATE TABLE audit_policy (name TEXT, key_path TEXT, decoded TEXT,
+            raw_hex TEXT, raw_size INTEGER, last_write TEXT, note TEXT,
+            parsed_at TEXT);
         CREATE TABLE UserAssist (program_path TEXT, run_count INTEGER,
             last_execution TEXT, focus_count INTEGER, focus_time INTEGER,
             user_sid TEXT, timestamp TEXT);
@@ -109,6 +124,31 @@ def artifacts_dir(tmp_path):
             {"user_sid": "S-1-5-21-111-222-333-1001", "username": "Alice",
              "profile_path": "", "profile_image_path": "", "profile_loaded": "1",
              "timestamp": ""}],
+        "UserAccounts": [
+            {"user_sid": "S-1-5-21-111-222-333-1001 (PC\\Alice)", "rid": 1001,
+             "username": "Alice", "display_name": "Alice", "full_name": "",
+             "comment": "", "account_type": "Local user", "well_known": "",
+             "account_enabled": 1, "account_flags": "", "last_logon":
+             "2026-06-12 19:30:00", "password_last_set": "2026-01-02 08:00:00",
+             "account_expires": "", "last_incorrect_password":
+             "2026-06-12 09:55:00", "login_count": 42, "bad_password_count": 6,
+             "profile_path": "", "profile_loaded": 1, "source": "SAM",
+             "parsed_at": ""},
+            {"user_sid": "S-1-5-21-111-222-333-1002 (PC\\Bob)", "rid": 1002,
+             "username": "Bob", "display_name": "Bob", "full_name": "",
+             "comment": "", "account_type": "Local user", "well_known": "",
+             "account_enabled": 0, "account_flags": "", "last_logon": "",
+             "password_last_set": "", "account_expires": "",
+             "last_incorrect_password": "", "login_count": 0,
+             "bad_password_count": 0, "profile_path": "", "profile_loaded": 0,
+             "source": "SAM", "parsed_at": ""}],
+        "audit_policy": [
+            {"name": "Logon", "key_path": "Policy\\PolAdtEv", "decoded":
+             "Success and Failure", "raw_hex": "", "raw_size": 0,
+             "last_write": "", "note": "", "parsed_at": ""},
+            {"name": "Logoff", "key_path": "Policy\\PolAdtEv", "decoded":
+             "Success", "raw_hex": "", "raw_size": 0, "last_write": "",
+             "note": "", "parsed_at": ""}],
         "UserAssist": [
             {"program_path": "C:\\Apps\\notepad.exe", "run_count": 3,
              "last_execution": "2026-06-12 10:00:00", "focus_count": 0,
@@ -330,11 +370,77 @@ def artifacts_dir(tmp_path):
              "User": "SYSTEM",
              "Keywords": "-,Alice,PC,S-1-5-21-111-222-333-1001,S-1-5-18,PC$,WORKGROUP,0x3e7,-,-",
              "TaskCategory": "", "EventDescription": "A user account was changed."},
-            # user-initiated logoff (4647)
+            # user-initiated logoff (4647). FOUR fields and no LogonType - that
+            # is the real payload shape. It used to be written here with a fifth
+            # field so it would survive parse_4634's "len >= 5" guard, which made
+            # the test pass on a payload Windows never writes while every real
+            # 4647 was silently dropped.
             {"EventID": 4647, "Source": "", "EventType": "", "Category": "",
              "EventTimestampUTC": "2026-06-12 16:59:00", "ComputerName": "PC",
-             "User": "Alice", "Keywords": "S-1-5-21-111-222-333-1001,Alice,PC,0x5fc1d,2",
+             "User": "Alice", "Keywords": "S-1-5-21-111-222-333-1001,Alice,PC,0x5fc1d",
              "TaskCategory": "", "EventDescription": "User initiated logoff."},
+
+            # --- same-second logoff, written BEFORE its own logon ------------
+            # Windows records the logoff in the same second as the logon, and the
+            # row order inside that second is insertion order. A single-pass
+            # builder that popped the open logon when it met the logoff threw
+            # away EVERY logoff on a real case (10 of 10), so no session closed
+            # and each was reported with a fabricated multi-hour duration. These
+            # two rows, in this order, are that regression.
+            {"EventID": 4634, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 18:00:00", "ComputerName": "PC",
+             "User": "Alice", "Keywords": "S-1-5-21-111-222-333-1001,Alice,PC,0xaaa01,2",
+             "TaskCategory": "", "EventDescription": "An account was logged off."},
+            {"EventID": 4624, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 18:00:00", "ComputerName": "PC",
+             "User": "Alice",
+             "Keywords": "S-1-5-18,PC$,WG,0x3e7,S-1-5-21-111-222-333-1001,Alice,PC,0xaaa01,2,User32,Negotiate,-,-,-,-,0,0x0,C:\\Windows\\System32\\winlogon.exe,-,-",
+             "TaskCategory": "", "EventDescription": "An account was successfully logged on."},
+
+            # --- Windows' duplicate logon -----------------------------------
+            # Every interactive logon is written twice with different LogonIds.
+            # Both rows must collapse into ONE activity (aggregate_count 2) and
+            # ONE session, not two identical cards at the same second.
+            {"EventID": 4624, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 19:30:00", "ComputerName": "PC",
+             "User": "Alice",
+             "Keywords": "S-1-5-18,PC$,WG,0x3e7,S-1-5-21-111-222-333-1001,Alice,PC,0xbbb01,2,User32,Negotiate,-,-,-,-,0,0x0,C:\\Windows\\System32\\winlogon.exe,-,-",
+             "TaskCategory": "", "EventDescription": "An account was successfully logged on."},
+            {"EventID": 4624, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 19:30:00", "ComputerName": "PC",
+             "User": "Alice",
+             "Keywords": "S-1-5-18,PC$,WG,0x3e7,S-1-5-21-111-222-333-1001,Alice,PC,0xbbb02,2,User32,Negotiate,-,-,-,-,0,0x0,C:\\Windows\\System32\\winlogon.exe,-,-",
+             "TaskCategory": "", "EventDescription": "An account was successfully logged on."},
+
+            # Workstation unlock (logon type 7) inside the 19:30 session. It must
+            # attach to that session, never open an overlapping one of its own.
+            {"EventID": 4624, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 20:15:00", "ComputerName": "PC",
+             "User": "Alice",
+             "Keywords": "S-1-5-18,PC$,WG,0x3e7,S-1-5-21-111-222-333-1001,Alice,PC,0xccc01,7,User32,Negotiate,-,-,-,-,0,0x0,C:\\Windows\\System32\\winlogon.exe,-,-",
+             "TaskCategory": "", "EventDescription": "An account was successfully logged on."},
+
+            # A service pseudo-account logging on interactively (type 2). DWM-1
+            # and UMFD-* do this constantly; they are not people and must never
+            # open a session or produce a "signed in" activity.
+            {"EventID": 4624, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 09:00:00", "ComputerName": "PC",
+             "User": "DWM-1",
+             "Keywords": "S-1-5-18,PC$,WG,0x3e7,S-1-5-90-0-1,DWM-1,Window Manager,0x23a30,2,User32,Negotiate,-,-,-,-,0,0x0,C:\\Windows\\System32\\winlogon.exe,-,-",
+             "TaskCategory": "", "EventDescription": "An account was successfully logged on."},
+        ] + [
+            # Six failed sign-ins for one account within one hour -> the burst
+            # escalates to 'suspicious' rather than reporting six attempts.
+            # TargetUserSid is S-1-0-0 on a failure: nothing was logged on.
+            # Placed in the minutes BEFORE the 09:59:58 logon, so the session
+            # that followed can report what preceded it.
+            {"EventID": 4625, "Source": "", "EventType": "", "Category": "",
+             "EventTimestampUTC": "2026-06-12 09:5{}:00".format(i),
+             "ComputerName": "PC", "User": "-",
+             "Keywords": ("S-1-5-18,PC$,WG,0x3e7,S-1-0-0,Alice,PC,0xC000006D,"
+                          "%%2313,0xC000006A,2,User32,Negotiate,PC,-,-"),
+             "TaskCategory": "", "EventDescription": "An account failed to log on."}
+            for i in range(6)
         ],
         "SystemLogs": [
             {"EventID": 7045, "Source": "Service Control Manager", "EventType": "Information",
@@ -349,6 +455,31 @@ def artifacts_dir(tmp_path):
              "Category": "None", "EventTimestampUTC": "2026-06-12 08:31:00",
              "ComputerName": "PC", "User": "Dan", "Keywords": "N/A",
              "EventDescription": "The start type of the service was changed."},
+            # Winlogon's own sign-in / sign-out notifications. Note User and
+            # Keywords are both 'N/A' - exactly as a real case records them, so
+            # these events must resolve to an EMPTY actor, never to the only
+            # profile on the machine.
+            {"EventID": 7001, "Source": "Microsoft-Windows-Winlogon",
+             "EventType": "Information", "Category": "",
+             "EventTimestampUTC": "2026-06-12 07:45:00", "ComputerName": "PC",
+             "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "The service started successfully."},
+            {"EventID": 7002, "Source": "Microsoft-Windows-Winlogon",
+             "EventType": "Information", "Category": "",
+             "EventTimestampUTC": "2026-06-12 21:10:00", "ComputerName": "PC",
+             "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "Description not available"},
+            # Boot (6005) and clean shutdown (6006). 6005 was never read, so a
+            # rule titled "Computer started or shut down" only ever reported
+            # shutdowns and the machine never appeared to come on.
+            {"EventID": 6005, "Source": "EventLog", "EventType": "Information",
+             "Category": "", "EventTimestampUTC": "2026-06-12 07:40:00",
+             "ComputerName": "PC", "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "The Event log service was started."},
+            {"EventID": 6006, "Source": "EventLog", "EventType": "Information",
+             "Category": "", "EventTimestampUTC": "2026-06-12 21:15:00",
+             "ComputerName": "PC", "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "The Event log service was stopped."},
         ],
         "ApplicationLogs": [
             {"EventID": 1001, "Source": "Windows Error Reporting", "EventType": "Information",
@@ -356,6 +487,19 @@ def artifacts_dir(tmp_path):
              "ComputerName": "PC", "User": "Alice",
              "Keywords": "1234,5,APPCRASH,Not available,0,winword.exe,16.0,,ntdll.dll",
              "EventDescription": "Fault bucket, application error."},
+            # User Profile Service profile load / unload - the same moments as
+            # Winlogon 7001/7002 from a different provider, used only to
+            # corroborate those (1531 within 120s of the 7001 above).
+            {"EventID": 1531, "Source": "Microsoft-Windows-User Profiles Service",
+             "EventType": "Information", "Category": "",
+             "EventTimestampUTC": "2026-06-12 07:45:02", "ComputerName": "PC",
+             "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "Description not available"},
+            {"EventID": 1532, "Source": "Microsoft-Windows-User Profiles Service",
+             "EventType": "Information", "Category": "",
+             "EventTimestampUTC": "2026-06-12 21:10:03", "ComputerName": "PC",
+             "User": "N/A", "Keywords": "N/A",
+             "EventDescription": "Description not available"},
         ],
     })
 
@@ -493,6 +637,131 @@ def artifacts_dir(tmp_path):
              "interface_luid": "", "l2_profile_id": "", "l2_profile_flags": "",
              "connected_time": "5m 12s", "connect_start_time": "2026-06-12 08:00:00"}],
     })
+
+    # browser_analysis.db ------------------------------------------------
+    # Only the tables the browser extractors read. Shaped to exercise each
+    # rule exactly once, including the history gap, which a real case may well
+    # not contain - the one in the case this was built against had no
+    # corroborating activity inside it, so the rule correctly produced nothing
+    # and could not be proven to work from real data alone.
+    _mk(str(d / "browser_analysis.db"), """
+        CREATE TABLE browser_history (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT, url TEXT,
+            title TEXT, visit_count INTEGER, typed_count INTEGER,
+            last_visit_time TEXT, visit_time TEXT, transition TEXT,
+            from_visit_url TEXT, visit_id TEXT);
+        CREATE TABLE browser_downloads (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT,
+            target_path TEXT, source_url TEXT, referrer TEXT, tab_url TEXT,
+            received_bytes INTEGER, total_bytes INTEGER, start_time TEXT,
+            end_time TEXT, danger_type INTEGER, interrupt_reason TEXT,
+            state INTEGER, opened INTEGER, mime_type TEXT, download_id TEXT);
+        CREATE TABLE browser_preferences (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT,
+            setting_key TEXT, setting_value TEXT, category TEXT);
+        CREATE TABLE browser_extensions (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT,
+            extension_id TEXT, name TEXT, version TEXT, description TEXT,
+            permissions TEXT, install_time TEXT, from_webstore INTEGER,
+            state INTEGER, manifest_path TEXT);
+        CREATE TABLE browser_credentials (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT,
+            origin_url TEXT, action_url TEXT, username_element TEXT,
+            username_value TEXT, password_element TEXT,
+            password_encrypted_b64 TEXT, encryption_version TEXT,
+            signon_realm TEXT, date_created TEXT, date_last_used TEXT,
+            date_password_modified TEXT, times_used INTEGER, blacklisted INTEGER);
+        CREATE TABLE browser_payments (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT, kind TEXT,
+            name_on_card TEXT, last_four TEXT, network TEXT,
+            expiration_month TEXT, expiration_year TEXT, bank_name TEXT,
+            card_number_encrypted_b64 TEXT, encryption_version TEXT,
+            billing_address_id TEXT, nickname TEXT, use_count INTEGER,
+            use_date TEXT, date_modified TEXT);
+        CREATE TABLE browser_cookies (browser TEXT, vendor TEXT, user_name TEXT,
+            sid TEXT, profile TEXT, source_path TEXT, parsed_at TEXT,
+            host_key TEXT, name TEXT, path TEXT, creation_time TEXT,
+            expires_time TEXT, last_access_time TEXT, is_secure INTEGER,
+            is_httponly INTEGER, is_persistent INTEGER, samesite TEXT,
+            source_scheme TEXT, has_expires INTEGER, encrypted_value_b64 TEXT,
+            encryption_version TEXT);
+    """, {
+        # Two browsing days either side of a four-day silence.
+        "browser_history": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "url": "https://example.test/a", "title": "A",
+             "visit_count": 2, "typed_count": 1, "visit_time": "2026-06-10 09:15:00",
+             "last_visit_time": "2026-06-10 09:15:00", "transition": "link"},
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "url": "https://other.test/b", "title": "B",
+             "visit_count": 1, "typed_count": 0, "visit_time": "2026-06-10 11:00:00",
+             "last_visit_time": "2026-06-10 11:00:00", "transition": "typed"},
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "url": "https://example.test/c", "title": "C",
+             "visit_count": 1, "typed_count": 0, "visit_time": "2026-06-15 08:00:00",
+             "last_visit_time": "2026-06-15 08:00:00", "transition": "link"}],
+        # ...contradicted by a cookie written inside the gap.
+        "browser_cookies": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "host_key": "quiet.test", "name": "sid",
+             "path": "/", "creation_time": "2026-06-12 13:00:00",
+             "encrypted_value_b64": "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo="}],
+        "browser_downloads": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "target_path": "C:\\Users\\Alice\\Downloads\\report.pdf",
+             "source_url": "https://files.test/report.pdf", "referrer": "",
+             "received_bytes": 1024, "total_bytes": 1024,
+             "start_time": "2026-06-10 10:00:00", "danger_type": 0,
+             "interrupt_reason": "", "state": 1, "mime_type": "application/pdf"},
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001",
+             "user_name": "Alice", "target_path": "C:\\Users\\Alice\\Downloads\\tool.exe",
+             "source_url": "https://unknown.test/tool.exe", "referrer": "",
+             "received_bytes": 10, "total_bytes": 2048,
+             "start_time": "2026-06-10 10:05:00", "danger_type": 6,
+             "interrupt_reason": "20", "state": 2, "mime_type": "application/x-msdownload"}],
+        "browser_preferences": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "profile": "Default", "setting_key": "profile.exit_type",
+             "setting_value": "Crashed", "category": "preferences"},
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "profile": "Default", "setting_key": "savefile.default_directory",
+             "setting_value": "D:\\Staging", "category": "preferences"},
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "profile": "Default", "setting_key": "sync.has_been_enabled",
+             "setting_value": "true", "category": "preferences"},
+            # Identity the rules must never read or echo.
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "profile": "Default", "setting_key": "account_info[0].email",
+             "setting_value": "alice.secret@example.test", "category": "preferences"},
+            # The clear-data dialog's state - NOT evidence anything was cleared.
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "profile": "Default", "setting_key": "browser.clear_data.browsing_history",
+             "setting_value": "True", "category": "preferences"}],
+        "browser_extensions": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "extension_id": "aaaabbbbccccdddd", "name": "Wide Reach",
+             "version": "1.2", "permissions": '["<all_urls>", "webRequest"]',
+             "install_time": "2026-06-09 12:00:00", "from_webstore": 0, "state": 1},
+            # Store origin alone must NOT flag this one: no risky permission.
+            {"browser": "Edge", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "extension_id": "eeeeffffgggghhhh", "name": "Harmless",
+             "version": "3.0", "permissions": '["storage"]',
+             "install_time": "2026-06-09 12:05:00", "from_webstore": 0, "state": 1}],
+        "browser_credentials": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "origin_url": "https://mail.test/", "signon_realm": "https://mail.test/",
+             "username_value": "alice.secret@example.test",
+             "password_encrypted_b64": "dGhpcy1pcy1jaXBoZXJ0ZXh0LW5vdC1hLXBhc3N3b3Jk",
+             "encryption_version": "v10", "date_created": "2026-06-01 09:00:00",
+             "date_last_used": "2026-06-10 09:20:00", "times_used": 4,
+             "blacklisted": 0}],
+        "browser_payments": [
+            {"browser": "Chrome", "sid": "S-1-5-21-111-222-333-1001", "user_name": "Alice",
+             "kind": "card", "name_on_card": "A SECRET NAME", "last_four": "4242",
+             "network": "visa", "card_number_encrypted_b64": "Y2lwaGVydGV4dC1jYXJkLW51bWJlcg==",
+             "use_count": 1, "use_date": "2026-06-10 09:30:00"}],
+    })
+
     return str(d)
 
 

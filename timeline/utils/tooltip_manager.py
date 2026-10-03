@@ -20,6 +20,7 @@ class TooltipManager:
         'registry': 'Registry artifacts contain system and application configuration changes',
         'bam': 'Background Activity Moderator tracks application execution',
         'shellbag': 'ShellBags record folder access and window positions',
+        'browser': 'Browser activity - visits, downloads, cookies, cache fetches and saved logins',
         'srum': 'System Resource Usage Monitor tracks application resource usage',
         'usn': 'USN Journal records file system changes',
         'mft': 'Master File Table contains file metadata and timestamps',

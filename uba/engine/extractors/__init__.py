@@ -4,6 +4,7 @@ onto the Python implementations."""
 from uba.engine.extractors import logs as _logs
 from uba.engine.extractors import artifacts as _artifacts
 from uba.engine.extractors import files as _files
+from uba.engine.extractors import browser as _browser
 
 # name -> callable(ctx, rules) -> list[BehaviorEvent]
 # 'rules' is the list of rule dicts sharing that extractor (most extractors
@@ -12,6 +13,9 @@ EXTRACTORS = {
     "sessions_logon": _logs.sessions_logon,
     "sessions_logoff": _logs.sessions_logoff,
     "sessions_unlock": _logs.sessions_unlock,
+    "failed_logon": _logs.failed_logon,
+    # One extractor, two rules (sign-in / sign-out) - the scheduled_tasks shape.
+    "winlogon_session_notification": _logs.winlogon_session_notification,
     "process_creation_4688": _logs.process_creation_4688,
     "service_installed": _logs.service_installed,
     "boot_shutdown": _logs.boot_shutdown,
@@ -59,4 +63,15 @@ EXTRACTORS = {
     "taskbar_pinned": _artifacts.taskbar_pinned,
     "usn_file_activity": _files.usn_file_activity,
     "file_copy_inferred": _files.file_copy_inferred,
+    # Browser databases (browser_analysis.db). web_browsing is re-pointed off
+    # the registry stub; the rest are new.
+    "browser_web_history": _browser.web_history,
+    # One extractor, two rules: an ordinary download and one the browser
+    # flagged or could not finish.
+    "browser_downloads": _browser.web_downloads,
+    # One extractor, three rules, all reading browser_preferences.
+    "browser_profile_state": _browser.browser_profile_state,
+    "browser_extensions": _browser.browser_extensions,
+    "browser_stored_secrets": _browser.browser_stored_secrets,
+    "browser_history_gap": _browser.browser_history_gap,
 }

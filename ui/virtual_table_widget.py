@@ -302,7 +302,7 @@ class VirtualTableWidget(QTableView, EnrichmentMixin):
         QTableView.__init__(self, parent)
         EnrichmentMixin.__init__(self)
 
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
         # Data source configuration
         self.data_loader = data_loader

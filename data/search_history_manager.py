@@ -129,7 +129,7 @@ class SearchHistoryManager:
         self.case_directory = Path(case_directory)
         self.history_file = self.case_directory / self.HISTORY_FILENAME
         self.saved_searches_file = self.case_directory / self.SAVED_SEARCHES_FILENAME
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         self.logger.info(f"Initialized SearchHistoryManager for: {case_directory}")
     

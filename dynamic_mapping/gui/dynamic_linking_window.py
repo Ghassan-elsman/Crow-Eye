@@ -122,10 +122,21 @@ class DynamicLinkingWindow(QDialog):
         self.setMinimumSize(1300, 850)
         
         # Set Window Icon
-        self.setWindowIcon(QtGui.QIcon("GUI Resources/icons/dynamic_linking.svg"))
+        _dl_icon = CrowEyeStyles.resource_icon("GUI Resources", "icons",
+                                               "dynamic_linking.svg")
+        if _dl_icon is not None:
+            self.setWindowIcon(_dl_icon)
         
         # Enable Min/Max buttons
         self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint | Qt.WindowMaximizeButtonHint)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         
         self.setStyleSheet(CrowEyeStyles.DYNAMIC_LINKING_WINDOW_STYLE)
         

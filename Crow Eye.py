@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.13.0"  # Single source of truth — read by the About menu, the update
+__version__ = "0.14.0"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.7.0" # Bumped for recent forensic-accuracy + UI work
 
@@ -87,6 +87,11 @@ def is_admin():
 
 # Detect operating system
 IS_WINDOWS = os.name == 'nt'
+
+# NOTE: BROWSER_TABS used to live here. It was moved below validate_dependencies()
+# because scratch/forward_port_main.py replaces this whole region with the frozen
+# preamble when porting to the EXE tree - which silently deleted the list while
+# keeping both places that iterate it. See the comment at its new home.
 
 # Fix for PyQtWebEngine on Linux when running as root (disable sandbox)
 if not IS_WINDOWS:
@@ -635,6 +640,12 @@ print('='*60)
 ensure_react_ui_built('Timeline', 'timeline', 'react-timeline')
 ensure_react_ui_built('Eye AI', 'eye', 'ui', 'react')
 ensure_react_ui_built('UBA', 'uba', 'react-uba')
+ensure_react_ui_built('SRUM Charts', 'visualizations', 'react-viz')
+ensure_react_ui_built('MFT/USN Charts', 'visualizations', 'react-mftusn')
+ensure_react_ui_built('LNK/JumpList Charts', 'visualizations', 'react-lnkjl')
+ensure_react_ui_built('Prefetch Charts', 'visualizations', 'react-prefetch')
+ensure_react_ui_built('Shell Items Charts', 'visualizations', 'react-shellitems')
+ensure_react_ui_built('Browser Charts', 'visualizations', 'react-browser')
 
 print('[STEP 5/5] Complete!\n')
 
@@ -897,6 +908,133 @@ def validate_dependencies():
 # Run dependency validation
 validate_dependencies()
 
+# Keeps the loading bars, elapsed clock and log moving while the GUI thread
+# is busy filling tables (no QTimer can fire then). Throttled to ~30 fps and
+# never runs the event loop, so calling it per row costs nothing and cannot
+# re-enter a loader. ui/animated_progress_bar.py.
+try:
+    from ui.animated_progress_bar import keep_alive
+except Exception:
+    def keep_alive():
+        pass
+
+# One busy state for the whole app (ui/busy_guard.py) and the two decorators
+# that use it. Parsing and loading run behind a non-modal dialog, so buttons
+# and shortcuts keep firing meanwhile; opening a feature (or another case)
+# against half-filled tables is how the GUI crashed.
+#
+#   @busy_section("Loading ...")   marks a method's whole run as busy
+#   @gated("Timeline", needs=...)  refuses to open while busy, without a case,
+#                                  or before there is data to show
+import functools as _functools
+import inspect as _inspect
+from ui import busy_guard
+
+
+def _trim_to_arity(fn):
+    """Qt hands `clicked(bool)` to slots whether they want it or not. A
+    wrapper taking *args would pass it on and break a `(self)` slot, so the
+    extra positional args are dropped down to what `fn` itself accepts."""
+    params = list(_inspect.signature(fn).parameters.values())
+    if any(p.kind == p.VAR_POSITIONAL for p in params):
+        return None
+    return sum(1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)) - 1
+
+
+def busy_section(reason):
+    def deco(fn):
+        limit = _trim_to_arity(fn)
+
+        @_functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            if limit is not None:
+                args = args[:max(0, limit)]
+            with busy_guard.busy(reason):
+                return fn(self, *args, **kwargs)
+        return wrapper
+    return deco
+
+
+def gated(feature, needs=None, kind="view"):
+    """`needs`: None (busy check only), "any" (some parsed data in the case),
+    or a tuple of Target_Artifacts database files one of which must hold rows.
+    `kind`: "view" opens a feature (may be queued with Open when ready),
+    "work" starts parsing/loading or switches case (never queued), "silent"
+    is refused without a message (a double-click mid-load)."""
+    def deco(fn):
+        limit = _trim_to_arity(fn)
+
+        @_functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            if limit is not None:
+                args = args[:max(0, limit)]
+            retry = lambda: wrapper(self, *args, **kwargs)
+            if not self._feature_gate(feature, needs=needs, kind=kind, retry=retry):
+                return None
+            return fn(self, *args, **kwargs)
+        wrapper._gated = (feature, needs, kind)
+        return wrapper
+    return deco
+
+
+# Database files behind each dashboard's `needs`.
+_NEEDS_SRUM = ("srum_data.db",)
+_NEEDS_MFTUSN = ("mft_claw_analysis.db", "USN_journal.db", "mft_usn_correlated_analysis.db")
+_NEEDS_LNK = ("LnkDB.db",)
+_NEEDS_PREFETCH = ("prefetch_data.db",)
+_NEEDS_REGISTRY = ("registry_data.db",)
+_NEEDS_BROWSER = ("browser_analysis.db",)
+
+# Ordered (db_table_name, display_label) pairs for the Browser Forensics tab.
+# Drives both the sub-tab construction and the data loader, so adding a browser
+# table means adding one entry here (plus the schema in Browser_Claw.py).
+#
+# This sits BELOW validate_dependencies() on purpose. scratch/forward_port_main.py
+# replaces everything from the venv bootstrap down to this call with the EXE's
+# frozen preamble, so anything defined above is dropped from the EXE tree. This
+# list was defined at line 94 and vanished on every forward port while the two
+# loops that read it survived - a NameError during setupUi, with nothing in the
+# script to flag it. Keep new module-level constants below this line.
+BROWSER_TABS = [
+    ("browser_history", "History"),
+    ("browser_downloads", "Downloads"),
+    ("browser_cookies", "Cookies"),
+    ("browser_autofill", "Autofill"),
+    ("browser_addresses", "Saved Addresses"),
+    ("browser_payments", "Payment Methods"),
+    ("browser_credentials", "Saved Logins"),
+    ("browser_search_engines", "Search Engines"),
+    ("browser_shortcuts", "Omnibox Shortcuts"),
+    ("browser_network_predictor", "Typed Predictor"),
+    ("browser_favicons", "Favicons"),
+    ("browser_bookmarks", "Bookmarks"),
+    ("browser_reading_list", "Reading List"),
+    ("browser_extensions", "Extensions"),
+    ("browser_extension_storage", "Extension Storage"),
+    ("browser_preferences", "Preferences"),
+    ("browser_sessions", "Sessions & Tabs"),
+    ("browser_local_storage", "Local Storage"),
+    ("browser_indexeddb", "IndexedDB"),
+    ("browser_service_worker", "Service Worker"),
+    ("browser_cache", "HTTP Cache"),
+    ("browser_top_sites", "Top Sites"),
+    ("browser_media_history", "Media History"),
+    ("browser_network_state", "Network State"),
+    ("browser_dips", "Bounce Tracking"),
+    ("browser_push", "Push Tokens"),
+    ("browser_media_router", "Media Router"),
+    ("browser_files", "Extracted Files"),
+    ("browser_metadata", "Profiles & Keys"),
+    ("browser_gecko_history", "Firefox History"),
+    ("browser_gecko_downloads", "Firefox Downloads"),
+    ("browser_gecko_bookmarks", "Firefox Bookmarks"),
+    ("browser_gecko_cookies", "Firefox Cookies"),
+    ("browser_gecko_formhistory", "Firefox Forms"),
+    ("browser_gecko_credentials", "Firefox Logins"),
+    ("browser_gecko_localstorage", "Firefox Local Storage"),
+    ("browser_gecko_sessions", "Firefox Sessions"),
+]
+
 # ============================================================================
 # UI COMPONENTS SECTION
 # ============================================================================
@@ -1055,6 +1193,9 @@ class _EyeInstantSplash(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        # Named even though it is frameless: a window with no title shows an
+        # empty entry anywhere the window manager lists it.
+        self.setWindowTitle("Crow-Eye - Starting Eye AI")
         self.setFixedSize(self.CARD_W, self.CARD_H)
 
         # Center on the primary screen.
@@ -1318,6 +1459,9 @@ TABLE_COLUMNS = {
         ("drive_letter", "Drive Letter"),
         ("mft_record_number", "MFT Record"),
         ("registry_path", "Registry Path"),
+        # The value the item is stored under in that key - registry_path is the
+        # PARENT key, so two items with one name in one key differ only here.
+        ("value_name", "Value"),
         # parent_path is where the folder sat in the shell tree and user_name
         # is whose hive it came from - the two columns that tell a multi-user
         # case apart.
@@ -1380,10 +1524,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         if hasattr(self, '_live_worker') and self._live_worker:
             self._live_worker.deleteLater()
             self._live_worker = None
-            
+
+        # The run is over, so this is where the console capture stops. It used to
+        # be torn down in a finally block right after worker.start(), i.e. before
+        # the collection had produced a single line.
+        try:
+            dialog.stop_log_capture()
+        except Exception:
+            pass
+
         # NOW load the data while the dialog is still visible
         try:
-            dialog.update_step(14, "LOADING DATA INTO GUI")
+            dialog.update_step(15, "LOADING DATA INTO GUI")
             self.load_all_data_internal()
             dialog.show_completion("ALL ARTIFACTS COLLECTED AND LOADED")
         except Exception as e:
@@ -1397,23 +1549,31 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.process_manager.shutdown()
             self.process_manager = None
 
-        # Show completion and success message
+        # Close the run and show what each artifact actually did, instead of
+        # an unconditional "collected and loaded successfully" - that message
+        # appeared even when collectors had failed or found nothing.
         QtCore.QTimer.singleShot(2500, dialog.close)
-        
-        def show_success():
-            QtWidgets.QMessageBox.information(
-                self.main_window,
-                "Live Artifacts Collection",
-                "All live artifacts have been collected and loaded successfully."
-            )
-        
-        QtCore.QTimer.singleShot(3000, show_success)
+        self._finish_parse_status_run(show=True)
+        # Parsed and loaded: features may open now.
+        busy_guard.end(getattr(self, '_live_busy_token', None))
+        self._live_busy_token = None
+        self._after_data_loaded(delay_ms=3000)
 
     def _on_live_acquisition_error(self, task_id, error_msg, traceback_str):
         """Handle live acquisition errors on the main thread."""
+        # Whatever outcomes arrived before the collection died are kept; the
+        # run is closed so the report shows them on the next load.
+        self._finish_parse_status_run(show=True)
+        busy_guard.end(getattr(self, '_live_busy_token', None))
+        self._live_busy_token = None
         dialog = getattr(self, '_live_dialog', None)
         if dialog:
             dialog.add_log_message(f"[Error] {error_msg}")
+            # The other end of the capture started in parse_all_live_artifacts.
+            try:
+                dialog.stop_log_capture()
+            except Exception:
+                pass
         print(f"[Error] {error_msg}\n{traceback_str}")
     # Add data loading methods to the class
 
@@ -1461,6 +1621,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.NetworkLists_table.setSortingEnabled(False)
                 self.NetworkLists_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.NetworkLists_table.setItem(row_index, col_index, item)
@@ -1484,6 +1646,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.computerName_table.setSortingEnabled(False)
                 self.computerName_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.computerName_table.setItem(row_index, col_index, item)
@@ -1507,6 +1671,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.TimeZone_table.setSortingEnabled(False)
                 self.TimeZone_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.TimeZone_table.setItem(row_index, col_index, item)
@@ -1544,6 +1710,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.MachineRun_table.setSortingEnabled(False)
                 self.MachineRun_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.MachineRun_table.setItem(row_index, col_index, item)
@@ -1567,6 +1735,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.MachineRunOnce_table.setSortingEnabled(False)
                 self.MachineRunOnce_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.MachineRunOnce_table.setItem(row_index, col_index, item)
@@ -1590,6 +1760,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.UserRun_table.setSortingEnabled(False)
                 self.UserRun_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.UserRun_table.setItem(row_index, col_index, item)
@@ -1613,6 +1785,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.UserRunOnce_table.setSortingEnabled(False)
                 self.UserRunOnce_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.UserRunOnce_table.setItem(row_index, col_index, item)
@@ -1636,6 +1810,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.LastUpdate_table.setSortingEnabled(False)
                 self.LastUpdate_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.LastUpdate_table.setItem(row_index, col_index, item)
@@ -1659,6 +1835,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.LastUpdateInfo_table.setSortingEnabled(False)
                 self.LastUpdateInfo_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.LastUpdateInfo_table.setItem(row_index, col_index, item)
@@ -1682,6 +1860,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.ShutDown_table.setSortingEnabled(False)
                 self.ShutDown_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.ShutDown_table.setItem(row_index, col_index, item)
@@ -1734,6 +1914,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.LastSaveMRU_table.setSortingEnabled(False)
                 self.LastSaveMRU_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.LastSaveMRU_table.setItem(row_index, col_index, item)
@@ -1757,6 +1939,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.TypedPath_table.setSortingEnabled(False)
                 self.TypedPath_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.TypedPath_table.setItem(row_index, col_index, item)
@@ -1780,6 +1964,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Bam_table.setSortingEnabled(False)
                 self.Bam_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.Bam_table.setItem(row_index, col_index, item)
@@ -1803,6 +1989,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Dam_table.setSortingEnabled(False)
                 self.Dam_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.Dam_table.setItem(row_index, col_index, item)
@@ -1837,6 +2025,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.UserAssist_table.setSortingEnabled(False)
                 self.UserAssist_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     
                     # Display values as-is (focus_time is already formatted in database)
                     for col_index, value in enumerate(row):
@@ -1903,6 +2093,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.RunMRU_table.setRowCount(len(rows))
 
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
 
                     for col_index, value in enumerate(row):
 
@@ -1934,6 +2126,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.MUICache_table.setRowCount(len(rows))
 
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
 
                     for col_index, value in enumerate(row):
 
@@ -1965,6 +2159,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.WordWheelQuery_table.setRowCount(len(rows))
 
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
 
                     for col_index, value in enumerate(row):
 
@@ -2164,6 +2360,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.Clj_table.setRowCount(len(rows))
                     
                     for row_index, row in enumerate(rows):
+                        if row_index % 200 == 0:
+                            keep_alive()
                         for gui_col, db_col_name in mapping.items():
                             if db_col_name in db_cols:
                                 val = row[db_cols[db_col_name]]
@@ -2582,6 +2780,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.tableWidget_22.setSortingEnabled(False)
                 self.tableWidget_22.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.tableWidget_22.setItem(row_index, col_index, item)
@@ -2622,6 +2822,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.AppLogs_table.setSortingEnabled(False)
                 self.AppLogs_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.AppLogs_table.setItem(row_index, col_index, item)
@@ -2662,6 +2864,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.SecurityLogs_table.setSortingEnabled(False)
                 self.SecurityLogs_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.SecurityLogs_table.setItem(row_index, col_index, item)
@@ -2720,6 +2924,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
                 
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     
                     # Map DB columns to GUI columns
                     # row[0]=sid, row[1]=username, row[2]=profile_path, row[3]=profile_image_path, row[4]=loaded, row[5]=timestamp
@@ -2847,7 +3053,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # exist when setupUi runs its pass. Calling it again is safe - a table
         # that already has its button is skipped.
         self._add_anatomy_links()
-    
+        self._add_empty_table_info_buttons()
+
     def create_mft_usn_table_tabs(self):
         """Create table tabs for MFT and USN Journal data"""
         # Create MFT main tab with subtabs
@@ -3024,9 +3231,47 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         self.verticalLayout_correlated.addWidget(self.Correlated_table)
         self.MFT_USN_tab_widget.addTab(self.Correlated_tab, "Correlated Data")
-    
 
-    
+
+    def create_browser_table_tabs(self):
+        """Create one sub-tab per browser table, driven by BROWSER_TABS.
+
+        Built programmatically so adding a browser table needs one list entry,
+        not a hand-copied tab block. The placeholder QTableWidgets are swapped
+        for VirtualTableWidgets when data is loaded (mirrors the SRUM loader).
+        """
+        self.browser_table_widgets = {}
+        self.browser_tab_pages = {}
+        self.browser_tab_layouts = {}
+        self.browser_tab_overlays = {}
+
+        for table_name, tab_label in BROWSER_TABS:
+            page = QtWidgets.QWidget()
+            page.setObjectName(f"browser_page_{table_name}")
+
+            layout = QtWidgets.QVBoxLayout(page)
+            layout.setObjectName(f"browser_layout_{table_name}")
+
+            table_widget = QtWidgets.QTableWidget(page)
+            table_widget.setObjectName(f"browser_tbl_{table_name}")
+            table_widget.setMinimumSize(QtCore.QSize(2, 2))
+            self.setup_standard_table(table_widget, 8, False, 300, 190)
+
+            layout.addWidget(table_widget)
+            self.Browser_tab_widget.addTab(page, tab_label)
+
+            self.browser_table_widgets[table_name] = table_widget
+            self.browser_tab_pages[table_name] = page
+            self.browser_tab_layouts[table_name] = layout
+
+            # Also expose each table as a named attribute, the way every other
+            # artifact tab does. `_add_anatomy_links` resolves its map with
+            # getattr, so a table that only lives in a dict gets no Anatomy
+            # button - and nothing reports that it is missing.
+            short_name = table_name.replace("browser_", "", 1)
+            setattr(self, f"Browser_{short_name}_table", table_widget)
+
+
     def _load_amcache_data_worker(self, progress_callback, cancellation_check):
         """Worker-compatible method for loading Amcache data - ONLY loads data, does NOT touch widgets"""
         try:
@@ -3173,6 +3418,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             table_widget.setSortingEnabled(False)
             table_widget.setRowCount(len(rows))
             for row_index, row in enumerate(rows):
+                if row_index % 200 == 0:
+                    keep_alive()
                 for col_index, value in enumerate(row):
                     item = QtWidgets.QTableWidgetItem(str(value))
                     table_widget.setItem(row_index, col_index, item)
@@ -4128,6 +4375,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
     # ROW DETAIL DIALOG FUNCTIONALITY
     # ============================================================================
     
+    @gated("Row details", kind="silent")
     def handle_table_double_click(self, item):
         """
         Handle double-click events on table rows.
@@ -4583,6 +4831,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.ShimCache_main_table.setSortingEnabled(False)
                 self.ShimCache_main_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value) if value is not None else "")
                         item.setFlags(item.flags() & ~Qt.ItemIsEditable) # Make cells read-only
@@ -4601,11 +4851,29 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             import traceback
             traceback.print_exc()
     
+    def set_window_title_for_case(self, case_name):
+        """Put the open case in the window title.
+
+        The title was set once in retranslateUi and never changed, so a
+        minimized Crow-Eye said only "Crow Eye" no matter what was open - and
+        with several cases worked in turn there was nothing in the taskbar to
+        tell them apart. The Correlation Engine and the Offline Importer both
+        already retitle themselves this way.
+        """
+        try:
+            name = (case_name or "").strip()
+            self.main_window.setWindowTitle(
+                "Crow Eye - %s" % name if name else "Crow Eye")
+        except Exception:
+            pass
+
     def create_crow_eye_dialog(self, title, style_sheet=None):
         """Helper function to create standardized Crow Eye dialogs - reduces code duplication"""
         dialog = QtWidgets.QDialog(self.main_window)
         dialog.setWindowTitle(f"Crow Eye - {title}")
-        dialog.setWindowIcon(QtGui.QIcon(":/Icons/CrowEye.ico"))
+        _icon = CrowEyeStyles.crow_eye_icon() if CrowEyeStyles else None
+        if _icon is not None:
+            dialog.setWindowIcon(_icon)
         dialog.setModal(True)
         
         if style_sheet:
@@ -5552,8 +5820,59 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print("[Anatomy] link map unavailable: %s" % exc)
             return
 
+        # SRUM tables that also get a Charts button (left of the Anatomy button),
+        # opening the visualization scoped to that provider's metric.
+        SRUM_VIZ_TABLES = {
+            "SRUM_application_usage_table": "application_usage",
+            "SRUM_network_data_table": "network_data",
+            "SRUM_network_connectivity_table": "network_connectivity",
+            "SRUM_energy_usage_table": "energy",
+            "SRUM_app_timeline_table": "app_timeline",
+        }
+        # MFT and USN table tabs get a Charts button opening the MFT/USN
+        # correlated dashboard (the second visualization).
+        MFTUSN_VIZ_TABLES = {"MFT_table", "USN_table"}
+        # LNK and Automatic-JumpList table tabs get a Charts button opening the
+        # LNK/Jump-List "opened files" dashboard (the third visualization).
+        LNKJL_VIZ_TABLES = {"LNK_table", "AJL_table"}
+        # The Prefetch table tab gets a Charts button opening the Prefetch
+        # "program executions" dashboard (the fourth visualization).
+        PREFETCH_VIZ_TABLES = {"Prefetch_table"}
+        # Every shell-item table tab (Shellbags + the shell/PIDL MRUs) gets a
+        # Charts button opening the Shell Items "user navigation & MRU"
+        # dashboard (the fifth visualization), opened pre-filtered to that
+        # table's own source. Most of these have no Anatomy page, so the loop
+        # below also visits every key here that ANATOMY_LINKS lacks - those
+        # rows carry the Charts button alone.
+        SHELLITEMS_VIZ_TABLES = {
+            "Shellbags_table": "shellbags", "RecentDocs_table": "recentdocs",
+            "OpenSaveMRU_table": "opensave", "LastSaveMRU_table": "lastvisited",
+            "TypedPath_table": "typedpaths", "RunMRU_table": "runmru",
+            "WordWheelQuery_table": "search", "cid_size_mru_table": "dialogapps",
+            "MUICache_table": "muicache", "user_shell_folders_table": "shellfolders",
+            "shell_open_command_table": "shellext",
+            "shell_icon_overlay_identifiers_table": "shellext",
+            "shell_service_object_delay_load_table": "shellext",
+            "RDPClientMRU_table": "rdp", "OfficeDocuments_table": "office",
+            "MountPoints2_table": "mountpoints", "RegistryBrowserHistory_table": "typedurls",
+            "RecentApps_table": "recentapps", "ApplicationArtifacts_table": "appmru",
+            "regedit_lastkey_table": "regedit",
+        }
+        # The browser tables the dashboard charts get a Charts button opening the
+        # Browser Forensics "activity & domains" dashboard (the sixth
+        # visualization). Every one of these must also be a key in ANATOMY_LINKS
+        # - the loop below iterates THAT, so a table missing from it gets no
+        # button row at all and no error says so.
+        BROWSER_VIZ_TABLES = {
+            "Browser_history_table", "Browser_gecko_history_table",
+            "Browser_downloads_table", "Browser_cookies_table",
+            "Browser_cache_table", "Browser_shortcuts_table",
+            "Browser_search_engines_table",
+        }
+
         placed, skipped = 0, []
-        for attr in ANATOMY_LINKS:
+        for attr in list(ANATOMY_LINKS) + [t for t in SHELLITEMS_VIZ_TABLES
+                                           if t not in ANATOMY_LINKS]:
             table = getattr(self, attr, None)
             if table is None:
                 continue                      # not built yet, or not built at all
@@ -5580,21 +5899,159 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             bar.setContentsMargins(0, 0, 0, 4)
             bar.addStretch(1)
 
-            button = QtWidgets.QToolButton(row)
-            button.setObjectName(attr + "_anatomy_button")
-            button.setText(" Anatomy")
-            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
-            button.setCursor(QtCore.Qt.PointingHandCursor)
-            button.setToolTip(tooltip_for(attr) or "")
-            button.setAutoRaise(True)
-            try:
-                from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
-                button.setIcon(CrowEyeIcons.link())
-            except Exception:
-                pass                          # a null icon is a Qt no-op
-            button.clicked.connect(
-                lambda _checked=False, a=attr: self._open_anatomy(a))
-            bar.addWidget(button)
+            # SRUM tables: a Charts button, immediately to the LEFT of Anatomy.
+            if attr in SRUM_VIZ_TABLES:
+                viz_button = QtWidgets.QToolButton(row)
+                viz_button.setObjectName(attr + "_viz_button")
+                viz_button.setText(" Charts")
+                viz_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                viz_button.setCursor(QtCore.Qt.PointingHandCursor)
+                viz_button.setToolTip("Open the SRUM activity contribution chart")
+                viz_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            viz_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                viz_button.clicked.connect(
+                    lambda _checked=False, p=SRUM_VIZ_TABLES[attr]:
+                    self.open_visualization_dialog(p))
+                bar.addWidget(viz_button)
+
+            # MFT / USN tables: a Charts button opening the correlated dashboard.
+            if attr in MFTUSN_VIZ_TABLES:
+                mu_button = QtWidgets.QToolButton(row)
+                mu_button.setObjectName(attr + "_viz_button")
+                mu_button.setText(" Charts")
+                mu_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                mu_button.setCursor(QtCore.Qt.PointingHandCursor)
+                mu_button.setToolTip("Open the MFT/USN correlated activity dashboard")
+                mu_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            mu_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                mu_button.clicked.connect(
+                    lambda _checked=False: self.open_mftusn_dialog())
+                bar.addWidget(mu_button)
+
+            # LNK / Automatic-JumpList tables: a Charts button opening the
+            # LNK/Jump-List "opened files" dashboard.
+            if attr in LNKJL_VIZ_TABLES:
+                lj_button = QtWidgets.QToolButton(row)
+                lj_button.setObjectName(attr + "_viz_button")
+                lj_button.setText(" Charts")
+                lj_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                lj_button.setCursor(QtCore.Qt.PointingHandCursor)
+                lj_button.setToolTip("Open the LNK / Jump-List opened-files dashboard")
+                lj_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            lj_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                lj_button.clicked.connect(
+                    lambda _checked=False: self.open_lnkjl_dialog())
+                bar.addWidget(lj_button)
+
+            # Prefetch table: a Charts button opening the program-executions dashboard.
+            if attr in PREFETCH_VIZ_TABLES:
+                pf_button = QtWidgets.QToolButton(row)
+                pf_button.setObjectName(attr + "_viz_button")
+                pf_button.setText(" Charts")
+                pf_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                pf_button.setCursor(QtCore.Qt.PointingHandCursor)
+                pf_button.setToolTip("Open the Prefetch program-executions dashboard")
+                pf_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            pf_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                pf_button.clicked.connect(
+                    lambda _checked=False: self.open_prefetch_dialog())
+                bar.addWidget(pf_button)
+
+            # Shell-item tables: a Charts button opening the Shell Items
+            # "user navigation & MRU" dashboard.
+            if attr in SHELLITEMS_VIZ_TABLES:
+                si_button = QtWidgets.QToolButton(row)
+                si_button.setObjectName(attr + "_viz_button")
+                si_button.setText(" Charts")
+                si_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                si_button.setCursor(QtCore.Qt.PointingHandCursor)
+                si_button.setToolTip("Open the Shell Items user-navigation & MRU dashboard")
+                si_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            si_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                si_button.clicked.connect(
+                    lambda _checked=False, src=SHELLITEMS_VIZ_TABLES[attr]:
+                    self.open_shellitems_dialog(src))
+                bar.addWidget(si_button)
+
+            # Browser tables: a Charts button opening the browser forensics
+            # "activity & domains" dashboard.
+            if attr in BROWSER_VIZ_TABLES:
+                br_button = QtWidgets.QToolButton(row)
+                br_button.setObjectName(attr + "_viz_button")
+                br_button.setText(" Charts")
+                br_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                br_button.setCursor(QtCore.Qt.PointingHandCursor)
+                br_button.setToolTip("Open the browser forensics activity & domains dashboard")
+                br_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            br_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                br_button.clicked.connect(
+                    lambda _checked=False: self.open_browser_dialog())
+                bar.addWidget(br_button)
+
+            if attr in ANATOMY_LINKS:
+                button = QtWidgets.QToolButton(row)
+                button.setObjectName(attr + "_anatomy_button")
+                button.setText(" Anatomy")
+                button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                button.setCursor(QtCore.Qt.PointingHandCursor)
+                button.setToolTip(tooltip_for(attr) or "")
+                button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    button.setIcon(CrowEyeIcons.link())
+                except Exception:
+                    pass                      # a null icon is a Qt no-op
+                button.clicked.connect(
+                    lambda _checked=False, a=attr: self._open_anatomy(a))
+                bar.addWidget(button)
 
             layout.insertWidget(0, row)
             table._anatomy_row = row
@@ -5606,6 +6063,429 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         if skipped:
             print("[Anatomy] no layout to place a button in: %s"
                   % ", ".join(sorted(skipped)))
+
+    # ------------------------------------------------------------------
+    # Parse status: per-artifact outcome + the i button on empty tables
+    # (utils/parse_status.py, utils/table_sources.py, ui/parse_status_dialog.py)
+    # ------------------------------------------------------------------
+
+    def _parse_status_case_root(self):
+        paths = getattr(self, 'case_paths', None)
+        return paths.get('case_root') if paths else None
+
+    def _begin_parse_status_run(self, mode):
+        """Open a run in <case>/logs/parse_status.json; outcomes attach to it."""
+        self._parse_status_run_id = None
+        case_root = self._parse_status_case_root()
+        if not case_root:
+            return None
+        try:
+            from utils.parse_status import ParseStatusStore
+            self._parse_status_run_id = ParseStatusStore(case_root).begin_run(mode)
+        except Exception as e:
+            print(f"[Parse Status] Could not start a run record: {e}")
+        return self._parse_status_run_id
+
+    def _on_parse_status_reported(self, outcome_dict):
+        """One outcome from the live collector process (Progress_Reporter)."""
+        case_root = self._parse_status_case_root()
+        if not case_root or not isinstance(outcome_dict, dict):
+            return
+        try:
+            from utils.parse_status import ArtifactOutcome, ParseStatusStore
+            ParseStatusStore(case_root).record(
+                ArtifactOutcome.from_dict(outcome_dict),
+                getattr(self, '_parse_status_run_id', None))
+        except Exception as e:
+            print(f"[Parse Status] Could not record outcome: {e}")
+
+    def _finish_parse_status_run(self, show=True):
+        run_id = getattr(self, '_parse_status_run_id', None)
+        case_root = self._parse_status_case_root()
+        self._parse_status_run_id = None
+        if not run_id or not case_root:
+            return
+        try:
+            from utils.parse_status import ParseStatusStore
+            ParseStatusStore(case_root).finish_run(run_id, show=show)
+        except Exception as e:
+            print(f"[Parse Status] Could not close the run record: {e}")
+
+    def _table_sources(self):
+        """widget attribute -> (artifact, db file, sqlite table), every GUI table."""
+        try:
+            from utils.table_sources import build_table_sources
+        except Exception as e:
+            print(f"[Parse Status] table map unavailable: {e}")
+            return {}
+        try:
+            from Artifacts_Collectors.amcacheparser import AMCACHE_SCHEMAS
+            amcache_tables = list(AMCACHE_SCHEMAS)
+        except Exception:
+            amcache_tables = []
+        return build_table_sources(amcache_tables, [t for t, _l in BROWSER_TABS])
+
+    def _add_empty_table_info_buttons(self):
+        """Put an i button at the LEFT of the row above every evidence table.
+
+        Hidden until refresh_empty_table_indicators() finds the table empty.
+        It shares the Anatomy/Charts row when the table has one (inserted
+        before that row's stretch, so it sits on the left while they stay on
+        the right) and otherwise gets a row of its own. Idempotent and keyed
+        on the HOLDER, like _add_anatomy_links, because the MFT/USN/SRUM/
+        Browser tables are swapped for VirtualTableWidgets when data loads.
+        """
+        sources = self._table_sources()
+        if not sources:
+            return
+        if not hasattr(self, '_info_button_holders'):
+            self._info_button_holders = {}
+        try:
+            from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+            icon = CrowEyeIcons.info()
+        except Exception:
+            icon = None
+
+        for attr in sources:
+            if attr in self._info_button_holders:
+                continue
+            try:
+                table = getattr(self, attr, None)
+                if table is None:
+                    continue
+                holder = table.parentWidget()
+                layout = holder.layout() if holder is not None else None
+                if layout is None:
+                    continue
+            except RuntimeError:              # wrapped C++ object already deleted
+                continue
+
+            row = holder.findChild(QtWidgets.QWidget, attr + "_anatomy_row",
+                                   QtCore.Qt.FindDirectChildrenOnly)
+            own_row = False
+            if row is None:
+                row = holder.findChild(QtWidgets.QWidget, attr + "_info_row",
+                                       QtCore.Qt.FindDirectChildrenOnly)
+            if row is None:
+                row = QtWidgets.QWidget(holder)
+                row.setObjectName(attr + "_info_row")
+                bar = QtWidgets.QHBoxLayout(row)
+                bar.setContentsMargins(0, 0, 0, 4)
+                bar.addStretch(1)
+                layout.insertWidget(0, row)
+                own_row = True
+            if row.findChild(QtWidgets.QToolButton, attr + "_info_button") is not None:
+                self._info_button_holders[attr] = (holder, row)
+                continue
+
+            button = QtWidgets.QToolButton(row)
+            button.setObjectName(attr + "_info_button")
+            button.setText(" Why empty?")
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+            button.setCursor(QtCore.Qt.PointingHandCursor)
+            button.setAutoRaise(True)
+            button.setToolTip("Why is this table empty?")
+            if icon is not None:
+                button.setIcon(icon)
+            button.clicked.connect(
+                lambda _checked=False, a=attr: self._show_empty_table_reason(a))
+            # Index 0 = left of the stretch the row starts with.
+            row.layout().insertWidget(0, button)
+            button.setVisible(False)
+            if own_row:
+                row.setVisible(False)
+            self._info_button_holders[attr] = (holder, row)
+
+    @staticmethod
+    def _current_table_in(holder):
+        """The table widget currently in a tab - survives VirtualTableWidget swaps."""
+        layout = holder.layout() if holder is not None else None
+        if layout is None:
+            return None
+        for i in range(layout.count()):
+            w = layout.itemAt(i).widget()
+            if isinstance(w, QtWidgets.QAbstractItemView):
+                return w
+        return None
+
+    @staticmethod
+    def _table_row_total(table):
+        try:
+            if hasattr(table, 'get_total_rows'):
+                return int(table.get_total_rows() or 0)
+            if isinstance(table, QtWidgets.QTableWidget):
+                return table.rowCount()
+            model = table.model()
+            return model.rowCount() if model is not None else 0
+        except Exception:
+            return 0
+
+    def refresh_empty_table_indicators(self):
+        """Show the i button on every empty table, hide it on the rest."""
+        holders = getattr(self, '_info_button_holders', None)
+        if not holders:
+            return
+        case_root = self._parse_status_case_root()
+        reasons_cache = {}
+        try:
+            from utils.parse_status import ParseStatusStore
+            from utils.table_sources import explain_empty
+            store = ParseStatusStore(case_root) if case_root else None
+        except Exception:
+            store, explain_empty = None, None
+        sources = self._table_sources()
+        shown = 0
+        for attr, (holder, row) in list(holders.items()):
+            try:
+                button = row.findChild(QtWidgets.QToolButton, attr + "_info_button")
+                if button is None:
+                    continue
+                table = self._current_table_in(holder)
+                empty = table is not None and self._table_row_total(table) == 0
+                # No case open: nothing has been parsed, so there is nothing to explain.
+                show = bool(empty and case_root)
+                if show and explain_empty is not None:
+                    reason = explain_empty(attr, case_root, sources, store, reasons_cache)
+                    if reason is not None:
+                        button.setToolTip(reason.tooltip)
+                        try:
+                            from utils.parse_status import status_color
+                            color = "#EF4444" if reason.status == "DISPLAY_ERROR" \
+                                else status_color(reason.status)
+                            button.setStyleSheet("QToolButton { color: %s; }" % color)
+                        except Exception:
+                            pass
+                button.setVisible(show)
+                if row.objectName().endswith("_info_row"):
+                    row.setVisible(show)
+                shown += int(show)
+            except RuntimeError:
+                holders.pop(attr, None)       # tab torn down
+        if shown:
+            print(f"[Parse Status] {shown} empty table(s) carry an i button")
+
+    def _show_empty_table_reason(self, attr):
+        case_root = self._parse_status_case_root()
+        try:
+            from utils.table_sources import explain_empty
+            from ui.parse_status_dialog import EmptyTableReasonDialog
+            reason = explain_empty(attr, case_root, self._table_sources())
+            if reason is None:
+                return
+            title = self._tab_title_for(attr) or reason.sqlite_table
+            dlg = EmptyTableReasonDialog(reason, title, self.main_window,
+                                         open_report=self.show_parse_status_report)
+            dlg.exec_()
+        except Exception as e:
+            print(f"[Parse Status] Could not explain {attr}: {e}")
+
+    def _tab_title_for(self, attr):
+        """'Registry > RecentDocs'-style label of the tab holding a table."""
+        holder_row = getattr(self, '_info_button_holders', {}).get(attr)
+        if not holder_row:
+            return ""
+        page = holder_row[0]
+        parts = []
+        try:
+            w = page
+            while w is not None and len(parts) < 3:
+                parent = w.parentWidget()
+                tabs = parent.parentWidget() if parent is not None else None
+                if isinstance(tabs, QtWidgets.QTabWidget):
+                    idx = tabs.indexOf(w)
+                    if idx >= 0:
+                        parts.insert(0, tabs.tabText(idx).strip())
+                    w = tabs
+                else:
+                    w = parent
+        except Exception:
+            pass
+        return " > ".join(p for p in parts if p)
+
+    def show_parse_status_report(self, run_id=None):
+        case_root = self._parse_status_case_root()
+        if not case_root:
+            QtWidgets.QMessageBox.information(
+                self.main_window, "Parse Status Report", "Open a case first.")
+            return
+        try:
+            from ui.parse_status_dialog import ParseStatusDialog
+            ParseStatusDialog(case_root, run_id, self.main_window).exec_()
+        except Exception as e:
+            print(f"[Parse Status] Could not open the report: {e}")
+
+    def _after_data_loaded(self, show_pending=True, delay_ms=300):
+        """Run once a load finishes: refresh the i buttons, then - if a parse
+        just ended and its report has not been shown - show it, once."""
+        try:
+            self.refresh_empty_table_indicators()
+        except Exception as e:
+            print(f"[Parse Status] indicator refresh failed: {e}")
+        if not show_pending:
+            return
+        case_root = self._parse_status_case_root()
+        if not case_root:
+            return
+
+        def _show():
+            try:
+                from utils.parse_status import ParseStatusStore
+                run_id = ParseStatusStore(case_root).take_pending()
+            except Exception:
+                run_id = None
+            if run_id:
+                self.show_parse_status_report(run_id)
+        QtCore.QTimer.singleShot(delay_ms, _show)
+
+    @busy_section("Parsing and loading an artifact")
+    def _run_single_artifact(self, artifact, title, parse_fn, loaders, mode="live"):
+        """A single-artifact parse button: run it, classify the outcome, load
+        the tab, then show the one-row report.
+
+        Replaces the bare run_analysis_with_loading + load pairs, which loaded
+        nothing when the parser returned None and said 'completed' either way.
+        """
+        import time as _time
+        started = _time.time()
+        self._begin_parse_status_run(mode)
+        result, exc = None, None
+        try:
+            result = self.run_analysis_with_loading(title, parse_fn, run_in_thread=True)
+        except Exception as e:
+            exc = e
+            print(f"[Parse Status] {title} raised: {e}")
+        case_root = self._parse_status_case_root()
+        if case_root:
+            try:
+                from utils.parse_status import ParseStatusStore, collect_live_outcome
+                partition = self.get_windows_partition() if mode == "live" else "C:"
+                # Probing this machine says nothing about offline evidence.
+                probe = None if mode == "live" else {"sources": [], "status": None,
+                                                     "message": ""}
+                outcome = collect_live_outcome(artifact, case_root, partition,
+                                               raw_result=result, exc=exc, started=started,
+                                               probe=probe)
+                outcome.mode = mode
+                ParseStatusStore(case_root).record(
+                    outcome, getattr(self, '_parse_status_run_id', None))
+            except Exception as e:
+                print(f"[Parse Status] Could not classify {artifact}: {e}")
+        self._finish_parse_status_run(show=True)
+        for loader in loaders:
+            try:
+                loader()
+            except Exception as e:
+                print(f"[Parse Status] Loading after {artifact} failed: {e}")
+        self._after_data_loaded(delay_ms=1800)
+        return result
+
+    # ------------------------------------------------------------------
+    # Feature gate: nothing opens mid-parse, without a case, or before data
+    # (used by the module-level @gated decorator; state in ui/busy_guard.py)
+    # ------------------------------------------------------------------
+
+    def _show_gate_message(self, title, text, offer_ready=False):
+        """Styled notice. Returns True when "Open when ready" was chosen."""
+        box = QtWidgets.QMessageBox(self.main_window)
+        box.setIcon(QtWidgets.QMessageBox.Information)
+        box.setWindowTitle(title)
+        box.setText(text)
+        ready = None
+        if offer_ready:
+            ready = box.addButton("Open when ready", QtWidgets.QMessageBox.AcceptRole)
+        ok = box.addButton("OK", QtWidgets.QMessageBox.RejectRole)
+        box.setDefaultButton(ok)
+        try:
+            box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        except Exception:
+            pass
+        box.exec_()
+        return ready is not None and box.clickedButton() is ready
+
+    def _case_has_data(self, needs):
+        """Whether the open case has something for a feature to show.
+
+        `needs` is "any" or a tuple of Target_Artifacts database files. A
+        database counts only if one of its tables holds rows - parsers create
+        empty databases. "any" also accepts imported evidence and any GUI
+        table that has rows.
+        """
+        case_root = self._parse_status_case_root()
+        if not case_root:
+            return False
+        from utils.parse_status import ARTIFACTS, db_table_counts
+        ta = os.path.join(case_root, "Target_Artifacts")
+        files = ([f for _label, fs in ARTIFACTS.values() for f in fs]
+                 if needs == "any" else list(needs))
+        for name in files:
+            if any(c > 0 for c in db_table_counts(os.path.join(ta, name)).values()):
+                return True
+        if needs != "any":
+            return False
+        imported = os.path.join(ta, "Imported_Evidence")
+        try:
+            if os.path.isdir(imported) and any(os.scandir(imported)):
+                return True
+        except OSError:
+            pass
+        for attr, (holder, _row) in getattr(self, "_info_button_holders", {}).items():
+            try:
+                table = self._current_table_in(holder)
+                if table is not None and self._table_row_total(table) > 0:
+                    return True
+            except RuntimeError:
+                continue
+        return False
+
+    def _feature_gate(self, feature, needs=None, kind="view", retry=None):
+        """True if `feature` may open now; otherwise say why and return False."""
+        # "the Timeline" reads mid-sentence; a sentence opening on it needs a capital.
+        Feature = feature[:1].upper() + feature[1:]
+        if busy_guard.is_busy():
+            if kind == "silent":
+                return False
+            reason, elapsed = busy_guard.current()
+            what = "%s (%s elapsed)" % (reason or "Working", busy_guard.format_elapsed(elapsed))
+            if kind == "work":
+                self._show_gate_message(
+                    "Crow-Eye is busy",
+                    "Another operation is still running: %s.\n\n"
+                    "%s can start once it has finished." % (what, Feature))
+                return False
+            if self._show_gate_message(
+                    "Data is still loading",
+                    "Crow-Eye is still working: %s.\n\n"
+                    "%s will be available when the data has finished parsing and "
+                    "loading. Opening it now could read half-written data.\n\n"
+                    "Choose \"Open when ready\" to open it automatically as soon as "
+                    "the work finishes." % (what, Feature),
+                    offer_ready=retry is not None) and retry is not None:
+                busy_guard.when_idle(feature, retry)
+                print("[Busy guard] %s queued until the current work finishes" % feature)
+            return False
+
+        if needs is None or kind in ("work", "silent"):
+            return True
+
+        if not self._parse_status_case_root():
+            self._show_gate_message(
+                "No Case Loaded",
+                "Please create or open a case before opening %s." % feature)
+            return False
+
+        if not self._case_has_data(needs):
+            if needs == "any":
+                detail = "No data has been parsed or loaded into this case yet."
+            else:
+                detail = "The data %s shows has not been parsed for this case yet." % feature
+            self._show_gate_message(
+                "No data loaded yet",
+                "%s\n\nParse artifacts first - Parse All Artifacts (live system), "
+                "Parse Offline Artifacts, or Image Parsing - or open a case that "
+                "already holds parsed data. %s opens once the data is loaded."
+                % (detail, Feature))
+            return False
+        return True
 
     def _open_anatomy(self, attr):
         """Open the artifact's anatomy page, or say why it cannot be opened.
@@ -5747,6 +6627,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         table.clearContents()          # a header with no column this time round
         table.setRowCount(len(rows))   # must not keep the last load's value
         for row_index, row in enumerate(rows):
+            if row_index % 200 == 0:
+                keep_alive()
             for source_index, value in enumerate(row):
                 name = names[source_index].lower() if source_index < len(names) else ""
                 column_index = source_index if positional else target.get(name)
@@ -5977,7 +6859,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         """Helper to run analysis with loading screen.
         Set run_in_thread=False if analysis_function touches GUI widgets.
         """
-        self.show_loading_screen_with_function(title, analysis_function, run_in_thread=run_in_thread)
+        # Returned: run_recyclebin/srum/browser_analysis tested it, and without
+        # the return they never loaded their tab.
+        return self.show_loading_screen_with_function(title, analysis_function, run_in_thread=run_in_thread)
         
     def load_files_activity(self):
         """Load file activity related tables from the registry DB"""
@@ -6128,6 +7012,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Populate cells
             for row_index, row_data in enumerate(rows):
+                if row_index % 200 == 0:
+                    keep_alive()
                 for col_index, cell_data in enumerate(row_data):
                     item = QtWidgets.QTableWidgetItem(str(cell_data) if cell_data is not None else "")
                     item.setFlags(item.flags() & ~Qt.ItemIsEditable)
@@ -6399,6 +7285,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # was causing severe lag for large datasets.
         tooltips = data.get('tooltips') or []
         for row_index, row_data in enumerate(rows):
+            if row_index % 200 == 0:
+                keep_alive()
             row_tips = tooltips[row_index] if row_index < len(tooltips) else None
             for col_index, cell_data in enumerate(row_data):
                 # Convert cell data to string
@@ -6655,7 +7543,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "Windows_lastupdate": self.LastUpdate_table,
             "WindowsUpdateInfo": self.LastUpdateInfo_table,
             "ShutdownInfo": self.ShutDown_table,
-            "BrowserHistory": self.Browser_history_table,
+            "BrowserHistory": self.RegistryBrowserHistory_table,
             "USBDevices": self.USBDevices_table,
             "USBInstances": self.USBInstances_table,
             "USBProperties": self.USBProperties_table,
@@ -6793,6 +7681,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # which all have to compare it.
             basis_idx = columns.index("time_basis") if "time_basis" in columns else -1
             for r_idx, row in enumerate(rows):
+                if r_idx % 200 == 0:
+                    keep_alive()
                 bounded = (basis_idx >= 0
                            and str(row[basis_idx] or "").startswith("key upper"))
                 for c_idx, value in enumerate(row):
@@ -6841,6 +7731,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.loading_overlay = QtWidgets.QWidget(self.main_window)
         self.loading_overlay.hide() # Hide by default
         self.loading_overlay.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+        # Frameless flags make this a top-level window as far as the window
+        # manager is concerned, so it needs a name of its own.
+        self.loading_overlay.setWindowTitle("Crow-Eye - Loading")
         self.loading_overlay.setAttribute(Qt.WA_TranslucentBackground)
         self.loading_overlay.setStyleSheet("background-color: rgba(0, 0, 0, 180);")
         Crow_Eye.setObjectName("Crow_Eye")
@@ -6849,7 +7742,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         Crow_Eye.setStyleSheet(CrowEyeStyles.MAIN_WINDOW)
         # Use the QIcon(path) constructor so Qt loads ALL embedded .ico sizes and picks the
         # sharpest for the taskbar/title bar (addPixmap(QPixmap(ico)) grabs one frame -> blurry).
-        Crow_Eye.setWindowIcon(QtGui.QIcon(":/Icons/CrowEye.ico"))
+        # Not a Qt resource path: the .qrc is never compiled, so one resolves
+        # to an empty icon - and QIcon.isNull() reports False for it, which is
+        # why the window carried no icon and nothing ever said so.
+        # crow_eye_icon() tests the pixmap and reads the file from disk.
+        _icon = CrowEyeStyles.crow_eye_icon() if CrowEyeStyles else None
+        if _icon is not None:
+            Crow_Eye.setWindowIcon(_icon)
         self.centralwidget = QtWidgets.QWidget(Crow_Eye)
         self.centralwidget.setObjectName("centralwidget")
         sizePolicy = QtWidgets.QSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
@@ -6892,7 +7791,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.main_menu.setStyleSheet(CrowEyeStyles.MAIN_MENU_BUTTON)
         self.main_menu.setText("")
         icon1 = QtGui.QIcon()
-        icon1.addPixmap(QtGui.QPixmap(":/Icons/icons/menu-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "menu-icon.svg")
+        if _px is not None:
+            icon1.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.main_menu.setIcon(icon1)
         self.main_menu.setIconSize(QtCore.QSize(42, 42))
         self.main_menu.setCheckable(True)
@@ -6917,7 +7818,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.settings_button.setStyleSheet(CrowEyeStyles.MAIN_MENU_BUTTON)
         self.settings_button.setText("")
         icon_settings = QtGui.QIcon()
-        icon_settings.addPixmap(QtGui.QPixmap(":/Icons/icons/settings-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "settings-icon.svg")
+        if _px is not None:
+            icon_settings.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.settings_button.setIcon(icon_settings)
         self.settings_button.setIconSize(QtCore.QSize(24, 24))
         self.settings_button.setFlat(False)
@@ -6934,7 +7837,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.Creat_case.setObjectName("Creat_case")
         self.Creat_case.setMaximumHeight(32)
         icon_new_case = QtGui.QIcon()
-        icon_new_case.addPixmap(QtGui.QPixmap(":/Icons/icons/new-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "new-case-icon.svg")
+        if _px is not None:
+            icon_new_case.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.Creat_case.setIcon(icon_new_case)
         self.Creat_case.setIconSize(QtCore.QSize(20, 20))
         self.left_section.addWidget(self.Creat_case)
@@ -6945,7 +7850,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.open_case_btn.setObjectName("pushButton_2")
         self.open_case_btn.setMaximumHeight(32)
         icon_open_case = QtGui.QIcon()
-        icon_open_case.addPixmap(QtGui.QPixmap(":/Icons/icons/open-case-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "open-case-icon.svg")
+        if _px is not None:
+            icon_open_case.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.open_case_btn.setIcon(icon_open_case)
         self.open_case_btn.setIconSize(QtCore.QSize(20, 20))
         self.left_section.addWidget(self.open_case_btn)
@@ -6992,7 +7899,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.search_button.setObjectName("search_button")
         self.search_button.setToolTip("Open database search dialog (Ctrl+Shift+F)")
         icon_search = QtGui.QIcon()
-        icon_search.addPixmap(QtGui.QPixmap(":/Icons/icons/search-icon.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "search-icon.svg")
+        if _px is not None:
+            icon_search.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.search_button.setIcon(icon_search)
         self.search_button.setIconSize(QtCore.QSize(16, 16))
         self.search_button.clicked.connect(self._show_database_search)
@@ -7003,7 +7912,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.timeline_search_button.setText("Timeline Visualization")
         # Add visualization icon
         icon_viz = QtGui.QIcon()
-        icon_viz.addPixmap(QtGui.QPixmap("GUI Resources/icons/visualization.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "visualization.svg")
+        if _px is not None:
+            icon_viz.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.timeline_search_button.setIcon(icon_viz)
         self.timeline_search_button.setIconSize(QtCore.QSize(16, 16))
         self.timeline_search_button.setObjectName("timeline_search_button")
@@ -7016,7 +7927,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.uba_button.setStyleSheet(CrowEyeStyles.UBA_BUTTON)
         self.uba_button.setText("User Behavior")
         icon_uba = QtGui.QIcon()
-        icon_uba.addPixmap(QtGui.QPixmap("GUI Resources/icons/uba.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "uba.svg")
+        if _px is not None:
+            icon_uba.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.uba_button.setIcon(icon_uba)
         self.uba_button.setIconSize(QtCore.QSize(16, 16))
         self.uba_button.setObjectName("uba_button")
@@ -7031,7 +7944,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.eye_assistant_button.setFixedHeight(40)
         # Add EYE icon
         icon_eye = QtGui.QIcon()
-        icon_eye.addPixmap(QtGui.QPixmap("GUI Resources/the Eye AI agent transparent.png"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "the Eye AI agent transparent.png")
+        if _px is not None:
+            icon_eye.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.eye_assistant_button.setIcon(icon_eye)
         self.eye_assistant_button.setIconSize(QtCore.QSize(60, 60))
         self.eye_assistant_button.setObjectName("eye_assistant_button")
@@ -7083,7 +7998,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.export_json_CSV.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
         # Add export icon
         icon_export = QtGui.QIcon()
-        icon_export.addPixmap(QtGui.QPixmap("GUI Resources/icons/export.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "export.svg")
+        if _px is not None:
+            icon_export.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.export_json_CSV.setIcon(icon_export)
         self.export_json_CSV.setIconSize(QtCore.QSize(16, 16))
         self.export_json_CSV.setText("Export Data") # Ensure text is set
@@ -7096,7 +8013,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.dynamic_linking_button.setStyleSheet(CrowEyeStyles.DYNAMIC_LINK_BUTTON) # Use distinct Cyan style
         # Add descriptive link icon
         icon_dynamic = QtGui.QIcon()
-        icon_dynamic.addPixmap(QtGui.QPixmap("GUI Resources/icons/dynamic_linking.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "dynamic_linking.svg")
+        if _px is not None:
+            icon_dynamic.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.dynamic_linking_button.setIcon(icon_dynamic)
         self.dynamic_linking_button.setIconSize(QtCore.QSize(20, 20)) # Slightly smaller icon
         self.dynamic_linking_button.setText("DYNAMIC LINKING")
@@ -7110,7 +8029,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.correlation_button.setStyleSheet(CrowEyeStyles.CORRELATION_BUTTON)
         # Add descriptive correlation icon showing connected data points
         icon_correlation = QtGui.QIcon()
-        icon_correlation.addPixmap(QtGui.QPixmap("GUI Resources/icons/correlation_icon_v4.svg"), QtGui.QIcon.Normal, QtGui.QIcon.Off)
+        _px = CrowEyeStyles.resource_pixmap("GUI Resources", "icons", "correlation_icon_v4.svg")
+        if _px is not None:
+            icon_correlation.addPixmap(_px, QtGui.QIcon.Normal, QtGui.QIcon.Off)
         self.correlation_button.setIcon(icon_correlation)
         self.correlation_button.setIconSize(QtCore.QSize(24, 24)) # Larger icon for better visibility
         self.correlation_button.setText("RUN CORRELATION")
@@ -7235,6 +8156,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Hide on non-Windows systems
         if not IS_WINDOWS:
             self.SRUMButton.setVisible(False)
+
+        self.BrowserButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.BrowserButton, True, True, True)
+        self.BrowserButton.setObjectName("BrowserButton")
+        self.verticalLayout_3.addWidget(self.BrowserButton)
+        # Hide on non-Windows systems
+        if not IS_WINDOWS:
+            self.BrowserButton.setVisible(False)
 
         self.PartitionButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.PartitionButton, True, True, True)
@@ -7932,15 +8861,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.verticalLayout_LastUpdateSubkeys.addWidget(self.LastUpdateSubkeys_table)
         self.Registry_widget.addTab(self.LastUpdateSubkeys_tab, "")
         # Provenance about the parse: one row per hive, saying whether Windows
-        # had it open, whether its transaction logs were replayed, and what the
-        # file hashed to as found. Fourteen columns, matching
+        # had it open, whether its transaction logs were replayed, what the
+        # file hashed to as found, and when Windows last compacted it - a
+        # reorganization discards the free space, so it decides whether an
+        # empty carved table means "nothing was deleted" or "the deletions
+        # were dropped before we looked". Sixteen columns, matching
         # registry_hive_state exactly.
         self.RegistryHiveState_tab = QtWidgets.QWidget()
         self.RegistryHiveState_tab.setObjectName("RegistryHiveState_tab")
         self.verticalLayout_RegistryHiveState = QtWidgets.QVBoxLayout(self.RegistryHiveState_tab)
         self.verticalLayout_RegistryHiveState.setObjectName("verticalLayout_RegistryHiveState")
         self.RegistryHiveState_table = QtWidgets.QTableWidget(self.RegistryHiveState_tab)
-        self.setup_standard_table(self.RegistryHiveState_table, 15, False, 300, 190)
+        self.setup_standard_table(self.RegistryHiveState_table, 16, False, 300, 190)
         self.RegistryHiveState_table.setObjectName("RegistryHiveState_table")
         self.verticalLayout_RegistryHiveState.addWidget(self.RegistryHiveState_table)
         self.Registry_widget.addTab(self.RegistryHiveState_tab, "")
@@ -8327,23 +9259,31 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.Browser_history.setObjectName("Browser_history")
         self.verticalLayout_31 = QtWidgets.QVBoxLayout(self.Browser_history)
         self.verticalLayout_31.setObjectName("verticalLayout_31")
-        self.Browser_history_table = QtWidgets.QTableWidget(self.Browser_history)
-        self.Browser_history_table.setMinimumSize(QtCore.QSize(2, 2))
-        self.setup_standard_table(self.Browser_history_table, 6, False, 300, 190)
-        self.Browser_history_table.setObjectName("Browser_history_table")
-        self.verticalLayout_31.addWidget(self.Browser_history_table)
+        # Not "Browser_history_table": create_browser_table_tabs() sets that
+        # name for the Browser tab's history table, built later, and the
+        # rebinding left this registry (TypedURLs) widget unreachable - the
+        # registry BrowserHistory rows were written into the Browser tab.
+        self.RegistryBrowserHistory_table = QtWidgets.QTableWidget(self.Browser_history)
+        self.RegistryBrowserHistory_table.setMinimumSize(QtCore.QSize(2, 2))
+        self.setup_standard_table(self.RegistryBrowserHistory_table, 6, False, 300, 190)
+        self.RegistryBrowserHistory_table.setObjectName("RegistryBrowserHistory_table")
+        self.verticalLayout_31.addWidget(self.RegistryBrowserHistory_table)
         self.Registry_widget.addTab(self.Browser_history, "")
         
         # ShimCache tab was moved to main tab
         self.tab = QtWidgets.QWidget()
         self.tab.setObjectName("tab")
-        self.horizontalLayout_4 = QtWidgets.QHBoxLayout(self.tab)
-        self.horizontalLayout_4.setObjectName("horizontalLayout_4")
+        # Vertical, like every other registry tab: the Anatomy/Charts row that
+        # _add_anatomy_links inserts at index 0 must land ABOVE the table. This
+        # tab was the last one still on a QHBoxLayout, which put the button in a
+        # thin strip to the LEFT of the grid instead.
+        self.verticalLayout_usbdevices = QtWidgets.QVBoxLayout(self.tab)
+        self.verticalLayout_usbdevices.setObjectName("verticalLayout_usbdevices")
         self.USBDevices_table = QtWidgets.QTableWidget(self.tab)
         self.USBDevices_table.setMinimumSize(QtCore.QSize(2, 2))
         self.setup_standard_table(self.USBDevices_table, 5, False, 300, 190)
         self.USBDevices_table.setObjectName("USBDevices_table")
-        self.horizontalLayout_4.addWidget(self.USBDevices_table)
+        self.verticalLayout_usbdevices.addWidget(self.USBDevices_table)
         self.Registry_widget.addTab(self.tab, "")
         self.USBInstance_tab = QtWidgets.QWidget()
         self.USBInstance_tab.setObjectName("USBInstance_tab")
@@ -8806,8 +9746,27 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
         self.verticalLayout_srum_main.addWidget(self.SRUM_tab_widget)
         self.main_tab.addTab(self.SRUM_main_tab, "")
-        
-        # Create EYE Assistant tab
+
+        # Create Browser Forensics main tab (Chromium / Gecko / Electron)
+        self.Browser_main_tab = QtWidgets.QWidget()
+        self.Browser_main_tab.setObjectName("Browser_main_tab")
+        self.verticalLayout_browser_main = QtWidgets.QVBoxLayout(self.Browser_main_tab)
+        self.verticalLayout_browser_main.setObjectName("verticalLayout_browser_main")
+
+        # Create Browser tab widget to hold all table tabs
+        self.Browser_tab_widget = QtWidgets.QTabWidget(self.Browser_main_tab)
+        self.Browser_tab_widget.setObjectName("Browser_tab_widget")
+
+        # Apply unified style to the tab widget
+        from styles import CrowEyeStyles
+        self.Browser_tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
+
+        # Create tabs for each browser table
+        self.create_browser_table_tabs()
+
+        self.verticalLayout_browser_main.addWidget(self.Browser_tab_widget)
+        self.main_tab.addTab(self.Browser_main_tab, "")
+
         self.verticalLayout.addWidget(self.main_tab)
         self.horizontalLayout_2.addWidget(self.info_frame)
         # Give all stretch to content and none to sidebar
@@ -8829,6 +9788,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Remove conflicting hide/show connections; animation handles visibility/width
         QtCore.QMetaObject.connectSlotsByName(Crow_Eye)
         self._add_anatomy_links()
+        self._add_empty_table_info_buttons()
         Crow_Eye.setTabOrder(self.lnkbutton, self.logbutton)
         Crow_Eye.setTabOrder(self.logbutton, self.main_tab)
         Crow_Eye.setTabOrder(self.main_tab, self.main_menu)
@@ -8865,6 +9825,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.logbutton.setText(_translate("Crow_Eye", "Event Logs"))
         self.RecycleBinButton.setText(_translate("Crow_Eye", "Recycle Bin"))
         self.SRUMButton.setText(_translate("Crow_Eye", "SRUM"))
+        self.BrowserButton.setText(_translate("Crow_Eye", "Browsers"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "Offline analysis"))
         self.CrowClawButton.setText(_translate("Crow_Eye", "Crow-Claw Collector"))
         self.OfflineImporterButton.setText(_translate("Crow_Eye", "Offline Importer"))
@@ -9545,12 +10506,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 _translate("Crow_Eye", "Hive State")
             )
         if hasattr(self, 'RegistryHiveState_table'):
-            self.RegistryHiveState_table.setColumnCount(15)
+            self.RegistryHiveState_table.setColumnCount(16)
+            # In DDL order: the rows are filled positionally from the database's
+            # own column list, so a label out of order relabels the wrong data.
             headers = ["Hive Name", "Hive Path", "Sequence 1", "Sequence 2",
                        "Was Dirty", "Logs Found", "Log Format", "Replayed",
                        "Entries Applied", "Pages Applied", "Highest Sequence",
-                       "Source SHA-256", "Acquisition Route", "Reason",
-                       "Parsed At"]
+                       "Source SHA-256", "Acquisition Route", "Reorganized At",
+                       "Reason", "Parsed At"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
                 self.RegistryHiveState_table.setHorizontalHeaderItem(i, item)
@@ -10009,6 +10972,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.main_tab.indexOf(self.SRUM_main_tab),
                 _translate("Crow_Eye", "SRUM")
             )
+
+        # Set tab text for Browser Forensics main tab
+        if hasattr(self, 'Browser_main_tab') and hasattr(self, 'main_tab'):
+            self.main_tab.setTabText(
+                self.main_tab.indexOf(self.Browser_main_tab),
+                _translate("Crow_Eye", "Browsers")
+            )
         
         
         # Set tab text for SRUM sub-tabs
@@ -10116,14 +11086,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 _translate("Crow_Eye", "Shutdown info")
             )
         
-        # Initialize Browser_history_table headers if it exists
-        if hasattr(self, 'Browser_history_table'):
-            self.Browser_history_table.setColumnCount(7)
+        # Initialize RegistryBrowserHistory_table headers if it exists
+        if hasattr(self, 'RegistryBrowserHistory_table'):
+            self.RegistryBrowserHistory_table.setColumnCount(7)
             headers = ["Browser", "URL", "Title", "Visit count", "Last visit",
                        "Parsed At", "User Name"]
             for i, header in enumerate(headers):
                 item = QtWidgets.QTableWidgetItem()
-                self.Browser_history_table.setHorizontalHeaderItem(i, item)
+                self.RegistryBrowserHistory_table.setHorizontalHeaderItem(i, item)
                 item.setText(_translate("Crow_Eye", header))
         
         # Set tab text for Browser History tab
@@ -10714,6 +11684,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.MFT_USN_CorrelateButton.clicked.connect(self.run_mft_usn_correlation)
         self.RecycleBinButton.clicked.connect(self.run_recyclebin_analysis)
         self.SRUMButton.clicked.connect(self.run_srum_analysis)
+        self.BrowserButton.clicked.connect(self.run_browser_analysis)
         self.export_json_CSV.clicked.connect(self.export_all_tables)
         
         # Connect correlation button
@@ -10727,8 +11698,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.Creat_case.clicked.connect(self.create_directory)
         self.open_case_btn.clicked.connect(self.open_existing_case)
         # Connect parse_all button to live artifacts collection
-        self.parse_all.clicked.connect(lambda: self.run_analysis_with_loading(
-            "Running All Live Artifacts Analysis...", self.parse_all_live_artifacts))
+        # Called directly, NOT through run_analysis_with_loading: that wrapper opens
+        # a loading dialog of its own, and parse_all_live_artifacts opens a second
+        # one parented to it. The wrapper's dialog has no steps (so it shows an
+        # indeterminate bar with no count), and because the real work is started
+        # asynchronously the wrapper declared success and closed about a second
+        # later - while parsing had barely begun, taking the real dialog with it.
+        self.parse_all.clicked.connect(self.parse_all_live_artifacts)
 
         self.CrowClawButton.clicked.connect(self.run_crow_claw)
         self.OfflineImporterButton.clicked.connect(self.open_offline_importer)
@@ -10801,6 +11777,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
     
 
     
+    @gated("Database Search", needs="any")
     def _show_database_search(self):
         """Show database search dialog"""
         try:
@@ -10847,6 +11824,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"An error occurred:\n{str(e)}"
             )
 
+    @gated("Eye AI")
     def _show_eye_assistant(self):
         """Show Eye AI Forensic Assistant Window.
 
@@ -10972,6 +11950,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[Error] Failed to load last case: {str(e)}")
             return False
 
+    @gated("Opening a case", kind="work")
     def open_case(self, directory_path=None):
         """Open and load a case.
         If directory_path is None, prompt the user to pick a directory.
@@ -11028,6 +12007,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
                     'recyclebin': os.path.join(artifacts_dir, 'recyclebin_analysis.db'),
                     'srum': os.path.join(artifacts_dir, 'srum_data.db'),
+                    'browser': os.path.join(artifacts_dir, 'browser_analysis.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -11037,9 +12017,19 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             for key, path in self.case_paths.items():
                 if key != 'databases' and isinstance(path, str):
                     os.makedirs(path, exist_ok=True)
+            # Centralize this case's logs under <case_root>/logs so every parser,
+            # the timeline, visualizations, offline parsing and the app all leave a
+            # record the Settings -> Logs panel can browse. Best-effort: never block
+            # opening a case on it.
+            try:
+                from utils.logging_setup import configure_case_logging
+                configure_case_logging(directory_path)
+            except Exception:
+                pass
             # Update UI
             case_name = os.path.basename(directory_path)
             self.label.setText(f"Case: {case_name}")
+            self.set_window_title_for_case(case_name)
             
             # Enable Parse Offline Artifacts button when case is opened
             if hasattr(self, 'ParseOfflineArtifactsButton'):
@@ -11080,6 +12070,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
                     'recyclebin': os.path.join(self.case_paths['artifacts_dir'], 'recyclebin_analysis.db'),
                     'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
+                    'browser': os.path.join(self.case_paths['artifacts_dir'], 'browser_analysis.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -11424,7 +12415,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # 2c. Drop the cached loaders so nothing can repopulate a tab from
             # the case that was just closed.
             for attr in ('mft_loader', 'usn_loader', 'corr_loader', 'srum_loader',
-                         'registry_loader'):
+                         'browser_loader', 'registry_loader'):
                 if hasattr(self, attr):
                     try:
                         setattr(self, attr, None)
@@ -11432,6 +12423,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         pass
 
             # 3. Reset internal state variables
+            # Stop writing this case's logs (restores stdout/stderr, closes handlers).
+            try:
+                from utils.logging_setup import reset_case_logging
+                reset_case_logging()
+            except Exception:
+                pass
             self.case_paths = None
             self.search_results = []
             self.current_result_index = -1
@@ -11439,6 +12436,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # 4. Reset UI labels
             if hasattr(self, 'label'):
                 self.label.setText("Case: None")
+                self.set_window_title_for_case(None)
             
             # 5. Disable Parse Offline Artifacts button when case is closed
             if hasattr(self, 'ParseOfflineArtifactsButton'):
@@ -11516,6 +12514,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                            f"  {' '.join(bad)}\n\nUse letters, numbers, spaces, '-' or '_'.")
         return True, cleaned
 
+    @gated("Creating a case", kind="work")
     def create_directory(self):
         """Create case directory structure and store paths in class variables"""
         self.Creat_case.setEnabled(False)
@@ -11600,12 +12599,21 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'shimcache': os.path.join(artifacts_dir, 'shimcache.db'),
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
                     'srum': os.path.join(artifacts_dir, 'srum_data.db'),
+                    'browser': os.path.join(artifacts_dir, 'browser_analysis.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
                 }
             }
-            
+
+            # Centralize this case's logs under <case_root>/logs (see the case-open
+            # path above). Best-effort.
+            try:
+                from utils.logging_setup import configure_case_logging
+                configure_case_logging(case_root)
+            except Exception:
+                pass
+
             # Create case configuration
             case_config = {
                 'case_name': dir_name,
@@ -11619,6 +12627,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'shimcache': os.path.join(self.case_paths['artifacts_dir'], 'shimcache.db'),
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
                     'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
+                    'browser': os.path.join(self.case_paths['artifacts_dir'], 'browser_analysis.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -11643,6 +12652,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     
                 # Update UI with case name
                 self.label.setText(f"Case: {dir_name}")
+                self.set_window_title_for_case(dir_name)
 
                 # Enable Parse Offline Artifacts now that a case is active — mirrors
                 # open_case so a freshly-created case can import artifacts immediately
@@ -11690,6 +12700,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     "Error",
                     f"Failed to create case structure:\n{str(e)}"
                 )
+                try:
+                    from utils.logging_setup import reset_case_logging
+                    reset_case_logging()
+                except Exception:
+                    pass
                 self.case_paths = None
                 return None
         
@@ -11704,6 +12719,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         finally:
             self.Creat_case.setEnabled(True)
 
+    @gated("Opening a case", kind="work")
     def open_existing_case(self):
         """Compatibility wrapper that delegates to open_case()."""
         return self.open_case()
@@ -11979,72 +12995,88 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             raise
             
 
+    # Each single-artifact button goes through _run_single_artifact, which
+    # records a parse status for it, loads its tab and shows the report.
+    @gated("LNK parsing", kind="work")
     def run_lnk_analysis(self):
         """Run LNK analysis with loading screen"""
-        self.run_analysis_with_loading("Running LNK Analysis...", self.parse_LNK_files, run_in_thread=True)
-        self.load_data_from_database_lnkAJL()
-        self.load_data_from_database_CJL()
+        self._run_single_artifact("lnk_jumplist", "Running LNK Analysis...", self.parse_LNK_files,
+                                  [self.load_data_from_database_lnkAJL, self.load_data_from_database_CJL])
         
+    @gated("Registry parsing", kind="work")
     def run_registry_analysis(self):
         """Run registry analysis with loading screen"""
-        self.run_analysis_with_loading("Running Registry Analysis...", self.parse_live_registry, run_in_thread=True)
-        self.load_registry_data_from_db()
+        self._run_single_artifact("registry", "Running Registry Analysis...", self.parse_live_registry,
+                                  [self.load_registry_data_from_db])
 
     
+    @gated("Prefetch parsing", kind="work")
     def run_prefetch_analysis(self):
         """Run prefetch analysis with loading screen"""
-        self.run_analysis_with_loading("Running Prefetch Analysis...", self.parse_perfetch, run_in_thread=True)
-        self.load_data_from_Prefetch()
+        self._run_single_artifact("prefetch", "Running Prefetch Analysis...", self.parse_perfetch,
+                                  [self.load_data_from_Prefetch])
     
+    @gated("ShimCache parsing", kind="work")
     def run_shimcache_analysis(self):
         """Run ShimCache analysis with loading screen and switch to ShimCache tab"""
-        self.run_analysis_with_loading("Running ShimCache Analysis...", self.parse_shimcache, run_in_thread=True)
-        self.load_shimcache_data()
+        self._run_single_artifact("shimcache", "Running ShimCache Analysis...", self.parse_shimcache,
+                                  [self.load_shimcache_data])
         # Switch to the ShimCache main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.ShimCache_main_tab))
     
+    @gated("Amcache parsing", kind="work")
     def run_amcache_analysis(self):
         """Run Amcache analysis with loading screen and switch to Amcache tab"""
-        self.run_analysis_with_loading("Running Amcache Analysis...", self.parse_amcache, run_in_thread=True)
-        self.load_amcache_data()
+        self._run_single_artifact("amcache", "Running Amcache Analysis...", self.parse_amcache,
+                                  [self.load_amcache_data])
         # Switch to the Amcache main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.Amcache_main_tab))
     
+    @gated("MFT parsing", kind="work")
     def run_mft_analysis(self):
         """Run MFT analysis with loading screen and switch to MFT/USN tab"""
-        self.run_analysis_with_loading("Running MFT Analysis...", self.parse_mft, run_in_thread=True)
-        self.load_mft_data()
+        self._run_single_artifact("mft", "Running MFT Analysis...", self.parse_mft,
+                                  [self.load_mft_data])
         # Switch to the MFT/USN main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
     
+    @gated("USN parsing", kind="work")
     def run_usn_analysis(self):
         """Run USN Journal analysis with loading screen and switch to MFT/USN tab"""
-        self.run_analysis_with_loading("Running USN Journal Analysis...", self.parse_usn, run_in_thread=True)
-        self.load_usn_data()
+        self._run_single_artifact("usn", "Running USN Journal Analysis...", self.parse_usn,
+                                  [self.load_usn_data])
         # Switch to the MFT/USN main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
     
+    @gated("Event log parsing", kind="work")
     def run_logs_analysis(self):
         """Run Windows logs analysis with loading screen"""
-        self.run_analysis_with_loading("Running Windows Logs Analysis...", self.parse_logs, run_in_thread=True)
-        self.load_all_logs()
+        self._run_single_artifact("evtx", "Running Windows Logs Analysis...", self.parse_logs,
+                                  [self.load_all_logs])
     
+    @gated("Offline LNK parsing", kind="work")
     def run_offline_lnk_analysis(self):
         """Run offline LNK analysis with loading screen"""
-        self.run_analysis_with_loading("Running Offline LNK Analysis...", self.parse_offline_lnk_files, run_in_thread=True)
-        self.load_data_from_database_lnkAJL()
-        self.load_data_from_database_CJL()
+        self._run_single_artifact("lnk_jumplist", "Running Offline LNK Analysis...",
+                                  self.parse_offline_lnk_files,
+                                  [self.load_data_from_database_lnkAJL, self.load_data_from_database_CJL],
+                                  mode="offline")
     
+    @gated("Offline registry parsing", kind="work")
     def run_offline_registry_analysis(self):
         """Run offline registry analysis with loading screen"""
-        self.run_analysis_with_loading("Running Offline Registry Analysis...", self.parse_offline_registry, run_in_thread=True)
-        self.load_registry_data_from_db()
+        self._run_single_artifact("registry", "Running Offline Registry Analysis...",
+                                  self.parse_offline_registry, [self.load_registry_data_from_db],
+                                  mode="offline")
     
+    @gated("Offline Prefetch parsing", kind="work")
     def run_offline_prefetch_analysis(self):
         """Run offline prefetch analysis with loading screen"""
-        self.run_analysis_with_loading("Running Offline Prefetch Analysis...", self.parse_offline_prefetch, run_in_thread=True)
-        self.load_data_from_Prefetch()
+        self._run_single_artifact("prefetch", "Running Offline Prefetch Analysis...",
+                                  self.parse_offline_prefetch, [self.load_data_from_Prefetch],
+                                  mode="offline")
 
+    @gated("Crow Claw collection", kind="work")
     def run_crow_claw(self):
         """Run Crow-Claw Collector GUI"""
         try:
@@ -12108,6 +13140,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[Error] Failed to open Crow-Claw Collector: {str(e)}")
             QtWidgets.QMessageBox.critical(self.main_window, "Crow-Claw Error", f"Failed to launch Crow-Claw: {str(e)}")
 
+    @gated("the Offline Importer", kind="work")
     def open_offline_importer(self):
         """Open the Offline Artifact Importer GUI"""
         try:
@@ -12159,6 +13192,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[Error] Failed to open Offline Artifact Importer: {str(e)}")
             QtWidgets.QMessageBox.critical(self.main_window, "Importer Error", f"Failed to launch Offline Importer: {str(e)}")
 
+    @gated("Image Parsing", kind="work")
     def open_image_parsing(self):
         """Open the Forensics Image Parsing Dialog"""
         try:
@@ -12213,6 +13247,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to launch Forensics Image Parsing:\n\n{str(e)}"
             )
 
+    @gated("Parse Offline Artifacts", kind="work")
+    @busy_section("Parsing offline artifacts")
     def on_parse_offline_artifacts(self):
         """
         Handle Parse Offline Artifacts button click.
@@ -12371,6 +13407,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                             
                         # 2. Parse all identified artifacts
                         loading_dialog.set_title("PARSING ARTIFACTS")
+                        loading_dialog.set_phase("parsing")
                         parse_steps = [f"Parsing {a.artifact_type}" for a in valid_artifacts]
                         loading_dialog.set_steps(parse_steps)
                         
@@ -12463,6 +13500,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to open Parse Offline Artifacts dialog:\n{str(e)}"
             )
     
+    @busy_section("Loading parsed data into the GUI")
     def refresh_gui_tabs_after_parsing(self, artifact_types=None):
         """
         Refresh GUI tabs after parsing offline artifacts.
@@ -12576,6 +13614,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     ],
                     'SRUM': [
                         ('SRUM Data', self.load_srum_data)
+                    ],
+                    'Browser': [
+                        ('Browser Data', self.load_browser_data)
                     ]
                 }
                 
@@ -12614,7 +13655,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # CRITICAL: Force GUI to update all tables before returning
             # This ensures that any caller (like ImageParsingDialog) knows the data is actually visible
             QtWidgets.QApplication.processEvents()
-            
+
+            # The offline/image parse recorded its outcomes in ParserInvoker;
+            # now that the tables are filled, mark the empty ones and show
+            # the report (once - a nested load_all_data may already have).
+            self._after_data_loaded(delay_ms=2400 if not artifact_types else 400)
+
         except Exception as e:
             print(f"[Error] Failed to refresh GUI tabs: {str(e)}")
             import traceback
@@ -12626,6 +13672,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to refresh GUI tabs after parsing:\n\n{str(e)}"
             )
 
+    @gated("MFT/USN correlation", kind="work")
+    @busy_section("Correlating MFT and USN data")
     def run_mft_usn_correlation(self):
         """Run MFT and USN correlation analysis with loading screen and switch to MFT/USN tab"""
         
@@ -12683,21 +13731,28 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.MFT_USN_main_tab))
             print("[MFT-USN] Data loaded successfully")
     
+    @gated("Recycle Bin parsing", kind="work")
     def run_recyclebin_analysis(self):
         """Run RecycleBin analysis with loading screen and switch to RecycleBin tab"""
-        result = self.run_analysis_with_loading("Running Recycle Bin Analysis...", self.parse_recyclebin, run_in_thread=True)
-        if result:
-            self.load_recyclebin_data()
+        self._run_single_artifact("recyclebin", "Running Recycle Bin Analysis...", self.parse_recyclebin,
+                                  [self.load_recyclebin_data])
         # Switch to the RecycleBin main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.RecycleBin_main_tab))
     
+    @gated("SRUM parsing", kind="work")
     def run_srum_analysis(self):
         """Run SRUM analysis with loading screen and switch to SRUM tab"""
-        result = self.run_analysis_with_loading("Running SRUM Analysis...", self.parse_srum, run_in_thread=True)
-        if result:
-            self.load_srum_data()
+        self._run_single_artifact("srum", "Running SRUM Analysis...", self.parse_srum,
+                                  [self.load_srum_data])
         # Switch to the SRUM main tab
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.SRUM_main_tab))
+
+    @gated("Browser parsing", kind="work")
+    def run_browser_analysis(self):
+        """Run browser forensics analysis and switch to the Browsers tab"""
+        self._run_single_artifact("browser", "Parsing Browser Artifacts...", self.parse_browser,
+                                  [self.load_browser_data])
+        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.Browser_main_tab))
     
     def parse_LNK_files(self):
         """Parse LNK files and Jump Lists"""
@@ -12744,8 +13799,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 db_path = os.path.join(artifacts_dir, 'registry_data.db')
             else:
                 db_path = None
-            parse_live_registry(case_root=case_root, db_path=db_path)
-            print("[Registry] Registry data collected successfully")
+            result = parse_live_registry(case_root=case_root, db_path=db_path)
+            print("[Registry] Registry data collected")
+            return result
         except Exception as e:
             print(f"[Registry Error] {str(e)}")
             raise
@@ -12757,8 +13813,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             from Artifacts_Collectors.Prefetch_claw import process_prefetch_files
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
             windows_partition = self.get_windows_partition()
-            process_prefetch_files(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
-            print("[Prefetch] Prefetch data collected successfully")
+            result = process_prefetch_files(case_path=case_root, offline_mode=False, windows_partition=windows_partition)
+            print("[Prefetch] Prefetch data collected")
+            return result
         except Exception as e:
             print(f"[Prefetch Error] {str(e)}")
             raise
@@ -12769,8 +13826,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print("[Logs] Starting Windows event logs collection...")
             from Artifacts_Collectors.WinLog_Claw import main as collect_logs
             case_root = self.case_paths.get('case_root') if hasattr(self, 'case_paths') and self.case_paths else None
-            collect_logs(case_path=case_root)
-            print("[Logs] Event logs collected successfully")
+            result = collect_logs(case_path=case_root)
+            print("[Logs] Event logs collected")
+            return result
         except Exception as e:
             print(f"[Logs Error] {str(e)}")
             raise
@@ -12849,6 +13907,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     except Exception as e:
                         print(f"[Amcache Warning] Failed to update case configuration: {str(e)}")
                         # Continue execution even if config update fails
+            return result_db_path
             
         except Exception as e:
             print(f"[Amcache Error] {str(e)}")
@@ -12890,6 +13949,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     print("[MFT Warning] MFT parser may have had issues but database might be created")
             finally:
                 os.chdir(original_cwd)
+            return result
             
         except Exception as e:
             print(f"[MFT Error] {str(e)}")
@@ -12931,6 +13991,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     print("[USN Warning] USN parser may have failed due to privilege requirements or missing dependencies")
             finally:
                 os.chdir(original_cwd)
+            return result
             
         except Exception as e:
             print(f"[USN Error] {str(e)}")
@@ -13021,7 +14082,41 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             import traceback
             traceback.print_exc()
             raise
-    
+
+    def parse_browser(self):
+        """Parse browser artifacts (Chromium / Gecko / Electron)"""
+        try:
+            print("[Browser] Starting browser artifact collection...")
+            from Artifacts_Collectors.Browser_Claw import parse_browser_data
+            artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+            if not artifacts_dir:
+                print("[Browser] No artifacts directory available, skipping browser collection")
+                raise Exception("No artifacts directory available for browser parsing")
+
+            def progress_callback(message):
+                try:
+                    if hasattr(self, '_current_loading_dialog') and self._current_loading_dialog:
+                        if not self._current_loading_dialog.is_cancelled():
+                            self._current_loading_dialog.log_signal.emit(
+                                f"<span style='color:#00FFFF;'>{message}</span>")
+                except Exception:
+                    pass
+
+            windows_partition = self.get_windows_partition()
+            result = parse_browser_data(case_artifacts_dir=artifacts_dir,
+                                        progress_callback=progress_callback,
+                                        windows_partition=windows_partition)
+            if result.get('success'):
+                print(f"[Browser] Browser data collected successfully: {result.get('statistics', {})}")
+            else:
+                print(f"[Browser] Browser parsing completed with warnings: {result.get('errors', [])}")
+            return result
+        except Exception as e:
+            print(f"[Browser Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+
     def load_recyclebin_data(self):
         """Load RecycleBin data from the recyclebin database"""
         try:
@@ -13061,6 +14156,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.RecycleBin_main_table.setSortingEnabled(False)
                 self.RecycleBin_main_table.setRowCount(len(rows))
                 for row_index, row in enumerate(rows):
+                    if row_index % 200 == 0:
+                        keep_alive()
                     for col_index, value in enumerate(row):
                         item = QtWidgets.QTableWidgetItem(str(value))
                         self.RecycleBin_main_table.setItem(row_index, col_index, item)
@@ -13161,7 +14258,32 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "cycles_wob": "CPU Cycles Without Break",
             "disk_raw": "Disk Bytes",
             "network_bytes_raw": "Network Bytes",
-            "network_tail_raw": "Network Tail Bytes"
+            "network_tail_raw": "Network Tail Bytes",
+            # Native columns captured in full (SRUM_EXTRA_COLUMNS)
+            "wake_count": "Wake Count",
+            "designed_capacity": "Battery Designed Capacity (mWh)",
+            "full_charged_capacity": "Battery Full-Charge Capacity (mWh)",
+            "battery_count": "Battery Count",
+            "configuration_hash": "Configuration Hash",
+            "battery_charge_limited": "Battery Charge Limited",
+            "in_focus_timeline": "In Focus (timeline)",
+            "user_input_timeline": "User Input (timeline)",
+            "comp_rendered_timeline": "Composition Rendered (timeline)",
+            "comp_dirtied_timeline": "Composition Dirtied (timeline)",
+            "comp_propagated_timeline": "Composition Propagated (timeline)",
+            "audio_in_timeline": "Audio In (timeline)",
+            "audio_out_timeline": "Audio Out (timeline)",
+            "cpu_timeline": "CPU (timeline)",
+            "disk_timeline": "Disk (timeline)",
+            "network_timeline": "Network (timeline)",
+            "mbb_timeline": "Mobile Broadband (timeline)",
+            "display_required_timeline": "Display Required (timeline)",
+            "keyboard_input_timeline": "Keyboard Input (timeline)",
+            "cycles_breakdown": "CPU Cycles Breakdown",
+            "cycles_attr_breakdown": "CPU Cycles Attributed Breakdown",
+            "cycles_wob_breakdown": "CPU Cycles Without Break Breakdown",
+            "mbb_tail_raw": "Mobile Broadband Tail Bytes",
+            "mbb_bytes_raw": "Mobile Broadband Bytes"
         }
         return [mapping.get(col, col.replace('_', ' ').title()) for col in columns]
 
@@ -13215,7 +14337,92 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[SRUM] Error loading SRUM data: {str(e)}")
             import traceback
             traceback.print_exc()
-    
+
+    def load_browser_data(self):
+        """Load browser_analysis.db into the Browser tab's sub-tables.
+
+        Each table's placeholder QTableWidget is swapped for a VirtualTableWidget
+        the first time it is loaded (same pattern as SRUM), so large tables such
+        as IndexedDB and Local Storage stay responsive.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                print("[Browser] No case paths available")
+                return
+            artifacts_dir = self.case_paths.get('artifacts_dir')
+            if not artifacts_dir:
+                print("[Browser] No artifacts directory available")
+                return
+            db_path = os.path.join(artifacts_dir, 'browser_analysis.db')
+            if not os.path.exists(db_path):
+                print(f"[Browser] Database not found at: {db_path}")
+                return
+
+            from PyQt5.QtCore import QThread
+            if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+                print("[Browser] ERROR: load_browser_data() must run on the main thread")
+                return
+
+            from data.base_loader import BaseDataLoader
+            browser_loader = BaseDataLoader(db_path)
+            if not browser_loader.connect():
+                print("[Browser] Failed to connect to browser database")
+                return
+            self.browser_loader = browser_loader
+
+            from ui.virtual_table_widget import VirtualTableWidget
+            from ui.progress_indicator import TableLoadingOverlay
+            from styles import CrowEyeStyles
+
+            loaded = 0
+            for table_name, _label in BROWSER_TABS:
+                try:
+                    if not browser_loader.table_exists(table_name):
+                        continue
+                    columns = browser_loader.get_columns(table_name)
+                    current = self.browser_table_widgets.get(table_name)
+                    page = self.browser_tab_pages.get(table_name)
+                    layout = self.browser_tab_layouts.get(table_name)
+                    if page is None or layout is None:
+                        continue
+                    if not isinstance(current, VirtualTableWidget):
+                        if current is not None:
+                            layout.removeWidget(current)
+                            current.deleteLater()
+                        vtable = VirtualTableWidget(
+                            data_loader=browser_loader,
+                            table_name=table_name,
+                            columns=columns,
+                            page_size=5000,
+                            buffer_size=10000,
+                            parent=page,
+                        )
+                        vtable.set_order_by('rowid ASC')
+                        CrowEyeStyles.apply_table_styles(vtable)
+                        layout.addWidget(vtable)
+                        self.browser_table_widgets[table_name] = vtable
+                        overlay = TableLoadingOverlay(vtable)
+                        self.browser_tab_overlays[table_name] = overlay
+                    else:
+                        vtable = current
+                        overlay = self.browser_tab_overlays.get(table_name)
+                    vtable.setHorizontalHeaderLabels(
+                        [c.replace('_', ' ').title() for c in columns])
+                    if overlay:
+                        overlay.show_loading(f"Loading {_label}...")
+                    ok = vtable.load_initial_data()
+                    if overlay:
+                        overlay.hide_loading()
+                    if ok:
+                        loaded += 1
+                except Exception as te:
+                    print(f"[Browser] Error loading table {table_name}: {te}")
+            print(f"[Browser] Loaded {loaded} browser table(s)")
+        except Exception as e:
+            print(f"[Browser] Error loading browser data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
     def load_srum_application_usage(self, srum_loader):
         """Load SRUM Application Usage data using VirtualTableWidget"""
         try:
@@ -13808,11 +15015,35 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             if cancellation_check():
                 return
-            
-            # Step 11, 12, 13: MFT and USN Journal data
-            step_callback(11, "PARSING MASTER FILE TABLE (MFT)")
-            step_callback(12, "PARSING USN JOURNAL")
-            step_callback(13, "CORRELATING MFT & USN DATA")
+
+            # Step 11: Browser data
+            step_callback(11, "COLLECTING BROWSER DATA")
+            try:
+                log_callback("[Browser] Collecting browser data...")
+                from Artifacts_Collectors.Browser_Claw import parse_browser_data
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                if artifacts_dir:
+                    result = parse_browser_data(case_artifacts_dir=artifacts_dir, windows_partition=windows_partition)
+                    if result.get('success'):
+                        log_callback(f"[Browser] Browser data collected successfully: {result.get('statistics', {})}")
+                    else:
+                        log_callback(f"[Browser] Browser parsing completed with warnings: {result.get('errors', [])}")
+                else:
+                    log_callback("[Browser] No artifacts directory available, skipping browser collection")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[Browser Error] {str(e)}")
+                log_callback(f"[Browser Error Details] {error_details}")
+                print(f"[Browser Error] {str(e)}\n{error_details}")
+
+            if cancellation_check():
+                return
+
+            # Step 12, 13, 14: MFT and USN Journal data
+            step_callback(12, "PARSING MASTER FILE TABLE (MFT)")
+            step_callback(13, "PARSING USN JOURNAL")
+            step_callback(14, "CORRELATING MFT & USN DATA")
             try:
                 log_callback("[MFT-USN] Collecting MFT and USN Journal data...")
                 self.parse_mft_usn_correlation()
@@ -13846,6 +15077,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # Don't raise - allow partial data collection
             # raise
 
+    @gated("Parse All Artifacts", kind="work")
     def parse_all_live_artifacts(self):
         """
         Enhanced live artifact collection with loading dialog.
@@ -13891,7 +15123,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             parent = active_window if active_window else self.main_window
             dialog = LoadingDialog(
                 title="CROW EYE SYSTEM",
-                parent=parent
+                parent=parent,
+                phase="parsing"
             )
             
             # Define the collection steps
@@ -13907,6 +15140,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Collecting Amcache data",
                 "Collecting RecycleBin artifacts",
                 "Collecting SRUM network & execution data",
+                "Collecting browser data (Chromium, Firefox, Electron)",
                 "Parsing Master File Table (MFT)",
                 "Parsing USN Journal",
                 "Correlating MFT & USN Data",
@@ -13940,9 +15174,21 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 message_queue = task_handle.message_queue
                 
                 worker = Progress_Reporter(message_queue)
-                
+
+                # Per-artifact outcomes from the collector process land in
+                # <case>/logs/parse_status.json (shown when the data has loaded).
+                self._begin_parse_status_run("live")
+                worker.parse_status_reported.connect(
+                    self._on_parse_status_reported, QtCore.Qt.QueuedConnection)
+
                 # Connect worker signals to LoadingDialog using QueuedConnection
                 worker.simple_progress_updated.connect(dialog.update_step, QtCore.Qt.QueuedConnection)
+                # The bar is driven by the real count of finished tasks, not by
+                # each parser's hard-coded step constant. simple_progress_updated
+                # still arrives and still sets the step label; it just no longer
+                # decides the number, which used to run backwards because the
+                # parallel pool completes out of order.
+                worker.task_progress_updated.connect(dialog.update_task_progress, QtCore.Qt.QueuedConnection)
                 worker.log_updated.connect(dialog.add_log_message, QtCore.Qt.QueuedConnection)
                 
                 # Store dialog reference and connect completion/error signals
@@ -13962,10 +15208,20 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         _pm.shutdown()  # terminate the worker process if it doesn't stop soon
                     except Exception as _e:
                         print(f"[Cancel] process_manager shutdown failed: {_e}")
+                    # A cancelled run never sends DONE, so the reporter can keep
+                    # polling forever - release the busy state here, not there.
+                    busy_guard.end(getattr(self, '_live_busy_token', None))
                 dialog.cancelled.connect(_on_cancel_requested)
 
                 # Store worker to prevent garbage collection
                 self._live_worker = worker
+
+                # Busy from here until the data is in the GUI: ended in
+                # _on_live_acquisition_finished / _error / cancel. `alive` lets
+                # it heal if the reporter thread dies without either.
+                self._live_busy_token = busy_guard.begin(
+                    "Parsing live artifacts",
+                    alive=lambda: getattr(self, '_live_worker', None) is not None)
 
                 # Start worker (non-blocking)
                 worker.start()
@@ -13988,15 +15244,20 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 QtCore.QTimer.singleShot(4500, show_error)
                 raise
-                
-            finally:
-                dialog.stop_log_capture()
-                
+
+            # NOTE: no `finally: dialog.stop_log_capture()` here. worker.start() is
+            # asynchronous, so a finally block runs while the collection is only just
+            # beginning and tears the capture down before a single line arrives. It is
+            # stopped in _on_live_acquisition_finished / _on_live_acquisition_error
+            # instead, which is where the run actually ends.
+
         except ImportError:
             print("Warning: Could not load loading dialog, using fallback")
             # Fallback to original implementation
             print("[Open Case] Starting full live analysis...")
-            
+            import time as _time
+            _fallback_started = _time.time()
+
             # Step 1: Collect all artifacts (without loading data into UI)
             try:
                 print("[LNK] Collecting LNK and Jump Lists...")
@@ -14070,15 +15331,32 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 print(f"[MFT-USN Error] {str(e)}")
             
             print("[Open Case] Artifact collection finished. Loading data into UI...")
-            
+
+            # The fallback runs each collector inline and keeps no results, so
+            # each artifact is judged by its source probe and whether its
+            # database was written during this run.
+            case_root = self._parse_status_case_root()
+            if case_root:
+                try:
+                    from utils.parse_status import (ARTIFACT_ORDER, collect_live_outcome,
+                                                    record_outcomes)
+                    partition = self.get_windows_partition()
+                    record_outcomes(case_root, [
+                        collect_live_outcome(a, case_root, partition, started=_fallback_started)
+                        for a in ARTIFACT_ORDER if a != "browser"], "live")
+                except Exception as e:
+                    print(f"[Parse Status] Could not record fallback outcomes: {e}")
+
             # Step 2: Load all collected data into UI tables
             try:
                 self.load_all_data_internal()
             except Exception as e:
                 print(f"[Open Case Error] Failed to load data into UI: {str(e)}")
-            
+            self._after_data_loaded()
+
             print("[Open Case] Full live analysis and data loading completed.")
     
+    @busy_section("Loading case data into the GUI")
     def load_all_data(self, loading_dialog=None):
         """Load all data with enhanced loading dialog"""
         try:
@@ -14093,25 +15371,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 parent=parent
             )
             
-            # Define the steps
-            steps = [
-                "Loading LNK and Jump List data",
-                "Loading Custom Jump Lists", 
-                "Loading Registry data",
-                "Loading File Activity data",
-                "Loading Prefetch data",
-                "Loading Event Logs",
-                "Loading ShimCache data",
-                "Loading Registry Database",
-                "Loading Amcache data",
-                "Loading RecycleBin data",
-                "Loading SRUM data",
-                "Loading MFT data",
-                "Loading USN Journal data",
-                "Loading Correlated MFT-USN data"
-            ]
-            
-            dialog.set_steps(steps)
+            # The step labels are derived from load_steps below rather than
+            # written out again here. They were two hand-maintained lists and
+            # they had drifted: 14 labels against 15 loaders, because
+            # "LOADING BROWSER DATA" was added to one and not the other. Since
+            # update_step() ignores any index past the end of the label list,
+            # the last two steps silently did not move the bar at all.
             dialog.show()
             
             dialog.start_log_capture()
@@ -14141,10 +15406,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     ("LOADING AMCACHE DATA",            self.load_amcache_data),
                     ("LOADING RECYCLEBIN DATA",         self.load_recyclebin_data),
                     ("LOADING SRUM DATA",               self.load_srum_data),
+                    ("LOADING BROWSER DATA",            self.load_browser_data),
                     ("LOADING MFT DATA",                lambda: self.load_mft_data(dialog.add_log_message)),
                     ("LOADING USN JOURNAL DATA",        lambda: self.load_usn_data(dialog.add_log_message)),
                     ("LOADING CORRELATED MFT-USN DATA", lambda: self.load_correlated_data(dialog.add_log_message)),
                 ]
+
+                # One list, one source of truth for both the bar and the labels.
+                dialog.set_steps([label.title() for label, _ in load_steps])
 
                 failed = []
                 was_cancelled = False
@@ -14161,6 +15430,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     QtWidgets.QApplication.processEvents()
 
                     print(f"[{label}] Starting...")
+                    keep_alive()
                     try:
                         loader()
                         print(f"[{label}] Completed.")
@@ -14187,6 +15457,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
                     QtCore.QTimer.singleShot(2000, finalize_loading)
 
+                # i buttons on the tables that came out empty, and - when a
+                # parse just finished - its report, once the loader has closed.
+                self._after_data_loaded(delay_ms=2300)
+
             except Exception as e:
                 error_msg = f"Error loading data: {str(e)}"
                 dialog.add_log_message(f"[Error] {error_msg}")
@@ -14208,6 +15482,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             else:
                 self.run_analysis_with_loading("Loading All Data...", self.load_all_data_internal, run_in_thread=True)
     
+    @busy_section("Loading data into the GUI")
     def load_all_data_internal(self):
         """Internal function to load all data (called by the loading screen)"""
         try:
@@ -14279,7 +15554,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[SRUM Error] Couldn't load SRUM data: {str(e)}")
             import traceback
             traceback.print_exc()
-            
+
+        try:
+            self.load_browser_data()
+        except Exception as e:
+            print(f"[Browser Error] Couldn't load browser data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
         try:
             self.load_registry_data_from_db()
         except Exception as e:
@@ -14313,7 +15595,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[Correlated Error] Couldn't load correlated MFT-USN data: {str(e)}")
             import traceback
             traceback.print_exc()
-        
+
+        # Indicators only - the callers decide when a parse report is shown.
+        try:
+            self.refresh_empty_table_indicators()
+        except Exception as e:
+            print(f"[Parse Status] indicator refresh failed: {e}")
+
         print("\033[92m\nData has been loaded into the GUI Successfully\033[0m")
 
     def load_all_data_with_progress(self, loading_dialog):
@@ -14536,6 +15824,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
             return False
     
+    @gated("Export", needs="any")
     def export_all_tables(self):
         """Export all tables to JSON and CSV files"""
         try:
@@ -14585,7 +15874,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Amcache_ApplicationShortcut": self.Amcache_InventoryApplicationShortcut_table,
                 "Amcache_DriverBinary": self.Amcache_InventoryDriverBinary_table,
                 "Amcache_DriverPackage": self.Amcache_InventoryDriverPackage_table,
-                "BrowserHistory": self.Browser_history_table,
+                "BrowserHistory": self.RegistryBrowserHistory_table,
                 "USBDevices": self.USBDevices_table,
                 "USBInstances": self.USBInstances_table,
                 "USBProperties": self.USBProperties_table,
@@ -14731,9 +16020,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             )
             self.action_clone_case_data.triggered.connect(self.import_case_data_into_current)
             self.menu_case.addAction(self.action_clone_case_data)
+
+            # Reopen the per-artifact outcome of the last parses (also shown
+            # automatically once after every live / offline / image parse).
+            self.action_parse_status_report = QtWidgets.QAction(
+                "Parse Status Report…", self.main_window
+            )
+            self.action_parse_status_report.setToolTip(
+                "Show, per artifact, whether it was parsed, absent from the evidence, "
+                "unsupported, or failed - and why."
+            )
+            self.action_parse_status_report.triggered.connect(
+                lambda _checked=False: self.show_parse_status_report())
+            self.menu_case.addAction(self.action_parse_status_report)
         except Exception as e:
             print(f"Error setting up Case menu: {str(e)}")
 
+    @gated("Importing case data", kind="work")
+    @busy_section("Importing case data")
     def import_case_data_into_current(self):
         """Import another case's artifact data INTO the currently-open case, then load
         it into the GUI. Copies the source's Target_Artifacts (parsed) + live_acquisition
@@ -14874,6 +16178,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "case and loaded it into the GUI."
         )
 
+    @gated("the Correlation Engine", needs="any")
     def run_correlation_analysis(self):
         """Run correlation analysis on current case artifacts"""
         try:
@@ -14898,6 +16203,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             import traceback
             traceback.print_exc()
             
+    @gated("Dynamic Linking", needs="any")
+    @busy_section("Applying Dynamic Linking")
     def run_dynamic_linking(self):
         """Open the Dynamic Linking Configuration dialog"""
         try:
@@ -15031,6 +16338,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to open Dynamic Linking:\n\n{str(e)}"
             )
     
+    @gated("the Timeline", needs="any")
     def open_timeline_dialog(self):
         """Open the timeline visualization dialog"""
         try:
@@ -15068,6 +16376,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 f"Failed to open timeline: {str(e)}"
             )
 
+    @gated("User Behavior Analytics", needs="any")
     def open_uba_dialog(self):
         """Open the User Behavior Analytics (UBA) window.
 
@@ -15104,6 +16413,195 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "User Behavior Analytics Error",
                 f"Failed to open User Behavior Analytics: {str(e)}"
             )
+
+    @gated("the SRUM charts", needs=_NEEDS_SRUM)
+    def open_visualization_dialog(self, focus_provider=None):
+        """Open the SRUM activity visualization (contribution chart).
+
+        Launched from the Charts button on the SRUM table tabs. A case must be
+        loaded; the chart shows its own empty-state if SRUM has not been parsed.
+        `focus_provider` (the SRUM table the button sits on) sets the metric the
+        chart opens on.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.viz_dialog import VizDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._viz_dialog = VizDialog(self.main_window, focus_provider=focus_provider)
+            self._viz_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the MFT/USN charts", needs=_NEEDS_MFTUSN)
+    def open_mftusn_dialog(self):
+        """Open the MFT/USN correlated activity dashboard.
+
+        Launched from the Charts button on the MFT and USN table tabs. A case
+        must be loaded; the chart shows its own empty-state if MFT/USN has not
+        been parsed and correlated.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.mftusn_dialog import MftUsnDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._mftusn_dialog = MftUsnDialog(self.main_window)
+            self._mftusn_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open MFT/USN visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the LNK & Jump List charts", needs=_NEEDS_LNK)
+    def open_lnkjl_dialog(self):
+        """Open the LNK / Jump-List "opened files" dashboard.
+
+        Launched from the Charts button on the LNK and Automatic-JumpList table
+        tabs. A case must be loaded; the chart shows its own empty-state if LNK /
+        jump lists have not been parsed.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.lnkjl_dialog import LnkJlDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._lnkjl_dialog = LnkJlDialog(self.main_window)
+            self._lnkjl_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open LNK/Jump-List visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the Prefetch charts", needs=_NEEDS_PREFETCH)
+    def open_prefetch_dialog(self):
+        """Open the Prefetch "program executions" dashboard.
+
+        Launched from the Charts button on the Prefetch table tab. A case must be
+        loaded; the chart shows its own empty-state if Prefetch has not been parsed.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.prefetch_dialog import PrefetchDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._prefetch_dialog = PrefetchDialog(self.main_window)
+            self._prefetch_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open Prefetch visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the Shell Items charts", needs=_NEEDS_REGISTRY)
+    def open_shellitems_dialog(self, focus_source=None):
+        """Open the Shell Items "user navigation & MRU" dashboard.
+
+        Launched from the Charts button on any shell-item table tab (Shellbags,
+        the MRUs, MUICache, User Shell Folders, the shell-extension tables...),
+        pre-filtered to that table's source (``focus_source``). A case must be
+        loaded; the chart shows its own empty-state if the Registry has not
+        been parsed.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.shellitems_dialog import ShellItemsDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._shellitems_dialog = ShellItemsDialog(
+                self.main_window, focus_source=focus_source or "")
+            self._shellitems_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open Shell Items visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the Browser charts", needs=_NEEDS_BROWSER)
+    def open_browser_dialog(self):
+        """Open the browser forensics "activity & domains" dashboard.
+
+        Launched from the Charts button on any charted browser table tab. A case
+        must be loaded; the chart shows its own empty-state if the browsers have
+        not been parsed.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+
+            from visualizations.browser_dialog import BrowserVizDialog
+
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+
+            # Keep a reference so the window is not garbage-collected while open.
+            self._browser_dialog = BrowserVizDialog(self.main_window)
+            self._browser_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open Browser visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
 
 
     def setup_search_ui(self):
@@ -15326,6 +16824,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             traceback.print_exc()
             QMessageBox.critical(self.main_window, "Filter Error", f"An error occurred applying filter: {str(e)}")
     
+    @gated("Table search")
     def search_tables(self):
         """Search for text in tables with filtering options"""
         try:
@@ -15686,6 +17185,18 @@ if __name__ == "__main__":
             os.environ['QTWEBENGINE_DISABLE_SANDBOX'] = '1'
             if '--no-sandbox' not in sys.argv:
                 sys.argv.append('--no-sandbox')
+    # Start capturing output before anything else happens. Case logging only
+    # begins when a case is opened, so startup - including any failure that
+    # stops a case ever being opened - used to go to a console that a windowless
+    # build does not have. The case handlers layer on top of this one later.
+    try:
+        from utils.logging_setup import configure_app_logging as _cal
+        _app_log = _cal()
+        if _app_log:
+            print(f"[Logging] Application log -> {_app_log}")
+    except Exception as _log_err:
+        print(f"[Warning] Could not start application logging: {_log_err}")
+
     # ---------------------------------------------------------
     # SHARED OPENGL CONTEXT FIX
     # Fixes: Attribute Qt::AA_ShareOpenGLContexts must be set before QCoreApplication is created.

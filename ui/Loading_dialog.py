@@ -12,6 +12,13 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 from PyQt5.QtCore import QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication
 
+# The bar that never looks frozen, and the pump that keeps it (and the elapsed
+# clock) moving while the GUI thread is busy filling tables.
+if __name__ == "__main__":
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from ui.animated_progress_bar import (AnimatedProgressBar, add_frame_callback,
+                                      keep_alive, remove_frame_callback)
+
 # Terminal colour codes, which several parsers emit through colorama and which
 # this dialog would otherwise embed into HTML as literal escape sequences.
 # Stripped centrally so no parser has to remember — the MFT, USN, Registry and
@@ -44,11 +51,20 @@ class LogCapture:
     
     def __init__(self, log_display_callback):
         self.log_display_callback = log_display_callback
+        # Captured at ENTER, not here: this object is built with the dialog and
+        # may be entered much later, by which time a case may have been opened
+        # and utils.logging_setup may have put its console tee in place. Holding
+        # a stream from construction time meant restoring the wrong one.
         self.original_stdout = sys.stdout
         self.original_stderr = sys.stderr
         self.last_progress_line = None  # Track last progress bar update
-        
+
     def __enter__(self):
+        # Whatever is in place right now is what gets restored, and what gets
+        # written through - so the case's console.log tee stays in the chain
+        # instead of being cut out of it.
+        self.original_stdout = sys.stdout
+        self.original_stderr = sys.stderr
         # Store original streams as attributes on the LogCapture object
         # This allows parsers to detect and bypass log capture for performance
         sys.stdout = self
@@ -57,10 +73,16 @@ class LogCapture:
         self.original_stdout_ref = self.original_stdout
         self.original_stderr_ref = self.original_stderr
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
-        sys.stdout = self.original_stdout
-        sys.stderr = self.original_stderr
+        # Only put the streams back if they are still ours. A case switch during
+        # a long parse re-points logging and installs a new tee; blindly
+        # restoring here would tear that out and leave writes going to a closed
+        # file handle.
+        if sys.stdout is self:
+            sys.stdout = self.original_stdout
+        if sys.stderr is self:
+            sys.stderr = self.original_stderr
     
     def write(self, text):
         # Write to original stdout/stderr — unstripped, so a real terminal
@@ -84,9 +106,18 @@ class LogCapture:
             
             # Send meaningful log messages to display
             self.log_display_callback(text.strip())
+
+        # Every print() during GUI-thread work (the table loaders print
+        # constantly) doubles as an animation frame, so the bar, the clock and
+        # this log keep moving while the event loop cannot run. Throttled and
+        # GUI-thread-only inside keep_alive; never runs the event loop.
+        keep_alive()
     
     def flush(self):
-        self.original_stdout.flush()
+        try:
+            self.original_stdout.flush()
+        except Exception:
+            pass
 
 
 class LoadingDialog(QtWidgets.QDialog):
@@ -96,32 +127,54 @@ class LoadingDialog(QtWidgets.QDialog):
     status_signal = pyqtSignal(str)  # Same, for the status line
     cancelled = pyqtSignal()      # Signal emitted when cancel button is clicked
     
-    def __init__(self, title="CROW EYE SYSTEM", parent=None):
+    def __init__(self, title="CROW EYE SYSTEM", parent=None, phase="loading"):
+        """`phase` colours the taskbar icon: "parsing" green, "loading" blue.
+
+        It cannot be inferred from the title - the live parse and the case load
+        both call themselves "CROW EYE SYSTEM" - so the three parsing call sites
+        say so explicitly and everything else stays on the default.
+        """
         super().__init__(parent)
         self.setWindowTitle("Crow Eye - Processing")
         
-        # Set Crow Eye icon for the dialog window. Use QIcon(path) so Qt loads all embedded
-        # .ico sizes (16..256) and stays sharp; load from the on-disk (freshly regenerated)
-        # icon via get_resource_path rather than the stale compiled ':/Icons/CrowEye.ico'.
+        # Set the Crow Eye icon from the .ico on disk, so Qt loads all the
+        # embedded sizes (16..256) and stays sharp.
+        #
+        # This used to call utils.path_utils.get_resource_path, which exists
+        # only in the EXE tree - in source the import raised straight into
+        # the except below and the dialog simply had no icon, silently.
         try:
-            from utils.path_utils import get_resource_path
-            self.setWindowIcon(QtGui.QIcon(get_resource_path("GUI Resources", "CrowEye.ico")))
+            from styles import CrowEyeStyles as _CES
+            _icon = _CES.crow_eye_icon()
+            if _icon is not None:
+                self.setWindowIcon(_icon)
         except Exception:
-            pass  # Fallback if icon resource is not available
+            pass  # an icon is never a reason to fail to show progress
         
-        # NOTE: deliberately NOT WindowStaysOnTopHint. The dialog stays modal (below)
-        # so it sits above the main window and blocks the half-loaded UI, but it must
-        # NOT force itself above a *newer* modal QMessageBox — otherwise any dialog
-        # shown during a load gets trapped behind the loading screen and freezes it.
+        # NOTE: deliberately NOT WindowStaysOnTopHint, and deliberately NOT modal.
+        #
+        # It must not force itself above a *newer* modal QMessageBox - otherwise a
+        # dialog shown during a load is trapped behind the loading screen and
+        # freezes it. And it must not take the input grab: an investigator is
+        # entitled to open Settings, read a tab or look at the case while a long
+        # parse runs. Without the grab, clicking the main window simply brings the
+        # main window in front of this one, which is the whole behaviour asked for
+        # - the loading screen keeps its size and its centred position and carries
+        # on reporting, it just stops being in the way.
         self.setWindowFlags(QtCore.Qt.Dialog | QtCore.Qt.FramelessWindowHint)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
-        self.setModal(True)
+        self.setModal(False)
         
         # Dialog properties
         self.title_text = title
         self.operation_steps = []
         self.current_step = 0
         self._is_cancelled = False
+        # Set once a real (completed, total) count reaches the bar; see
+        # update_task_progress and _animate_dots.
+        self._has_real_count = False
+        self._phase = phase if phase in ("parsing", "loading") else "loading"
+        self._taskbar_open = False
         
         # Animation properties - cyberpunk glow effects
         self.glow_opacity = 0.0
@@ -174,6 +227,13 @@ class LoadingDialog(QtWidgets.QDialog):
         self.status_label.setObjectName("statusLabel")
         self.status_label.setAlignment(QtCore.Qt.AlignCenter)
         self.status_label.setWordWrap(True)
+        # A default look of its own. Unstyled, it inherited the backdrop's
+        # QFrame border and gradient (QLabel is a QFrame) and drew black text
+        # in a cyan box - the live parse never applies OVERLAY_STATUS.
+        self.status_label.setStyleSheet(
+            "QLabel { color: #7dd3fc; font-family: 'Consolas', 'Courier New', monospace;"
+            " font-size: 13px; font-weight: bold; background: transparent; border: none;"
+            " padding: 2px; }")
         self.status_label.hide()
         content_layout.addWidget(self.status_label)
         
@@ -190,8 +250,9 @@ class LoadingDialog(QtWidgets.QDialog):
         # Small gap
         content_layout.addSpacing(10)
         
-        # Progress bar - directly added
-        self.progress_bar = QtWidgets.QProgressBar()
+        # Progress bar - directly added. Animated: a light sweep keeps moving
+        # between real updates, so a long step never looks like a freeze.
+        self.progress_bar = AnimatedProgressBar(accent="#00FFFF")
         self.progress_bar.setRange(0, 0)  # Start as indeterminate
         self.progress_bar.setStyleSheet(CrowEyeStyles.LOADING_DIALOG_PROGRESS + """
             QProgressBar {
@@ -212,7 +273,21 @@ class LoadingDialog(QtWidgets.QDialog):
         """)
         self.progress_bar.setFixedHeight(40)
         content_layout.addWidget(self.progress_bar)
-        
+
+        # Elapsed clock under the bar: proof of life even when no step has
+        # finished for minutes. Ticks on every animation frame (see
+        # _on_frame), including frames pumped while the GUI thread is busy.
+        self.elapsed_label = QtWidgets.QLabel("Elapsed 00:00")
+        self.elapsed_label.setObjectName("elapsedLabel")
+        self.elapsed_label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        self.elapsed_label.setStyleSheet(
+            # border: none - QLabel is a QFrame, so the backdrop's QFrame rule
+            # would otherwise draw its cyan border around this label.
+            "QLabel { color: #7dd3fc; font-family: 'Consolas', 'Courier New', monospace;"
+            " font-size: 12px; background: transparent; border: none;"
+            " padding: 2px 4px 0 0; }")
+        content_layout.addWidget(self.elapsed_label)
+
         # Small gap
         content_layout.addSpacing(10)
         
@@ -266,11 +341,68 @@ class LoadingDialog(QtWidgets.QDialog):
     def showEvent(self, event):
         """Override showEvent to center dialog after Qt finalizes geometry"""
         super().showEvent(event)
+        # The taskbar indicator lives exactly as long as this dialog is up.
+        # showEvent can fire more than once (hide/show), so it is guarded.
+        if not self._taskbar_open:
+            self._taskbar_open = True
+            self._taskbar("begin", self._phase)
+        self._start_clock()
         self.center_on_screen()
         # Without WindowStaysOnTopHint, raise once so the frameless dialog reliably
         # appears in front of the main window when shown.
         self.raise_()
         
+    # -- elapsed clock + busy-thread frames ----------------------------------
+    def _start_clock(self):
+        if getattr(self, "_clock_ref", None) is not None:
+            return                                   # showEvent can fire twice
+        import time as _time
+        self._clock_t0 = _time.monotonic()
+        self._clock_frozen = False
+        self._clock_text = ""
+        self._log_dirty = False
+        self._last_log_paint = 0.0
+        self._clock_ref = add_frame_callback(self._on_frame)
+
+    def _stop_clock(self):
+        ref = getattr(self, "_clock_ref", None)
+        if ref is not None:
+            remove_frame_callback(ref)
+            self._clock_ref = None
+
+    @staticmethod
+    def _fmt_elapsed(seconds):
+        seconds = int(seconds)
+        h, rem = divmod(seconds, 3600)
+        m, s = divmod(rem, 60)
+        return "%d:%02d:%02d" % (h, m, s) if h else "%02d:%02d" % (m, s)
+
+    def _on_frame(self):
+        """One animation frame - from the shared timer or from keep_alive().
+
+        Under keep_alive the event loop is NOT running, so a plain update()
+        would never be painted: what changed is repainted directly. Cheap -
+        the clock text changes once a second and the log at most ~7x/s.
+        """
+        try:
+            if not self.isVisible():
+                return
+            import time as _time
+            now = _time.monotonic()
+            if not getattr(self, "_clock_frozen", False):
+                text = "Elapsed " + self._fmt_elapsed(now - self._clock_t0)
+                if text != self._clock_text:
+                    self._clock_text = text
+                    self.elapsed_label.setText(text)
+                    self.elapsed_label.repaint()
+            if self._log_dirty and now - self._last_log_paint > 0.15:
+                self._log_dirty = False
+                self._last_log_paint = now
+                self.log_display.viewport().repaint()
+                self.status_label.repaint()
+        except RuntimeError:
+            self._stop_clock()                       # widget already deleted
+
     def is_cancelled(self):
         """Check if cancellation has been requested"""
         return self._is_cancelled
@@ -300,7 +432,6 @@ class LoadingDialog(QtWidgets.QDialog):
                 os.path.join(base_dir, "GUI Resources", "CrowEye_rounded.png"),
                 os.path.join(base_dir, "GUI Resources", "Crow-Eye.png"),
                 os.path.join(base_dir, "GUI Resources", "CrowEye.png"),
-                ":/Icons/Crow-Eye.png",
                 "GUI Resources/Crow-Eye.png",
                 "GUI Resources/CrowEye.png",
                 "../GUI Resources/Crow-Eye.png",
@@ -321,7 +452,6 @@ class LoadingDialog(QtWidgets.QDialog):
             # ICO fallback — pull the largest embedded size, not the default 16x13.
             if icon_pixmap is None or icon_pixmap.isNull():
                 ico_candidates = [
-                    ":/Icons/CrowEye.ico",
                     os.path.join(base_dir, "GUI Resources", "CrowEye.ico"),
                     "GUI Resources/CrowEye.ico",
                     "../GUI Resources/CrowEye.ico",
@@ -329,7 +459,9 @@ class LoadingDialog(QtWidgets.QDialog):
                 for path in ico_candidates:
                     try:
                         ico = QtGui.QIcon(path)
-                        if not ico.isNull():
+                        # Not ico.isNull(): QIcon is lazy and says False
+                        # for a path that resolves to nothing.
+                        if ico.availableSizes() or not ico.pixmap(32, 32).isNull():
                             sizes = ico.availableSizes()
                             if sizes:
                                 largest = max(sizes, key=lambda s: s.width() * s.height())
@@ -532,7 +664,14 @@ class LoadingDialog(QtWidgets.QDialog):
     def _animate_dots(self):
         """Animate the dots indicator next to percentage (Bug Fix #2)"""
         # This method animates dots for percentage displays (like "Step 1/5: 45% ...")
-        
+
+        # Not while a real count is on the bar. This timer rewrites the format
+        # string every 500 ms, so it used to overwrite "Collected 4 of 13" with
+        # its own rstrip-and-append version a moment after it was written - the
+        # count flickered and lost its trailing characters to rstrip(". ").
+        if getattr(self, "_has_real_count", False):
+            return
+
         current_text = self.progress_bar.format()
         if not current_text:
             # If no text, set default
@@ -569,6 +708,74 @@ class LoadingDialog(QtWidgets.QDialog):
         dialog_geometry.moveCenter(center_point)
         self.move(dialog_geometry.topLeft())
                  
+    def update_task_progress(self, completed, total, label=""):
+        """Show a real count of finished work: `completed` of `total`.
+
+        Driven by Progress_Reporter.task_progress_updated, which carries a
+        counter that only ever increases. The older update_step() renders a
+        parser's hard-coded step constant instead, and the parallel pool
+        finishes out of order, so that number can go down. Once this has been
+        called the dots animation stands down for the rest of the run.
+        """
+        try:
+            total = int(total)
+            completed = int(completed)
+        except (TypeError, ValueError):
+            return
+        if total <= 0:
+            return
+        completed = max(0, min(completed, total))
+        self._has_real_count = True
+        pct = int(completed * 100 / total)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(pct)
+        self.progress_bar.setFormat("%d of %d complete (%d%%)" % (completed, total, pct))
+        self._taskbar("set_value", completed, total)
+        if label:
+            self.set_status_safe(label)
+
+    def _taskbar(self, action, *args):
+        """Drive the taskbar indicator. Never lets it affect the operation.
+
+        Everything long-running in Crow-Eye drives one of these dialogs, so
+        this is the only wiring the feature needs - no call site has to know
+        the taskbar exists.
+        """
+        try:
+            from ui.taskbar_progress import taskbar
+            getattr(taskbar(), action)(*args)
+        except Exception:
+            pass
+
+    def set_phase(self, phase):
+        """Recolour the taskbar icon: "parsing" green, "loading" blue.
+
+        Parse Offline Artifacts opens one dialog to scan the image and then
+        reuses it for the parse, so a phase fixed at construction would be
+        wrong for the longer half of that run.
+        """
+        if phase in ("parsing", "loading"):
+            self._phase = phase
+            if self._taskbar_open:
+                self._taskbar("set_phase", phase)
+
+    def set_title(self, title):
+        """Retitle the dialog while it is open.
+
+        `Crow Eye.py` has called this since Parse Offline Artifacts was written,
+        and the method did not exist. The AttributeError was swallowed by the
+        caller's own handler, which left this dialog - application-modal and
+        frameless at the time - on screen with no way to close it. Adding the
+        method is the fix; the modal grab went away separately.
+        """
+        self.title_text = title or ""
+        try:
+            self.title_label.setText(self.title_text)
+            self.setWindowTitle("Crow Eye - %s" % self.title_text
+                                if self.title_text else "Crow Eye - Processing")
+        except Exception:
+            pass
+
     def set_steps(self, steps):
         """Set the operation steps"""
         self.operation_steps = steps
@@ -590,7 +797,15 @@ class LoadingDialog(QtWidgets.QDialog):
         if step_index < len(self.operation_steps):
             self.current_step = step_index
             self.add_log_message(f"Step {step_index + 1}: {step_message}")
-            
+
+            # Where a real count is already driving the bar, this stays out of
+            # the way: the step index is the sender's own constant, and on the
+            # parallel path it does not increase in order. The message still
+            # reaches the log and the status line.
+            if getattr(self, "_has_real_count", False):
+                self.set_status_safe(step_message)
+                return
+
             # Update progress if we have determinant steps
             if len(self.operation_steps) > 0:
                 target_progress = int((step_index + 1) * 100 / len(self.operation_steps))
@@ -600,6 +815,7 @@ class LoadingDialog(QtWidgets.QDialog):
                 
                 # Update progress bar format
                 self.progress_bar.setFormat(f"Step {step_index + 1}/{len(self.operation_steps)}: {target_progress}%")
+                self._taskbar("set_percent", target_progress)
                 
                 # Force GUI update to show progress
                 QApplication.processEvents()
@@ -650,6 +866,7 @@ class LoadingDialog(QtWidgets.QDialog):
 
         self.progress_bar.setValue(percentage)
         self.progress_bar.setFormat(f"Progress: {completed_steps}/{total_steps} tasks ({percentage}%)")
+        self._taskbar("set_percent", percentage)
         QApplication.processEvents()
 
     def set_status(self, message):
@@ -684,6 +901,8 @@ class LoadingDialog(QtWidgets.QDialog):
         # Auto-scroll to bottom
         scrollbar = self.log_display.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
+        # Painted by the next frame even if the event loop is blocked.
+        self._log_dirty = True
         
     def format_log_message(self, message):
         """Format log messages with cyberpunk styling"""
@@ -750,16 +969,52 @@ class LoadingDialog(QtWidgets.QDialog):
         """Stop capturing stdout/stderr"""
         self.log_capture.__exit__(None, None, None)
         
+    def _end_taskbar(self):
+        """Release the taskbar indicator, once, however this dialog ends."""
+        if self._taskbar_open:
+            self._taskbar_open = False
+            self._taskbar("end")
+
     def closeEvent(self, event):
         """Handle dialog close event"""
+        # Every dismissal in Crow-Eye today is dialog.close(), including the
+        # QTimer.singleShot(..., dialog.close) ones - and a cancelled parse
+        # never sends its worker a "DONE", so anything that waited for the
+        # worker would leave the taskbar stuck at whatever it last showed.
+        self._end_taskbar()
+        self._stop_clock()
         self.stop_log_capture()
         super().closeEvent(event)
+
+    def done(self, result):
+        """QDialog.done() - and so accept() and reject() - hides the dialog
+        WITHOUT sending a closeEvent.
+
+        Nothing dismisses a LoadingDialog that way at the moment, which is the
+        only reason closeEvent alone was enough. This is here so the first
+        caller that reaches for accept() does not leave a percentage sitting in
+        the taskbar for the rest of the session, with nothing on screen to
+        explain it.
+        """
+        self._end_taskbar()
+        self._stop_clock()
+        super().done(result)
         
     def show_completion(self, message="OPERATION COMPLETED SUCCESSFULLY"):
         """Show completion message"""
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(100)
         self.progress_bar.setFormat("COMPLETE")
+        self._taskbar("set_percent", 100)
+        # Freeze the clock on the total: "Completed in 02:13".
+        try:
+            import time as _time
+            if getattr(self, "_clock_ref", None) is not None and not self._clock_frozen:
+                self._clock_frozen = True
+                self.elapsed_label.setText(
+                    "Completed in " + self._fmt_elapsed(_time.monotonic() - self._clock_t0))
+        except Exception:
+            pass
         
         # Add final log message
         self.add_log_message(f"[Success] {message}")

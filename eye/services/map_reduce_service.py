@@ -25,7 +25,7 @@ from eye.services.evidence_seal import EvidenceSeal
 class MapReduceService:
     def __init__(self, context_manager):
         self.cm = context_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
     def _base_system_prompt(self) -> str:
         try:

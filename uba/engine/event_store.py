@@ -36,6 +36,7 @@ CREATE TABLE events (
     evidence_json TEXT
 );
 CREATE INDEX idx_events_ts ON events(ts_start);
+CREATE INDEX idx_events_rule ON events(rule_id);
 CREATE INDEX idx_events_actor ON events(actor_name);
 CREATE INDEX idx_events_session_user ON events(session_user);
 CREATE INDEX idx_events_app ON events(app_name);
@@ -76,15 +77,20 @@ class UBAEventStore:
     def query_events(self, filters: Optional[dict] = None,
                      cursor: Optional[str] = None,
                      page_size: int = 200) -> dict:
-        """Keyset-paginated event query, newest first.
+        """Keyset-paginated event query, newest first by default.
 
         cursor is "<ts_start>|<event_id>" of the last row of the previous
         page. Timeless events are excluded unless filters['timeless'] is
         truthy, in which case ONLY timeless events are returned.
+
+        filters['order'] = 'asc' reads the story forwards instead. Timestamps
+        are fixed-width UTC strings, so string comparison is chronological and
+        both directions stay keyset-paginated.
         """
         filters = filters or {}
         where, params = self._build_where(filters)
 
+        ascending = str(filters.get("order", "desc")).lower() == "asc"
         timeless = bool(filters.get("timeless"))
         if timeless:
             where.append("ts_start IS NULL")
@@ -92,12 +98,18 @@ class UBAEventStore:
             where.append("ts_start IS NOT NULL")
             if cursor and "|" in cursor:
                 ts, eid = cursor.split("|", 1)
-                where.append("(ts_start < ? OR (ts_start = ? AND event_id < ?))")
+                comparison = ">" if ascending else "<"
+                where.append("(ts_start {0} ? OR (ts_start = ? AND event_id {0} ?))"
+                             .format(comparison))
                 params.extend([ts, ts, eid])
 
         where_sql = " AND ".join(where) if where else "1=1"
-        order = "ORDER BY actor_name, activity" if timeless else \
-                "ORDER BY ts_start DESC, event_id DESC"
+        if timeless:
+            order = "ORDER BY actor_name, activity"
+        elif ascending:
+            order = "ORDER BY ts_start ASC, event_id ASC"
+        else:
+            order = "ORDER BY ts_start DESC, event_id DESC"
         sql = "SELECT * FROM events WHERE {} {} LIMIT ?".format(where_sql, order)
         rows = self.conn.execute(sql, params + [page_size]).fetchall()
 
@@ -147,6 +159,7 @@ class UBAEventStore:
 
         return {
             "by_class": _group("behavior_class", "behavior_class"),
+            "by_rule": _group("rule_id", "rule_id"),
             "by_severity": _group("severity", "severity"),
             "by_activity": _group("activity", "activity"),
             "by_actor": _group("actor_name", "actor_name"),
@@ -169,6 +182,7 @@ class UBAEventStore:
                     column, ",".join("?" for _ in values)))
                 params.extend(values)
 
+        _in("rule_id", filters.get("rules"))
         _in("behavior_class", filters.get("classes"))
         _in("severity", filters.get("severities"))
         _in("activity", filters.get("activities"))

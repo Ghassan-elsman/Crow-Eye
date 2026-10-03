@@ -1710,11 +1710,18 @@ class MFTParser:
         logger.addHandler(file_handler)
         logger.setLevel(self.config.log_level.value)
         
-        # Create file-only logger for errors during parsing (to avoid interrupting progress bar)
-        self.file_logger = logging.getLogger('file_only')
+        # A quieter channel for errors raised mid-parse, so they do not shred the
+        # progress bar on the console. It keeps its own file handler and now
+        # PROPAGATES: `propagate = False` made every line written through it
+        # invisible to the case log by construction, which is the opposite of
+        # what a file-only error channel is for. The console noise it was
+        # avoiding comes from the root StreamHandler, not from propagation.
+        #
+        # Named under this module rather than the global 'file_only', which any
+        # other component could have grabbed by the same name.
+        self.file_logger = logging.getLogger(__name__ + ".file_only")
         self.file_logger.setLevel(logging.DEBUG)
         self.file_logger.addHandler(file_handler)
-        self.file_logger.propagate = False  # Don't propagate to root logger
     
     def _format_elapsed_time(self, start_time: float) -> str:
         """Format elapsed time in human-readable format"""

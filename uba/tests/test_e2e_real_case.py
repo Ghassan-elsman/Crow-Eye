@@ -238,6 +238,34 @@ def test_all_activity_bearing_tables_are_covered(engine):
         "network_interfaces",
         # log mirror consumed via SecurityLogs/SystemLogs
         "ApplicationLogs",
+
+        # ---- browser_analysis.db ----
+        # UBA reads history, downloads, preferences, extensions, credentials,
+        # payments, addresses, cookies and DIPS. The rest are populated in a
+        # real case but are not behaviour, or are not yet modelled. Listed
+        # with the reason rather than left to fail the first time this suite is
+        # pointed at a case that has browser data - the case it currently uses
+        # has none, so these would otherwise go unnoticed until then.
+        #
+        # Content caches and web storage - what a site left behind, not what
+        # the person did:
+        "browser_cache", "browser_local_storage", "browser_indexeddb",
+        "browser_gecko_localstorage", "browser_extension_storage",
+        "browser_service_worker", "browser_push", "browser_favicons",
+        # Collection bookkeeping, not activity:
+        "browser_files", "browser_metadata",
+        # Inert in practice: no is_default, no date_created, no usage_count,
+        # so no honest default-search-hijack rule can be written from it.
+        # See uba/engine/extractors/browser.py.
+        "browser_search_engines",
+        # Activity-bearing, no extractor written yet. Stated as the truth
+        # rather than called non-activity - each is outstanding work:
+        "browser_bookmarks", "browser_gecko_bookmarks", "browser_sessions",
+        "browser_gecko_sessions", "browser_top_sites", "browser_shortcuts",
+        "browser_autofill", "browser_gecko_formhistory", "browser_gecko_cookies",
+        "browser_gecko_downloads", "browser_network_predictor",
+        "browser_network_state", "browser_media_router", "browser_media_history",
+        "browser_reading_list",
     }
 
     # Collect extractor table references from the engine source.

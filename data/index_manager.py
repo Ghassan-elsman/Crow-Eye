@@ -23,7 +23,7 @@ class IndexManager:
             connection: Optional SQLite connection. If None, must be set later.
         """
         self.connection = connection
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
     
     def set_connection(self, connection: sqlite3.Connection) -> None:
         """

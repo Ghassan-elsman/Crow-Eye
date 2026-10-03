@@ -43,7 +43,7 @@ class OpenAIBackend(LLMBackend):
         self.credential_key = credential_key          # keyring name for the API key
         self.provider_label = provider_label or "OpenAI"
         self.default_headers = default_headers        # e.g. OpenRouter attribution
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.quota_stats = "API Managed"
         self._client = None
         self._model_cache = []

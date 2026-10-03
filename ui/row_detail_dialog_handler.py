@@ -29,6 +29,7 @@ TABLE_NAME_MAPPING = {
     "LastUpdateInfo_table": "Last Update Info",
     "ShutDown_table": "Shutdown Info",
     "Browser_history_table": "Browser History",
+    "RegistryBrowserHistory_table": "Browser History (Registry)",
     "NetworkLists_table": "Network Lists",
     # Add more mappings as needed
 }

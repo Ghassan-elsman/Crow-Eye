@@ -172,7 +172,7 @@ class QueryProcessor:
             context_manager: Instance of eye.services.context_manager.ContextManager
         """
         self.cm = context_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
     def _push_narrative_map_update(self, change: dict = None, audit: dict = None) -> None:
         """Notify the UI that the Narrative Map changed mid-investigation (auto-sync,

@@ -89,7 +89,7 @@ class OllamaBackend(LLMBackend):
         
         # Heuristically determine API endpoint from provided path/URL
         self.api_endpoint = self._normalize_endpoint(endpoint)
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Connection pooling for performance
         # We reuse HTTP connections instead of creating new ones each time - much faster!

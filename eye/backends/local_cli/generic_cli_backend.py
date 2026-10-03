@@ -62,7 +62,7 @@ class GenericCLIBackend(LLMBackend):
         self.backend_type = backend_type
         self.model_name = model_name
         self.profile = get_profile(backend_type)
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
     def _resolve_executable(self) -> str:
         """

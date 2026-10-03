@@ -46,6 +46,25 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont
 
+# The animated loading bar (a light sweep that keeps moving between updates,
+# so long work never looks frozen). Falls back to the plain bar when this
+# module runs standalone without the Crow-Eye root on sys.path.
+try:
+    from ui.animated_progress_bar import AnimatedProgressBar
+except ImportError:
+    AnimatedProgressBar = None
+
+
+def _mark_busy(reason, thread):
+    """Tell the main window Crow-Eye is working while `thread` runs, so its
+    feature windows refuse to open against data still being written
+    (ui/busy_guard.py). Released by itself when the thread stops."""
+    try:
+        from ui import busy_guard
+        busy_guard.begin(reason, alive=thread.isRunning)
+    except Exception:
+        pass
+
 # Import image parsing components
 try:
     if __package__ or "." in __name__:
@@ -755,7 +774,8 @@ class ImageParsingDialog(QMainWindow):
         progress_header_layout.addWidget(self.time_value)
         status_layout.addLayout(progress_header_layout)
         
-        self.progress_bar = QProgressBar()
+        self.progress_bar = (AnimatedProgressBar(accent="#60A5FA") if AnimatedProgressBar
+                             else QProgressBar())
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)
@@ -1063,7 +1083,8 @@ class ImageParsingDialog(QMainWindow):
             self.scan_worker.scan_complete.connect(self._on_scan_complete)
             self.scan_worker.scan_error.connect(self._on_scan_error)
             self.scan_worker.start()
-            
+            _mark_busy("Scanning the forensic image", self.scan_worker)
+
     def _update_scan_animation(self):
         """Update the scanning animation dots."""
         self.scan_dots = (self.scan_dots % 3) + 1
@@ -1154,6 +1175,7 @@ class ImageParsingDialog(QMainWindow):
         
         # Reset progress
         self.progress_bar.setValue(0)
+        self._taskbar_begin("loading")
         self.operation_value.setText("Starting extraction...")
         self.found_value.setText("0")
         self.extracted_value.setText("0")
@@ -1208,7 +1230,44 @@ class ImageParsingDialog(QMainWindow):
         
         # Start thread
         self.collection_thread.start()
-    
+        _mark_busy("Collecting artifacts from the forensic image", self.collection_thread)
+
+    def _taskbar(self, action, *args):
+        """Drive the taskbar indicator. Never lets it affect the extraction.
+
+        This dialog owns a plain QProgressBar rather than a LoadingDialog, so
+        unlike everything else it has to open and close the indicator itself.
+        """
+        try:
+            from ui.taskbar_progress import taskbar
+            getattr(taskbar(), action)(*args)
+        except Exception:
+            pass
+
+    def _taskbar_begin(self, phase):
+        """Open the indicator, or recolour one that is already open.
+
+        Extraction and parsing are two runs in one dialog and the analyst may
+        start the second without closing the first, so this must not stack a
+        second indicator that nothing would ever close.
+        """
+        if getattr(self, "_taskbar_open", False):
+            self._taskbar("set_phase", phase)
+            return
+        self._taskbar_open = True
+        self._taskbar("begin", phase)
+
+    def _taskbar_end(self):
+        if getattr(self, "_taskbar_open", False):
+            self._taskbar_open = False
+            self._taskbar("end")
+
+    def closeEvent(self, event):
+        """The backstop. Closing the dialog mid-run must not leave the
+        taskbar showing a percentage for a job that is no longer going."""
+        self._taskbar_end()
+        super().closeEvent(event)
+
     def _on_cancel(self):
         """Handle cancel button click."""
         if self.collection_thread and self.collection_thread.isRunning():
@@ -1234,6 +1293,7 @@ class ImageParsingDialog(QMainWindow):
         if progress.total_count > 0:
             percentage = int((progress.processed_count / progress.total_count) * 100)
             self.progress_bar.setValue(percentage)
+            self._taskbar("set_percent", percentage)
         
         # Update current operation
         self.operation_value.setText(progress.current_file)
@@ -1276,6 +1336,7 @@ class ImageParsingDialog(QMainWindow):
         
         # Update progress
         self.progress_bar.setValue(100)
+        self._taskbar_end()
         self.operation_value.setText("Extraction complete")
         
         # Add to ArtifactScanIndex
@@ -1342,6 +1403,8 @@ class ImageParsingDialog(QMainWindow):
         self.browse_image_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         
+        self._taskbar_end()
+
         # Log error
         self._append_log("Extraction failed", "ERROR")
         self._append_log(error_msg, "ERROR")
@@ -1360,6 +1423,8 @@ class ImageParsingDialog(QMainWindow):
         self.browse_image_button.setEnabled(True)
         self.cancel_button.setEnabled(False)
         
+        self._taskbar_end()
+
         # Log cancellation
         self._append_log("Extraction cancelled by user", "WARNING")
         
@@ -1389,7 +1454,9 @@ class ImageParsingDialog(QMainWindow):
                 
                 # Create and execute ParseArtifactsDialog
                 dialog = ParseArtifactsDialog(self.case_root, self)
-                
+                # Labels the parse-status record as an image parse.
+                dialog.source_mode = 'image'
+
                 # Connect to artifacts_selected signal to show loading status
                 dialog.artifacts_selected.connect(self._on_artifacts_parsing_started)
                 
@@ -1446,7 +1513,8 @@ class ImageParsingDialog(QMainWindow):
                 from Offline_Importer.parse_artifacts_dialog import ParsingWorker
                 
                 invoker = ParserInvoker(self.case_root)
-                
+                invoker.mode = 'image'
+
                 def error_log_path():
                     return os.path.join(self.case_root, "parsing_errors.log")
 
@@ -1465,7 +1533,8 @@ class ImageParsingDialog(QMainWindow):
                 self.parsing_worker.parsing_error.connect(self._on_automated_parsing_error, Qt.QueuedConnection)
                 
                 self.parsing_worker.start()
-                
+                _mark_busy("Parsing artifacts from the forensic image", self.parsing_worker)
+
         except Exception as e:
             import traceback
             error_msg = f"Failed to invoke artifact parser: {str(e)}"
@@ -1481,13 +1550,17 @@ class ImageParsingDialog(QMainWindow):
     def _on_automated_progress_update(self, curr, tot, name, typ):
         """Update progress description (runs on main thread)."""
         self.operation_value.setText(f"Parsing {typ}: {name} ({curr}/{tot})")
+        self._taskbar_begin("parsing")
+        self._taskbar("set_value", curr, tot)
 
     def _on_automated_parsing_error(self, err):
         """Log parsing error (runs on main thread)."""
+        self._taskbar_end()
         self._append_log(f"Parsing Error: {err}", "ERROR")
     
     def _on_automated_parsing_complete(self, results):
         """Handle completion of automated parsing."""
+        self._taskbar_end()
         self._append_log("Automated artifact parsing completed!", "SUCCESS")
         self.operation_value.setText("Parsing complete. Updating GUI...")
         
@@ -1510,17 +1583,34 @@ class ImageParsingDialog(QMainWindow):
                         self._append_log(f"Refresh failed: {e}", "ERROR")
         else:
             self._append_log("No artifacts were successfully parsed.", "WARNING")
-            
+            # Nothing to load - still show why (the report says per artifact).
+            main = getattr(self, 'crow_eye_main_window', None)
+            if main is not None and hasattr(main, '_after_data_loaded'):
+                try:
+                    main._after_data_loaded()
+                except Exception as e:
+                    self._append_log(f"Could not show the parse status: {e}", "ERROR")
+
         # CRITICAL: Force GUI to process all pending events (like table population)
         # BEFORE showing the modal information dialog which blocks the event loop.
         from PyQt5.QtWidgets import QApplication
         QApplication.processEvents()
         
+        # The main window shows the Parse Status Report once its tables are
+        # loaded - per artifact: parsed, absent from the image, unsupported or
+        # failed. A blanket "completed successfully" here contradicted it.
+        main = getattr(self, 'crow_eye_main_window', None)
+        if main is not None and hasattr(main, 'show_parse_status_report'):
+            self._append_log("Per-artifact results: see the Parse Status Report "
+                             "(Case -> Parse Status Report).", "INFO")
+            return
+        failed = [r for r in results if not r.success]
         QMessageBox.information(
             self,
             "Processing Complete",
-            "Artifact extraction and parsing completed successfully!\n"
-            "The main window is now updated with the forensic data."
+            "Artifact extraction and parsing finished.\n"
+            "%d of %d artifact file(s) parsed; %d did not."
+            % (len(results) - len(failed), len(results), len(failed))
         )
 
     def _on_artifacts_parsing_started(self, artifact_types: List[str]):

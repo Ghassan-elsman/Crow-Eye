@@ -98,7 +98,7 @@ class SearchCache:
         self.max_size = max_size
         self.cache: OrderedDict[str, SearchResults] = OrderedDict()
         self.lock = threading.Lock()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
     
     def _make_key(self, config: SearchConfig) -> str:
         """Create a cache key from search configuration."""
@@ -180,7 +180,7 @@ class DatabaseSearchEngine:
             cache_size: Maximum number of cached search results
         """
         self.data_loader = data_loader
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.enable_cache = enable_cache
         self.cache = SearchCache(max_size=cache_size) if enable_cache else None
         self._search_thread: Optional[threading.Thread] = None

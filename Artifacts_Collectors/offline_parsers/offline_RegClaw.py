@@ -401,6 +401,15 @@ def detect_hive_files(registry_dir):
         # and nothing has ever collected or parsed it.
         'default': ['DEFAULT', 'default', 'Default', 'DEFAULT.OLD', 'default.old',
                     'DEFAULT.SAV', 'default.sav', 'DEFAULT.BAK', 'default.bak'],
+        # Collected since the walk was extended to carve them. Nothing reads
+        # these by key path - they are here so their freed cells can be
+        # recovered, which is the half of a hive no API can reach.
+        'components': ['COMPONENTS', 'components', 'Components',
+                       'COMPONENTS.OLD', 'components.old'],
+        'drivers': ['DRIVERS', 'drivers', 'Drivers', 'DRIVERS.OLD',
+                    'drivers.old'],
+        'bbi': ['BBI', 'bbi', 'Bbi'],
+        'elam': ['ELAM', 'elam', 'Elam'],
     }
     
     detected_hives = {}
@@ -740,6 +749,21 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     # inside an `if` is not a name that exists.
     _hive_states = []
 
+    # Label -> when that hive was last reorganized, "" if never. Declared here
+    # for the same reason _hive_states is: the walk that fills it and the row
+    # that reads it are in different try blocks, and a name bound inside one of
+    # them is not a name the other can rely on. Absent stays NULL in the row,
+    # which says "not known" rather than "never compacted".
+    _hive_reorg = {}
+    # Label -> collected path, for the hives outside the five the parser was
+    # written around. Kept as a dict rather than four more variables because
+    # nothing reads them individually - they exist to be walked.
+    _extra_hives = {}
+    # Collected path -> the label the walk used for it. RecoveryResult knows a
+    # hive only by its basename, and three users' hives are all called
+    # NTUSER.DAT, so the row and the walk cannot be joined on the name.
+    _hive_label_by_path = {}
+
     # Define paths
     if offline_mode and case_root:
         # Try multiple possible registry directory locations
@@ -798,6 +822,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         
         default_reg_hive = detected_hives.get('default', '')
 
+        for _k, _label in (('components', 'COMPONENTS'), ('drivers', 'DRIVERS'),
+                           ('bbi', 'BBI'), ('elam', 'ELAM')):
+            _p = detected_hives.get(_k, '')
+            if _p:
+                _extra_hives[_label] = _p
+
         # ---------------------------------------------------------------- replay
         # A hive Windows had open is rarely the whole story: its outstanding
         # changes sit in the .LOG1/.LOG2 beside it. Recover into a temporary
@@ -845,6 +875,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             _pre_replay["NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i] = _h
         for _i, _h in enumerate(usrclass_hives or []):
             _pre_replay["UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i] = _h
+        _pre_replay.update(_extra_hives)
+        # Built before the replay, from the paths as collected, because that is
+        # what RecoveryResult recorded - it is keyed on the source hive, not on
+        # the recovered copy the walk goes on to read.
+        _hive_label_by_path = {os.path.abspath(_v): _k
+                               for _k, _v in _pre_replay.items() if _v}
 
         system_reg_hive = _replay(system_reg_hive)
         Software_reg_hive = _replay(Software_reg_hive)
@@ -853,6 +889,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         default_reg_hive = _replay(default_reg_hive)
         ntuser_hives = [_replay(h) for h in ntuser_hives]
         usrclass_hives = [_replay(h) for h in usrclass_hives]
+        _extra_hives = {_k: _replay(_v) for _k, _v in _extra_hives.items()}
 
         # Report detected hives
         if detected_hives:
@@ -1172,7 +1209,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                        "lease_obtained": "TEXT",
                                        "lease_expires": "TEXT"}),
             # Which shell view wrote the bag - see _bag_view() below.
-            ("Shellbags", {"node_slot": "INTEGER", "bag_views": "TEXT"}),
+            # value_name: the item's value under its BagMRU key, its stable
+            # identity there - see Regclaw.DECODED_COLUMNS.
+            ("Shellbags", {"node_slot": "INTEGER", "bag_views": "TEXT",
+                           "value_name": "TEXT"}),
     ):
         try:
             _have = {r[1].lower() for r
@@ -1203,7 +1243,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         hive_name TEXT, hive_path TEXT, sequence_1 INTEGER, sequence_2 INTEGER,
         was_dirty INTEGER, logs_found TEXT, log_format TEXT, replayed INTEGER,
         entries_applied INTEGER, pages_applied INTEGER, highest_sequence INTEGER,
-        source_sha256 TEXT, acquisition_route TEXT, reason TEXT, parsed_at TEXT
+        source_sha256 TEXT, acquisition_route TEXT, reorganized_at TEXT,
+        reason TEXT, parsed_at TEXT
     )''')
 
     # Additive migration, same as key_last_write below: a case database from an
@@ -1219,6 +1260,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         if _hs_cols and "acquisition_route" not in _hs_cols:
             cursor.execute(
                 "ALTER TABLE registry_hive_state ADD COLUMN acquisition_route TEXT")
+        if _hs_cols and "reorganized_at" not in _hs_cols:
+            cursor.execute(
+                "ALTER TABLE registry_hive_state ADD COLUMN reorganized_at TEXT")
     except sqlite3.Error as _e:
         logging.debug("source_sha256 migration: %s", _e)
 
@@ -1430,7 +1474,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         share_name TEXT, drive_letter TEXT, mft_record_number INTEGER,
         registry_path TEXT, parent_path TEXT,
         last_written TEXT, time_basis TEXT,
-        node_slot INTEGER, bag_views TEXT, parsed_at TEXT, user_name TEXT
+        node_slot INTEGER, bag_views TEXT, parsed_at TEXT, user_name TEXT,
+        value_name TEXT
     )''')
 
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
@@ -2168,8 +2213,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         
                         file_name = parsed_data.get('file_name', '')
                         if not file_name:
-                            continue
-                        
+                            # Kept, named by its class - see the live parser.
+                            file_name = registry_binary_parser.unnamed_shell_item_name(data)
+
                         # Extract all 17 fields from parsed data
                         short_name = parsed_data.get('short_name', '')
                         shell_item_type = parsed_data.get('shell_item_type', '')
@@ -2210,22 +2256,48 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         node_slot, bag_views = _bag_view(
                             reg, bags_path, full_path + chr(92) + name)
 
-                        if not check_exists(cursor, 'Shellbags', ['file_name', 'registry_path', 'user_name'],
-                                           (file_name, registry_path, _sb_user)):
+                        # The bag's own registry write time - the child key P\N
+                        # holds this folder's view/children, so its NK last-write
+                        # is when the folder was last touched and differs per
+                        # folder. A leaf value has no such subkey; the containing
+                        # key P is the honest fallback, flagged in time_basis.
+                        # Mirrors Regclaw's live pass and the same NK timestamp
+                        # python-registry reads off the hive.
+                        last_written = key_last_write(reg, full_path + chr(92) + name)
+                        time_basis = "bag_key" if last_written else ""
+                        if not last_written:
+                            last_written = key_last_write(reg, full_path)
+                            time_basis = "parent_key" if last_written else ""
+
+                        # A row from before value_name existed is claimed by the
+                        # first item matching it on the old key, so a re-parse of
+                        # an older case does not append every Shellbag again.
+                        cursor.execute(
+                            "UPDATE Shellbags SET value_name = ? WHERE rowid = ("
+                            "SELECT rowid FROM Shellbags WHERE file_name IS ? AND "
+                            "registry_path IS ? AND user_name IS ? AND "
+                            "value_name IS NULL LIMIT 1)",
+                            (name, file_name, registry_path, _sb_user))
+                        # Keyed on the value too: two items with one name in one
+                        # key (Pictures 15 and 17) are two items.
+                        if not check_exists(cursor, 'Shellbags',
+                                            ['file_name', 'registry_path', 'user_name', 'value_name'],
+                                           (file_name, registry_path, _sb_user, name)):
                             cursor.execute('''INSERT INTO Shellbags
                                 (file_name, short_name, shell_item_type, mru_position,
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, parent_path, node_slot, bag_views,
-                                 parsed_at, user_name)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                 registry_path, parent_path, last_written, time_basis,
+                                 node_slot, bag_views, parsed_at, user_name, value_name)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                 (file_name, short_name, shell_item_type, mru_position,
                                  created_date, modified_date, accessed_date, attributes,
                                  file_size, special_folder, network_share, server_name,
                                  share_name, drive_letter, mft_record_number,
-                                 registry_path, parent_readable, node_slot, bag_views,
-                                 get_current_forensic_timestamp(), _sb_user))
+                                 registry_path, parent_readable, last_written, time_basis,
+                                 node_slot, bag_views,
+                                 get_current_forensic_timestamp(), _sb_user, name))
                         else:
                             # The row is already evidence and is left alone, but
                             # a column added after the case was made is empty on
@@ -2235,9 +2307,18 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 "UPDATE Shellbags SET node_slot = ?, "
                                 "bag_views = ? WHERE file_name IS ? AND "
                                 "registry_path IS ? AND user_name IS ? "
-                                "AND node_slot IS NULL",
+                                "AND value_name IS ? AND node_slot IS NULL",
                                 (node_slot, bag_views, file_name,
-                                 registry_path, _sb_user))
+                                 registry_path, _sb_user, name))
+                            if last_written:
+                                cursor.execute(
+                                    "UPDATE Shellbags SET last_written = ?, "
+                                    "time_basis = ? WHERE file_name IS ? AND "
+                                    "registry_path IS ? AND user_name IS ? AND "
+                                    "value_name IS ? AND "
+                                    "(last_written IS NULL OR last_written = '')",
+                                    (last_written, time_basis, file_name,
+                                     registry_path, _sb_user, name))
                 except Exception as e:
                     logging.error(f"Error parsing Shellbag entry at {full_path}\\{name}: {e}")
 
@@ -2253,8 +2334,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 _v = subkey_values.get(subkey.name())
                 if _v and isinstance(_v[0], bytes):
                     try:
-                        _own = registry_binary_parser.parse_shellbag_entry(
-                            _v[0]).get('file_name', '') or ''
+                        _own = (registry_binary_parser.parse_shellbag_entry(
+                                    _v[0]).get('file_name', '')
+                                or registry_binary_parser.unnamed_shell_item_name(_v[0]))
                     except Exception:
                         _own = ''
                 child_readable = (f"{parent_readable}\\{_own}"
@@ -2292,7 +2374,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         
         # UsrClass.dat uses different base path (no "Software\Classes\" prefix)
         usrclass_shellbags_paths = [
-            "Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU"
+            "Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU",
+            # ShellNoRoam under UsrClass - rarely populated, enumerated for
+            # completeness so a bag that lands there is not lost. Mirrors the
+            # live parser; an absent key yields nothing.
+            "Local Settings\\Software\\Microsoft\\Windows\\ShellNoRoam\\BagMRU"
         ]
 
         # Process each NTUSER hive file
@@ -5650,6 +5736,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             _walk_targets.append(("NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i, _p))
         for _i, _p in enumerate(usrclass_hives or []):
             _walk_targets.append(("UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i, _p))
+        for _label, _p in sorted(_extra_hives.items()):
+            if _p:
+                _walk_targets.append((_label, _p))
 
         _tot = {"c": 0, "s": 0, "k": 0, "v": 0}
         # Kept so the attribution pass below can reuse them rather than
@@ -5660,6 +5749,20 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             _walk_results[_label] = _w
             if _w.error:
                 logging.debug("hive walk %s: %s", _label, _w.error)
+
+            # Whether this hive still holds the free space carving reads.
+            # Windows compacts a hive on its own schedule and drops the freed
+            # cells when it does, so without this a hive that was compacted
+            # last week and a hive nothing was ever deleted from carve the same
+            # nothing and cannot be told apart. Formatted here, where the raw
+            # value is in hand.
+            try:
+                _rr = getattr(_w, "reorganized_raw", None)
+                _hive_reorg[_label] = (
+                    format_forensic_timestamp(filetime_to_datetime(_rr))
+                    if _rr else "")
+            except Exception:
+                _hive_reorg[_label] = ""
 
             for _cn in _w.class_names:
                 cursor.execute(
@@ -6193,6 +6296,16 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     try:
         _hs_stamp = get_current_forensic_timestamp()
         for _st in _hive_states:
+            # By path, so three files called NTUSER.DAT stay three hives.
+            # Falls back to the basename for a hive that reached _hive_states
+            # without going through _pre_replay, and to NULL - "not known" -
+            # rather than borrowing a date from whichever hive happened to
+            # share a name. Computed before the guard so the check_exists sits
+            # directly above the INSERT (the re-parse-stable test reads the lines
+            # just above an INSERT for its guard).
+            _reorg = _hive_reorg.get(
+                _hive_label_by_path.get(os.path.abspath(_st.hive_path or ""),
+                                        _st.hive_name))
             # Guarded like every other insert here: the table carries no UNIQUE
             # constraint, so OR IGNORE would be a no-op and re-parsing the same
             # case would append the same hive state again. Keyed on the hive and
@@ -6208,8 +6321,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 'INSERT INTO registry_hive_state (hive_name, hive_path, '
                 'sequence_1, sequence_2, was_dirty, logs_found, log_format, '
                 'replayed, entries_applied, pages_applied, highest_sequence, '
-                'source_sha256, acquisition_route, reason, parsed_at) '
-                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                'source_sha256, acquisition_route, reorganized_at, reason, '
+                'parsed_at) '
+                'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                 (_st.hive_name, _st.hive_path, _st.sequence_1, _st.sequence_2,
                  1 if _st.was_dirty else 0,
                  "; ".join(os.path.basename(x) for x in _st.logs_found),
@@ -6219,7 +6333,8 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                  # this is what the evidence still hashes to afterwards.
                  # An offline parse reads a hive the collector already
                  # acquired, so the route is settled before the parser sees it.
-                 _st.source_sha256, "file:collected", _st.reason, _hs_stamp))
+                 _st.source_sha256, "file:collected", _reorg, _st.reason,
+                 _hs_stamp))
         _stale = [x for x in _hive_states if x.was_dirty and not x.recovered]
         if _stale:
             print("[WARNING] %d hive(s) were dirty and could not be replayed; "

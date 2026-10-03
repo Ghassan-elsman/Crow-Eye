@@ -36,6 +36,30 @@ from styles import CrowEyeStyles
 from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
 
 
+# Crow-Eye's application-wide busy state (ui/busy_guard.py). The engine also
+# runs standalone, without Crow-Eye's ui package - then there is nothing to
+# coordinate with and both helpers do nothing.
+def _crow_eye_busy():
+    """The reason Crow-Eye is busy ('Parsing live artifacts (01:12)'), or None."""
+    try:
+        from ui import busy_guard
+        if busy_guard.is_busy():
+            reason, elapsed = busy_guard.current()
+            return "%s (%s elapsed)" % (reason or "Working", busy_guard.format_elapsed(elapsed))
+    except Exception:
+        pass
+    return None
+
+
+def _mark_crow_eye_busy(reason, thread):
+    """Mark Crow-Eye busy while `thread` runs; released by itself when it stops."""
+    try:
+        from ui import busy_guard
+        return busy_guard.begin(reason, alive=thread.isRunning)
+    except Exception:
+        return None
+
+
 class OutputRedirector(QObject):
     """Redirects stdout/stderr to a QTextEdit widget"""
     
@@ -1280,7 +1304,20 @@ class ExecutionControlWidget(QWidget):
         """Start correlation execution"""
         try:
             # logger.info("[ExecutionControl] _start_execution called")
-            
+
+            # A pipeline reads the case databases; not while Crow-Eye is
+            # parsing or loading them (ui/busy_guard.py).
+            busy = _crow_eye_busy()
+            if busy:
+                QMessageBox.information(
+                    self,
+                    "Crow-Eye is still working",
+                    "Crow-Eye is still working: %s.\n\n"
+                    "Run the pipeline once the data has finished parsing and "
+                    "loading - correlating now could read half-written data." % busy
+                )
+                return
+
             if not self.current_pipeline:
                 QMessageBox.warning(
                     self,
@@ -1473,6 +1510,9 @@ class ExecutionControlWidget(QWidget):
             
             # Start thread
             self.worker_thread.start()
+            # Held while the pipeline runs, so Crow-Eye will not start a parse
+            # or switch case underneath it. Released when the thread stops.
+            _mark_crow_eye_busy("Correlation Engine pipeline", self.worker_thread)
             
             # logger.info("[ExecutionControl] Worker thread started successfully")
             

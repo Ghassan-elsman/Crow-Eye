@@ -232,9 +232,13 @@ class OptimizedFeatherQuery:
     ---------
     Phase 9 added ``self._cache_lock`` (RLock) around the main cache
     paths in :meth:`query_time_range` and :meth:`_evict_lru_cache_entries`.
-    SQLite connections are not yet per-thread; until per-TLS connections
-    land, treat the instance as single-thread-owned at query time. Phase 9
-    follow-up is to wire ``self._tls`` into ``_get_connection``.
+    That lock protects the cache only. **The instance is single-thread-owned
+    at query time**: it reads through the ``FeatherLoader`` it was handed, and
+    that loader's connection belongs to whichever thread opened it. In
+    practice the pipeline builds both inside one execution on one thread, so
+    this holds - but it holds by construction, not by enforcement. Driving one
+    instance from two threads needs a per-thread pool in the loader first; see
+    ``uba/utils/db_access.py``.
     """
     
     def __init__(self, feather_loader: FeatherLoader, debug_mode: bool = False, profiler: Optional[PerformanceProfiler] = None):
@@ -345,13 +349,19 @@ class OptimizedFeatherQuery:
         self._current_cache_size_mb = 0.0 # Track current cache size in MB
 
         # PHASE 9: Per-thread SQLite connections via threading.local.
-        # sqlite3.connect() is not thread-safe by default; sharing a
-        # connection across worker threads triggers
-        # "SQLite objects created in a thread can only be used in that
-        # same thread". Each worker requests get_connection() and gets
-        # its own connection lazily.
-        self._tls = _threading.local()
-        
+        # NOTE: this engine does NOT hold connections per thread. It reads
+        # through the FeatherLoader it was given, and that loader is built and
+        # used inside one pipeline execution on one thread - which is why it is
+        # safe, not because of anything here. A `threading.local()` used to sit
+        # at this spot with a comment claiming "each worker gets its own
+        # connection lazily"; nothing ever read it, so the comment described an
+        # intention rather than the code. An unread safety mechanism is worse
+        # than none, because the next reader believes it.
+        #
+        # If this engine is ever driven from more than one thread, give the
+        # loader a per-thread pool the way uba/utils/db_access.py and
+        # timeline/data/timeline_data_manager.py do.
+
         # Cache statistics (Requirements 2.4, 2.5)
         self._cache_stats = {
             'hits': 0,

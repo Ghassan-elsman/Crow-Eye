@@ -7,6 +7,14 @@ This module provides loading spinners and progress indicators for timeline opera
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout, QProgressBar
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtGui import QPainter, QColor, QPen
+
+# The animated loading bar (a light sweep that keeps moving between updates,
+# so long work never looks frozen). Falls back to the plain bar when this
+# module runs standalone without the Crow-Eye root on sys.path.
+try:
+    from ui.animated_progress_bar import AnimatedProgressBar
+except ImportError:
+    AnimatedProgressBar = None
 import math
 
 
@@ -170,7 +178,8 @@ class LoadingOverlay(QWidget):
         layout.addWidget(self.artifact_label)
         
         # Create progress bar
-        self.progress_bar = QProgressBar()
+        self.progress_bar = (AnimatedProgressBar(accent="#3B82F6") if AnimatedProgressBar
+                             else QProgressBar())
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: 2px solid #475569;
@@ -363,7 +372,8 @@ class ProgressIndicator(QWidget):
         layout.addWidget(self.message_label)
         
         # Progress bar
-        self.progress_bar = QProgressBar()
+        self.progress_bar = (AnimatedProgressBar(accent="#3B82F6") if AnimatedProgressBar
+                             else QProgressBar())
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 border: 2px solid #475569;

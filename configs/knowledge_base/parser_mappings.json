@@ -137,10 +137,11 @@
       "parser_file": "Artifacts_Collectors/SRUM_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_SRUM_Claw.py",
       "database": "srum_data.db",
-      "table": "srum_data",
-      "description": "System Resource Usage Monitor parser",
-      "anatomy_url": null,
-      "anatomy_summary": "Visual anatomy page not yet published."
+      "table": "srum_application_usage",
+      "tables": ["srum_application_usage", "srum_network_data_usage", "srum_network_connectivity", "srum_energy_usage", "srum_app_timeline", "srum_metadata"],
+      "description": "System Resource Usage Monitor parser. Output srum_data.db holds FIVE provider tables plus a bookkeeping table (there is no single 'srum_data' table): srum_application_usage (per-app, per-hour CPU + disk cost), srum_network_data_usage (bytes sent/received per app, per interface), srum_network_connectivity (interface connection windows), srum_energy_usage (battery charge + state; the short- and long-term energy providers merge here), srum_app_timeline (focus/keyboard/mouse seconds, duration, hosted_services; Windows 10+), and srum_metadata (one row per parse). Every provider row carries resolved app_name/app_path and user_sid/user_name (the numeric AppId/UserId resolved through SruDbIdMapTable). Timeline AppIds of the Store form (PackageFamily!PRAID!exe!timestamp!seq) resolve to the real executable. The parser also collects the ESE checkpoint set (SRU.chk, SRUDB.jfm, SRU*.log) so a dirty database is soft-recovered (esentutl /r) rather than repaired; srum_metadata records jfm_collected, log_files_collected and db_state (clean/recovered/repaired).",
+      "anatomy_url": "https://crow-eye.com/Eye-Describe/srum_anatomy",
+      "anatomy_summary": "Visual walkthrough of the SRUM ESE database (SRUDB.dat): its five provider tables, the SruDbIdMapTable that resolves App/User IDs to paths and SIDs, the hourly-window lifecycle and ~30-60 day retention, the checkpoint/log recovery model, and how Crow-Eye decodes the resource-usage rows."
     },
     "eventlog": {
       "parser_file": "Artifacts_Collectors/WinLog_Claw.py",
@@ -150,6 +151,15 @@
       "description": "Windows Event Log (.evtx) parser",
       "anatomy_url": null,
       "anatomy_summary": "Visual anatomy page not yet published."
+    },
+    "browser": {
+      "parser_file": "Artifacts_Collectors/Browser_Claw.py",
+      "offline_parser": "Artifacts_Collectors/offline_parsers/offline_BrowserClaw.py",
+      "database": "browser_analysis.db",
+      "table": "browser_history",
+      "description": "Browser forensics parser for Chromium-family (Chrome, Edge, Brave, Chromium, Opera, Vivaldi), Gecko (Firefox), and Electron apps. One database with per-artifact tables (browser_history, browser_downloads, browser_cookies, browser_credentials, browser_autofill, browser_shortcuts, browser_network_predictor, browser_favicons, browser_bookmarks, browser_extensions, browser_preferences, browser_sessions, browser_local_storage, browser_indexeddb, browser_service_worker, browser_cache, browser_push, browser_media_router, browser_files, browser_metadata, and browser_gecko_* for Firefox). Every row carries provenance: browser, vendor, user_name, sid, profile, source_path. Cookie values and saved passwords are stored as base64 of the raw ENCRYPTED blob with an encryption_version (v10/v11/v20/dpapi) and are NEVER decrypted by the parser; the DPAPI-wrapped master key is kept in browser_metadata.os_crypt_key_b64 for a separate, audited decryption step. Full extraction copies HTTP cache bodies and IndexedDB blobs into browser_extracted/ with a browser_files inventory row (sha1, size, mtime).",
+      "anatomy_url": "https://crow-eye.com/Eye-Describe/browser-forensics",
+      "anatomy_summary": "Master-class guide to browser artifacts: how history, cookies, cache, sessions, saved logins and web-app storage work, where they live on disk, the difference between the Chromium and Gecko engines, and how Crow-Eye parses them."
     }
   },
   "anatomy_index": {
@@ -162,7 +172,9 @@
       "usn": "https://crow-eye.com/eye-describe/usn_anatomy.html",
       "lnk": "https://crow-eye.com/eye-describe/lnk_anatomy.html",
       "jumplist_automatic": "https://crow-eye.com/eye-describe/automatic_jumplist.html",
-      "jumplist_custom": "https://crow-eye.com/eye-describe/custom_jumplist.html"
+      "jumplist_custom": "https://crow-eye.com/eye-describe/custom_jumplist.html",
+      "browser": "https://crow-eye.com/Eye-Describe/browser-forensics",
+      "srum": "https://crow-eye.com/Eye-Describe/srum_anatomy"
     }
   },
   "consolidated_database": {
@@ -173,8 +185,8 @@
   "github_base_url": "https://github.com/crow-eye/crow-eye",
   "website_base_url": "https://crow-eye.com",
   "eye_describe_base_url": "https://crow-eye.com/eye-describe",
-  "version": "3.5",
-  "last_updated": "2026-08-29",
+  "version": "3.8",
+  "last_updated": "2026-09-18",
   "shared_modules": {
     "registry_transaction_log.py": "Replays a dirty hive's .LOG1/.LOG2 into a working copy before parsing. Used by every hive reader: offline_RegClaw, amcacheparser, offline_ShimCacheClaw, offline_SRUM_Claw, security_hive, user_identity. Amcache.hve has its own logs and is collected with them.",
     "registry_hive_walk.py": "Walks a hive's allocator rather than its tree, recovering class names, shared security descriptors, and keys and values still present in freed cells. Offline only: all three need the hive file."

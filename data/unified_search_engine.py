@@ -69,7 +69,7 @@ class UnifiedDatabaseSearchEngine:
         self.history_manager = SearchHistoryManager(self.case_directory)
         self.discovery_manager = DatabaseDiscoveryManager(self.case_directory)
         self.timestamp_parser = TimestampParser()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self._discovered_databases: Optional[List[DatabaseInfo]] = None
         self._enhanced_databases: Optional[List[EnhancedDatabaseInfo]] = None
         

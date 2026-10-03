@@ -63,7 +63,7 @@ class CaseContextManager:
         # the findings instead of re-querying. Sibling to the investigation
         # log so the existing Case Summary timeline is left untouched.
         self.question_memory_file = self.case_directory / "eye_question_memory.jsonl"
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Load or create case context
         self.case_context = self._load_or_create_context()

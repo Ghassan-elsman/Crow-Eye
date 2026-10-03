@@ -39,7 +39,7 @@ class SearchUtils:
         Args:
             logger: Optional logger instance
         """
-        self.logger = logger or logging.getLogger(self.__class__.__name__)
+        self.logger = logger or logging.getLogger(__name__)
         
         # Track currently highlighted items
         self._highlighted_items: Dict[QtWidgets.QTableWidget, list] = {}

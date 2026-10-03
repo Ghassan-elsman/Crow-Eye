@@ -98,7 +98,7 @@ class EvidenceSeal:
 
     def __init__(self, case_directory: Union[str, Path], store_full_payload: bool = True):
         self.case_directory = Path(case_directory) if case_directory else None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self._seq = 0
         self._prev_seal_hash = ""
         self._lock = threading.Lock()  # guards _seq/_prev_seal_hash + append

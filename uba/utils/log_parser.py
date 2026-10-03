@@ -79,6 +79,51 @@ def parse_4634(keywords) -> Dict[str, str]:
     }
 
 
+def parse_4647(keywords) -> Dict[str, str]:
+    """User-initiated logoff ("Sign out"). Payload: TargetUserSid,
+    TargetUserName, TargetDomainName, TargetLogonId — FOUR fields, with no
+    LogonType. Parsing it with the 4634 layout (which requires five) returned
+    {} for every row, so every 4647 was silently dropped."""
+    parts = _split(keywords)
+    if len(parts) < 4:
+        return {}
+    return {
+        "target_sid": parts[0],
+        "target_user": parts[1],
+        "target_domain": parts[2],
+        "logon_id": parts[3],
+    }
+
+
+def parse_4625(keywords) -> Dict[str, str]:
+    """Failed logon. Payload: SubjectUserSid, SubjectUserName,
+    SubjectDomainName, SubjectLogonId, TargetUserSid, TargetUserName,
+    TargetDomainName, Status, FailureReason, SubStatus, LogonType,
+    LogonProcessName, AuthenticationPackageName, WorkstationName, ...
+
+    TargetUserSid is S-1-0-0 on a failure (the account was never logged on),
+    so the account is identified by name only — callers must not expect a
+    resolvable SID here."""
+    parts = _split(keywords)
+    if len(parts) < 11:
+        return {}
+    info = {
+        "subject_sid": parts[0],
+        "target_sid": parts[4],
+        "target_user": parts[5],
+        "target_domain": parts[6],
+        "status": parts[7],
+        "failure_reason": parts[8],
+        "sub_status": parts[9],
+        "logon_type": parts[10],
+        "logon_type_label": LOGON_TYPE_LABELS.get(
+            parts[10], "logon type {}".format(parts[10])),
+    }
+    if len(parts) > 13:
+        info["workstation"] = parts[13]
+    return info
+
+
 def parse_4688(keywords) -> Dict[str, str]:
     """Process creation. CommandLine (idx 8) may contain commas, so the
     fields after it are anchored from the tail: the payload ends with
@@ -204,9 +249,93 @@ def parse_group_member(keywords) -> Dict[str, str]:
     }
 
 
+# ------------------------------------------------------------------ #
+# Offline ("named") payloads.
+#
+# The two event-log parsers do NOT agree on what Keywords means:
+#   live    (WinLog_Claw.py)         Keywords = comma-joined EventData VALUES
+#   offline (offline_WinLog_Claw.py) Keywords = the <System><Keywords> BITMASK,
+#                                    and EventData lands in EventDescription as
+#                                    "Name: value; Name: value; ..."
+# So on an image-imported case every positional parser above sees a bitmask and
+# returns {} — no actor, no logon type, no LogonId — and the whole sign-in story
+# disappears with no error anywhere. The named form is parsed here instead, and
+# is preferred whenever it is present: names beat positions.
+# ------------------------------------------------------------------ #
+
+# Windows EventData field name -> the key the positional parsers already return.
+_NAMED_FIELDS = {
+    "subjectusersid": "subject_sid",
+    "subjectusername": "subject_user",
+    "subjectdomainname": "subject_domain",
+    "targetusersid": "target_sid",
+    "targetsid": "target_sid",
+    "targetusername": "target_user",
+    "targetdomainname": "target_domain",
+    "logontype": "logon_type",
+    "processname": "process_name",
+    "newprocessname": "new_process_name",
+    "parentprocessname": "parent_process_name",
+    "commandline": "command_line",
+    "membername": "member_name",
+    "membersid": "member_sid",
+    "targetgroupname": "group_name",
+    "callerprocessname": "caller_process",
+    "status": "status",
+    "substatus": "sub_status",
+    "failurereason": "failure_reason",
+    "workstationname": "workstation",
+    "ipaddress": "ip_address",
+}
+
+
+def parse_named_payload(description) -> Dict[str, str]:
+    """Parse an offline 'Name: value; Name: value' EventData rendering.
+
+    Returns {} when the text is not a named payload — a live EventDescription
+    holds the template sentence ("An account was successfully logged on."), so
+    callers fall back to the positional split. A result is only accepted when at
+    least one field name was recognised, so prose that happens to contain a
+    colon can never be mistaken for a payload.
+    """
+    if not description:
+        return {}
+    text = str(description)
+    if ":" not in text:
+        return {}
+    info: Dict[str, str] = {}
+    logon_ids: Dict[str, str] = {}
+    for chunk in text.split(";"):
+        name, sep, value = chunk.partition(":")
+        if not sep:
+            continue
+        key = name.strip().lower()
+        value = value.strip()
+        # LogonId is ambiguous: 4624 carries both Subject and Target. The
+        # positional parser maps logon_id to TargetLogonId, so keep that
+        # precedence and fall back to Subject (4672/4688 carry only Subject).
+        if key in ("targetlogonid", "subjectlogonid"):
+            logon_ids[key] = value
+            continue
+        mapped = _NAMED_FIELDS.get(key)
+        if mapped and mapped not in info:
+            info[mapped] = value
+    if logon_ids:
+        info["logon_id"] = (logon_ids.get("targetlogonid")
+                            or logon_ids.get("subjectlogonid", ""))
+    if not info:
+        return {}
+    if info.get("logon_type"):
+        info["logon_type_label"] = LOGON_TYPE_LABELS.get(
+            info["logon_type"], "logon type {}".format(info["logon_type"]))
+    return info
+
+
 PARSERS = {
     4624: parse_4624,
     4634: parse_4634,
+    4647: parse_4647,
+    4625: parse_4625,
     4688: parse_4688,
     4648: parse_4648,
     4672: parse_4672,
@@ -223,12 +352,25 @@ PARSERS = {
 }
 
 
-def parse_payload(event_id, keywords) -> Dict[str, str]:
-    """Parse the Keywords payload for a supported Event ID.
+def parse_payload(event_id, keywords, description=None) -> Dict[str, str]:
+    """Parse the EventData payload for a supported Event ID.
+
+    ``description`` is the row's EventDescription column. On an offline-imported
+    case it holds the named EventData rendering and is parsed in preference to
+    ``keywords`` (which is only the Keywords bitmask there). On a live case it
+    holds a template sentence, the named parse declines it, and the positional
+    split runs exactly as before.
 
     Returns {} for unsupported ids or malformed payloads — callers must
     treat an empty result as "attribution unavailable".
     """
+    try:
+        named = parse_named_payload(description)
+    except Exception as e:  # defensive: never let a payload crash the engine
+        logger.debug("UBA: named payload parse failed for EID %s: %s", event_id, e)
+        named = {}
+    if named:
+        return named
     parser = PARSERS.get(int(event_id) if event_id is not None else -1)
     if not parser:
         return {}

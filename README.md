@@ -118,6 +118,7 @@ flowchart TB
 
 %% ═══════════ 3. CASE ═══════════
     CASE[("CASE DATABASES<br/>Target_Artifacts/<br/>Imported_Evidence/")]
+    PSTAT[("PARSE STATUS<br/>logs/parse_status.json<br/>why each table is empty")]
 
 %% ═══════════ 4. ANALYSIS ═══════════
     TL["INTERACTIVE TIMELINE<br/>heat map · week · day"]
@@ -148,6 +149,8 @@ flowchart TB
     REPLAY -- "the state Windows<br/>had not finished writing" --> PARSERS
 
     PARSERS -- "parsed artifacts" --> CASE
+    PARSERS -- "outcome per artifact" --> PSTAT
+    PSTAT -. "i button on empty tables" .-> CASE
     I4 -- "verbatim copy or<br/>converted to feather" --> CASE
 
     CASE -- "read-only" --> TL
@@ -175,7 +178,7 @@ flowchart TB
 
     class S1,S2,S3,S4 src
     class I1,I2,I3,I4,PARSERS ing
-    class CASE,RES,INTEL store
+    class CASE,RES,INTEL,PSTAT store
     class TL,UB,CE,DL ana
     class EYE,NM,COMP ai
     class OUT out
@@ -192,6 +195,7 @@ flowchart TB
 |---|---|
 | ① → ② | **Four independent doors into a case.** You never need Crow-Eye's own collector — a folder from Velociraptor, KAPE, or an EDR package goes through the Offline Importer, and third-party CSV/JSON/SQLite goes through Import Evidence. |
 | ② → ③ | Everything converges on one place: **the case databases**. Parsed artifacts land in `Target_Artifacts/`; imported third-party evidence lands in `Imported_Evidence/` and is auto-discovered. |
+| ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses each write one outcome per artifact to `logs/parse_status.json`: parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, or failed. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, an **i** button marks every empty table with its reason, and Settings → Logs lists `parse_status.log`. |
 | ③ → ④ | **The three analysis paths are independent of each other.** The Timeline and UBA read the case databases directly — neither requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
 | ③ → ④ | **Dynamic Linking sits alongside the Timeline and UBA** — a fourth, independent reader of the case databases (it has nothing to do with the Timeline visualization). It gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact data tables** via non-destructive `ATTACH` + `LEFT JOIN`. It changes how records *read*, never the evidence. |
 | ④ → ⑤ | The Eye queries the case databases directly and can pull correlation results **on demand**. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
@@ -271,7 +275,8 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 | Jump Lists & LNK | ✅ | ✅ | File access, paths, timestamps, metadata |
 | ShellBags | ✅ | ✅ | Folder access history and navigation |
 | MRU & RecentDocs / Typed Paths | ✅ | ✅ | Open/Save history, recent files, typed locations |
-| Browser / Website history | ✅ | ✅ | Visited sites and access times |
+| Browser / Website history (registry: TypedURLs) | ✅ | ✅ | Addresses typed into the browser |
+| Browsers — Chromium family, Firefox family, Electron apps (37 tables) | ✅ | — | History, downloads, cookies, cache, sessions, extensions, local storage; stored secrets kept but never decrypted |
 | Event Logs (System / Security / Application) | ✅ | ✅ | Logons, process creation (4688), account & service changes, log clearing |
 | MFT | ✅ | ✅ | File metadata, deleted files, timestamps (NTFS, Win 7/10/11) |
 | USN Journal | ✅ | ✅ | File create/modify/delete/rename with full name history |
@@ -297,6 +302,7 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 - **Prefetch** — parses `C:\Windows\Prefetch`, extracting execution history and forensic metadata (including per-run timestamps).
 - **Event Logs** — automatic parsing of System/Security/Application logs into a database for comprehensive analysis.
 - **Registry depth (0.13.0)** — the parser reads the hive **file** as well as the live registry, so it reaches what `winreg` denies even to an administrator (every device `Properties` subkey, and with it USB connect times), walks the hive's allocator to recover deleted keys and values, and reads class names and key security descriptors. Nineteen keys that held real data and were read by nothing are now parsed — including Explorer's **StartupApproved**, which says whether each autostart entry is actually allowed to launch.
+- **Browsers (0.14.0)** — `Browser_Claw` reads every Chromium-family browser (Chrome, Edge, Brave, Opera, Vivaldi and others, plus any it finds by profile layout), the Firefox family (Firefox, LibreWolf, Waterfox, Pale Moon, SeaMonkey, Tor Browser) and Electron apps (Slack, Discord, Teams, Signal and others) into `browser_analysis.db`. SQLite stores are read from a copy that keeps their `-wal` and `-journal` files, so rows not yet checkpointed are still seen. Passwords, cookie values and card data are stored as found and **never decrypted**. Live systems only for now.
 - **ShellBags** — reveals folder access history and user navigation patterns.
 - **Recycle Bin** — parses `$RECYCLE.BIN` to recover deleted file names, original paths, deletion times, and sizes (live systems and disk images).
 - **MFT** — parses the Master File Table for file metadata, attributes, timestamps, and deleted-file information (NTFS, Windows 7/10/11).
@@ -356,6 +362,9 @@ Correlate events across artifacts on a unified temporal grid, with **Heat Map**,
 
 The Timeline reads the case's parsed artifact databases **directly** and is **independent of the [Correlation Engine](#-correlation-engine)** — you do not need to build feathers, author wings, or run a pipeline to use it. It applies its own lightweight temporal grouping (exact-timestamp and time-window correlation, grouping by application, path, or user) to relate events on the grid. Evidence brought in through [Import Evidence](#-import-evidence-third-party-data) also appears on the timeline as the `imported` artifact type, with working time-window filtering and time bounds.
 
+### 📊 Chart Dashboards
+Six dashboards, each opened by the **Charts** button above an artifact table — **SRUM**, **MFT / USN**, **LNK & Jump Lists**, **Prefetch**, **Shell Items** and **Browser**. Every one draws a day-by-day heat strip (one cell is always one day, so a quiet stretch shows as one), six months at a time with a whole-range overview to jump through years of activity; drills from a day to an hour to an item; and ends at the item's **full source record**. Insights carry the records behind their counts, so "7 files ran from Temp" opens those seven files. The Shell Items dashboard covers twenty registry tables — Shellbags, the MRUs, MUICache, User Shell Folders, shell extensions — and opens filtered to the table it was launched from.
+
 ### 🔎 Search & Export
 Full-text search across the case database, plus export to **CSV** (spreadsheets), **JSON** (integration with other tools), and **Detailed HTML reports** (full dossiers consolidating every artifact tied to a search term).
 
@@ -368,7 +377,7 @@ Translate raw technical identifiers — SIDs, MAC addresses, hashes — into hum
 
 **User Behavior Analytics (UBA)** reads the parsed artifact databases in your case's `Target_Artifacts/` folder (strictly **read-only**) and replays them through a declarative rule set to produce a clear, chronological **Activity Story**. Open it from the **"User Behavior"** toolbar button or with **`Ctrl+Shift+B`** (a case must be loaded).
 
-- 🧩 **40 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
+- 🧩 **65 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
 - 🕵️ **Detects behavior that matters**: sign-in / sign-out / unlock, program launch · execution · install, file open / delete / inferred copy, USB device connection, network-share access, persistence & autostart, explicit-credential use (`runas`), account & group changes, service changes, **system-clock tampering** (suspicious), and **event-log clearing** (critical).
 - 🗺️ **Three views** — an **Activity Story** feed, an **Activity Map** heatmap (day × hour), and a **"What we can see"** honesty report that labels each detection *Working / Limited / No data / By design* for this case.
 - 🔗 **Every activity is evidence-backed.** Click any item to open the exact backing record (`database : table : rowid`) — nothing is asserted without a source.

@@ -28,14 +28,18 @@ except ImportError:
     raise
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('offline_winlog_claw.log'),
-        logging.StreamHandler()
-    ]
-)
+# Deliberately no logging.basicConfig() here. This module is imported into the
+# PyQt app, and basicConfig at import time seeds the ROOT logger before any
+# case exists - then silently does nothing once a case has added its own
+# handlers, so the file it thinks it is writing never appears. The root
+# configuration belongs to utils.logging_setup; this module just asks for a
+# logger and lets its records propagate.
+#
+# This one additionally wrote 'offline_winlog_claw.log' to the CURRENT WORKING
+# DIRECTORY, which for the packaged app is wherever it was launched from - the
+# repo root in development. The case's logs folder is the right home, and
+# utils.logging_setup already routes there.
+
 logger = logging.getLogger(__name__)
 
 # Database schema constants matching live WinLog-Claw
@@ -294,7 +298,8 @@ class EVTXParser:
         Validate timestamp format.
 
         Accepts formats:
-        - YYYY-MM-DD HH:MM:SS.mmm (standard format)
+        - YYYY-MM-DD HH:MM:SS (what _convert_timestamp_to_utc writes)
+        - YYYY-MM-DD HH:MM:SS.mmm (the same, with a fractional part)
         - ISO 8601 formats (fallback from conversion failures)
 
         Args:
@@ -307,6 +312,21 @@ class EVTXParser:
         """
         if not timestamp_str or not isinstance(timestamp_str, str):
             return False
+
+        # Try what this parser ACTUALLY writes: YYYY-MM-DD HH:MM:SS.
+        #
+        # _convert_timestamp_to_utc() returns format_forensic_timestamp(),
+        # which is the project's canonical formatter and emits WHOLE
+        # SECONDS. Requiring the fractional part below rejected every event
+        # this parser produced: all three logs read cleanly, 'Successfully
+        # processed: 3, Failed: 0', and zero rows written - a database that
+        # reads as a machine with no event history, reported as a success.
+        # The writer and the validator are in the same file and disagreed.
+        try:
+            datetime.strptime(timestamp_str[:19], '%Y-%m-%d %H:%M:%S')
+            return True
+        except ValueError:
+            pass
 
         # Try standard format: YYYY-MM-DD HH:MM:SS.mmm
         try:

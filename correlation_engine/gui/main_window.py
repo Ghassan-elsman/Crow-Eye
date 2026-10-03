@@ -647,8 +647,17 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Correlation Engine")
         self.setMinimumSize(1280, 720)
         
-        # Remove window icon to match clean Crow-Eye aesthetic
-        self.setWindowIcon(QIcon())
+        # This used to be setWindowIcon(QIcon()) - deliberately blank, "to match
+        # clean Crow-Eye aesthetic". That predated this window having a taskbar
+        # button; a blank icon in the taskbar reads as a broken app rather than
+        # a clean one, and there is nowhere else the icon shows.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _icon = _CES.crow_eye_icon()
+            if _icon is not None:
+                self.setWindowIcon(_icon)
+        except Exception:
+            pass
         
         # Load and apply Crow-Eye styles
         self._load_styles()

@@ -32,7 +32,7 @@ class IntelligenceEngine(BaseComponent):
             case_directory: Path to active case directory
         """
         super().__init__("IntelligenceEngine")
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.case_directory = case_directory
         self.intelligence_db_path = os.path.join(case_directory, "Crow_Intelligence.db")
         self._db_manager: Optional[DatabaseManager] = None

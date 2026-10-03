@@ -72,6 +72,9 @@ OTHER_PARSERS = {
         _p("MFT and USN journal", "mft_usn_correlator.py")],
     "USN_journal.db": [_p("MFT and USN journal", "USN_Claw.py"),
                        _p("offline_parsers", "offline_USNClaw.py")],
+    # Without this entry the Browser check passes vacuously - the schema
+    # lookup returns nothing and the loop skips every mapped column.
+    "browser_analysis.db": [_p("Browser_Claw.py")],
 }
 
 BRIDGE = os.path.join(REPO, "timeline", "timeline_bridge.py")
@@ -198,6 +201,34 @@ def _schema_from(paths):
                 cols = re.findall(r'"(\w+)"', tm.group(2))
                 if cols:
                     schema.setdefault(tm.group(1), ["id"] + cols)
+
+        # 4b. Browser_Claw declares TABLE_SCHEMAS as {table: "<full column
+        #     DDL>"}, built from f-strings that splice in a shared provenance
+        #     block. A CREATE TABLE regex sees none of its 37 tables, so
+        #     without this the browser checks below pass by finding nothing.
+        m = re.search(r"TABLE_SCHEMAS[^=]*=\s*\{", src)
+        if m:
+            i, depth, end = m.end() - 1, 0, None
+            for j in range(i, len(src)):
+                if src[j] == "{":
+                    depth += 1
+                elif src[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = j
+                        break
+            body = src[i:end] if end else ""
+            # the shared provenance prefix, so its columns count as real ones
+            pm = re.search(r"_PROV\s*=\s*\(((?:[^)])*)\)", src)
+            prov = re.findall(r"(\w+)\s+(?:TEXT|INTEGER|REAL|BLOB)",
+                              pm.group(1)) if pm else []
+            for tm in re.finditer(r'"(\w+)"\s*:\s*\((.*?)\n    \)', body, re.S):
+                ddl = tm.group(2)
+                cols = re.findall(r"(\w+)\s+(?:TEXT|INTEGER|REAL|BLOB)", ddl)
+                if "_PROV" in ddl or "{_PROV}" in ddl:
+                    cols = prov + cols
+                if cols:
+                    schema.setdefault(tm.group(1), ["rowid"] + cols)
 
         # 5. ALTER TABLE ... ADD COLUMN lands at the end of the table.
         for m in re.finditer(

@@ -123,16 +123,61 @@ def unix_timestamp_to_datetime(timestamp: Union[int, float]) -> datetime.datetim
 def datetime_to_unix_timestamp(dt: datetime.datetime) -> float:
     """
     Convert UTC datetime to Unix timestamp.
-    
+
     Args:
         dt: datetime object (assumed to be in UTC)
-        
+
     Returns:
         float: Unix timestamp (seconds since 1970-01-01)
     """
     if not dt.tzinfo:
         dt = dt.replace(tzinfo=datetime.timezone.utc)
     return dt.timestamp()
+
+
+def webkit_to_datetime(webkit: int) -> datetime.datetime:
+    """
+    Convert a Chromium/WebKit timestamp to UTC datetime.
+
+    Chromium (Chrome, Edge, Brave, ...) stores times as the number of
+    microseconds since 1601-01-01 (the same epoch as Windows FILETIME, but in
+    microseconds rather than 100-nanosecond ticks). Multiplying by 10 gives a
+    FILETIME, so we reuse filetime_to_datetime and keep the exact integer math.
+
+    Args:
+        webkit: microseconds since 1601-01-01 (e.g. History.last_visit_time)
+
+    Returns:
+        datetime: UTC datetime object
+
+    Raises:
+        ValueError: if the value is falsy/zero (Chromium's "never" sentinel)
+    """
+    if not webkit or webkit == 0:
+        raise ValueError("Invalid WebKit timestamp value")
+    return filetime_to_datetime(webkit * 10)
+
+
+def prtime_to_datetime(prtime: int) -> datetime.datetime:
+    """
+    Convert a Mozilla/Gecko PRTime timestamp to UTC datetime.
+
+    Firefox stores times as PRTime: microseconds since the Unix epoch
+    (1970-01-01). Some columns (e.g. formhistory timesUsed) are already in
+    microseconds; callers pass the raw value here.
+
+    Args:
+        prtime: microseconds since 1970-01-01 (e.g. moz_places.last_visit_date)
+
+    Returns:
+        datetime: UTC datetime object
+
+    Raises:
+        ValueError: if the value is falsy/zero
+    """
+    if not prtime or prtime == 0:
+        raise ValueError("Invalid PRTime value")
+    return UNIX_EPOCH + datetime.timedelta(microseconds=prtime)
 
 
 def parse_unknown_timestamp(value: Union[int, float, str, bytes], 

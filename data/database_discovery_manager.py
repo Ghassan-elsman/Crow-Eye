@@ -146,6 +146,10 @@ class DatabaseDiscoveryManager:
         'srum_data.db': 'SRUM',
         'srum_dump.db': 'SRUM',
         'SRUM': 'SRUM',
+
+        # Browser forensics
+        'browser_analysis.db': 'Browser',
+        'Browser': 'Browser',
     }
     
     def __init__(self, case_directory: Union[str, Path]):
@@ -158,7 +162,7 @@ class DatabaseDiscoveryManager:
         self.case_directory = Path(case_directory)
         self.db_manager = DatabaseManager(case_directory)
         self.timestamp_detector = TimestampDetector()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Cache for enhanced database information
         self.cache: Dict[str, EnhancedDatabaseInfo] = {}

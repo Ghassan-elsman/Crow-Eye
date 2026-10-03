@@ -104,7 +104,7 @@ class NarrativeMapService:
         eye_version: str = "",
         model_name: str = "eye",
     ):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.case_directory = Path(case_directory) if case_directory else None
         self.eye_version = eye_version
         self.model_name = model_name or "eye"

@@ -76,7 +76,16 @@ class EyeWindowManager(QtCore.QObject):
             
             # Configure standalone window properties
             self.eye_window.setWindowTitle("EYE AI Forensic Assistant")
-            self.eye_window.setWindowIcon(QtGui.QIcon(":/Icons/CrowEye.ico"))
+            # Not ":/Icons/CrowEye.ico": the .qrc is never compiled, so that
+            # path yields an empty icon while QIcon.isNull() reports False.
+            try:
+                from styles import CrowEyeStyles as _CES
+                _eye_icon = _CES.resource_icon(
+                    "GUI Resources", "the Eye AI agent transparent.png", trim=True)
+                if _eye_icon is not None:
+                    self.eye_window.setWindowIcon(_eye_icon)
+            except Exception:
+                pass
             
             # Set a reasonable default size for a standalone window
             self.eye_window.resize(1200, 900)

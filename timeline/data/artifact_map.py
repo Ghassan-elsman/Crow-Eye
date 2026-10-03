@@ -63,6 +63,10 @@ ARTIFACT_DB_MAPPING = {
     "Shimcache": "shimcache.db",
     "RecycleBin": "recyclebin_analysis.db",
     "SRUM": "srum_data.db",
+    # Browser forensics (Chromium / Gecko / Electron). One database, many
+    # tables; the timeline plots the event-bearing ones (visits, downloads,
+    # cookie lifetimes, cache fetches).
+    "Browser": "browser_analysis.db",
     "USN": "USN_journal.db",
     "MFT": "mft_claw_analysis.db",
     # Windows Event Logs. Absent from both maps until now, while the bridge read
@@ -302,6 +306,92 @@ TIMESTAMP_MAPPINGS = {
         ("srum_energy_usage", "event_timestamp", "various",
          "Battery state transition"),
         ("srum_app_timeline", "timestamp", "various"),
+    ],
+    # Browser events. Each row's own event time, never the parser's parsed_at.
+    # `visit_time` dates a single visit (there is also a per-URL
+    # `last_visit_time`, deliberately not plotted so one URL is not drawn
+    # once per visit AND again at its last visit).
+    "Browser": [
+        # --- Chromium: navigation and intent ---------------------------------
+        ("browser_history", "visit_time", "accessed", "Page visited"),
+        ("browser_shortcuts", "last_access_time", "accessed",
+         "Typed into the omnibox"),
+        # --- Chromium: downloads ---------------------------------------------
+        ("browser_downloads", "start_time", "created", "Download started"),
+        ("browser_downloads", "end_time", "modified", "Download finished"),
+        # --- Chromium: cookies ------------------------------------------------
+        ("browser_cookies", "creation_time", "created", "Cookie set"),
+        ("browser_cookies", "last_access_time", "accessed", "Cookie last sent"),
+        # --- Chromium: cache --------------------------------------------------
+        # request_time and response_time are a PAIR from one HttpResponseInfo,
+        # so a cached fetch draws twice on purpose - the two together are the
+        # request/response span, not a duplicated event. Both are labelled so
+        # the pair reads that way rather than as noise.
+        ("browser_cache", "request_time", "accessed", "Resource requested"),
+        ("browser_cache", "response_time", "accessed", "Resource fetched"),
+        # Empty on every row today: CacheStorage records the response but not
+        # when it was fetched. Mapped so it plots the moment that changes, and
+        # listed in the bridge test's KNOWN_EMPTY meanwhile.
+        ("browser_service_worker", "response_time", "accessed",
+         "Service worker resource fetched"),
+        # --- Chromium: secrets and saved data ---------------------------------
+        ("browser_credentials", "date_created", "created", "Login saved"),
+        ("browser_credentials", "date_last_used", "accessed", "Saved login used"),
+        ("browser_autofill", "date_created", "created", "Form value saved"),
+        ("browser_autofill", "date_last_used", "accessed", "Form value reused"),
+        ("browser_addresses", "date_modified", "modified", "Saved address changed"),
+        ("browser_addresses", "use_date", "accessed", "Saved address used"),
+        ("browser_payments", "date_modified", "modified", "Payment method changed"),
+        ("browser_payments", "use_date", "accessed", "Payment method used"),
+        # --- Chromium: configuration ------------------------------------------
+        ("browser_extensions", "install_time", "installed", "Extension installed"),
+        ("browser_search_engines", "date_created", "created", "Search provider added"),
+        ("browser_search_engines", "last_modified", "modified",
+         "Search provider changed"),
+        ("browser_bookmarks", "date_added", "created", "Bookmarked"),
+        ("browser_bookmarks", "date_last_used", "accessed", "Bookmark opened"),
+        ("browser_reading_list", "date_added", "created", "Added to reading list"),
+        ("browser_reading_list", "date_last_opened", "accessed",
+         "Reading list item opened"),
+        # --- Chromium: behavioural --------------------------------------------
+        # Favicons outlive a cleared history, which is why they are plotted.
+        ("browser_favicons", "last_updated", "accessed", "Favicon fetched"),
+        ("browser_media_history", "last_updated", "accessed", "Media played"),
+        ("browser_media_router", "last_seen", "accessed", "Cast device seen"),
+        ("browser_dips", "first_site_storage_time", "created",
+         "Site first stored data (tracker)"),
+        ("browser_dips", "last_site_storage_time", "modified",
+         "Site last stored data (tracker)"),
+        ("browser_dips", "first_user_interaction_time", "accessed",
+         "First site interaction (tracker)"),
+        ("browser_dips", "last_user_interaction_time", "accessed",
+         "Site interaction (tracker)"),
+        # --- Extracted payloads ------------------------------------------------
+        # mtime of the copy Crow-Eye made. shutil.copy2 preserves the original's
+        # time, so this is usually the browser's own write; the locked-file raw
+        # copy fallback does not, so a minority of rows can carry the copy time.
+        ("browser_files", "mtime", "modified", "Extracted payload last written"),
+        # --- Gecko (Firefox) ---------------------------------------------------
+        # Parity with the Chromium side above: cookies, logins and forms were
+        # plotted for Chromium and not for Firefox, so a Firefox-only case
+        # showed almost nothing.
+        ("browser_gecko_history", "visit_time", "accessed", "Page visited (Firefox)"),
+        ("browser_gecko_downloads", "start_time", "created",
+         "Download started (Firefox)"),
+        ("browser_gecko_downloads", "end_time", "modified",
+         "Download finished (Firefox)"),
+        ("browser_gecko_cookies", "creation_time", "created", "Cookie set (Firefox)"),
+        ("browser_gecko_cookies", "last_accessed", "accessed",
+         "Cookie last sent (Firefox)"),
+        ("browser_gecko_credentials", "time_created", "created",
+         "Login saved (Firefox)"),
+        ("browser_gecko_credentials", "time_last_used", "accessed",
+         "Saved login used (Firefox)"),
+        ("browser_gecko_formhistory", "last_used", "accessed",
+         "Form value reused (Firefox)"),
+        ("browser_gecko_bookmarks", "date_added", "created", "Bookmarked (Firefox)"),
+        ("browser_gecko_bookmarks", "last_modified", "modified",
+         "Bookmark changed (Firefox)"),
     ],
     "USN": [
         ("journal_events", "timestamp", "various"),

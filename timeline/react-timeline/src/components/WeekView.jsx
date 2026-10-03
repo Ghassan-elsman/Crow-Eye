@@ -35,6 +35,7 @@ function WeekView({ data, state }) {
         shimcache: 0,
         recyclebin: 0,
         registry: 0,
+        browser: 0,
         sessions: 0,
         _artifactNames: {},  // Track artifact name frequencies
         _hasDetailedData: {} // Track which categories have detailed data loaded
@@ -59,6 +60,7 @@ function WeekView({ data, state }) {
             else if (source === 'shimcache') day.shimcache += count;
             else if (source === 'recyclebin') day.recyclebin += count;
             else if (source === 'registry') day.registry += count;
+            else if (source === 'browser') day.browser += count;
           }
         });
       });
@@ -66,7 +68,7 @@ function WeekView({ data, state }) {
       dayArray.forEach(d => {
         d._srumDetail = 0; d._mftDetail = 0; d._execDetail = 0;
         d._amcacheDetail = 0; d._shimcacheDetail = 0; d._recyclebinDetail = 0;
-        d._registryDetail = 0; d._sessionsDetail = 0;
+        d._registryDetail = 0; d._sessionsDetail = 0; d._browserDetail = 0;
       });
     }
 
@@ -123,6 +125,7 @@ function WeekView({ data, state }) {
     }
     
     count(data.shimcache, 'shimcache');
+    count(data.browser, 'browser');
     count(data.recyclebin, 'recyclebin');
     
     if (data.registry) {
@@ -156,7 +159,7 @@ function WeekView({ data, state }) {
     return dayArray;
   }, [data, timeRange]);
 
-  const maxOnDay = Math.max(1, ...days.map(d => d.srum + d.mft + d.exec + d.amcache + d.shimcache + d.recyclebin + d.registry + d.sessions));
+  const maxOnDay = Math.max(1, ...days.map(d => d.srum + d.mft + d.exec + d.amcache + d.shimcache + d.recyclebin + d.registry + d.browser + d.sessions));
 
   // Task 5.5.1: Day click handler uses UTC methods
   const handleDayClick = (dayDate) => {
@@ -184,7 +187,7 @@ function WeekView({ data, state }) {
 
       <div style={{ display: 'flex', gap: 12, height: 'calc(100% - 80px)', minHeight: 400 }}>
         {days.map((d) => {
-          const total = d.srum + d.mft + d.exec + d.amcache + d.shimcache + d.recyclebin + d.registry + d.sessions;
+          const total = d.srum + d.mft + d.exec + d.amcache + d.shimcache + d.recyclebin + d.registry + d.browser + d.sessions;
           const hSrum = (d.srum / maxOnDay) * 100;
           const hMft = (d.mft / maxOnDay) * 100;
           const hExec = (d.exec / maxOnDay) * 100;
@@ -192,6 +195,7 @@ function WeekView({ data, state }) {
           const hShimcache = (d.shimcache / maxOnDay) * 100;
           const hRecyclebin = (d.recyclebin / maxOnDay) * 100;
           const hRegistry = (d.registry / maxOnDay) * 100;
+          const hBrowser = (d.browser / maxOnDay) * 100;
           const hSessions = (d.sessions / maxOnDay) * 100;
 
           return (
@@ -207,6 +211,7 @@ function WeekView({ data, state }) {
                 <div style={{ height: `${hShimcache}%`, background: 'var(--lane-cache)', opacity: 0.7 }} title={`Shimcache: ${d.shimcache}`} />
                 <div style={{ height: `${hRecyclebin}%`, background: 'var(--lane-cache)', opacity: 0.7 }} title={`RecycleBin: ${d.recyclebin}`} />
                 <div style={{ height: `${hRegistry}%`, background: 'var(--lane-execution)', opacity: 0.7 }} title={`Registry: ${d.registry}`} />
+                <div style={{ height: `${hBrowser}%`, background: 'var(--lane-browser)', opacity: 0.85 }} title={`Browser: ${d.browser}`} />
                 <div style={{ height: `${hSessions}%`, background: 'var(--lane-sessions)', opacity: 0.7 }} title={`Sessions: ${d.sessions}`} />
                 
                 {total > 0 && (
@@ -232,6 +237,7 @@ function WeekView({ data, state }) {
                   {d.shimcache > 0 && <div style={{display: 'flex', justifyContent: 'space-between'}}><span>Shimcache:</span> <span>{d.shimcache}</span></div>}
                   {d.recyclebin > 0 && <div style={{display: 'flex', justifyContent: 'space-between'}}><span>Recycle:</span> <span>{d.recyclebin}</span></div>}
                   {d.registry > 0 && <div style={{display: 'flex', justifyContent: 'space-between'}}><span>Registry:</span> <span>{d.registry}</span></div>}
+                  {d.browser > 0 && <div style={{display: 'flex', justifyContent: 'space-between'}}><span>Browser:</span> <span>{d.browser}</span></div>}
                   {d.sessions > 0 && <div style={{display: 'flex', justifyContent: 'space-between'}}><span>Sessions:</span> <span>{d.sessions}</span></div>}
                 </div>
               )}

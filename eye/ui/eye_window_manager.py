@@ -19,6 +19,9 @@ class EYESplashWindow(QtWidgets.QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        # Qt.Window makes this a real top-level entry, and it had no name, so
+        # anywhere the window manager listed it the label was blank.
+        self.setWindowTitle("Crow-Eye - Starting Eye AI")
         self.setFixedSize(600, 600)
 
         # Center on screen

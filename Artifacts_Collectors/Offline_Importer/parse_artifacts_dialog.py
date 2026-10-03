@@ -644,9 +644,13 @@ class ParseArtifactsDialog(QDialog):
                     from PyQt5.QtWidgets import QApplication
                     QApplication.processEvents()
                     
-                    # Give the GUI a moment to process the data loading
-                    import time
-                    time.sleep(0.5)
+                    # Give the GUI a moment to process the data loading.
+                    # Waited in an event loop, not time.sleep(): sleeping froze
+                    # the loading dialog's animation for the whole half second.
+                    from PyQt5.QtCore import QEventLoop, QTimer
+                    _pause = QEventLoop()
+                    QTimer.singleShot(500, _pause.quit)
+                    _pause.exec_()
                     
                     # Close loading dialog now that data is loaded
                     if loading_dialog:
@@ -654,10 +658,14 @@ class ParseArtifactsDialog(QDialog):
                         loading_dialog.close()
                         print("[DEBUG] Loading dialog closed")
                     
-                    # NOW show the completion dialog AFTER data has loaded
-                    print("[DEBUG] Now showing completion dialog after data load...")
-                    self._show_parsing_complete_dialog(parse_results, success_count, error_count, selected_artifacts_objs)
-                    print("[DEBUG] Completion dialog shown")
+                    # The main window shows the Parse Status Report once its
+                    # tables are loaded (ParserInvoker recorded this batch).
+                    # Showing this dialog as well stacked two summaries, the
+                    # first one titled "Successfully parsed" regardless.
+                    if self._parse_status_recorded():
+                        print("[ParseArtifacts] Per-artifact results are in the Parse Status Report")
+                    else:
+                        self._show_parsing_complete_dialog(parse_results, success_count, error_count, selected_artifacts_objs)
                         
                 except Exception as e:
                     logger.error(f"Failed to determine parsed artifact types: {e}")
@@ -776,6 +784,15 @@ class ParseArtifactsDialog(QDialog):
         
         return "\n".join(lines)
     
+    def _parse_status_recorded(self) -> bool:
+        """True when this parse left a parse-status run for the report to show."""
+        try:
+            from utils.parse_status import ParseStatusStore
+            run = ParseStatusStore(str(self.case_root)).last_run()
+            return bool(run and run.get("finished") and run.get("mode") in ("offline", "image"))
+        except Exception:
+            return False
+
     def _show_parsing_complete_dialog(self, parse_results: list, success_count: int, error_count: int, selected_artifacts: list):
         """
         Show smart completion dialog with QTableWidget AFTER data has loaded into GUI.
@@ -1187,7 +1204,7 @@ class ParseArtifactsDialog(QDialog):
         # Create LoadingDialog for consistent UI with live parsers (Requirement 3)
         if LOADING_DIALOG_AVAILABLE:
             # Use self as parent to prevent active modal dialog from blocking this dialog (Fixing modality bug)
-            self.loading_dialog = LoadingDialog("PARSING ARTIFACTS", self)
+            self.loading_dialog = LoadingDialog("PARSING ARTIFACTS", self, phase="parsing")
             
             # Apply EXACT cyberpunk styling used by live parsers (same as Crow Eye.py line 7325-7330)
             try:
@@ -1308,7 +1325,9 @@ class ParseArtifactsDialog(QDialog):
         # Initialize parser
         from Artifacts_Collectors.Offline_Importer.parser_invoker import ParserInvoker
         parser = ParserInvoker(self.case_root)
-        
+        # 'image' when opened from ImageParsingDialog; labels the parse status.
+        parser.mode = getattr(self, 'source_mode', 'offline')
+
         # Track results
         self.parse_results = []
         self.cancelled = False
@@ -1340,7 +1359,16 @@ class ParseArtifactsDialog(QDialog):
             
             # Start worker thread (non-blocking)
             worker.start()
-            
+            # Crow-Eye is busy while this parses: feature windows in the main
+            # window refuse to open meanwhile (ui/busy_guard.py). Released by
+            # itself when the thread stops; the main-window load that follows
+            # marks its own section.
+            try:
+                from ui import busy_guard
+                busy_guard.begin("Parsing offline artifacts", alive=worker.isRunning)
+            except Exception:
+                pass
+
             # Use QEventLoop to wait without blocking GUI
             from PyQt5.QtCore import QEventLoop
             loop = QEventLoop()

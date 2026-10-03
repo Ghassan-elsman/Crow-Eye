@@ -580,6 +580,13 @@ class TimelineBridge(QObject):
         ("registry_data.db", "ShutdownInfo", "shutdown_time"),
         ("amcache.db", "InventoryApplicationFile", "link_date_utc"),
         ("amcache.db", "InventoryApplication", "install_date_utc"),
+        # Browser. Without these a browser-only case reports
+        # "No forensic data found" even though the lane has data.
+        ("browser_analysis.db", "browser_history", "visit_time"),
+        ("browser_analysis.db", "browser_downloads", "start_time"),
+        ("browser_analysis.db", "browser_cookies", "creation_time"),
+        ("browser_analysis.db", "browser_cache", "response_time"),
+        ("browser_analysis.db", "browser_gecko_history", "visit_time"),
     ]
 
     @pyqtSlot(result=str)
@@ -1835,7 +1842,80 @@ class TimelineBridge(QObject):
                         "formatted_file_size, user_sid, file_signature, "
                         "recovery_status,"),
             order_by="deletion_time"))
-    
+
+    # ──────────────────────────────────────────────
+    # SLOT: Lane 7 — Browser activity
+    # ──────────────────────────────────────────────
+
+    # table -> the non-time columns worth carrying to the front end, as the
+    # label under the dot and the tooltip. Kept deliberately narrow: the
+    # double-click detail dialog fetches the whole row through getEventDetail,
+    # so nothing here needs to be exhaustive - and nothing here may be a
+    # secret. `username_value`, cookie `value`, autofill `value` and every
+    # `*_encrypted_b64` column are omitted on purpose; the parser preserves
+    # them rather than decrypting, and a timeline label must not undo that.
+    _BROWSER_LABEL_COLS = {
+        "browser_history": "url, title, transition, typed_count,",
+        "browser_shortcuts": "text, url, number_of_hits,",
+        "browser_downloads": "target_path, source_url, danger_type, mime_type,",
+        "browser_cookies": "host_key, name, is_secure, is_persistent,",
+        "browser_cache": "url, http_status, content_type, cache_format,",
+        "browser_service_worker": "resource_url, scope, http_status, content_type,",
+        "browser_credentials": "origin_url, signon_realm, times_used,",
+        "browser_autofill": "field_name, count,",
+        "browser_addresses": "guid, city, country,",
+        "browser_payments": "kind, network, last_four,",
+        "browser_extensions": "name, extension_id, from_webstore, state,",
+        "browser_search_engines": "short_name, keyword, url, is_default,",
+        "browser_bookmarks": "name, url, folder,",
+        "browser_reading_list": "title, url, read_status,",
+        "browser_favicons": "page_url, icon_domain,",
+        "browser_media_history": "origin, url, watch_time_seconds,",
+        "browser_media_router": "device_name, device_type, model_name,",
+        "browser_dips": "site,",
+        "browser_files": "artifact, original_path, size,",
+        "browser_gecko_history": "url, title, visit_type, typed,",
+        "browser_gecko_downloads": "url, target_path, state,",
+        "browser_gecko_cookies": "host, name, is_secure,",
+        "browser_gecko_credentials": "hostname, times_used,",
+        "browser_gecko_formhistory": "field_name, times_used,",
+        "browser_gecko_bookmarks": "title, url, folder,",
+    }
+
+    @pyqtSlot(str, str, result=str)
+    def getBrowserData(self, start: str, end: str) -> str:
+        """Browser activity across every table `artifact_map` plots.
+
+        Driven entirely by `TIMESTAMP_MAPPINGS["Browser"]` - the table list is
+        derived from the map rather than written out here, so a column added to
+        the map is fetched without touching this slot and the two cannot drift.
+
+        Each row carries `bsource`, the table it came from, so the front end can
+        label and group without a second round trip.
+        """
+        from timeline.data import artifact_map as _am
+
+        artifact = "Browser"
+        db = _am.ARTIFACT_DB_MAPPING.get(artifact, "browser_analysis.db")
+        tables = []
+        for entry in _am.TIMESTAMP_MAPPINGS.get(artifact, []):
+            if entry[0] not in tables:
+                tables.append(entry[0])
+
+        rows = []
+        for table in tables:
+            extra = self._BROWSER_LABEL_COLS.get(table, "")
+            # The source table travels with the row; SQLite has no column for
+            # it and the front end has no other way to tell a visit from a
+            # cookie once the rows are merged into one list.
+            extra = "%s '%s' as bsource," % (extra, table)
+            try:
+                rows.extend(self._mapped_rows(db, artifact, table, start, end,
+                                              extra_cols=extra))
+            except Exception as exc:        # a table absent from an older case
+                logger.debug("browser table %s skipped: %s", table, exc)
+        return json.dumps(rows)
+
     # ──────────────────────────────────────────────
     # SLOT: SRUM Energy (supplementary)
     # ──────────────────────────────────────────────
@@ -2066,7 +2146,40 @@ class TimelineBridge(QObject):
             union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"
             return self._query_db("registry_data.db", union_sql, (start, end))
 
-        with ThreadPoolExecutor(max_workers=11) as executor:
+        def fetch_browser():
+            """Per-day browser counts for the heatmap and week views.
+
+            Derived from `artifact_map` for the same reason the registry
+            fetcher is: a hand-written (table, column) list here would be a
+            second copy of the map, and the last two copies both drifted.
+            """
+            from timeline.data import artifact_map as _am
+
+            db = _am.ARTIFACT_DB_MAPPING.get("Browser", "browser_analysis.db")
+            pairs = []
+            for entry in _am.TIMESTAMP_MAPPINGS.get("Browser", []):
+                if _am.is_key_time(entry):
+                    continue
+                if (entry[0], entry[1]) not in pairs:
+                    pairs.append((entry[0], entry[1]))
+
+            query_parts = []
+            for table, date_col in pairs:
+                if self._table_exists(db, table):
+                    query_parts.append(f"""
+                        SELECT DATE({date_col}) as day, STRFTIME('%H', {date_col}) as hour, COUNT(*) as c
+                        FROM {table}
+                        WHERE {date_col} IS NOT NULL AND {date_col} NOT IN ('', 'N/A', '0s')
+                        GROUP BY day, hour
+                    """)
+
+            if not query_parts:
+                return []
+
+            union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"
+            return self._query_db(db, union_sql, (start, end))
+
+        with ThreadPoolExecutor(max_workers=12) as executor:
             fut_sys = executor.submit(fetch_system)
             fut_app = executor.submit(fetch_app)
             fut_sec = executor.submit(fetch_sec)
@@ -2079,6 +2192,7 @@ class TimelineBridge(QObject):
             fut_recy = executor.submit(fetch_recycle)
             fut_lnk = executor.submit(fetch_lnk)
             fut_reg = executor.submit(fetch_artifacts_registry)
+            fut_brow = executor.submit(fetch_browser)
             
             # Consolidate results
             result['SystemLogs'] = fut_sys.result()
@@ -2095,6 +2209,7 @@ class TimelineBridge(QObject):
             result['recyclebin'] = fut_recy.result()
             result['lnk'] = fut_lnk.result()
             result['registry_others'] = fut_reg.result()
+            result['browser'] = fut_brow.result()
         
         return json.dumps(result)
     
@@ -2114,7 +2229,8 @@ class TimelineBridge(QObject):
             'Log_Claw.db', 'srum_data.db', 'mft_usn_correlated_analysis.db',
             'mft_claw_analysis.db', 'prefetch_data.db', 'LnkDB.db',
             'registry_data.db', 'shimcache.db', 'amcache.db',
-            'recyclebin_analysis.db', 'USN_journal.db'
+            'recyclebin_analysis.db', 'USN_journal.db',
+            'browser_analysis.db'
         ]
         available = {}
         for db in dbs:

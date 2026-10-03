@@ -42,6 +42,7 @@ const DEFAULT_ARTIFACTS = {
   shimcache: true,
   recyclebin: true,
   event_logs: true,
+  browser: true,
   // Two start OFF. A registry key's write time is an
   // upper bound on every value under it, so these are shown only when
   // the analyst asks - otherwise ~2,200 of them cluster on install day
@@ -61,6 +62,7 @@ const DEFAULT_LANE_HEIGHTS = {
   srum_app: 120,
   srum_net: 100,
   mft_usn: 120,
+  browser: 110,
   execution: 100,
   cache: 80,
 };

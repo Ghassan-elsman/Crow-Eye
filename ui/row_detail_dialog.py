@@ -149,8 +149,19 @@ class RowDetailDialog(QtWidgets.QDialog):
         # Set dialog properties
         self.setWindowTitle(f"Row Details - {self.table_name}")
         self.setMinimumSize(700, 500)
-        # Set window flags to allow maximize button in the title bar
-        self.setWindowFlags(Qt.Dialog | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        # Maximize AND minimize. Without the minimize hint the window cannot be
+        # sent to the taskbar at all, so its title never appears there - which
+        # is the whole point of having one.
+        self.setWindowFlags(Qt.Window | Qt.WindowMinimizeButtonHint
+                            | Qt.WindowMaximizeButtonHint | Qt.WindowCloseButtonHint)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         
         # Create main layout
         main_layout = QtWidgets.QVBoxLayout(self)

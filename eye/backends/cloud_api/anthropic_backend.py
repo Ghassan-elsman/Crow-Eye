@@ -35,7 +35,7 @@ class AnthropicBackend(LLMBackend):
     def __init__(self, model_name: str, credential_manager):
         self.model_name = model_name
         self.credential_manager = credential_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.quota_stats = "API Managed"
         self._client = None
         self._model_cache = []

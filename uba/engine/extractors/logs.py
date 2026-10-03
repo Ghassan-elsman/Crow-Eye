@@ -28,8 +28,11 @@ def _security_rows(ctx, eids):
     if conn is None or not ctx.pool.has_table("logs", "SecurityLogs"):
         return []
     marks = ",".join("?" for _ in eids)
+    # EventDescription is selected because it is where an OFFLINE-parsed case
+    # keeps the EventData ("Name: value; ..."); on a live case it is only the
+    # template sentence and log_parser falls back to splitting Keywords.
     return conn.execute(
-        "SELECT rowid, EventID, EventTimestampUTC, User, Keywords "
+        "SELECT rowid, EventID, EventTimestampUTC, User, Keywords, EventDescription "
         "FROM SecurityLogs WHERE EventID IN ({}) "
         "ORDER BY EventTimestampUTC".format(marks), list(eids)).fetchall()
 
@@ -78,12 +81,40 @@ def _mk(rule, ts, actor, description_text, evidence, confidence=CONF_LOG_ONLY,
 
 
 # --------------------------------------------------------------------- #
+def _collapse_duplicates(entries):
+    """Collapse rows Windows logged more than once for the same moment.
+
+    Windows writes TWO 4624 rows for every interactive logon (and two 4634s per
+    logoff), so one sign-in produced two identical cards one after the other at
+    the same second. Rows sharing (actor, timestamp, variant) become a single
+    activity whose evidence lists every contributing rowid, so nothing is lost
+    from the proof — only the repetition goes.
+
+    ``entries`` are (key, ts, actor, rowid) tuples; yields
+    (key, ts, actor, rowids) in first-seen order.
+    """
+    merged = {}
+    for key, ts, actor, rowid in entries:
+        bucket = merged.setdefault((key, ts, actor), [])
+        if rowid not in bucket:
+            bucket.append(rowid)
+    for (key, ts, actor), rowids in merged.items():
+        yield key, ts, actor, rowids
+
+
+def _session_evidence(rowids):
+    return [EvidenceRef(db="logs", table="SecurityLogs",
+                        rowids=rowids, count=len(rowids))]
+
+
 def sessions_logon(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
-    events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4624]):
-        info = log_parser.parse_payload(4624, keywords)
-        if info.get("logon_type") not in ("2", "10", "11"):
+    rows = []
+    labels = {}
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4624]):
+        info = log_parser.parse_payload(4624, keywords, desc)
+        logon_type = info.get("logon_type")
+        if logon_type not in ("2", "10", "11"):
             continue
         ts = normalize_ts(ts)
         actor = ctx.resolver.from_sid(info.get("target_sid"), "the logon event")
@@ -92,36 +123,47 @@ def sessions_logon(ctx, rules) -> List[BehaviorEvent]:
                 info.get("target_user"), "the Windows security log")
         if actor[0] != "User":
             continue                     # service noise, not a person signing in
-        remote = info.get("logon_type") == "10"
-        if remote:
+        labels[logon_type] = info.get("logon_type_label", "logon")
+        rows.append((logon_type, ts, actor, rowid))
+
+    events = []
+    for logon_type, ts, actor, rowids in _collapse_duplicates(rows):
+        if logon_type == "10":
             text = "{} signed in remotely over Remote Desktop".format(actor[1])
             severity = SEV_NOTABLE
         else:
             text = "{} signed in to the computer ({})".format(
-                actor[1], info.get("logon_type_label", "logon"))
+                actor[1], labels.get(logon_type, "logon"))
             severity = None
         events.append(_mk(
-            rule, ts, actor, text,
-            [EvidenceRef(db="logs", table="SecurityLogs", rowids=[rowid], count=1)],
-            ctx=ctx, severity=severity, details={"logon_type": info.get("logon_type")}))
+            rule, ts, actor, text, _session_evidence(rowids),
+            ctx=ctx, severity=severity, count=len(rowids),
+            details={"logon_type": logon_type}))
     return events
 
 
 def sessions_logoff(ctx, rules) -> List[BehaviorEvent]:
     """4634 (session logoff) + 4647 (user-initiated logoff)."""
     rule = rules[0]
-    events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4634, 4647]):
-        info = log_parser.parse_payload(4634, keywords)
+    rows = []
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4634, 4647]):
+        # Parse per EventID: a 4647 payload has FOUR fields and no LogonType,
+        # so reading it with the 4634 layout returned {} and dropped every one.
+        info = log_parser.parse_payload(eid, keywords, desc)
         actor = ctx.resolver.from_sid(info.get("target_sid"), "the logoff event")
+        if not actor[0]:
+            actor = ctx.resolver.from_account_name(
+                info.get("target_user"), "the Windows security log")
         if actor[0] != "User":
             continue
-        ts = normalize_ts(ts)
+        rows.append((eid, normalize_ts(ts), actor, rowid))
+
+    events = []
+    for eid, ts, actor, rowids in _collapse_duplicates(rows):
         verb = "signed out" if eid == 4634 else "signed out (chose Sign Out)"
         events.append(_mk(
             rule, ts, actor, "{} {}".format(actor[1], verb),
-            [EvidenceRef(db="logs", table="SecurityLogs", rowids=[rowid], count=1)],
-            ctx=ctx))
+            _session_evidence(rowids), ctx=ctx, count=len(rowids)))
     return events
 
 
@@ -129,9 +171,9 @@ def sessions_unlock(ctx, rules) -> List[BehaviorEvent]:
     """Explicit 4800/4801 auditing is normally off; logon type 7 events are
     the reliable unlock signal that IS captured by default."""
     rule = rules[0]
-    events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4624]):
-        info = log_parser.parse_payload(4624, keywords)
+    rows = []
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4624]):
+        info = log_parser.parse_payload(4624, keywords, desc)
         if info.get("logon_type") != "7":
             continue
         actor = ctx.resolver.from_sid(info.get("target_sid"), "the unlock event")
@@ -140,12 +182,14 @@ def sessions_unlock(ctx, rules) -> List[BehaviorEvent]:
                 info.get("target_user"), "the Windows security log")
         if actor[0] != "User":
             continue
-        ts = normalize_ts(ts)
+        rows.append(("unlock", normalize_ts(ts), actor, rowid))
+
+    events = []
+    for _key, ts, actor, rowids in _collapse_duplicates(rows):
         events.append(_mk(
             rule, ts, actor,
             "{} unlocked the computer (was present at the keyboard)".format(actor[1]),
-            [EvidenceRef(db="logs", table="SecurityLogs", rowids=[rowid], count=1)],
-            ctx=ctx))
+            _session_evidence(rowids), ctx=ctx, count=len(rowids)))
     return events
 
 
@@ -153,8 +197,8 @@ def sessions_unlock(ctx, rules) -> List[BehaviorEvent]:
 def process_creation_4688(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4688]):
-        info = log_parser.parse_payload(4688, keywords)
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4688]):
+        info = log_parser.parse_payload(4688, keywords, desc)
         proc = info.get("new_process_name", "")
         if not proc or proc == "-":
             continue
@@ -202,21 +246,35 @@ def service_installed(ctx, rules) -> List[BehaviorEvent]:
 
 
 def boot_shutdown(ctx, rules) -> List[BehaviorEvent]:
+    """Power transitions: 6005 event-log started (boot), 6006 event-log stopped
+    (clean shutdown), 1074 initiated shutdown/restart, 6008 dirty shutdown.
+
+    6005/6006 were not read before, so a rule titled "Computer started or shut
+    down" only ever reported shutdowns — a case with 29 boot records showed
+    zero moments where the machine came on, and the session view had nothing to
+    anchor uptime to.
+    """
     rule = rules[0]
+    text_for = {
+        6005: ("The computer started up (Windows began logging)", SEV_ROUTINE),
+        6006: ("The computer was shut down cleanly (Windows stopped logging)",
+               SEV_ROUTINE),
+        1074: ("The computer was shut down or restarted", SEV_ROUTINE),
+        6008: ("The computer shut down unexpectedly (power loss, crash "
+               "or forced power-off)", SEV_NOTABLE),
+    }
     events = []
-    for rowid, eid, ts, source, user, keywords, desc in _system_rows(ctx, [1074, 6008]):
+    for rowid, eid, ts, source, user, keywords, desc in _system_rows(
+            ctx, [1074, 6005, 6006, 6008]):
         ts = normalize_ts(ts)
-        if eid == 6008:
-            text = ("The computer shut down unexpectedly (power loss, crash "
-                    "or forced power-off)")
-            severity = SEV_NOTABLE
-        else:
-            text = "The computer was shut down or restarted"
-            severity = SEV_ROUTINE
+        text, severity = text_for.get(
+            eid, ("The computer changed power state", SEV_ROUTINE))
         events.append(_mk(
             rule, ts, ("System", "Windows", "recorded in the system log"),
             text, [EvidenceRef(db="logs", table="SystemLogs", rowids=[rowid], count=1)],
-            ctx=ctx, severity=severity))
+            ctx=ctx, severity=severity,
+            details={"event_id": eid,
+                     "transition": "start" if eid == 6005 else "stop"}))
     return events
 
 
@@ -255,7 +313,7 @@ def time_changed(ctx, rules) -> List[BehaviorEvent]:
             [EvidenceRef(db="logs", table="SystemLogs", rowids=[rowid], count=1)]
             + tz_evidence,
             ctx=ctx))
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4616]):
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4616]):
         ts = normalize_ts(ts)
         actor = ctx.resolver.from_account_name(user, "the security log")
         events.append(_mk(
@@ -268,7 +326,7 @@ def time_changed(ctx, rules) -> List[BehaviorEvent]:
 def log_cleared(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [1102]):
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [1102]):
         ts = normalize_ts(ts)
         actor = ctx.resolver.from_account_name(user, "the security log")
         events.append(_mk(
@@ -302,8 +360,8 @@ def privileged_logon(ctx, rules) -> List[BehaviorEvent]:
     reported, aggregated per hour."""
     rule = rules[0]
     rows = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4672]):
-        info = log_parser.parse_payload(4672, keywords)
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4672]):
+        info = log_parser.parse_payload(4672, keywords, desc)
         actor = ctx.resolver.from_sid(info.get("subject_sid"), "the privilege event")
         if actor[0] != "User":
             continue
@@ -322,11 +380,146 @@ def privileged_logon(ctx, rules) -> List[BehaviorEvent]:
     return events
 
 
+def failed_logon(ctx, rules) -> List[BehaviorEvent]:
+    """4625 — an account failed to sign in.
+
+    TargetUserSid is S-1-0-0 on a failure (nothing was logged on), so the
+    account is named from the payload and never resolved to a profile SID. A
+    handful of failures is a typed password; a run of them in one hour is worth
+    a look, so the burst escalates instead of reporting each attempt.
+    """
+    rule = rules[0]
+    rows = []
+    reasons = {}
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4625]):
+        info = log_parser.parse_payload(4625, keywords, desc)
+        if not info:
+            continue
+        account = (info.get("target_user") or "").strip()
+        if not account or not sid_utils.is_human_account_name(account):
+            continue
+        ts = normalize_ts(ts)
+        # The account is named by the log but was NOT signed in; attribute the
+        # attempt to the named account with that as the explicit basis.
+        actor = ("User", account,
+                 "the Windows security log recorded the failed sign-in for "
+                 "account '{}'".format(account))
+        reasons[account] = info.get("logon_type_label", "sign-in")
+        rows.append((rowid, ts, actor))
+
+    events = []
+    for (actor, hour), items in _burst_by_user_hour(rows).items():
+        rowids = [r for r, _ in items]
+        ts = items[0][1]
+        n = len(items)
+        severity = SEV_SUSPICIOUS if n >= 5 else None
+        text = "{} failed to sign in ({} attempt{}, {})".format(
+            actor[1], n, "s" if n != 1 else "",
+            reasons.get(actor[1], "sign-in"))
+        if severity is not None:
+            text += " — repeated failures within the hour"
+        events.append(_mk(
+            rule, ts, actor, text,
+            [EvidenceRef(db="logs", table="SecurityLogs",
+                         rowids=rowids[:50], count=len(rowids))],
+            ctx=ctx, severity=severity, count=n,
+            caveat=("A failed sign-in does not prove who was at the keyboard — "
+                    "only that this account name was submitted.")))
+    return events
+
+
+def winlogon_session_notification(ctx, rules) -> List[BehaviorEvent]:
+    """Winlogon's own sign-in / sign-out notifications (System 7001 / 7002).
+
+    These are written on every Windows machine with no auditing configured, and
+    the System log is usually retained far longer than Security — on the case
+    this was built against they reach back five weeks further than the oldest
+    4624. That is the point of reading them: they cover the period where the
+    Security log has already rolled over.
+
+    The rows carry no SID and no payload (User and Keywords are both 'N/A'), so
+    the ACTOR IS LEFT EMPTY and the caveat says so. Naming the only profile on
+    the machine here would be a guess dressed as evidence. The User Profile
+    Service rows for the same moment are attached as corroboration when present.
+    """
+    # One extractor, two rules (logon / logoff) - the scheduled_tasks shape.
+    # Each rule declares the EID it covers in its own `requires`, so the mapping
+    # comes from the rule file rather than from guessing at its activity name.
+    by_eid = {}
+    for rule in rules:
+        for eid in (rule.get("requires", {})
+                    .get("log_eids", {})
+                    .get("SystemLogs", [])):
+            by_eid[int(eid)] = rule
+    if not by_eid:
+        logger.error("UBA: winlogon rules declare no SystemLogs event IDs")
+        return []
+
+    profile_rows = _profile_service_index(ctx)
+    events = []
+    for rowid, eid, ts, source, user, keywords, desc in _system_rows(
+            ctx, sorted(by_eid), source_like="%Winlogon%"):
+        rule = by_eid.get(eid)
+        if rule is None:
+            continue
+        ts = normalize_ts(ts)
+        if eid == 7001:
+            text = ("A user signed in to this computer (recorded by Windows "
+                    "sign-in, account not named in the record)")
+        else:
+            text = ("A user signed out of this computer (recorded by Windows "
+                    "sign-in, account not named in the record)")
+        evidence = [EvidenceRef(db="logs", table="SystemLogs",
+                                rowids=[rowid], count=1)]
+        corroborating = _near_profile_rows(profile_rows, ts)
+        confidence = CONF_LOG_ONLY
+        if corroborating:
+            evidence.append(EvidenceRef(
+                db="logs", table="ApplicationLogs", role="corroborating",
+                rowids=corroborating, count=len(corroborating)))
+            confidence = CONF_CORROBORATED
+        events.append(_mk(
+            rule, ts, ("", "", ""), text, evidence,
+            confidence=confidence, ctx=ctx,
+            details={"event_id": eid},
+            caveat=("Windows does not record which account this was, so no user "
+                    "is named. It proves a sign-in happened at this time.")))
+    return events
+
+
+_PROFILE_SERVICE_EIDS = (1531, 1532)
+_PROFILE_DELTA_SECONDS = 120
+
+
+def _profile_service_index(ctx):
+    """(epoch, rowid) of User Profile Service profile load/unload rows.
+
+    Same moments as Winlogon 7001/7002, from a different provider — used only
+    to corroborate, never as a source of its own.
+    """
+    index = []
+    for rowid, eid, ts, source, user, keywords, desc in _app_rows(
+            ctx, list(_PROFILE_SERVICE_EIDS), source_like="%User Profile%"):
+        epoch = epoch_seconds(normalize_ts(ts))
+        if epoch is not None:
+            index.append((epoch, rowid))
+    index.sort()
+    return index
+
+
+def _near_profile_rows(index, ts):
+    epoch = epoch_seconds(ts)
+    if epoch is None or not index:
+        return []
+    return [rowid for e, rowid in index
+            if abs(e - epoch) <= _PROFILE_DELTA_SECONDS]
+
+
 def explicit_credentials(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4648]):
-        info = log_parser.parse_payload(4648, keywords)
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4648]):
+        info = log_parser.parse_payload(4648, keywords, desc)
         ts = normalize_ts(ts)
         actor = ctx.resolver.from_sid(info.get("subject_sid"), "the credential event")
         if not actor[0]:
@@ -347,8 +540,8 @@ def explicit_credentials(ctx, rules) -> List[BehaviorEvent]:
 def account_enumeration(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     rows = []
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4798, 4799]):
-        info = log_parser.parse_payload(eid, keywords)
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4798, 4799]):
+        info = log_parser.parse_payload(eid, keywords, desc)
         actor = ctx.resolver.from_sid(info.get("subject_sid"), "the lookup event")
         if not actor[0]:
             actor = ("", "", "")
@@ -412,9 +605,9 @@ def account_management(ctx, rules) -> List[BehaviorEvent]:
             g["first_ts"] = ts
 
     # Target-account events (create / enable / disable / delete / change / pwd)
-    for rowid, eid, ts, user, keywords in _security_rows(
+    for rowid, eid, ts, user, keywords, desc in _security_rows(
             ctx, list(_ACCOUNT_EVENT_VERB)):
-        info = log_parser.parse_payload(eid, keywords)
+        info = log_parser.parse_payload(eid, keywords, desc)
         if not info:
             continue
         ts = normalize_ts(ts)
@@ -429,8 +622,8 @@ def account_management(ctx, rules) -> List[BehaviorEvent]:
              actor, severity)
 
     # Group-membership additions (4732 local, 4728 global)
-    for rowid, eid, ts, user, keywords in _security_rows(ctx, [4728, 4732]):
-        info = log_parser.parse_payload(eid, keywords)
+    for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4728, 4732]):
+        info = log_parser.parse_payload(eid, keywords, desc)
         if not info:
             continue
         ts = normalize_ts(ts)

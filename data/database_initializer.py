@@ -36,7 +36,7 @@ class DatabaseInitializer:
             config: Optional DataConfig instance for configuration settings
         """
         self.config = config or DataConfig()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
     
     def initialize_database(
         self,

@@ -114,7 +114,7 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
 
     // Process "Salvaged" items for links too
     Object.keys(data).forEach(key => {
-      if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'aggregated'].includes(key)) {
+      if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'browser', 'aggregated'].includes(key)) {
         processItems(data[key], `salvaged_${key}`);
       }
     });

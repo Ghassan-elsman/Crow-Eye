@@ -24,7 +24,7 @@ class ResultCache:
 
     def __init__(self, case_directory):
         self.case_directory = Path(case_directory) if case_directory else None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self._cache: Dict[str, Dict[str, Any]] = {}
         self._load()
 

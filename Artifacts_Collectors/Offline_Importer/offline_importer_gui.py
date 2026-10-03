@@ -23,6 +23,14 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QColor
+
+# The animated loading bar (a light sweep that keeps moving between updates,
+# so long work never looks frozen). Falls back to the plain bar when this
+# module runs standalone without the Crow-Eye root on sys.path.
+try:
+    from ui.animated_progress_bar import AnimatedProgressBar
+except ImportError:
+    AnimatedProgressBar = None
 from typing import Optional, Callable, List
 from dataclasses import dataclass
 from datetime import datetime
@@ -1464,7 +1472,8 @@ class OfflineImporterGUI(QMainWindow):
         progress_header_layout.addWidget(self.time_value)
         layout.addLayout(progress_header_layout)
         
-        self.progress_bar = QProgressBar()
+        self.progress_bar = (AnimatedProgressBar(accent="#60A5FA") if AnimatedProgressBar
+                             else QProgressBar())
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100)
         self.progress_bar.setValue(0)

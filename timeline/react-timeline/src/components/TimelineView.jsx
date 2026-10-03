@@ -41,6 +41,7 @@ const LANES_META = [
   { key: 'srum_app', label: 'SRUM App Usage', sub: 'Foreground/Background Cycles', color: 'var(--lane-srum-app)' },
   { key: 'srum_net', label: 'SRUM Network', sub: 'Connectivity, Data Usage', color: 'var(--lane-srum-net)' },
   { key: 'mft_usn', label: 'MFT / USN', sub: 'File Creation, Deletion, Rename', color: 'var(--lane-mft-usn)' },
+  { key: 'browser', label: 'Browser Activity', sub: 'Visits, Downloads, Cookies, Cache', color: 'var(--lane-browser)' },
   { key: 'artifacts', label: 'Unified Artifacts', sub: 'LNK, PF, BAM, Reg, USB, Bin', color: 'var(--lane-cache)' },
 ];
 
@@ -331,7 +332,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       });
     };
 
-    const activeKeys = ['sessions', 'srum_app', 'srum_net', 'mft_usn', 'artifacts'].filter(k => {
+    const activeKeys = ['sessions', 'srum_app', 'srum_net', 'mft_usn', 'browser', 'artifacts'].filter(k => {
       let isActive = true;
       if (activeArtifacts[k] === false && k !== 'artifacts') isActive = false;
 
@@ -345,13 +346,14 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         if (k === 'srum_app') return hasAnyInBounds(data.srum_app);
         if (k === 'srum_net') return hasAnyInBounds(data.srum_net?.connectivity) || hasAnyInBounds(data.srum_net?.data_usage);
         if (k === 'mft_usn') return hasAnyInBounds(data.mft_usn);
+        if (k === 'browser') return hasAnyInBounds(data.browser);
 
         if (k === 'artifacts') {
           const sources = getArtifactSources(data);
           const hasManifestData = sources.some(src => hasAnyInBounds(src.items));
             
           const hasSalvaged = Object.keys(data).some(key => {
-            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'aggregated', 'links'].includes(key)) {
+            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'browser', 'aggregated', 'links'].includes(key)) {
               return hasAnyInBounds(data[key]);
             }
             return false;
@@ -372,6 +374,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       const val = Number(laneHeightsActual[k]);
       let minH = 60;
       if (k === 'artifacts') minH = 150; // Expand minimal size for unified artifacts lane
+      if (k === 'browser') minH = 90;
       const requestedH = (isNaN(val) || val <= 0) ? minH : val;
       laneHeightsActual[k] = Math.max(requestedH, minH);
     });
@@ -486,6 +489,51 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       const tracked = allocateTracks(pts, 120000);
       const nTracks = Math.max(1, tracked.reduce((m, p) => Math.max(m, p.track), 0) + 1);
       laneData['mft_usn'] = { items: tracked, numTracks: nTracks, innerH: nTracks * 30 };
+    }
+
+    // 5. Browser activity
+    //
+    // Map-driven rather than naming columns the way MFT/USN does above:
+    // getForensicTimestamps walks FORENSIC_TS_FIELDS, so every column
+    // artifact_map plots becomes a dot without this block being touched.
+    // `bsource` is the table the row came from, carried by the bridge.
+    const browserRows = heuristicFlatten(data.browser);
+    if (activeKeys.includes('browser') && browserRows.length > 0) {
+      const pts = [];
+      browserRows.forEach(r => {
+        const fullName = getName(r);
+        getForensicTimestamps(r).forEach(t => {
+          const ts = t.time;
+          if (!ts) return;
+          const field = t.field || '';
+          const id = getForensicId('browser', ts, field, fullName);
+          const { match } = searchMatch({ ...r, timestamp: ts, type: 'browser', name: fullName });
+
+          // Semantic label in the vocabulary the artifacts lane uses. The dot
+          // itself stays the lane colour (subType wins the forensicMap lookup,
+          // and 'browser' is a sky-blue circle) - this label is what the
+          // tooltip and the detail modal show as the kind of time.
+          let label = field.toLowerCase();
+          if (label.includes('creation') || label.includes('created')) label = 'created';
+          else if (label.includes('modified') || label.includes('modification')) label = 'modified';
+          else if (label.includes('install')) label = 'installed';
+          else if (label.includes('access') || label.includes('visit') ||
+                   label.includes('used') || label.includes('opened') ||
+                   label.includes('response') || label.includes('request') ||
+                   label.includes('seen') || label.includes('updated')) label = 'accessed';
+          else label = field.replace(/_time$|_date$/, '').toLowerCase();
+
+          pts.push({
+            ...r, id, timestamp: ts, type: 'browser',
+            subType: 'browser', tsType: label,
+            _artifact_type: r.bsource || 'browser',
+            isSearchMatch: match,
+          });
+        });
+      });
+      const tracked = allocateTracks(pts, 120000);
+      const nTracks = Math.max(1, tracked.reduce((m, p) => Math.max(m, p.track), 0) + 1);
+      laneData['browser'] = { items: tracked, numTracks: nTracks, innerH: nTracks * 30 };
     }
 
     // 5. Unified Forensic Artifacts (Consolidated Lane 5)
@@ -753,7 +801,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           pm.set(id, { x: u.x, lane: k, localY, y: topY + localY });
           return { ...u, id, y: track * scaledRH + netPad, pad: netPad, bandH: netBandH, r: 6 };
         });
-      } else if (['mft_usn', 'execution', 'artifacts'].includes(k)) {
+      } else if (['mft_usn', 'execution', 'browser', 'artifacts'].includes(k)) {
         const sorted = [...ld.items].sort((a, b) => a.x - b.x);
         // WARNING: Critical label positioning algorithm - Prevents overlapping labels in dense clusters
         // Uses array-based history to check last 5 items within 110px proximity window
@@ -794,7 +842,14 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
             }
           }
 
-          const item = { ...p, id, x, y: localY, name: fullName, labelPos, leaderLine };
+          // The browser lane carries an order of magnitude more events than the
+          // others, so at anything but a close zoom its labels overlap into an
+          // unreadable wall. Label only a point with clear space on its track -
+          // zooming in thins the crowd and the labels come back. A search hit
+          // keeps its label whatever the density.
+          const hideLabel = k === 'browser' && proximityItems.length > 0 && !p.isSearchMatch;
+
+          const item = { ...p, id, x, y: localY, name: fullName, labelPos, leaderLine, hideLabel };
 
           // Task 4.4: Update history management
           // Task 4.4.1: Append current item to history array
@@ -832,7 +887,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     let laneKey = null;
     const laneKeyMap = {
       'SystemLogs': 'sessions', 'ApplicationLogs': 'sessions', 'SecurityLogs': 'sessions',
-      'srum_app': 'srum_app', 'srum_net': 'srum_net', 'mft_usn': 'mft_usn',
+      'srum_app': 'srum_app', 'srum_net': 'srum_net', 'mft_usn': 'mft_usn', 'browser': 'browser',
       'prefetch': 'artifacts', 'bam': 'artifacts', 'lnk': 'artifacts', 'registry': 'artifacts',
       'shimcache': 'artifacts', 'recyclebin': 'artifacts', 'amcache': 'artifacts'
     };
@@ -1255,7 +1310,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                         })}
                       </>
                     )}
-                    {['mft_usn', 'execution', 'artifacts'].includes(lane.key) && lane.items.map((p, i) => {
+                    {['mft_usn', 'execution', 'browser', 'artifacts'].includes(lane.key) && lane.items.map((p, i) => {
                       // Standardized naming and identification
                       const fullName = getName(p);
                       
@@ -1295,7 +1350,8 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                         'usb_storage': { color: '#14b8a6', shape: 'square' },
                         'key_times': { color: '#64748b', shape: 'circle' },
                         'event_logs': { color: '#0ea5e9', shape: 'diamond' },
-                        'network_profiles': { color: '#3b82f6', shape: 'triangle' }
+                        'network_profiles': { color: '#3b82f6', shape: 'triangle' },
+                        'browser': { color: '#38bdf8', shape: 'circle' }
                       };
 
                       const lookupType = (p.subType || p.tsType || '').toLowerCase();
@@ -1323,6 +1379,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                       else labelY -= 11;
 
                       const labelX = (p.labelPos === 'right') ? p.x + 8 : p.x;
+                      const showLabel = !p.hideLabel || isLinked;
 
                       // Shape Selection
                       let dotShape;
@@ -1357,9 +1414,9 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                           onMouseEnter={(e) => handleEventMouseEnter(e, p)}
                           onMouseLeave={() => setTooltip(null)}
                           style={{ cursor: 'pointer' }}>
-                          {p.leaderLine && <line x1={p.x} y1={p.y} x2={labelX} y2={labelY} stroke={textColor} strokeWidth="0.5" strokeDasharray="2,2" opacity="0.5" />}
+                          {p.leaderLine && showLabel && <line x1={p.x} y1={p.y} x2={labelX} y2={labelY} stroke={textColor} strokeWidth="0.5" strokeDasharray="2,2" opacity="0.5" />}
                           {dotShape}
-                          <text x={labelX} y={labelY} fill={textColor} textAnchor={(p.labelPos === 'right') ? 'start' : 'middle'} fontSize="10" fontWeight={(p.isSearchMatch || isLinked) ? "700" : "600"} pointerEvents="none" style={{ textShadow: (p.isSearchMatch || isLinked) ? '0 0 3px #000' : 'none' }}>{fullName}</text>
+                          {showLabel && <text x={labelX} y={labelY} fill={textColor} textAnchor={(p.labelPos === 'right') ? 'start' : 'middle'} fontSize="10" fontWeight={(p.isSearchMatch || isLinked) ? "700" : "600"} pointerEvents="none" style={{ textShadow: (p.isSearchMatch || isLinked) ? '0 0 3px #000' : 'none' }}>{fullName}</text>}
                         </g>
                       );
                     })}

@@ -42,7 +42,7 @@ class CorrelationService:
         """
         self.case_directory = Path(case_directory)
         self.correlation_db_path = self._resolve_correlation_db()
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
         # Validate correlation database exists
         if not self.correlation_db_path.exists():

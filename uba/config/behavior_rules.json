@@ -41,9 +41,11 @@
         },
         "log_eids": {
           "SecurityLogs": [
-            4634
+            4634,
+            4647
           ]
-        }
+        },
+        "log_eids_mode": "any"
       }
     },
     {
@@ -68,6 +70,89 @@
         }
       },
       "degrade_note": "Lock/unlock auditing (4800/4801) is not enabled on most systems; unlocks are recovered from logon type 7 events instead."
+    },
+    {
+      "id": "failed_logon",
+      "matrix_row": 2,
+      "behavior_class": "user",
+      "activity": "failed_logon",
+      "title": "Failed to sign in",
+      "extractor": "failed_logon",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "tables": {
+          "logs": [
+            "SecurityLogs"
+          ]
+        },
+        "log_eids": {
+          "SecurityLogs": [
+            4625
+          ]
+        }
+      },
+      "degrade_note": "No failed sign-in records (4625) are present in this case's Security log, so unsuccessful attempts cannot be shown. Absence here is absence of the records, not proof that every sign-in succeeded."
+    },
+    {
+      "id": "winlogon_logon_notification",
+      "matrix_row": 1,
+      "behavior_class": "user",
+      "activity": "logon",
+      "title": "Signed in (Windows sign-in record)",
+      "extractor": "winlogon_session_notification",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "tables": {
+          "logs": [
+            "SystemLogs"
+          ]
+        },
+        "log_eids": {
+          "SystemLogs": [
+            7001
+          ]
+        },
+        "optional_log_eids": {
+          "ApplicationLogs": [
+            1531,
+            1532
+          ]
+        }
+      },
+      "how": "Reads Winlogon's own sign-in notification from the System log, which every Windows machine writes with no auditing configured and usually retains far longer than the Security log. Windows does not record the account in these events, so no user is named.",
+      "degrade_note": "Windows does not name the account in its sign-in notifications, so these records prove a sign-in happened without identifying who. They are read because the System log normally reaches back further than the Security log."
+    },
+    {
+      "id": "winlogon_logoff_notification",
+      "matrix_row": 2,
+      "behavior_class": "user",
+      "activity": "logoff",
+      "title": "Signed out (Windows sign-in record)",
+      "extractor": "winlogon_session_notification",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "tables": {
+          "logs": [
+            "SystemLogs"
+          ]
+        },
+        "log_eids": {
+          "SystemLogs": [
+            7002
+          ]
+        },
+        "optional_log_eids": {
+          "ApplicationLogs": [
+            1531,
+            1532
+          ]
+        }
+      },
+      "how": "Reads Winlogon's own sign-out notification from the System log. As with the sign-in record, Windows does not name the account, so no user is named.",
+      "degrade_note": "Windows does not name the account in its sign-out notifications, so these records prove a sign-out happened without identifying who."
     },
     {
       "id": "gui_app_launch",
@@ -429,7 +514,7 @@
       "matrix_row": 19,
       "behavior_class": "user",
       "activity": "web_browsing",
-      "title": "Visited a website",
+      "title": "Visited a website (registry record)",
       "extractor": "browser_history",
       "severity": "routine",
       "color_token": "class_user",
@@ -440,7 +525,7 @@
           ]
         }
       },
-      "degrade_note": "Only registry-recorded (typed) URLs are available; full browser history requires collecting the browser databases."
+      "degrade_note": "Registry-recorded typed URLs only. Where the browser databases were collected, browser_web_history carries the full history."
     },
     {
       "id": "local_search",
@@ -609,6 +694,8 @@
         "optional_log_eids": {
           "SystemLogs": [
             1074,
+            6005,
+            6006,
             6008
           ]
         }
@@ -1054,6 +1141,166 @@
           ]
         }
       }
+    },
+    {
+      "id": "browser_web_history",
+      "behavior_class": "user",
+      "activity": "web_browsing",
+      "title": "Browsed the web",
+      "extractor": "browser_web_history",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history databases and groups a profile's visits by day, attributing each to the SID that owns the profile.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_download",
+      "behavior_class": "user",
+      "activity": "file_download",
+      "title": "Downloaded a file",
+      "extractor": "browser_downloads",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_downloads"
+          ]
+        }
+      },
+      "how": "Reads the browser's download record: where the file came from, what referred it, and where it was written."
+    },
+    {
+      "id": "browser_download_flagged",
+      "behavior_class": "user",
+      "activity": "file_download",
+      "title": "Download flagged or interrupted",
+      "extractor": "browser_downloads",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_downloads"
+          ]
+        }
+      },
+      "how": "The browser itself marked the download dangerous, or it did not complete."
+    },
+    {
+      "id": "browser_abnormal_exit",
+      "behavior_class": "user",
+      "activity": "application_state",
+      "title": "Browser closed abnormally",
+      "extractor": "browser_profile_state",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_preferences"
+          ]
+        }
+      },
+      "how": "profile.exit_type records how the profile last shut down; anything but a normal close means the browser was killed or crashed."
+    },
+    {
+      "id": "browser_save_location",
+      "behavior_class": "user",
+      "activity": "configuration_change",
+      "title": "Browser download location",
+      "extractor": "browser_profile_state",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_preferences"
+          ]
+        }
+      },
+      "how": "Where this profile writes downloads, from its own preferences."
+    },
+    {
+      "id": "browser_account_sync",
+      "behavior_class": "user",
+      "activity": "account_sync",
+      "title": "Signed in with sync enabled",
+      "extractor": "browser_profile_state",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_preferences"
+          ]
+        }
+      },
+      "how": "Reports that a profile is signed in and which data types it synchronises. The account identity is deliberately not read.",
+      "degrade_note": "Synchronisation means data in this profile can originate from, and leave to, other devices."
+    },
+    {
+      "id": "browser_risky_extension",
+      "behavior_class": "user",
+      "activity": "extension_install",
+      "title": "Extension with far-reaching permissions",
+      "extractor": "browser_extensions",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_extensions"
+          ]
+        }
+      },
+      "how": "Flags extensions holding permissions such as <all_urls>, webRequest, nativeMessaging or debugger. Deliberately not keyed on from_webstore: Edge and Brave extensions are not from the Chrome web store, so that flag marks almost every extension on a multi-browser machine."
+    },
+    {
+      "id": "browser_stored_secrets",
+      "behavior_class": "user",
+      "activity": "credential_storage",
+      "title": "Browser stores credentials or payment data",
+      "extractor": "browser_stored_secrets",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_credentials",
+            "browser_gecko_credentials",
+            "browser_payments",
+            "browser_addresses"
+          ]
+        }
+      },
+      "how": "Counts the saved logins, payment instruments and addresses a profile holds, and how many logins have actually been used. Values are never read or shown."
+    },
+    {
+      "id": "browser_history_gap",
+      "behavior_class": "user",
+      "activity": "anti_forensics",
+      "title": "Browsing history has an uncorroborated gap",
+      "extractor": "browser_history_gap",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history"
+          ]
+        }
+      },
+      "how": "Browsers keep no deletion log, so a cleared history can only be inferred: history goes quiet for days while cookies or site-engagement records are still being written in the same window.",
+      "degrade_note": "Inference, not observation. The same pattern fits a profile that simply was not used for browsing while other state was written."
     }
   ],
   "requires_collection": [
@@ -1080,10 +1327,6 @@
     {
       "activity": "Office macro trust decisions",
       "needs": "Trusted Documents registry parsing"
-    },
-    {
-      "activity": "Browser extension installs",
-      "needs": "Browser 'Secure Preferences' collection"
     },
     {
       "activity": "System crash analysis",

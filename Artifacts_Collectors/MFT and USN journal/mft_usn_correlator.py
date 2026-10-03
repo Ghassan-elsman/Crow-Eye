@@ -155,19 +155,18 @@ def check_dependencies():
                 return False
     return True
 
-# Configure logging
-# Create Target_Artifacts directory for logs
-target_artifacts_dir = os.path.join(".", "Target_Artifacts")
-os.makedirs(target_artifacts_dir, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(os.path.join(target_artifacts_dir, "mft_usn_correlation.log"), mode='w'),
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Deliberately no logging.basicConfig() and no directory creation at import time.
+#
+# This module used to build "./Target_Artifacts" and open a log inside it the
+# moment it was imported - relative to the CURRENT WORKING DIRECTORY, which is
+# not the case folder, so the log landed wherever the app happened to be
+# launched from. Worse, basicConfig at import seeds the root logger before any
+# case exists and then does nothing at all once a case has added its handlers,
+# so the file it believed it was writing often did not exist either way.
+#
+# The root configuration belongs to utils.logging_setup, which points at
+# <case>/logs. This module asks for a logger and lets its records propagate
+# there like every other component.
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -313,8 +312,7 @@ class MFTUSNCorrelator:
                     env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
                     
                     mft_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MFT_Claw.py")
-                    result = subprocess.run([sys.executable, mft_script], 
-                                          cwd=self.case_directory, env=env)
+                    result = self._run_parser_subprocess(mft_script, "MFT")
                     
                     if result.returncode == 0:
                         logger.info("MFT parser completed successfully")
@@ -370,8 +368,7 @@ class MFTUSNCorrelator:
                     env["PYTHONUNBUFFERED"] = "1"  # Ensure output is not buffered
                     
                     usn_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "USN_Claw.py")
-                    result = subprocess.run([sys.executable, usn_script], 
-                                          cwd=self.case_directory, env=env)
+                    result = self._run_parser_subprocess(usn_script, "USN")
                     
                     if result.returncode == 0:
                         logger.info("USN parser completed successfully")
@@ -700,6 +697,26 @@ class MFTUSNCorrelator:
         # Correlate and insert data with column information
         self._correlate_and_insert(mft_data, usn_data, usn_select_columns, corr_cursor)
     
+    def _run_parser_subprocess(self, script, label):
+        """Run a parser in its own interpreter and route its output to the log.
+
+        Without stdout/stderr pipes the child inherits the OS handles, so its
+        output goes past the parent's console tee entirely - and in the frozen
+        windowless build, where there is no console at all, it goes nowhere.
+        Two whole parsers ran that way. Captured here and replayed through the
+        logger, so it lands in the case log like every other component's.
+        """
+        import subprocess as _sp
+        env = dict(os.environ)
+        env["PYTHONUNBUFFERED"] = "1"
+        result = _sp.run([sys.executable, script], cwd=self.case_directory,
+                         env=env, stdout=_sp.PIPE, stderr=_sp.STDOUT)
+        text = (result.stdout or b"").decode("utf-8", errors="replace")
+        for line in text.splitlines():
+            if line.strip():
+                logger.info("[%s] %s", label, line.rstrip())
+        return result
+
     def _get_mft_data_with_paths(self, cursor):
         """
         Get MFT data with reconstructed paths using optimized approach.

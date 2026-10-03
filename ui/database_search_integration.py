@@ -27,7 +27,7 @@ class DatabaseSearchIntegration:
             parent_window: Main Crow Eye window instance
         """
         self.parent = parent_window
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.search_dialog = None
         self.unified_search_engine = None  # Will be created when needed with proper case directory
         

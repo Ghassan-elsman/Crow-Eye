@@ -1188,7 +1188,13 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 
 ### Table: `registry_hive_state`
 
-One row per hive: whether Windows had it open mid-transaction, whether its `.LOG1`/`.LOG2` were replayed, and what the file hashed to as found. A hive with `was_dirty = 1` and `replayed = 0` may not be the final registry, and `reason` says why it was not replayed. Empty on a live parse: there is no hive file to be stale.
+One row per hive: whether Windows had it open mid-transaction, whether its `.LOG1`/`.LOG2` were replayed, what the file hashed to as found, how it was acquired, and when Windows last compacted it. A hive with `was_dirty = 1` and `replayed = 0` may not be the final registry, and `reason` says why it was not replayed.
+
+A live parse writes rows too. The sequence and replay columns are empty there — the running registry is the state, so there is no hive file to be mid-transaction — but `acquisition_route` and `reorganized_at` are the point: they say whether the carved tables could have found anything.
+
+`reorganized_at` is when Windows last reorganized the hive, which discards its free space and with it every deleted record still sitting there. It is the column that makes a carve count readable: an empty `registry_carved_keys` means "nothing was deleted" when this is blank and "the deletions were dropped before the parse" when it holds a recent date. Three states, and they are distinct — `NULL` the hive was not walked so this is unknown, `''` the hive has never been reorganized, a timestamp it was reorganized then.
+
+Hives covered: `SYSTEM`, `SOFTWARE`, `SAM`, `SECURITY`, `DEFAULT`, `COMPONENTS`, `DRIVERS`, `BBI`, `ELAM`, plus `NTUSER.DAT` and `UsrClass.dat` per user profile.
 
 | Column | Type |
 |---|---|
@@ -1205,6 +1211,7 @@ One row per hive: whether Windows had it open mid-transaction, whether its `.LOG
 | `highest_sequence` | INTEGER |
 | `source_sha256` | TEXT |
 | `acquisition_route` | TEXT |
+| `reorganized_at` | TEXT |
 | `reason` | TEXT |
 | `parsed_at` | TEXT |
 
@@ -1755,6 +1762,16 @@ Persistence and execution evidence: what runs, as whom, when it last ran and whe
 | `bag_views` | TEXT |
 | `parsed_at` | TEXT |
 | `user_name` | TEXT |
+| `value_name` | TEXT |
+
+`value_name` is the value the item is stored under in its BagMRU key (`"0"`,
+`"15"`). `registry_path` is the **parent** key, so the item's own key is
+`registry_path\value_name` - and two rows with the same `file_name` and
+`registry_path` are two different items (e.g. two phones' storage, or a
+`Pictures` folder in two libraries), told apart only by `value_name`. Items
+whose name cannot be decoded are kept with a `file_name` such as
+`(unnamed control panel item, class 0x71)`: they are real slots, and often the
+first link of the paths beneath them.
 
 `node_slot` is the `NodeSlot` DWORD on the folder's own BagMRU key, naming the
 subkey of `Bags` that holds its view settings. `bag_views` is which subkeys are
@@ -2964,6 +2981,8 @@ column empty on every row, because none of them reference an AppId of that form.
 | `l2_profile_id` | INTEGER |
 | `bytes_sent` | INTEGER |
 | `bytes_received` | INTEGER |
+| `wake_count` | INTEGER |
+| `l2_profile_flags` | INTEGER |
 
 
 ### Table: `srum_energy_usage`
@@ -2980,6 +2999,13 @@ column empty on every row, because none of them reference an AppId of that form.
 | `state_transition` | INTEGER |
 | `charge_level` | INTEGER |
 | `cycle_count` | INTEGER |
+| `designed_capacity` | INTEGER |
+| `full_charged_capacity` | INTEGER |
+| `battery_count` | INTEGER |
+| `configuration_hash` | INTEGER |
+| `battery_charge_limited` | INTEGER |
+
+`designed_capacity` vs `full_charged_capacity` (both mWh) is battery wear.
 
 
 ### Table: `srum_app_timeline`
@@ -3025,6 +3051,27 @@ window, not a failed decode.
 | `disk_raw` | INTEGER |
 | `network_bytes_raw` | INTEGER |
 | `network_tail_raw` | INTEGER |
+| `in_focus_timeline` | INTEGER |
+| `user_input_timeline` | INTEGER |
+| `comp_rendered_timeline` | INTEGER |
+| `comp_dirtied_timeline` | INTEGER |
+| `comp_propagated_timeline` | INTEGER |
+| `audio_in_timeline` | INTEGER |
+| `audio_out_timeline` | INTEGER |
+| `cpu_timeline` | INTEGER |
+| `disk_timeline` | INTEGER |
+| `network_timeline` | INTEGER |
+| `mbb_timeline` | INTEGER |
+| `display_required_timeline` | INTEGER |
+| `keyboard_input_timeline` | INTEGER |
+| `cycles_breakdown` | INTEGER |
+| `cycles_attr_breakdown` | INTEGER |
+| `cycles_wob_breakdown` | INTEGER |
+| `mbb_tail_raw` | INTEGER |
+| `mbb_bytes_raw` | INTEGER |
+
+Crow-Eye captures every native column this provider defines. The `*_s` columns are second-counts; the
+`*_timeline` and `*_breakdown` columns are the raw packed per-window counters SRUM stores alongside them.
 
 
 ### Table: `srum_metadata`
@@ -3037,7 +3084,16 @@ window, not a failed decode.
 | `total_records_parsed` | INTEGER |
 | `parsing_duration_seconds` | REAL |
 | `windows_version` | TEXT |
+| `jfm_collected` | INTEGER |
+| `jfm_path` | TEXT |
+| `jfm_size` | INTEGER |
+| `jfm_modified` | TEXT |
+| `log_files_collected` | INTEGER |
+| `db_state` | TEXT |
+| `recovery_notes` | TEXT |
 | `notes` | TEXT |
+
+`db_state` is one of `clean`, `recovered` (the collected transaction logs were replayed with `esentutl /r`) or `repaired` (`esentutl /p`, which can discard damaged pages). `jfm_*` and `log_files_collected` record the ESE checkpoint set (`SRU.chk`, `SRUDB.jfm`, `SRU*.log`) collected alongside `SRUDB.dat`.
 
 
 ## Database: `USN_journal.db`
@@ -3176,6 +3232,224 @@ window, not a failed decode.
 | `total_records` | INTEGER |
 | `identities_extracted` | INTEGER |
 | `identities_found` | INTEGER |
+
+
+## Database: `browser_analysis.db`
+
+Written by `Browser_Claw`. Chromium (Chrome/Edge/Brave/…), Gecko (Firefox) and
+Electron-app browser artifacts. **Every** table starts with the provenance
+columns `browser, vendor, user_name, sid, profile, source_path, parsed_at`
+(omitted from the per-table lists below to avoid repetition; `browser_files` and
+`browser_metadata` carry a subset). All time columns are UTC
+`YYYY-MM-DD HH:MM:SS`. `parsed_at` is parser run time, never an event time.
+Cookie/password `*_encrypted_b64` columns hold base64 of the **encrypted** blob
+and are never decrypted here; `encryption_version` is `v10`/`v11`/`v20`/`dpapi`/
+`plaintext`. The DPAPI-wrapped master key lives in
+`browser_metadata.os_crypt_key_b64`.
+
+### Table: `browser_history`
+
+| Column | Type |
+|---|---|
+| `url` | TEXT |
+| `title` | TEXT |
+| `visit_count` | INTEGER |
+| `typed_count` | INTEGER |
+| `last_visit_time` | TEXT |
+| `visit_time` | TEXT |
+| `transition` | TEXT |
+| `from_visit_url` | TEXT |
+| `visit_id` | INTEGER |
+
+### Table: `browser_downloads`
+
+| Column | Type |
+|---|---|
+| `target_path` | TEXT |
+| `source_url` | TEXT |
+| `referrer` | TEXT |
+| `tab_url` | TEXT |
+| `received_bytes` | INTEGER |
+| `total_bytes` | INTEGER |
+| `start_time` | TEXT |
+| `end_time` | TEXT |
+| `state` | INTEGER |
+| `mime_type` | TEXT |
+| `download_id` | INTEGER |
+
+### Table: `browser_cookies`
+
+| Column | Type |
+|---|---|
+| `host_key` | TEXT |
+| `name` | TEXT |
+| `path` | TEXT |
+| `creation_time` | TEXT |
+| `expires_time` | TEXT |
+| `last_access_time` | TEXT |
+| `is_secure` | INTEGER |
+| `is_httponly` | INTEGER |
+| `encrypted_value_b64` | TEXT |
+| `encryption_version` | TEXT |
+
+### Table: `browser_credentials`
+
+| Column | Type |
+|---|---|
+| `origin_url` | TEXT |
+| `action_url` | TEXT |
+| `username_value` | TEXT |
+| `password_encrypted_b64` | TEXT |
+| `encryption_version` | TEXT |
+| `signon_realm` | TEXT |
+| `date_created` | TEXT |
+| `date_last_used` | TEXT |
+| `times_used` | INTEGER |
+
+### Table: `browser_autofill`
+
+| Column | Type |
+|---|---|
+| `field_name` | TEXT |
+| `value` | TEXT |
+| `count` | INTEGER |
+| `date_created` | TEXT |
+| `date_last_used` | TEXT |
+
+### Table: `browser_shortcuts`
+
+| Column | Type |
+|---|---|
+| `text` | TEXT |
+| `fill_into_edit` | TEXT |
+| `url` | TEXT |
+| `last_access_time` | TEXT |
+| `number_of_hits` | INTEGER |
+
+### Table: `browser_network_predictor`
+
+| Column | Type |
+|---|---|
+| `user_text` | TEXT |
+| `hit_count` | INTEGER |
+| `miss_count` | INTEGER |
+
+### Table: `browser_cache`
+
+| Column | Type |
+|---|---|
+| `url` | TEXT |
+| `response_time` | TEXT |
+| `http_status` | INTEGER |
+| `content_type` | TEXT |
+| `content_length` | INTEGER |
+| `content_encoding` | TEXT |
+| `extracted_body_path` | TEXT |
+| `cache_format` | TEXT |
+
+`cache_format` says what a row actually is. `blockfile` and `firefox_cache2` rows
+are real cache entries walked from the index, so they carry a status and headers.
+`blockfile_scan` rows are URL strings recovered from block data the index did not
+account for — evidence a URL appeared, not evidence of a cache record — so their
+`http_status` is NULL by design, not by failure.
+
+`request_time` / `response_time` differ by engine. Chromium stores both inside the
+cache entry's `HttpResponseInfo` (int64 Chromium Times at offsets 12 and 20 of
+stream 0). Firefox cache2 records only `lastFetched`, which fills `response_time`;
+`request_time` stays empty there rather than being filled with `lastModified`,
+which means when the entry was written, not when the request was sent.
+
+### Table: `browser_service_worker`
+
+CacheStorage entries, backed by the Simple Cache. The response metadata is a
+protobuf, not a serialized `HttpResponseInfo`, and it is stored *after* the body
+stream — which is why these columns were empty before 2026-09.
+
+| Column | Type |
+|---|---|
+| `scope` | TEXT |
+| `resource_url` | TEXT |
+| `response_time` | TEXT |
+| `content_length` | INTEGER |
+| `extracted_body_path` | TEXT |
+| `request_method` | TEXT |
+| `http_status` | INTEGER |
+| `content_type` | TEXT |
+| `content_encoding` | TEXT |
+| `server_headers` | TEXT |
+
+### Table: `browser_sessions`
+
+One navigation entry from a saved session (SNSS). `window_index` is a 0-based
+ordinal over the windows in the file, not the raw session window id; both it and
+`tab_index` come from the placement commands, so they are NULL for streams that
+carry none rather than being guessed.
+
+| Column | Type |
+|---|---|
+| `session_file` | TEXT |
+| `window_index` | INTEGER |
+| `tab_index` | INTEGER |
+| `url` | TEXT |
+| `title` | TEXT |
+| `referrer` | TEXT |
+| `form_text` | TEXT |
+| `entry_type` | TEXT |
+
+`form_text` is text scavenged from the serialized page state — including values
+typed into a form and never submitted.
+
+### Table: `browser_local_storage`
+
+| Column | Type |
+|---|---|
+| `store_kind` | TEXT |
+| `origin` | TEXT |
+| `key` | TEXT |
+| `value` | TEXT |
+| `is_deleted` | INTEGER |
+| `seq` | INTEGER |
+
+### Table: `browser_metadata`
+
+| Column | Type |
+|---|---|
+| `browser` | TEXT |
+| `profile` | TEXT |
+| `source_path` | TEXT |
+| `os_crypt_key_b64` | TEXT |
+| `key_scheme` | TEXT |
+| `parsed_at` | TEXT |
+
+### Table: `browser_files`
+
+| Column | Type |
+|---|---|
+| `artifact` | TEXT |
+| `original_path` | TEXT |
+| `extracted_path` | TEXT |
+| `size` | INTEGER |
+| `sha1` | TEXT |
+| `mtime` | TEXT |
+
+Other tables in this database:
+- Chromium extras: `browser_favicons`, `browser_bookmarks`, `browser_reading_list`,
+  `browser_extensions`, `browser_extension_storage` (crypto-wallet / password-
+  manager LevelDB vaults — values preserved verbatim), `browser_preferences`,
+  `browser_indexeddb`, `browser_push` (`app_id`, `origin` and `sender_id` split
+  out of the GCM registration key), `browser_media_router`.
+- Web Data extras: `browser_addresses` (saved addresses; field values joined from
+  `address_type_tokens`), `browser_payments` (card / bank / IBAN metadata + the
+  encrypted PAN blob, never the plaintext number), `browser_search_engines`
+  (`keywords`; `is_default` from Preferences).
+- Network / behavioural: `browser_network_state` (alt-svc, HSTS, Reporting/NEL),
+  `browser_dips` (bounce-tracking interaction/storage times), `browser_media_history`
+  (playback / watch time), `browser_top_sites`.
+- Firefox set: `browser_gecko_history`, `browser_gecko_downloads`,
+  `browser_gecko_bookmarks`, `browser_gecko_cookies`, `browser_gecko_formhistory`,
+  `browser_gecko_credentials` (encrypted; key material in browser_metadata /
+  browser_extracted), `browser_gecko_localstorage` (webappsstore + storage/default),
+  `browser_gecko_sessions`.
 
 
 ## `last_written` and `time_basis`

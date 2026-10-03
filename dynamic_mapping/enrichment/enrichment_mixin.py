@@ -50,7 +50,7 @@ class EnrichmentMixin:
         """Initialize the enrichment mixin."""
         import logging
         if not hasattr(self, 'logger'):
-            self.logger = logging.getLogger(self.__class__.__name__)
+            self.logger = logging.getLogger(__name__)
         self._intelligence_db_path: Optional[str] = None
         self._intelligence_db_attached = False
     

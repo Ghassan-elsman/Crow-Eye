@@ -199,6 +199,11 @@ class DatabaseManager:
             "category": "System Resource Usage",
             "display_name": "SRUM Data",
             "description": "System Resource Usage Monitor data"
+        },
+        "browser_analysis.db": {
+            "category": "Browser Activity",
+            "display_name": "Browser Data",
+            "description": "Chromium / Firefox / Electron history, downloads, cookies, credentials, storage and cache"
         }
     }
     
@@ -276,6 +281,10 @@ class DatabaseManager:
         
         # System Resource Usage
         "srum_data.db": ["srum_", "srum_application", "srum_network", "srum_energy"],
+
+        # Browser Activity
+        "browser_analysis.db": ["browser_history", "browser_downloads", "browser_cookies",
+                                "browser_credentials", "browser_local_storage", "browser_cache"],
     }
     
     def __init__(self, case_directory: Union[str, Path]):
@@ -288,7 +297,7 @@ class DatabaseManager:
         self.case_directory = Path(case_directory)
         self.connections: Dict[str, sqlite3.Connection] = {}
         self.database_schemas: Dict[str, Dict[str, List[str]]] = {}
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         # Map logical database names (e.g., 'amcache_data.db') to their actual
         # file paths when artifacts are consolidated into aggregator databases.
         # This prevents false "Missing" statuses when the data exists as tables.

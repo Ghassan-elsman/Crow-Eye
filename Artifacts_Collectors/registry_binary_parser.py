@@ -1570,7 +1570,55 @@ _SPECIAL_FOLDER_GUIDS = {
     '18989B1D-99B5-455B-841C-AB7C74E4DDFC': 'Videos',
     'D34A6CA6-62C2-4C34-8A7C-14709C1AD938': 'Common Places',
     '5B934B42-522B-4C34-BBFE-37A3EF7B9C90': 'This Device',
+    # Namespace-extension roots a modern Explorer bag sits under. Only GUIDs
+    # whose meaning is unambiguous are named; an opaque delegate GUID
+    # (property-store items like DFD502xx, per-machine B710002F) is left as its
+    # GUID, because a guessed label is worse evidence than the fact itself.
+    '018D5C66-4533-4307-9B53-224DE2ED1FE6': 'OneDrive',
+    '26EE0668-A00A-44D7-9371-BEB064C98683': 'Control Panel',
+    'F874310E-B6B7-47DC-BC84-B9E6B38F5903': 'Home',
 }
+
+
+# Shell item class byte (offset 2) -> what the item is, for items whose name
+# cannot be decoded. Only the well-documented classes (libfwsi); anything else
+# is called a shell item, because a wrong class name on evidence is worse than
+# a generic one.
+_UNNAMED_CLASS = {
+    0x00: "variable item",
+    0x01: "control panel category",
+    0x1F: "root folder",
+    0x52: "compressed folder item",
+    0x61: "URI item",
+    0x71: "control panel item",
+    0x74: "delegate item",
+}
+_UNNAMED_RANGES = (
+    (0x20, 0x2F, "volume item"),
+    (0x30, 0x3F, "file system item"),
+    (0x40, 0x4F, "network location"),
+)
+
+
+def unnamed_shell_item_name(binary_data: bytes) -> str:
+    """A stable, honest name for a shell item whose name did not decode.
+
+    The Shellbag parsers used to skip such items outright - control panel
+    entries, MTP/phone delegate items, property-store roots - and with them the
+    first link of every folder path beneath them. This keeps the item, named by
+    its class byte so the row says exactly what is known and nothing more:
+    "(unnamed control panel item, class 0x71)".
+    """
+    cls = binary_data[2] if isinstance(binary_data, (bytes, bytearray)) and len(binary_data) > 2 else None
+    if cls is None:
+        return "(unnamed shell item)"
+    kind = _UNNAMED_CLASS.get(cls)
+    if kind is None:
+        for lo, hi, label in _UNNAMED_RANGES:
+            if lo <= cls <= hi:
+                kind = label
+                break
+    return "(unnamed %s, class 0x%02X)" % (kind or "shell item", cls)
 
 
 def parse_shellbag_entry(binary_data: bytes) -> dict:

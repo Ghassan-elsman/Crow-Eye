@@ -40,7 +40,7 @@ export default function App() {
     sessions: null, srum_app: null, srum_net: null, mft_usn: null,
     prefetch: null, lnk: null, bam: null, dam: null, registry: null,
     amcache: null, shimcache: null, recyclebin: null, imported: null,
-    event_logs: null, aggregated: null,
+    event_logs: null, browser: null, aggregated: null,
   });
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Initializing forensic engine...');
@@ -97,10 +97,22 @@ export default function App() {
           'install_date', 'installation_date', 'link_date', 'driver_last_write_time',
           'driver_time_stamp', 'deletion_time', 'created_date', 'modified_date',
           'accessed_date', 'connection_date', 'last_modified', 'si_creation_time',
-          'Time_Creation', 'Time_Modification', 'Time_Access'
+          'Time_Creation', 'Time_Modification', 'Time_Access',
+          // Browser. Without these every browser row fingerprints as
+          // 'unknown' and collapses to one on an incremental merge.
+          'visit_time', 'start_time', 'end_time', 'last_access_time',
+          'request_time', 'response_time', 'date_created', 'date_modified',
+          'date_last_used', 'date_added', 'date_last_opened', 'install_time',
+          'last_updated', 'last_accessed', 'time_created', 'time_last_used',
+          'last_used', 'use_date', 'last_seen', 'mtime',
+          'last_user_interaction_time'
         ];
-        // Case-insensitive manifest field lookup
-        const key = Object.keys(p).find(k => tsFields.some(f => f.toLowerCase() === k.toLowerCase()));
+        // Case-insensitive manifest field lookup. Prefer a field that actually
+        // holds a value: a browser cache row carries an empty request_time
+        // beside a filled response_time, and taking the first listed field
+        // regardless would fingerprint it as 'unknown'.
+        const keys = Object.keys(p).filter(k => tsFields.some(f => f.toLowerCase() === k.toLowerCase()));
+        const key = keys.find(k => p[k]) || keys[0];
         return key ? p[key] : null;
       };
 
@@ -156,6 +168,7 @@ export default function App() {
     merged.lnk = mergeArray(existingData.lnk, deduplicateBatch(newData.lnk, 'lnk'), 'lnk');
     merged.bam = mergeArray(existingData.bam, deduplicateBatch(newData.bam, 'bam'), 'bam');
     merged.dam = mergeArray(existingData.dam, deduplicateBatch(newData.dam, 'dam'), 'dam');
+    merged.browser = mergeArray(existingData.browser, deduplicateBatch(newData.browser, 'browser'), 'browser');
 
     if (newData.registry) {
       const mergedRegistry = { ...(existingData.registry || {}) };
@@ -269,7 +282,7 @@ export default function App() {
           sessions: null, srum_app: null, srum_net: null, mft_usn: null,
           prefetch: null, lnk: null, bam: null, dam: null, registry: null,
           amcache: null, shimcache: null, recyclebin: null, imported: null,
-          event_logs: null, aggregated: data.aggregated,
+          event_logs: null, browser: null, aggregated: data.aggregated,
         });
       }
     }
@@ -342,6 +355,9 @@ export default function App() {
         // applied after the fetch could only ever hide rows, never
         // fetch the 39,000 the curated set leaves behind.
         callBridge('getEventLogData', start, end, !!allEventIds),
+        // Browser. Appended last on purpose: the val(n) unpack below is
+        // positional, so anything inserted above renumbers every one of them.
+        callBridge('getBrowserData', start, end),
       ]);
 
       if (currentFetchId !== lastFetchId.current) return;
@@ -364,6 +380,7 @@ export default function App() {
       const rawRecycleBin = val(10);
       const rawImported = val(11);
       const rawEventLogs = val(12);
+      const rawBrowser = val(13);
 
       // DIAGNOSTIC LOGGING: Backend Response
       console.log('[DIAG] Bridge Responses:', {
@@ -409,6 +426,7 @@ export default function App() {
         recyclebin: heuristicFlatten(rawRecycleBin),
         imported: heuristicFlatten(rawImported),
         event_logs: heuristicFlatten(rawEventLogs),
+        browser: heuristicFlatten(rawBrowser),
       };
 
       // Registry table normalization (case-insensitive keys for easier discovery)

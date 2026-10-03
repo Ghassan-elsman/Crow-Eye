@@ -72,32 +72,39 @@ target_artifacts_dir = os.path.join(".", "Target_Artifacts")
 os.makedirs(target_artifacts_dir, exist_ok=True)
 log_filename = os.path.join(target_artifacts_dir, f"usn_claw_{log_timestamp}.log")
 
-# Configure separate loggers for console (simplified) and file (detailed)
-# Remove any existing handlers
-for handler in logging.root.handlers[:]:
-    logging.root.removeHandler(handler)
-
-# Create console handler with simplified output (INFO level only)
-console_handler = logging.StreamHandler(sys.stdout)
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter("%(message)s")  # Simple format for console
-console_handler.setFormatter(console_formatter)
-
-# Create file handler with detailed output (DEBUG level)
+# Detailed per-run file, kept: it is a forensic artifact of the parse and lives
+# beside the databases in Target_Artifacts.
+#
+# What is NOT done here any more, and must not come back:
+#
+#   for handler in logging.root.handlers[:]:
+#       logging.root.removeHandler(handler)
+#   logging.basicConfig(level=logging.DEBUG, handlers=[...])
+#
+# This module is importable into the running app, and those two lines tore every
+# handler off the root logger at import time - the case log, the component
+# splits and the application log with them - and then replaced the root
+# configuration with this parser's own. One import silently switched the whole
+# application's logging off.
+#
+# The handler below is attached to THIS module's logger instead, and records
+# still propagate to root, so a line lands both in the per-run file and in the
+# case log.
 file_handler = logging.FileHandler(log_filename, mode='w', encoding='utf-8')
 file_handler.setLevel(logging.DEBUG)
 file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 file_handler.setFormatter(file_formatter)
 
-# Configure root logger
-logging.basicConfig(level=logging.DEBUG, handlers=[console_handler, file_handler])
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+logger.addHandler(file_handler)
 
-# Create a separate logger for detailed file-only logging
-file_logger = logging.getLogger('file_only')
+# The detailed file-only channel keeps its own handler, but propagates now: it
+# used to set propagate = False, which made everything written through it
+# invisible to the case log by construction.
+file_logger = logging.getLogger(__name__ + ".detail")
 file_logger.setLevel(logging.DEBUG)
 file_logger.addHandler(file_handler)
-file_logger.propagate = False  # Don't propagate to root logger
 
 # Log the log file location (file only)
 file_logger.info(f"Detailed logging to file: {log_filename}")
@@ -339,20 +346,35 @@ def should_exclude_from_analysis(filename):
     return False
 
 # --------- Utility Functions ----------
-def filetime_to_datetime(filetime_value):
+def filetime_to_forensic_text(filetime_value):
+    """A raw FILETIME as this parser's timestamp column, or None.
+
+    NAMED FOR WHAT IT RETURNS, and that is not cosmetic. This function used to
+    be called `filetime_to_datetime`, which is also the name it imports from
+    `utils.time_utils` at the top of this file - so the def shadowed the
+    import, the call below resolved to ITSELF, and it recursed until
+    RecursionError. RecursionError is an Exception, the `except Exception`
+    around the call swallowed it, and every timestamp in the USN journal came
+    out None. 244,014 rows with a reason, a filename and an FRN, and no time
+    on any of them, with no error anywhere.
+
+    So: the import keeps its name and means a datetime, this returns text, and
+    the two can no longer be confused for one another.
+    """
     if not filetime_value:
         return None
     try:
         ft = int(filetime_value)
-    except Exception:
+    except (TypeError, ValueError):
         return None
     if ft == 0:
         return None
-    # FILETIME is 100-nanosecond intervals since Jan 1, 1601 (UTC)
+    # FILETIME is 100-nanosecond intervals since Jan 1, 1601 (UTC).
     try:
-        dt = filetime_to_datetime(ft)
-        return format_forensic_timestamp(dt)
-    except Exception:
+        return format_forensic_timestamp(filetime_to_datetime(ft))
+    except (TypeError, ValueError, OverflowError, OSError):
+        # A value that is not a plausible FILETIME. Narrow on purpose: the
+        # blanket except that used to be here is what hid the recursion.
         return None
 
 def file_id_128_to_str(fid):
@@ -498,7 +520,7 @@ def parse_record(data_bytes, offset):
             usn = int(hdr.Usn)
             minor_version = int(hdr.MinorVersion)
 
-            timestamp = filetime_to_datetime(hdr.TimeStamp)
+            timestamp = filetime_to_forensic_text(hdr.TimeStamp)
             reason_raw = int(hdr.Reason)
             reason = reason_to_text(reason_raw)
             source_info_raw = int(hdr.SourceInfo)
@@ -516,7 +538,7 @@ def parse_record(data_bytes, offset):
             usn = int(hdr.Usn)
             minor_version = int(hdr.MinorVersion)
 
-            timestamp = filetime_to_datetime(hdr.TimeStamp)
+            timestamp = filetime_to_forensic_text(hdr.TimeStamp)
             reason_raw = int(hdr.Reason)
             reason = reason_to_text(reason_raw)
             source_info_raw = int(hdr.SourceInfo)

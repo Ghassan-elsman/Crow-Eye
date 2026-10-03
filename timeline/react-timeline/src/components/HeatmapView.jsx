@@ -2,6 +2,25 @@ import { memo, useMemo, useState } from 'react';
 import { cleanForensicDate } from '../utils/formatters';
 import { IconGrid } from './Icons';
 
+/** Display name per aggregated source key. The badge and the breakdown below
+ *  both read it, so a source cannot be spelled one way in one and another way
+ *  in the other. */
+const SOURCE_LABELS = {
+  'prefetch': 'Prefetch Executions',
+  'lnk': 'LNK/JumpList Activity',
+  'amcache': 'Amcache App/Driver Activity',
+  'shimcache': 'ShimCache AppCompat',
+  'recyclebin': 'Recycle Bin Deletions',
+  'registry_others': 'Registry/MRU Artifacts',
+  'SystemLogs': 'Windows System Logs',
+  'ApplicationLogs': 'Application Event Logs',
+  'SecurityLogs': 'Security/Logon Logs',
+  'srum_app': 'App Resource Usage (SRUM)',
+  'srum_net': 'Network Data Usage (SRUM)',
+  'mft_usn': 'MFT/USN Journal Ops',
+  'browser': 'Browser Activity'
+};
+
 /**
  * HeatmapView — Calendar grid showing per-day forensic artifact density.
  * Click any active day to load detailed lane data for that day ± 3 days.
@@ -227,7 +246,7 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
                   background: 'rgba(0, 255, 255, 0.08)', border: '1px solid rgba(0, 255, 255, 0.25)' 
                 }}>
                   <div style={{ fontSize: 9, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4 }}>Most Active Source</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-cyan)' }}>{topSource}</div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-cyan)' }}>{SOURCE_LABELS[topSource] || topSource}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>
                     {topCount.toLocaleString()} artifacts ({pct}%)
                   </div>
@@ -238,22 +257,8 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
             {/* Granular Breakdown Sections */}
             {(() => {
               const src = hoveredDay.sources || {};
-              const sourceLabels = {
-                'prefetch': 'Prefetch Executions',
-                'lnk': 'LNK/JumpList Activity',
-                'amcache': 'Amcache App/Driver Activity',
-                'shimcache': 'ShimCache AppCompat',
-                'recyclebin': 'Recycle Bin Deletions',
-                'registry_others': 'Registry/MRU Artifacts',
-                'SystemLogs': 'Windows System Logs',
-                'ApplicationLogs': 'Application Event Logs',
-                'SecurityLogs': 'Security/Logon Logs',
-                'srum_app': 'App Resource Usage (SRUM)',
-                'srum_net': 'Network Data Usage (SRUM)',
-                'mft_usn': 'MFT/USN Journal Ops'
-              };
 
-              const forensicKeys = ['prefetch', 'lnk', 'amcache', 'shimcache', 'recyclebin', 'registry_others'];
+              const forensicKeys = ['prefetch', 'lnk', 'amcache', 'shimcache', 'recyclebin', 'registry_others', 'browser'];
               const systemKeys = ['SystemLogs', 'ApplicationLogs', 'SecurityLogs', 'srum_app', 'srum_net', 'mft_usn'];
 
               const renderGroup = (title, keys, color) => {
@@ -268,7 +273,7 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
                       return (
                         <div key={k} style={{ marginBottom: 8 }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 2 }}>
-                            <span style={{ color: 'var(--text-secondary)' }}>{sourceLabels[k] || k}</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{SOURCE_LABELS[k] || k}</span>
                             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{count.toLocaleString()}</span>
                           </div>
                           <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,0.05)', overflow: 'hidden' }}>

@@ -73,6 +73,20 @@ persistence queries see tasks beside the Run keys.
 The **Parse Registry** and **Parse All Artifacts** actions need no change — they already call the
 parser. It is the display path that does not know.
 
+### Parse status — why a table is empty
+Every parse records one outcome per artifact (`utils/parse_status.py` → `<case>/logs/parse_status.json`),
+and the **i** button above an empty table reads it through `utils/table_sources.py`.
+- **A new registry table:** add it to `REGISTRY_TABLE_WIDGETS` in `utils/table_sources.py` as well as to
+  `table_mapping` (place 3 above). `test_table_sources_complete.py` fails until the two agree.
+- **A new non-registry tab:** add its widget to `_STATIC_SOURCES` in the same file.
+- **A table that is often legitimately empty:** add one plain sentence to `configs/empty_table_hints.json`
+  saying when that is normal. That sentence is what the investigator reads.
+- **A new artifact / parser:** add it to `ARTIFACTS` and `probe_sources()` in `utils/parse_status.py`, give
+  the live task an artifact key in `utils/concurrency/standalone_parsers.py`, and map its offline type
+  name in `_TYPE_ALIASES`.
+- **Return a real result** (dict with `success` / `records` / `errors`), or an explicit `status` when the
+  parser already knows why it stopped. A bare `None` with no fresh database is recorded as **Failed**.
+
 ### The correlation engine
 - `correlation_engine/config/artifact_types.json` — the source of truth
 - `correlation_engine/config/artifact_type_registry.py` → `_load_hardcoded_defaults` — the fallback

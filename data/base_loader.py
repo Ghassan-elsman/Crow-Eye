@@ -11,6 +11,17 @@ class BaseDataLoader(EnrichmentMixin):
     Base class for data loading operations with common database functionality.
     Handles database connections, query execution, and error handling.
     Now with 20% more intelligence thanks to EnrichmentMixin!
+
+    **One loader per thread.** `connect()` stores a `sqlite3.Connection` on the
+    instance, and a connection may only be used by the thread that opened it -
+    so a loader must be built and connected on the thread that will query it,
+    never created on the GUI thread and handed to a worker. Both threaded
+    callers already do this: `data/search_engine.py:368` builds a fresh loader
+    inside its worker, and `data/unified_search_engine.py` connects and
+    disconnects around each search. Sharing one instead raises
+    `sqlite3.ProgrammingError: SQLite objects created in a thread can only be
+    used in that same thread` - the fault that crashed UBA. Guarded by
+    `correlation_engine/tests/test_sqlite_connections_stay_on_their_thread.py`.
     """
     
     def __init__(self, db_path: Optional[Union[str, Path]] = None):
@@ -23,7 +34,7 @@ class BaseDataLoader(EnrichmentMixin):
         EnrichmentMixin.__init__(self)
         self.db_path = Path(db_path) if db_path else None
         self.connection = None
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Check if we have a brain nearby
         self._detect_intelligence()

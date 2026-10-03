@@ -823,6 +823,28 @@ class FeatherBuilderWindow(QMainWindow):
             QMessageBox.critical(self, "Import Error", f"Failed to import JSON: {str(e)}")
     
     def perform_import(self, config: dict, table_name: str):
+        """Import into a feather - never while Crow-Eye is parsing or loading
+        the case databases it reads (ui/busy_guard.py), and marked busy while
+        it runs so a parse or case switch waits for it. Standalone (no
+        Crow-Eye ui package) it simply imports."""
+        try:
+            from ui import busy_guard
+        except Exception:
+            busy_guard = None
+        if busy_guard is not None and busy_guard.is_busy():
+            reason, elapsed = busy_guard.current()
+            QMessageBox.information(
+                self, "Crow-Eye is still working",
+                "Crow-Eye is still working: %s (%s elapsed).\n\n"
+                "Import the data once it has finished parsing and loading."
+                % (reason or "Working", busy_guard.format_elapsed(elapsed)))
+            return None
+        if busy_guard is None:
+            return self._perform_import_impl(config, table_name)
+        with busy_guard.busy("Feather import"):
+            return self._perform_import_impl(config, table_name)
+
+    def _perform_import_impl(self, config: dict, table_name: str):
         """Perform the actual import operation."""
         self.initialize_feather_database()
         

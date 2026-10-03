@@ -58,6 +58,7 @@ function LaneDataModal({ laneKey, laneTitle, data, timeRange, initialSearch, onC
       // Unified Data Discovery matching TimelineView
       const registry = data.registry || {};
       const artifactSources = [
+        { items: data.browser, label: 'Browser' },
         { items: data.prefetch || data.prefetch_data, label: 'Prefetch' },
         { items: data.lnk, label: 'LNK/JumpList' },
         { items: data.bam, label: 'BAM' },
@@ -99,7 +100,7 @@ function LaneDataModal({ laneKey, laneTitle, data, timeRange, initialSearch, onC
 
       // 3. Salvaged Items
       Object.keys(data).forEach(key => {
-        if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'aggregated'].includes(key)) {
+        if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'browser', 'aggregated'].includes(key)) {
           const salvaged = expandArtifacts(data[key], `Salvaged: ${key}`);
           if (salvaged.length > 0) allItems = [...allItems, ...salvaged];
         }

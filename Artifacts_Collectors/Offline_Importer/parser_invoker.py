@@ -46,7 +46,94 @@ class ParserInvoker:
         """
         self.case_root = Path(case_root)
         self.input_dir = self.case_root / 'live_acquisition'
-        self.target_artifacts_dir = self.case_root / 'Target_Artifacts'    
+        self.target_artifacts_dir = self.case_root / 'Target_Artifacts'
+        # 'offline' or 'image' - only labels the parse-status record; callers
+        # driving a forensic image set it (ImageParsingDialog).
+        self.mode = 'offline'
+
+    def _record_parse_status(self, results: List[ParserResult], artifacts: List,
+                             started: float) -> None:
+        """One parse-status outcome per artifact type in this batch.
+
+        Results arrive one per FILE (directory parsers fan the type result out
+        across its files), so they are folded back per type: any success with
+        failures is PARTIAL, all failures classify by their error text. Types
+        the scan index never found are recorded as SOURCE_NOT_FOUND so their
+        empty tables explain themselves; Browser has no offline parser yet and
+        is recorded as NOT_RUN rather than left silently absent.
+        Best-effort: a status record must never fail a parse.
+        """
+        try:
+            from utils.parse_status import (ARTIFACT_ORDER, ParseStatus, ParserResultLike,
+                                            artifact_db_records, canonical_artifact,
+                                            classify_result, probe_sources, record_outcomes)
+        except Exception as e:
+            logger.warning(f"Parse status unavailable: {e}")
+            return
+        try:
+            case_root = str(self.case_root)
+            by_type = {}
+            for r in results:
+                by_type.setdefault(r.artifact_type, []).append(r)
+            paths_by_type = {}
+            for a in artifacts:
+                paths_by_type.setdefault(a.artifact_type, []).append(
+                    getattr(a, 'current_path', '') or getattr(a, 'original_path', ''))
+
+            # What the evidence contains at all (scan index), to tell "not in
+            # this batch" apart from "not on this evidence".
+            indexed_types = set(paths_by_type)
+            try:
+                from Artifacts_Collectors.Offline_Importer.artifact_scan_index import ArtifactScanIndex
+                indexed_types |= {a.artifact_type for a in ArtifactScanIndex(case_root).get_all_artifacts()}
+            except Exception:
+                pass
+            indexed = {canonical_artifact(t) for t in indexed_types}
+
+            outcomes = []
+            for type_name, type_results in by_type.items():
+                artifact = canonical_artifact(type_name)
+                if not artifact:
+                    continue
+                ok = [r for r in type_results if r.success]
+                bad = [r for r in type_results if not r.success]
+                errors = []
+                for r in bad:
+                    errors.extend(e for e in r.errors if e and e not in errors)
+                warnings = []
+                for r in type_results:
+                    warnings.extend(w for w in r.warnings if w and w not in warnings)
+                folded = ParserResultLike(
+                    success=bool(ok) and not bad,
+                    records_parsed=sum(r.records_parsed for r in type_results),
+                    errors=errors, warnings=warnings,
+                    status=ParseStatus.PARTIAL if ok and bad else None)
+                probe = probe_sources(artifact, self.mode,
+                                      scanned_paths=paths_by_type.get(type_name, []))
+                details = []
+                if bad and ok:
+                    details.append("%d of %d input file(s) failed" % (len(bad), len(type_results)))
+                outcome = classify_result(
+                    artifact, folded, probe=probe, mode=self.mode,
+                    db_records=artifact_db_records(case_root, artifact, since=started),
+                    details=details)
+                if outcome.status == ParseStatus.PARTIAL and not outcome.message:
+                    outcome.message = errors[0] if errors else "Some input files failed."
+                outcomes.append(outcome)
+
+            done = {o.artifact for o in outcomes}
+            for artifact in ARTIFACT_ORDER:
+                if artifact in done or artifact == 'mft_usn_correlation':
+                    continue
+                if artifact == 'browser':
+                    probe = probe_sources('browser', self.mode)
+                    outcomes.append(classify_result('browser', None, probe=probe, mode=self.mode))
+                elif artifact not in indexed:
+                    probe = probe_sources(artifact, self.mode, scanned_paths=[])
+                    outcomes.append(classify_result(artifact, None, probe=probe, mode=self.mode))
+            record_outcomes(case_root, outcomes, self.mode, show=True)
+        except Exception as e:
+            logger.warning(f"Could not record parse status: {e}", exc_info=True)
     def _validate_path_in_case(self, path: str) -> tuple[bool, str]:
         """
         Validate that path is within case directory.
@@ -555,13 +642,16 @@ class ParserInvoker:
             
             output_path = str(self.target_artifacts_dir / 'registry_data.db')
             
-            # Create initial ParserResult
+            # Trust what reg_Claw reports instead of hard-coding success=True:
+            # a dict that says success False used to show as parsed.
+            reported = result if isinstance(result, dict) else {}
+            reg_error = reported.get('error')
             parser_result = ParserResult(
-                success=True,
+                success=bool(reported.get('success', True)) and not reg_error,
                 artifact_type='Registry',
-                records_parsed=result.get('records', 0) if isinstance(result, dict) else 0,
+                records_parsed=reported.get('records', 0) or 0,
                 output_path=output_path,
-                errors=[],
+                errors=[reg_error] if reg_error else [],
                 warnings=[],
                 execution_time=time.time() - start_time
             )
@@ -926,10 +1016,6 @@ class ParserInvoker:
                 execution_time=time.time() - start_time
             )
         except Exception as e:
-            # USN parser requires special handling - placeholder
-            output_path = os.path.join(self.target_artifacts_dir, 'MFT_USN', 'USN_journal.db')
-            return ParserResult(success=True, artifact_type='USN', records_parsed=0, output_path=output_path, warnings=["USN parser not yet implemented"], execution_time=time.time() - start_time)
-        except Exception as e:
             # Capture full exception details for logging
             import traceback
             error_type = type(e).__name__
@@ -1182,9 +1268,10 @@ class ParserInvoker:
         """
         results = []
         total = len(artifacts)
-        
+
         # Track last heartbeat time for emitting heartbeat signals
         import time
+        batch_started = time.time()
         last_heartbeat = time.time()
         
         def emit_heartbeat_if_needed():
@@ -1580,6 +1667,9 @@ class ParserInvoker:
         # Final progress callback
         if progress_callback:
             progress_callback(len(results), total, "Complete", "")
+
+        # Per-artifact outcome for the Parse Status report / empty-table i buttons.
+        self._record_parse_status(results, artifacts, batch_started)
 
         return results
 

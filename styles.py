@@ -144,6 +144,268 @@ QToolTip {{
         if CrowEyeStyles._GLOBAL_THEME_MARKER not in existing:
             app.setStyleSheet((existing + "\n" + CrowEyeStyles.POPUP_STYLESHEET).strip())
 
+        CrowEyeStyles.apply_application_identity(app)
+
+    @staticmethod
+    def apply_application_identity(app):
+        """Give the process a name and an icon, once.
+
+        Crow-Eye opens more than fifty windows and only a handful ever set an
+        icon, so most of them showed Qt's default when minimized. A window with
+        no icon of its own falls back to the application icon, so setting one
+        here names every window that never named itself - including the ones
+        inside the packages, which cannot reach the main window's own helper.
+
+        A window that DOES set its own icon is unaffected: this is a fallback,
+        not an override. Best-effort; a missing icon file never blocks startup.
+        """
+        try:
+            app.setApplicationName("Crow-Eye")
+            app.setOrganizationName("Crow-Eye")
+        except Exception:
+            pass
+        icon = CrowEyeStyles.crow_eye_icon()
+        if icon is not None:
+            try:
+                app.setWindowIcon(icon)
+            except Exception:
+                pass
+
+    @staticmethod
+    def resource_path(*parts):
+        """Absolute path to a bundled resource, or None if it is not there.
+
+        `os.path.join("GUI Resources", "CrowEye.ico")` relative to the working
+        directory only works when Crow-Eye happens to be launched from the tree
+        root, and never works frozen. This resolves against the bundle when
+        PyInstaller has unpacked one and against this file otherwise, so a
+        caller gets the same answer either way.
+        """
+        import os
+        import sys
+        roots = []
+        base = getattr(sys, "_MEIPASS", None)
+        if base:
+            roots.append(base)
+        roots.append(os.path.dirname(os.path.abspath(__file__)))
+        try:
+            roots.append(os.path.dirname(os.path.abspath(sys.argv[0])))
+        except Exception:
+            pass
+        for root in roots:
+            try:
+                path = os.path.join(root, *parts)
+                if os.path.exists(path):
+                    return path
+            except Exception:
+                continue
+        return None
+
+    @staticmethod
+    def _trim_transparent(pixmap):
+        """Crop a pixmap's fully transparent margin. Returns it unchanged on
+        anything unexpected.
+
+        Some of the shipped artwork is a small logo centred on a large
+        transparent canvas - "the Eye AI agent transparent.png" is 1024x1024
+        with its content inside a 350x354 box, 34% of the width. Scaled down to
+        a 32px window icon that leaves an 11px smudge in the middle of empty
+        space, which in a taskbar is indistinguishable from no icon at all.
+        Trimming first means the art fills the frame it is given.
+        """
+        try:
+            from PyQt5 import QtGui
+            image = pixmap.toImage()
+            if not image.hasAlphaChannel():
+                return pixmap
+            width, height = image.width(), image.height()
+            if width < 2 or height < 2:
+                return pixmap
+            # Sampling is enough to find the margin and keeps a 1024px image
+            # off the critical path; the box is then padded by the step.
+            step = max(1, min(width, height) // 256)
+            min_x, min_y, max_x, max_y = width, height, -1, -1
+            for y in range(0, height, step):
+                for x in range(0, width, step):
+                    if QtGui.qAlpha(image.pixel(x, y)) > 16:
+                        if x < min_x:
+                            min_x = x
+                        if x > max_x:
+                            max_x = x
+                        if y < min_y:
+                            min_y = y
+                        if y > max_y:
+                            max_y = y
+            if max_x < 0 or max_y < 0:
+                return pixmap                 # fully transparent: nothing to keep
+            min_x = max(0, min_x - step)
+            min_y = max(0, min_y - step)
+            max_x = min(width - 1, max_x + step)
+            max_y = min(height - 1, max_y + step)
+            box_w, box_h = max_x - min_x + 1, max_y - min_y + 1
+            # Only worth doing when the margin is substantial. Most of the icon
+            # set is already tight - the search SVG's content is about 83% of
+            # its box - and cropping those gains nothing while risking clipped
+            # antialiasing. The case this exists for is the Eye PNG at 34%.
+            if box_w > width * 0.7 or box_h > height * 0.7:
+                return pixmap
+            # Keep it square so the aspect ratio survives the crop.
+            side = max(box_w, box_h)
+            cx, cy = min_x + box_w // 2, min_y + box_h // 2
+            left = max(0, min(width - side, cx - side // 2))
+            top = max(0, min(height - side, cy - side // 2))
+            cropped = pixmap.copy(left, top, min(side, width - left), min(side, height - top))
+            return cropped if not cropped.isNull() else pixmap
+        except Exception:
+            return pixmap
+
+    @staticmethod
+    def resource_icon(*parts, **kwargs):
+        """A QIcon for a bundled resource, or None. Never an empty icon.
+
+        `trim=True` crops a transparent margin first - see _trim_transparent.
+
+        Every icon in Crow-Eye should come through here, because getting one is
+        not as simple as it looks. `QIcon(":/Icons/CrowEye.ico")` reports
+        `isNull() == False` even when the resource does not exist - the object
+        is lazy and does not touch the data until a pixmap is asked for. The
+        .qrc in this repo is never compiled in either tree, so every
+        `:/Icons/...` path yields an EMPTY pixmap while insisting it is fine,
+        and an earlier version of this code tested `isNull()` and therefore set
+        the application icon to nothing at all. The packaged build looked right
+        only because PyInstaller gives the executable its own icon.
+
+        So: ask for a pixmap, and believe that. Returning None rather than an
+        empty QIcon matters - a caller can fall back, but it cannot tell an
+        empty icon from a real one.
+        """
+        try:
+            from PyQt5 import QtGui
+        except Exception:
+            return None
+        path = CrowEyeStyles.resource_path(*parts)
+        if not path:
+            return None
+        try:
+            if kwargs.get("trim"):
+                pixmap = QtGui.QPixmap(path)
+                if pixmap.isNull():
+                    return None
+                trimmed = CrowEyeStyles._trim_transparent(pixmap)
+                icon = QtGui.QIcon()
+                # Give Qt the sizes Windows asks for, each scaled from the
+                # trimmed master rather than from the original canvas.
+                for size in (16, 24, 32, 48, 64, 128, 256):
+                    icon.addPixmap(trimmed.scaled(
+                        size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                if not icon.pixmap(32, 32).isNull():
+                    return icon
+                return None
+            icon = QtGui.QIcon(path)
+            if not icon.pixmap(32, 32).isNull():
+                return icon
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def resource_pixmap(*parts):
+        """A QPixmap for a bundled resource, or None. Never an empty pixmap."""
+        try:
+            from PyQt5 import QtGui
+        except Exception:
+            return None
+        path = CrowEyeStyles.resource_path(*parts)
+        if not path:
+            return None
+        try:
+            pixmap = QtGui.QPixmap(path)
+            if not pixmap.isNull():
+                return pixmap
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
+    def crow_eye_icon():
+        """The Crow-Eye application icon, or None."""
+        return CrowEyeStyles.resource_icon("GUI Resources", "CrowEye.ico")
+
+    @staticmethod
+    def give_window_a_taskbar_button(widget):
+        """Make an owned window appear in the Windows taskbar.
+
+        Crow-Eye builds nearly every window with the main window as its parent,
+        which is right for stacking and placement and is also why they had no
+        taskbar button: on Windows an *owned* window is not given one, whatever
+        its title says, and setting Qt.Window does not change that. Measured on
+        this platform:
+
+            parented QDialog, default flags .................. no button
+            parented + Qt.Window | min | max | close ......... no button
+            parented + transientParent cleared .............. no button
+            unparented ...................................... button
+            parented + WS_EX_APPWINDOW ...................... button
+
+        Dropping the parent would work and would also give up parent-relative
+        placement, stacking above the main window, and Qt-managed lifetime. So
+        the parent stays and the extended style is set instead.
+
+        Qt destroys and recreates the native window on a later setWindowFlags(),
+        which silently drops the style - a one-shot call looks correct and stops
+        working the first time a window changes its flags. An event filter
+        re-applies it on every Show and WinIdChange.
+
+        No-op off Windows, and never fatal: a window without a taskbar button is
+        a blemish, not a reason to fail to open.
+        """
+        import sys as _sys
+        if not _sys.platform.startswith("win"):
+            return
+        try:
+            from PyQt5 import QtCore as _QtCore
+        except Exception:
+            return
+
+        GWL_EXSTYLE = -20
+        WS_EX_APPWINDOW = 0x00040000
+
+        def _apply(w):
+            try:
+                import ctypes
+                u32 = ctypes.windll.user32
+                u32.GetWindowLongPtrW.restype = ctypes.c_longlong
+                u32.GetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+                u32.SetWindowLongPtrW.restype = ctypes.c_longlong
+                u32.SetWindowLongPtrW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                                  ctypes.c_longlong]
+                h = ctypes.c_void_p(int(w.winId()))
+                ex = u32.GetWindowLongPtrW(h, GWL_EXSTYLE)
+                if not (ex & WS_EX_APPWINDOW):
+                    u32.SetWindowLongPtrW(h, GWL_EXSTYLE, ex | WS_EX_APPWINDOW)
+            except Exception:
+                pass
+
+        class _Keeper(_QtCore.QObject):
+            def eventFilter(self, obj, event):
+                if event.type() in (_QtCore.QEvent.Show,
+                                    _QtCore.QEvent.WinIdChange):
+                    _apply(obj)
+                return False
+
+        try:
+            if getattr(widget, "_crow_eye_taskbar_keeper", None) is None:
+                keeper = _Keeper(widget)
+                widget.installEventFilter(keeper)
+                widget._crow_eye_taskbar_keeper = keeper
+            # Realise the handle now so the style is in place before the first
+            # show - setting it afterwards needs a hide/show to take effect, and
+            # that flickers.
+            widget.winId()
+            _apply(widget)
+        except Exception:
+            pass
+
     @staticmethod
     def apply_table_styles(table_widget):
         """Apply consistent table styles to a QTableWidget.

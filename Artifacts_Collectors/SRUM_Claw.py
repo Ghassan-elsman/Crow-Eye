@@ -57,6 +57,7 @@ Part of: Crow Eye Digital Forensics Suite
 """
 
 import os
+import re
 import struct
 import datetime
 import sqlite3
@@ -79,17 +80,40 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
                               get_current_utc, filetime_to_datetime, ensure_utc)
 
 # Configure logging for forensic analysis
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - [SRUM] %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+# Deliberately no logging.basicConfig() here. This module is imported into the
+# PyQt app, and basicConfig at import time seeds the ROOT logger before any
+# case exists - then silently does nothing once a case has added its own
+# handlers, so the file it thinks it is writing never appears. The root
+# configuration belongs to utils.logging_setup; this module just asks for a
+# logger and lets its records propagate.
 logger = logging.getLogger(__name__)
 
 
 # ============================================================================
 # FORMATTING HELPER FUNCTIONS
 # ============================================================================
+
+def dedupe_exact(rows):
+    """Drop byte-for-byte identical row tuples, preserving order.
+
+    SRUM writes some records more than once (notably energy rows, whose
+    minute-truncated timestamp and NULL event_timestamp make distinct events
+    collapse into identical tuples). A Python set compares None == None, so this
+    catches NULL-bearing duplicates that a SQL UNIQUE index would miss. Only
+    fully identical rows are removed - rows differing in any column are kept.
+
+    Returns (deduped_rows, removed_count).
+    """
+    seen = set()
+    out = []
+    for r in rows:
+        key = tuple(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out, len(rows) - len(out)
+
 
 def format_bytes(bytes_value):
     """Format bytes into human-readable format (KB, MB, GB)"""
@@ -311,38 +335,65 @@ def srum_filetime(value) -> Optional[datetime.datetime]:
 
 
 def parse_srum_app_id(raw: str) -> dict:
-    """Split a SRUM application identity into its parts.
+    """Split a SRUM application identity into (app_name, app_path, hosted_services).
 
-    SRUM does not always record a path. Many entries use an AppId form:
+    SRUM records an application three different ways, and all three land here:
 
-        !!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]
+      1. A device path, sometimes with a service group appended:
+             \\Device\\HarddiskVolume3\\Windows\\System32\\svchost.exe [LocalService]
+      2. The service-host form, '!!'-prefixed, with a bracketed service list:
+             !!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]
+      3. The modern Store / timeline form - a '!'-delimited composite of the
+         package family name, the PRAID, the executable, a launch timestamp and
+         a sequence value, e.g.:
+             MicrosoftWindows.Client.CBS_..._cw5n1h2txyewy!SoftLanding!SoftLandingTask.exe!2026/07/28:21:01:46!e276f!
 
-    Keeping only the executable name makes every svchost row identical, and the
-    hosted service list is the one thing that tells them apart. It is separated
-    out here so the timeline provider - the only table that uses this form - can
-    record it.
-
-    A plain path is left exactly as it is; only the `!!` form is split.
+    The old parser ran os.path.basename over form 3. Because the launch
+    timestamp is written 'YYYY/MM/DD:HH:MM:SS', basename split on those forward
+    slashes and returned '28:21:01:46!e276f!' as the application name on ~18% of
+    timeline rows - a timestamp fragment where an executable belongs. A real
+    filesystem path never contains '!', so the '!' composite is decoded
+    structurally instead: the token that ends in '.exe' is the executable, the
+    bracketed tokens are the hosted service list, and the first token (the
+    package family name) is the closest thing to a path the record carries.
     """
     result = {"app_name": "", "app_path": "", "hosted_services": ""}
     if not raw:
         return result
-    raw = str(raw).rstrip("\x00")
-
-    if not raw.startswith("!!"):
-        result["app_path"] = raw
-        result["app_name"] = os.path.basename(raw) if raw else raw
+    raw = str(raw).rstrip("\x00").strip()
+    if not raw:
         return result
 
-    parts = raw[2:].split("!")
-    result["app_name"] = parts[0] if parts else raw
-    # The bracketed service list is the trailing field when present.
-    for part in reversed(parts[1:]):
-        if "[" in part:
-            result["hosted_services"] = part.strip()
-            break
-    # An AppId names no path; leaving app_path empty keeps that honest rather
-    # than repeating the executable name as though it were one.
+    # Forms 2 and 3 are the '!'-delimited composite; a path never contains '!'.
+    body = raw[2:] if raw.startswith("!!") else raw
+    if "!" in body:
+        tokens = body.split("!")
+        # The bracketed tokens are the service list (form 2). Joined in order so
+        # a multi-group host keeps every group, not just the last.
+        services = " ".join(t.strip() for t in tokens if t.strip().startswith("["))
+        # The executable is the first token ending in '.exe'; failing that (a
+        # pure activity/GUID id, or the service-host form whose exe is token 0),
+        # the first token is the best identifier the record offers.
+        exe = next((t.strip() for t in tokens if t.strip().lower().endswith(".exe")), "")
+        pkg = tokens[0].strip()
+        if not exe:
+            exe = pkg
+        result["app_name"] = exe
+        result["hosted_services"] = services.strip()
+        # The package family name is a real identity worth keeping; the
+        # service-host form (pkg == exe, or a bracketed token 0) names no path,
+        # and repeating the exe there would only pretend it did.
+        if pkg and pkg != exe and not pkg.startswith("["):
+            result["app_path"] = pkg
+        return result
+
+    # Form 1: a plain path. Keep it verbatim as the path, and take the display
+    # name from its basename with any trailing ' [service group]' removed so the
+    # name is the executable, not the executable plus a decoration.
+    result["app_path"] = raw
+    base = os.path.basename(raw) or raw
+    base = re.sub(r"\s*\[[^\]]*\]\s*$", "", base).strip() or base
+    result["app_name"] = base
     return result
 
 
@@ -365,8 +416,33 @@ APP_TIMELINE_INSERT = """
         mouse_input_s, display_required_s, comp_rendered_s, comp_dirtied_s,
         comp_propagated_s, audio_in_s, audio_out_s,
         cycles, cycles_attr, cycles_wob,
-        disk_raw, network_bytes_raw, network_tail_raw
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        disk_raw, network_bytes_raw, network_tail_raw,
+        in_focus_timeline, user_input_timeline, comp_rendered_timeline,
+        comp_dirtied_timeline, comp_propagated_timeline, audio_in_timeline,
+        audio_out_timeline, cpu_timeline, disk_timeline, network_timeline,
+        mbb_timeline, display_required_timeline, keyboard_input_timeline,
+        cycles_breakdown, cycles_attr_breakdown, cycles_wob_breakdown,
+        mbb_tail_raw, mbb_bytes_raw
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+# Named like APP_TIMELINE_INSERT so the batched and trailing inserts share one
+# column order that already includes the native extras (SRUM_EXTRA_COLUMNS).
+NET_DATA_INSERT = """
+    INSERT INTO srum_network_data_usage (
+        timestamp, app_name, app_path, user_sid, user_name,
+        interface_luid, l2_profile_id, bytes_sent, bytes_received,
+        wake_count, l2_profile_flags
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+ENERGY_INSERT = """
+    INSERT INTO srum_energy_usage (
+        timestamp, app_name, app_path, user_sid, user_name,
+        event_timestamp, state_transition, charge_level, cycle_count,
+        designed_capacity, full_charged_capacity, battery_count,
+        configuration_hash, battery_charge_limited
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Special System IDs that don't have entries in SruDbIdMapTable
@@ -420,6 +496,54 @@ SRUM_KNOWN_COLUMNS = {
         'DiskRaw', 'NetworkBytesRaw', 'NetworkTailRaw'
     ]
 }
+
+# Every OTHER native column each provider table carries, beyond the structured
+# set above - so nothing SRUM records is dropped. Each entry is
+# (native ESE column name, sqlite column name); all are integer counters and are
+# stored raw. Confirmed against this machine's SRUDB.dat with dissect.esedb:
+# APP_RESOURCE_USAGE and NETWORK_CONNECTIVITY already carry every native column,
+# so they have no extras. The energy table's battery-health columns and the
+# timeline's per-window '*Timeline'/'*Breakdown' counters are the real gains.
+SRUM_EXTRA_COLUMNS = {
+    'NETWORK_DATA_USAGE': [
+        ('WakeCount', 'wake_count'),
+        ('L2ProfileFlags', 'l2_profile_flags'),
+    ],
+    'ENERGY_USAGE': [
+        ('DesignedCapacity', 'designed_capacity'),
+        ('FullChargedCapacity', 'full_charged_capacity'),
+        ('BatteryCount', 'battery_count'),
+        ('ConfigurationHash', 'configuration_hash'),
+        ('BatteryChargeLimited', 'battery_charge_limited'),
+    ],
+    'APPLICATION_TIMELINE': [
+        ('InFocusTimeline', 'in_focus_timeline'),
+        ('UserInputTimeline', 'user_input_timeline'),
+        ('CompRenderedTimeline', 'comp_rendered_timeline'),
+        ('CompDirtiedTimeline', 'comp_dirtied_timeline'),
+        ('CompPropagatedTimeline', 'comp_propagated_timeline'),
+        ('AudioInTimeline', 'audio_in_timeline'),
+        ('AudioOutTimeline', 'audio_out_timeline'),
+        ('CpuTimeline', 'cpu_timeline'),
+        ('DiskTimeline', 'disk_timeline'),
+        ('NetworkTimeline', 'network_timeline'),
+        ('MBBTimeline', 'mbb_timeline'),
+        ('DisplayRequiredTimeline', 'display_required_timeline'),
+        ('KeyboardInputTimeline', 'keyboard_input_timeline'),
+        ('CyclesBreakdown', 'cycles_breakdown'),
+        ('CyclesAttrBreakdown', 'cycles_attr_breakdown'),
+        ('CyclesWOBBreakdown', 'cycles_wob_breakdown'),
+        ('MBBTailRaw', 'mbb_tail_raw'),
+        ('MBBBytesRaw', 'mbb_bytes_raw'),
+    ],
+}
+
+# So JetGetTableColumnInfo fetches a column id for every extra, the extra native
+# names are folded into the known-column lists the reader queries.
+for _t, _extras in SRUM_EXTRA_COLUMNS.items():
+    for _native, _sql in _extras:
+        if _native not in SRUM_KNOWN_COLUMNS[_t]:
+            SRUM_KNOWN_COLUMNS[_t].append(_native)
 
 
 class SRUMParsingError(Exception):
@@ -537,6 +661,7 @@ class SRUMNetworkDataRecord:
     l2_profile_id: int = 0
     bytes_sent: int = 0
     bytes_received: int = 0
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -563,6 +688,7 @@ class SRUMEnergyRecord:
     state_transition: int = 0
     charge_level: int = 0
     cycle_count: int = 0
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -616,6 +742,7 @@ class SRUMAppTimelineRecord:
     disk_raw: int = 0
     network_bytes_raw: int = 0
     network_tail_raw: int = 0
+    extra: dict = field(default_factory=dict)
 
 
 class ESERecord:
@@ -904,6 +1031,15 @@ class SRUMParser:
         self.temp_dir = None  # Temporary directory
         self.working_copy = None  # Working copy of SRUDB.dat
         self.id_lookup = {}  # Cache for ID to app/user lookups from SruDbIdMapTable
+        # Facts about the checkpoint (SRUDB.jfm) and log set collected alongside
+        # the database, and what state the database was opened in. Written to
+        # srum_metadata so the recovery path is evidenced, not just performed.
+        self.recovery_info = {
+            'jfm_collected': 0, 'jfm_path': '', 'jfm_size': 0, 'jfm_modified': '',
+            'log_files_collected': 0, 'db_state': 'clean', 'recovery_notes': '',
+        }
+        self._recovery_files = []  # working-copy paths of the collected .jfm/.chk/logs
+        self._file_accessor = None  # lazily-built FileAccessor (StandardCopy/VSS/RawDisk)
         
         # JET API handles
         self.instance = JET_INSTANCE()
@@ -990,56 +1126,127 @@ class SRUMParser:
             return None
     
     def open_ese_database(self):
-        """Open the SRUM ESE database using Windows JET API.
-        
-        Initializes JET instance, begins session, attaches and opens the database.
-        Sets up read-only access to the SRUDB.dat file.
-        
+        """Open the SRUM database, replaying its logs first to include unsaved data.
+
+        SRUDB.dat on disk lags the transaction logs: the SRUM service commits new
+        rows to SRU*.log and only flushes them into the database at a checkpoint,
+        so the newest activity (up to roughly the last hour) lives in the logs,
+        not yet in the .dat. A plain read-only open with recovery off reads the
+        .dat as it sits and therefore MISSES that data. So when the log set was
+        collected, this replays it into the working copy first (soft recovery),
+        folding the unflushed transactions in before reading - then opens
+        read-only. If replay is unavailable it opens the copy as-is; if that fails
+        (a genuinely dirty/corrupt database) it recovers or, as a last resort,
+        repairs. `self.recovery_info['db_state']` records what happened.
+
         Raises:
-            SRUMDatabaseCorruptError: If database cannot be opened
+            SRUMDatabaseCorruptError: If the database cannot be opened, recovered
+                or repaired.
         """
         logger.info("Opening SRUM database with Windows ESE API")
-        
+
+        # A read-only, recovery-off open succeeds only on a CONSISTENT database.
+        # This is the whole mechanism for "data not yet saved in SRUDB.dat": a
+        # copy that still has transactions sitting in SRU*.log - the newest
+        # activity, committed but not yet flushed - is a *dirty-shutdown*
+        # database, and this open fails on it. That failure is what triggers the
+        # log replay below, which folds those unflushed rows in. A copy that
+        # opens clean genuinely has nothing left in the logs (its checkpoint is
+        # current), so there is nothing to replay.
         try:
-            # Initialize JET instance
-            ret = esent.JetCreateInstanceW(byref(self.instance), c_wchar_p("SRUMParser"))
-            if ret != JET_errSuccess:
-                raise SRUMDatabaseCorruptError(f"JetCreateInstance failed: {ret}")
-            logger.debug("Created JET instance")
-            
-            # Set parameters for read-only access
-            esent.JetSetSystemParameterW(byref(self.instance), 0, 64, 0, None)  # JET_paramRecovery = "Off"
-            esent.JetSetSystemParameterW(byref(self.instance), 0, 0, 8192, None)  # JET_paramDatabasePageSize
-            
-            # Initialize instance
-            ret = esent.JetInit(byref(self.instance))
-            if ret != JET_errSuccess:
-                raise SRUMDatabaseCorruptError(f"JetInit failed: {ret}")
-            logger.debug("Initialized JET instance")
-            
-            # Begin session
-            ret = esent.JetBeginSessionW(self.instance, byref(self.sesid), None, None)
-            if ret != JET_errSuccess:
-                raise SRUMDatabaseCorruptError(f"JetBeginSession failed: {ret}")
-            logger.debug("Began JET session")
-            
-            # Attach database (read-only)
-            db_path = self.working_copy if self.working_copy else self.srudb_path
-            ret = esent.JetAttachDatabaseW(self.sesid, c_wchar_p(db_path), 1)  # JET_bitDbReadOnly
-            if ret != JET_errSuccess:
-                raise SRUMDatabaseCorruptError(f"JetAttachDatabase failed: {ret}")
-            logger.debug("Attached database")
-            
-            # Open database
-            ret = esent.JetOpenDatabaseW(self.sesid, c_wchar_p(db_path), None, byref(self.dbid), 1)
-            if ret != JET_errSuccess:
-                raise SRUMDatabaseCorruptError(f"JetOpenDatabase failed: {ret}")
-            logger.info("Successfully opened SRUM database")
-            
-        except Exception as e:
-            logger.error(f"Failed to open ESE database: {e}")
-            raise SRUMDatabaseCorruptError(f"Cannot open SRUDB.dat: {e}")
-    
+            self._jet_open_readonly()
+            self.recovery_info['db_state'] = 'clean'
+            # Record the header proof that nothing was left in the logs: a
+            # database that opens read-only is in clean shutdown with no log
+            # required, so every committed row is already in SRUDB.dat.
+            state, log_required = self._ese_header_state()
+            self.recovery_info['recovery_notes'] = (
+                "Clean open: ESE header State=%s, Log Required=%s - all committed "
+                "activity was already flushed into SRUDB.dat, so there was nothing "
+                "in the transaction logs to recover." % (state or 'Clean Shutdown',
+                                                         log_required or '0-0'))
+            logger.info("Successfully opened SRUM database (clean; State=%s, "
+                        "Log Required=%s - nothing unflushed)", state, log_required)
+            return
+        except SRUMDatabaseCorruptError as first_error:
+            logger.warning(f"Read-only open failed (database not consistent): "
+                           f"{first_error}")
+            self._jet_teardown()
+
+        # Dirty shutdown: replay the collected logs to recover the transactions
+        # that were committed to SRU*.log but never flushed into SRUDB.dat, then
+        # reopen. Repair (which can discard damaged pages) is the last resort.
+        if self._esentutl_recover():
+            self.recovery_info['db_state'] = 'recovered'
+            self.recovery_info['recovery_notes'] = (
+                'Database was in dirty shutdown; the collected transaction logs '
+                '(SRU*.log) were replayed to recover activity not yet flushed '
+                'into SRUDB.dat before reading.')
+        elif self._esentutl_repair():
+            self.recovery_info['db_state'] = 'repaired'
+            self.recovery_info['recovery_notes'] = (
+                'Database was dirty and soft recovery was unavailable or '
+                'insufficient; repaired with esentutl /p, which can discard '
+                'damaged pages.')
+        else:
+            self.recovery_info['db_state'] = 'dirty'
+            raise SRUMDatabaseCorruptError(
+                "SRUDB.dat is dirty and could not be recovered or repaired")
+
+        # Retry the read-only open on the now-consistent working copy.
+        self._jet_open_readonly()
+        logger.info("Successfully opened SRUM database (%s)",
+                    self.recovery_info['db_state'])
+
+    def _jet_open_readonly(self):
+        """Initialise JET and open the working copy read-only, recovery off."""
+        # Initialize JET instance
+        ret = esent.JetCreateInstanceW(byref(self.instance), c_wchar_p("SRUMParser"))
+        if ret != JET_errSuccess:
+            raise SRUMDatabaseCorruptError(f"JetCreateInstance failed: {ret}")
+
+        # Set parameters for read-only access
+        esent.JetSetSystemParameterW(byref(self.instance), 0, 64, 0, None)  # JET_paramRecovery = "Off"
+        esent.JetSetSystemParameterW(byref(self.instance), 0, 0, 8192, None)  # JET_paramDatabasePageSize
+
+        # Initialize instance
+        ret = esent.JetInit(byref(self.instance))
+        if ret != JET_errSuccess:
+            raise SRUMDatabaseCorruptError(f"JetInit failed: {ret}")
+
+        # Begin session
+        ret = esent.JetBeginSessionW(self.instance, byref(self.sesid), None, None)
+        if ret != JET_errSuccess:
+            raise SRUMDatabaseCorruptError(f"JetBeginSession failed: {ret}")
+
+        # Attach database (read-only)
+        db_path = self.working_copy if self.working_copy else self.srudb_path
+        ret = esent.JetAttachDatabaseW(self.sesid, c_wchar_p(db_path), 1)  # JET_bitDbReadOnly
+        if ret != JET_errSuccess:
+            raise SRUMDatabaseCorruptError(f"JetAttachDatabase failed: {ret}")
+
+        # Open database
+        ret = esent.JetOpenDatabaseW(self.sesid, c_wchar_p(db_path), None, byref(self.dbid), 1)
+        if ret != JET_errSuccess:
+            raise SRUMDatabaseCorruptError(f"JetOpenDatabase failed: {ret}")
+
+    def _jet_teardown(self):
+        """Best-effort tear-down of a partial JET open so a retry can re-init.
+
+        A failed open can leave the session or instance half-created; ending and
+        terminating them (ignoring errors) and resetting the handles lets
+        _jet_open_readonly start from a clean slate after recovery.
+        """
+        for call in (lambda: esent.JetEndSession(self.sesid, 0),
+                     lambda: esent.JetTerm(self.instance)):
+            try:
+                call()
+            except Exception:
+                pass
+        self.instance = JET_INSTANCE()
+        self.sesid = JET_SESID()
+        self.dbid = JET_DBID()
+
     def get_table_by_guid(self, table_guid: str):
         """Open a SRUM table by its GUID identifier.
         
@@ -1091,7 +1298,21 @@ class SRUMParser:
         except Exception as e:
             logger.debug(f"Error getting column {column_name}: {e}")
             return default
-    
+
+    def _read_extra_columns(self, record, table_type: str) -> dict:
+        """Read every native column beyond the structured set (SRUM_EXTRA_COLUMNS).
+
+        Keeps the promise that nothing SRUM records is dropped: the columns the
+        structured record does not name are read here by their native ESE name
+        and stored raw under their sqlite name. A column absent on this Windows
+        build simply reads 0, so an older or newer schema degrades cleanly.
+        """
+        extras = {}
+        for native, sql in SRUM_EXTRA_COLUMNS.get(table_type, ()):  # () -> no extras
+            value = self._get_column_value(record, native, 0)
+            extras[sql] = value if value is not None else 0
+        return extras
+
     def load_id_lookup_table(self):
         """Load the SruDbIdMapTable which maps IDs to application paths and user SIDs.
         
@@ -1262,86 +1483,208 @@ class SRUMParser:
         
         # Not found - return descriptive text
         return (f"Unknown SID (ID:{user_id})", f"Unknown User (ID:{user_id})")
-    
+
+    def _robust_copy(self, src: str, dst: str) -> bool:
+        """Copy one locked file using Crow-Eye's own file-access strategies.
+
+        Routes through FileAccessor (StandardCopy -> VSS -> RawDisk, with retry),
+        the same chain the image collector uses, so a file the running SRUM
+        service holds open is copied the way the rest of the product copies
+        locked files rather than through a hand-rolled path. Falls back to the
+        raw backup-semantics copy and then a plain copy if FileAccessor is
+        unavailable (e.g. a trimmed build) or declines the file.
+        """
+        try:
+            if self._file_accessor is None:
+                from Artifacts_Collectors.crow_claw.core.file_accessor import FileAccessor
+                self._file_accessor = FileAccessor(is_admin=self._is_admin())
+            result = self._file_accessor.access_file_with_retry(src, dst, "SRUM")
+            if getattr(result, "success", False) and os.path.exists(dst):
+                return True
+        except Exception as e:
+            logger.debug(f"FileAccessor copy unavailable for {os.path.basename(src)}: {e}")
+        # Fallbacks: raw backup-semantics, then a plain copy.
+        try:
+            if copy_locked_file_raw(src, dst) and os.path.exists(dst):
+                return True
+        except Exception:
+            pass
+        try:
+            shutil.copy2(src, dst)
+            return os.path.exists(dst)
+        except Exception as e:
+            logger.debug(f"All copy methods failed for {os.path.basename(src)}: {e}")
+            return False
+
+    @staticmethod
+    def _is_admin() -> bool:
+        try:
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            return False
+
+    def _collect_recovery_set(self, source_path: str) -> None:
+        """Copy the ESE checkpoint, flush map and transaction logs next to the DB.
+
+        A SRUDB.dat that was not cleanly closed cannot be read until its logs
+        are replayed. The sru directory holds everything that replay needs -
+        SRUDB.jfm (flush map), SRU.chk (checkpoint), SRU*.log (the generations),
+        SRUtmp.log and the SRUres*.jrs reserves - so the whole set is copied into
+        the same temp directory as the database. Soft recovery then has real logs
+        to replay instead of esentutl /p, which discards what it cannot repair.
+
+        Best-effort: a missing or locked sibling is logged and skipped, never
+        fatal - a clean database opens without any of them.
+        """
+        try:
+            src_dir = os.path.dirname(source_path)
+            if not src_dir or not os.path.isdir(src_dir):
+                return
+            siblings = []
+            for name in os.listdir(src_dir):
+                low = name.lower()
+                if low == 'srudb.dat':
+                    continue  # already copied
+                if (low.endswith('.jfm') or low.endswith('.chk') or
+                        low.endswith('.log') or low.endswith('.jrs')):
+                    siblings.append(name)
+            log_count = 0
+            for name in siblings:
+                src = os.path.join(src_dir, name)
+                dst = os.path.join(self.temp_dir, name)
+                if not self._robust_copy(src, dst):
+                    logger.debug(f"Could not collect recovery file {name}")
+                    continue
+                self._recovery_files.append(dst)
+                low = name.lower()
+                if low.endswith('.log') or low.endswith('.jrs'):
+                    log_count += 1
+                if low == 'srudb.jfm':
+                    self.recovery_info['jfm_collected'] = 1
+                    self.recovery_info['jfm_path'] = src
+                    try:
+                        st = os.stat(dst)
+                        self.recovery_info['jfm_size'] = st.st_size
+                        self.recovery_info['jfm_modified'] = format_forensic_timestamp(
+                            datetime.datetime.utcfromtimestamp(os.stat(src).st_mtime))
+                    except Exception:
+                        pass
+            self.recovery_info['log_files_collected'] = log_count
+            logger.info("Collected recovery set: %d file(s) (jfm=%s, logs/reserves=%d)",
+                        len(self._recovery_files),
+                        bool(self.recovery_info['jfm_collected']), log_count)
+        except Exception as e:
+            logger.debug(f"Recovery-set collection skipped: {e}")
+
+    def _esentutl_recover(self) -> bool:
+        """Soft-recover the working copy by replaying the collected logs.
+
+        Uses the log base name 'SRU' (SRU.log / SRU*.log / SRU.chk), pointing the
+        log, system and database paths at the temp directory the whole set was
+        copied into. Preferred over /p repair because replay restores committed
+        rows rather than discarding damaged pages.
+        """
+        if not self._recovery_files or not self.temp_dir:
+            return False
+        try:
+            cmd = ('esentutl /r SRU /l"{d}" /s"{d}" /d"{d}" /i'
+                   .format(d=self.temp_dir))
+            result = subprocess.run(cmd, shell=True, capture_output=True,
+                                    text=True, timeout=180)
+            ok = result.returncode == 0
+            logger.info("esentutl soft recovery %s (rc=%s)",
+                        "succeeded" if ok else "failed", result.returncode)
+            if not ok:
+                logger.debug("esentutl /r output: %s %s", result.stdout, result.stderr)
+            return ok
+        except Exception as e:
+            logger.warning(f"esentutl soft recovery error: {e}")
+            return False
+
+    def _ese_header_state(self):
+        """Read the ESE database header via `esentutl /mh`.
+
+        Returns (state, log_required) - e.g. ('Clean Shutdown', '0-0') - so a
+        clean parse can prove in its own metadata that nothing was left behind:
+        'Clean Shutdown' with 'Log Required: 0-0' means every committed
+        transaction is already in SRUDB.dat and there is nothing in the logs to
+        recover. Best-effort; returns (None, None) if the header cannot be read.
+        """
+        target = self.working_copy or self.srudb_path
+        if not target:
+            return (None, None)
+        try:
+            result = subprocess.run(["esentutl", "/mh", target],
+                                    capture_output=True, text=True, timeout=60)
+            state = log_required = None
+            for line in result.stdout.splitlines():
+                s = line.strip()
+                if s.startswith("State:"):
+                    state = s.split(":", 1)[1].strip()
+                elif s.startswith("Log Required:"):
+                    log_required = s.split(":", 1)[1].strip().split()[0]
+            return (state, log_required)
+        except Exception as e:
+            logger.debug(f"Could not read ESE header: {e}")
+            return (None, None)
+
+    def _esentutl_repair(self) -> bool:
+        """Last-resort /p repair when no logs are available or recovery failed.
+
+        Repair can discard unrecoverable pages, so it runs only after soft
+        recovery has been tried; db_state records that it happened.
+        """
+        if not self.working_copy:
+            return False
+        try:
+            result = subprocess.run(['esentutl', '/p', self.working_copy, '/o'],
+                                    capture_output=True, text=True, timeout=180)
+            ok = result.returncode == 0
+            logger.info("esentutl repair %s (rc=%s)",
+                        "succeeded" if ok else "failed", result.returncode)
+            return ok
+        except Exception as e:
+            logger.warning(f"esentutl repair error: {e}")
+            return False
+
     def copy_srum_database(self, source_path: str = None, windows_partition: str = "C:") -> str:
-        """Copy SRUDB.dat from system location to temporary location.
-        
-        Required because the file is locked by Windows. Uses multiple methods:
-        1. Raw disk access with backup semantics (bypasses file locks)
-        2. esentutl.exe as fallback
-        3. Simple copy as last resort
-        
+        """Copy SRUDB.dat from its system location to a temporary working copy.
+
+        The file is held open by the DPS service, so it is copied through
+        Crow-Eye's own FileAccessor - the same StandardCopy -> VSS -> RawDisk
+        chain (with retry) the image collector uses - rather than a bespoke path
+        (see _robust_copy). The checkpoint/flush-map/log set is collected next to
+        it so a dirty database can be soft-recovered.
+
         Args:
             source_path (str, optional): Path to SRUDB.dat. Defaults to system location.
-            windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
-            
+            windows_partition (str, optional): Windows partition letter. Defaults to "C:".
+
         Returns:
-            str: Path to copied SRUDB.dat file
-            
+            str: Path to the copied SRUDB.dat.
+
         Raises:
-            SRUMFileAccessError: If copy fails
+            SRUMFileAccessError: If every access strategy fails.
         """
         if source_path is None:
-            # Construct path dynamically based on Windows partition
             source_path = f"{windows_partition}\\Windows\\System32\\sru\\SRUDB.dat"
-        
-        # Create temporary directory
+
         self.temp_dir = tempfile.mkdtemp(prefix="srum_parse_")
         dest_path = os.path.join(self.temp_dir, "SRUDB.dat")
-        
         logger.info(f"Copying SRUDB.dat from {source_path} to {dest_path}")
-        
-        # Method 1: Try raw disk access with backup semantics (best method)
-        try:
-            logger.info("Attempting raw copy with backup semantics...")
-            if copy_locked_file_raw(source_path, dest_path):
-                size = os.path.getsize(dest_path)
-                logger.info(f"Successfully copied SRUDB.dat using backup semantics ({size:,} bytes)")
-                self.working_copy = dest_path
-                return dest_path
-        except Exception as e:
-            logger.warning(f"Backup semantics copy failed: {e}")
-        
-        # Method 2: Try esentutl
-        try:
-            logger.info("Attempting copy with esentutl...")
-            cmd = f'esentutl /y "{source_path}" /d "{dest_path}" /o'
-            result = subprocess.run(
-                cmd,
-                shell=True,
-                capture_output=True,
-                text=True,
-                timeout=60
-            )
-            
-            if result.returncode == 0 and os.path.exists(dest_path):
-                size = os.path.getsize(dest_path)
-                logger.info(f"Successfully copied SRUDB.dat using esentutl ({size:,} bytes)")
-                self.working_copy = dest_path
-                return dest_path
-            else:
-                logger.warning(f"esentutl copy failed: {result.stderr}")
-        except subprocess.TimeoutExpired:
-            logger.warning("esentutl timeout")
-        except Exception as e:
-            logger.warning(f"esentutl failed: {e}")
-        
-        # Method 3: Try simple copy as last resort
-        try:
-            logger.info("Attempting simple file copy...")
-            shutil.copy2(source_path, dest_path)
-            if os.path.exists(dest_path):
-                size = os.path.getsize(dest_path)
-                logger.info(f"Successfully copied SRUDB.dat using simple copy ({size:,} bytes)")
-                self.working_copy = dest_path
-                return dest_path
-        except Exception as e:
-            logger.warning(f"Simple copy failed: {e}")
-        
-        # All methods failed
+
+        if self._robust_copy(source_path, dest_path):
+            size = os.path.getsize(dest_path)
+            logger.info(f"Successfully copied SRUDB.dat ({size:,} bytes)")
+            self.working_copy = dest_path
+            self._collect_recovery_set(source_path)
+            return dest_path
+
         raise SRUMFileAccessError(
-            "Failed to copy SRUDB.dat using all available methods. "
-            "The file may be locked by Windows. Try stopping the SRUM service or use shadow copy."
+            "Failed to copy SRUDB.dat using all available access strategies "
+            "(standard copy, VSS and raw disk). The file may be locked by "
+            "Windows and no shadow copy was available. Try running as "
+            "Administrator or stopping the SRUM service."
         )
     
     def export_table_to_csv(self, table_guid: str, table_name: str) -> Optional[str]:
@@ -1612,10 +1955,11 @@ class SRUMParser:
                         l2_profile_id=self._get_column_value(record, 'L2ProfileId', 0) or 0,
                         bytes_sent=self._get_column_value(record, 'BytesSent', 0) or 0,
                         bytes_received=self._get_column_value(record, 'BytesRecvd', 0) or 0,
+                        extra=self._read_extra_columns(record, 'NETWORK_DATA_USAGE'),
                     )
-                    
+
                     records.append(srum_record)
-                
+
                 except Exception as e:
                     logger.debug(f"Error parsing network data record {i}: {e}")
                     continue
@@ -1678,8 +2022,9 @@ class SRUMParser:
                         state_transition=self._get_column_value(record, 'StateTransition', 0) or 0,
                         charge_level=self._get_column_value(record, 'ChargeLevel', 0) or 0,
                         cycle_count=self._get_column_value(record, 'CycleCount', 0) or 0,
+                        extra=self._read_extra_columns(record, 'ENERGY_USAGE'),
                     )
-                    
+
                     records.append(srum_record)
                 
                 except Exception as e:
@@ -1759,6 +2104,7 @@ class SRUMParser:
                         disk_raw=self._get_column_value(record, 'DiskRaw', 0) or 0,
                         network_bytes_raw=self._get_column_value(record, 'NetworkBytesRaw', 0) or 0,
                         network_tail_raw=self._get_column_value(record, 'NetworkTailRaw', 0) or 0,
+                        extra=self._read_extra_columns(record, 'APPLICATION_TIMELINE'),
                     )
 
                     records.append(srum_record)
@@ -1915,9 +2261,17 @@ class SRUMParser:
                     total_records_parsed INTEGER,
                     parsing_duration_seconds REAL,
                     windows_version TEXT,
+                    jfm_collected INTEGER,
+                    jfm_path TEXT,
+                    jfm_size INTEGER,
+                    jfm_modified TEXT,
+                    log_files_collected INTEGER,
+                    db_state TEXT,
+                    recovery_notes TEXT,
                     notes TEXT
                 )
             """)
+            self._ensure_metadata_columns(cursor)
             
             # Create indexes for performance
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_app_usage_timestamp ON srum_application_usage(timestamp)")
@@ -1937,10 +2291,11 @@ class SRUMParser:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_app_timeline_app_name ON srum_app_timeline(app_name)")
 
             self._drop_retired_columns(cursor)
+            self._ensure_extra_columns(cursor)
 
             conn.commit()
             conn.close()
-            
+
             logger.info(f"Created database schema at: {self.output_db_path}")
         
         except Exception as e:
@@ -1983,6 +2338,61 @@ class SRUMParser:
                     # place is harmless; losing the rows would not be.
                     logger.warning("Could not drop %s.%s: %s", table, column, e)
 
+    # Columns added after srum_metadata first shipped. A database from an
+    # earlier build has the table but not these, and INSERT names them, so they
+    # are added in place rather than by recreating the table (which would lose
+    # every prior parse's row).
+    ADDED_METADATA_COLUMNS = (
+        ('jfm_collected', 'INTEGER'), ('jfm_path', 'TEXT'), ('jfm_size', 'INTEGER'),
+        ('jfm_modified', 'TEXT'), ('log_files_collected', 'INTEGER'),
+        ('db_state', 'TEXT'), ('recovery_notes', 'TEXT'),
+    )
+
+    # table_type -> sqlite table, for the extra-column migration.
+    EXTRA_COLUMN_TABLES = {
+        'NETWORK_DATA_USAGE': 'srum_network_data_usage',
+        'ENERGY_USAGE': 'srum_energy_usage',
+        'APPLICATION_TIMELINE': 'srum_app_timeline',
+    }
+
+    def _ensure_extra_columns(self, cursor) -> None:
+        """Add every SRUM_EXTRA_COLUMNS column (all INTEGER) that is missing.
+
+        Runs for new and existing databases alike, so the full native column set
+        is present whether the table was just created or carried over from an
+        earlier build. Rows are appended per parse, so the table is never
+        recreated - the columns are added in place.
+        """
+        for table_type, table in self.EXTRA_COLUMN_TABLES.items():
+            try:
+                cursor.execute("PRAGMA table_info(%s)" % table)
+                present = {row[1] for row in cursor.fetchall()}
+            except sqlite3.Error:
+                continue
+            for _native, sql in SRUM_EXTRA_COLUMNS.get(table_type, ()):
+                if sql not in present:
+                    try:
+                        cursor.execute("ALTER TABLE %s ADD COLUMN %s INTEGER" % (table, sql))
+                        logger.info("Added native column %s.%s", table, sql)
+                    except sqlite3.Error as e:
+                        logger.warning("Could not add %s.%s: %s", table, sql, e)
+
+    def _ensure_metadata_columns(self, cursor) -> None:
+        """Add any srum_metadata column a pre-recovery database is missing."""
+        try:
+            cursor.execute("PRAGMA table_info(srum_metadata)")
+            present = {row[1] for row in cursor.fetchall()}
+        except sqlite3.Error:
+            return
+        for column, coltype in self.ADDED_METADATA_COLUMNS:
+            if column not in present:
+                try:
+                    cursor.execute("ALTER TABLE srum_metadata ADD COLUMN %s %s"
+                                   % (column, coltype))
+                    logger.info("Added srum_metadata column %s", column)
+                except sqlite3.Error as e:
+                    logger.warning("Could not add srum_metadata.%s: %s", column, e)
+
     def save_to_database(self, parsed_data: Dict[str, List], metadata: Optional[Dict[str, any]] = None) -> None:
         """Save parsed SRUM data to SQLite database.
         
@@ -2010,184 +2420,134 @@ class SRUMParser:
                 total_records += len(records)
                 logger.info(f"Saving {len(records)} application usage records")
                 
-                batch = []
-                for record in records:
-                    batch.append((
-                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                        record.app_name,
-                        record.app_path,
-                        record.user_sid,
-                        record.user_name,
-                        record.foreground_cycle_time,
-                        record.background_cycle_time,
-                        record.face_time,
-                        record.foreground_context_switches,
-                        record.background_context_switches,
-                        record.foreground_bytes_read,
-                        record.foreground_bytes_written,
-                        record.foreground_num_read_operations,
-                        record.foreground_num_write_operations,
-                        record.foreground_number_of_flushes,
-                        record.background_bytes_read,
-                        record.background_bytes_written,
-                        record.background_num_read_operations,
-                        record.background_num_write_operations,
-                        record.background_number_of_flushes,
-                    ))
-                    
-                    # Commit in batches of 1000
-                    if len(batch) >= 1000:
-                        cursor.executemany("""
-                            INSERT INTO srum_application_usage (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                foreground_cycle_time, background_cycle_time, face_time,
-                                foreground_context_switches, background_context_switches,
-                                foreground_bytes_read, foreground_bytes_written,
-                                foreground_num_read_operations, foreground_num_write_operations,
-                                foreground_number_of_flushes, background_bytes_read,
-                                background_bytes_written, background_num_read_operations,
-                                background_num_write_operations, background_number_of_flushes
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, batch)
-                        conn.commit()
-                        batch = []
-                
-                # Commit remaining records
-                if batch:
-                    cursor.executemany("""
-                        INSERT INTO srum_application_usage (
-                            timestamp, app_name, app_path, user_sid, user_name,
-                            foreground_cycle_time, background_cycle_time, face_time,
-                            foreground_context_switches, background_context_switches,
-                            foreground_bytes_read, foreground_bytes_written,
-                            foreground_num_read_operations, foreground_num_write_operations,
-                            foreground_number_of_flushes, background_bytes_read,
-                            background_bytes_written, background_num_read_operations,
-                            background_num_write_operations, background_number_of_flushes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, batch)
+                rows = [(
+                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                    record.app_name,
+                    record.app_path,
+                    record.user_sid,
+                    record.user_name,
+                    record.foreground_cycle_time,
+                    record.background_cycle_time,
+                    record.face_time,
+                    record.foreground_context_switches,
+                    record.background_context_switches,
+                    record.foreground_bytes_read,
+                    record.foreground_bytes_written,
+                    record.foreground_num_read_operations,
+                    record.foreground_num_write_operations,
+                    record.foreground_number_of_flushes,
+                    record.background_bytes_read,
+                    record.background_bytes_written,
+                    record.background_num_read_operations,
+                    record.background_num_write_operations,
+                    record.background_number_of_flushes,
+                ) for record in records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] application_usage: removed %d exact-duplicate rows", removed)
+                sql = """
+                    INSERT INTO srum_application_usage (
+                        timestamp, app_name, app_path, user_sid, user_name,
+                        foreground_cycle_time, background_cycle_time, face_time,
+                        foreground_context_switches, background_context_switches,
+                        foreground_bytes_read, foreground_bytes_written,
+                        foreground_num_read_operations, foreground_num_write_operations,
+                        foreground_number_of_flushes, background_bytes_read,
+                        background_bytes_written, background_num_read_operations,
+                        background_num_write_operations, background_number_of_flushes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for i in range(0, len(rows), 1000):
+                    cursor.executemany(sql, rows[i:i + 1000])
                     conn.commit()
-            
+
             # Save network connectivity records
             if 'network_connectivity' in parsed_data:
                 records = parsed_data['network_connectivity']
                 total_records += len(records)
                 logger.info(f"Saving {len(records)} network connectivity records")
                 
-                batch = []
-                for record in records:
-                    batch.append((
-                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                        record.app_name,
-                        record.app_path,
-                        record.user_sid,
-                        record.user_name,
-                        record.interface_luid,
-                        record.l2_profile_id,
-                        record.l2_profile_flags,
-                        record.connected_time,
-                        format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
-                    ))
-                    
-                    if len(batch) >= 1000:
-                        cursor.executemany("""
-                            INSERT INTO srum_network_connectivity (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                interface_luid, l2_profile_id, l2_profile_flags,
-                                connected_time, connect_start_time
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, batch)
-                        conn.commit()
-                        batch = []
-                
-                if batch:
-                    cursor.executemany("""
-                        INSERT INTO srum_network_connectivity (
-                            timestamp, app_name, app_path, user_sid, user_name,
-                            interface_luid, l2_profile_id, l2_profile_flags,
-                            connected_time, connect_start_time
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, batch)
+                rows = [(
+                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                    record.app_name,
+                    record.app_path,
+                    record.user_sid,
+                    record.user_name,
+                    record.interface_luid,
+                    record.l2_profile_id,
+                    record.l2_profile_flags,
+                    record.connected_time,
+                    format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
+                ) for record in records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] network_connectivity: removed %d exact-duplicate rows", removed)
+                sql = """
+                    INSERT INTO srum_network_connectivity (
+                        timestamp, app_name, app_path, user_sid, user_name,
+                        interface_luid, l2_profile_id, l2_profile_flags,
+                        connected_time, connect_start_time
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """
+                for i in range(0, len(rows), 1000):
+                    cursor.executemany(sql, rows[i:i + 1000])
                     conn.commit()
-            
+
             # Save network data usage records
             if 'network_data_usage' in parsed_data:
                 records = parsed_data['network_data_usage']
                 total_records += len(records)
                 logger.info(f"Saving {len(records)} network data usage records")
                 
-                batch = []
-                for record in records:
-                    batch.append((
-                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                        record.app_name,
-                        record.app_path,
-                        record.user_sid,
-                        record.user_name,
-                        record.interface_luid,
-                        record.l2_profile_id,
-                        record.bytes_sent,
-                        record.bytes_received,
-                    ))
-                    
-                    if len(batch) >= 1000:
-                        cursor.executemany("""
-                            INSERT INTO srum_network_data_usage (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                interface_luid, l2_profile_id, bytes_sent, bytes_received
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, batch)
-                        conn.commit()
-                        batch = []
-                
-                if batch:
-                    cursor.executemany("""
-                        INSERT INTO srum_network_data_usage (
-                            timestamp, app_name, app_path, user_sid, user_name,
-                            interface_luid, l2_profile_id, bytes_sent, bytes_received
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, batch)
+                rows = [(
+                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                    record.app_name,
+                    record.app_path,
+                    record.user_sid,
+                    record.user_name,
+                    record.interface_luid,
+                    record.l2_profile_id,
+                    record.bytes_sent,
+                    record.bytes_received,
+                    record.extra.get('wake_count', 0),
+                    record.extra.get('l2_profile_flags', 0),
+                ) for record in records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
+                for i in range(0, len(rows), 1000):
+                    cursor.executemany(NET_DATA_INSERT, rows[i:i + 1000])
                     conn.commit()
-            
+
             # Save energy usage records
             if 'energy_usage' in parsed_data:
                 records = parsed_data['energy_usage']
                 total_records += len(records)
                 logger.info(f"Saving {len(records)} energy usage records")
                 
-                batch = []
-                for record in records:
-                    batch.append((
-                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                        record.app_name,
-                        record.app_path,
-                        record.user_sid,
-                        record.user_name,
-                        format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
-                        record.state_transition,
-                        record.charge_level,
-                        record.cycle_count,
-                    ))
-                    
-                    if len(batch) >= 1000:
-                        cursor.executemany("""
-                            INSERT INTO srum_energy_usage (
-                                timestamp, app_name, app_path, user_sid, user_name,
-                                event_timestamp, state_transition, charge_level, cycle_count
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, batch)
-                        conn.commit()
-                        batch = []
-                
-                if batch:
-                    cursor.executemany("""
-                        INSERT INTO srum_energy_usage (
-                            timestamp, app_name, app_path, user_sid, user_name,
-                            event_timestamp, state_transition, charge_level, cycle_count
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, batch)
+                rows = [(
+                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                    record.app_name,
+                    record.app_path,
+                    record.user_sid,
+                    record.user_name,
+                    format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
+                    record.state_transition,
+                    record.charge_level,
+                    record.cycle_count,
+                    record.extra.get('designed_capacity', 0),
+                    record.extra.get('full_charged_capacity', 0),
+                    record.extra.get('battery_count', 0),
+                    record.extra.get('configuration_hash', 0),
+                    record.extra.get('battery_charge_limited', 0),
+                ) for record in records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
+                for i in range(0, len(rows), 1000):
+                    cursor.executemany(ENERGY_INSERT, rows[i:i + 1000])
                     conn.commit()
-            
+
             # Save application timeline records
             #
             # Stored as raw integers, not through format_number. A comma makes
@@ -2200,46 +2560,59 @@ class SRUMParser:
                 total_records += len(records)
                 logger.info(f"Saving {len(records)} application timeline records")
 
-                batch = []
-                for record in records:
-                    batch.append((
-                        format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                        record.app_name,
-                        record.app_path,
-                        record.hosted_services,
-                        record.user_sid,
-                        record.user_name,
-                        format_forensic_timestamp(record.end_time) if record.end_time else None,
-                        record.duration_ms,
-                        record.span_ms,
-                        record.timeline_end,
-                        record.flags,
-                        record.in_focus_s,
-                        record.psm_foreground_s,
-                        record.user_input_s,
-                        record.keyboard_input_s,
-                        record.mouse_input_s,
-                        record.display_required_s,
-                        record.comp_rendered_s,
-                        record.comp_dirtied_s,
-                        record.comp_propagated_s,
-                        record.audio_in_s,
-                        record.audio_out_s,
-                        record.cycles,
-                        record.cycles_attr,
-                        record.cycles_wob,
-                        record.disk_raw,
-                        record.network_bytes_raw,
-                        record.network_tail_raw,
-                    ))
-
-                    if len(batch) >= 1000:
-                        cursor.executemany(APP_TIMELINE_INSERT, batch)
-                        conn.commit()
-                        batch = []
-
-                if batch:
-                    cursor.executemany(APP_TIMELINE_INSERT, batch)
+                rows = [(
+                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                    record.app_name,
+                    record.app_path,
+                    record.hosted_services,
+                    record.user_sid,
+                    record.user_name,
+                    format_forensic_timestamp(record.end_time) if record.end_time else None,
+                    record.duration_ms,
+                    record.span_ms,
+                    record.timeline_end,
+                    record.flags,
+                    record.in_focus_s,
+                    record.psm_foreground_s,
+                    record.user_input_s,
+                    record.keyboard_input_s,
+                    record.mouse_input_s,
+                    record.display_required_s,
+                    record.comp_rendered_s,
+                    record.comp_dirtied_s,
+                    record.comp_propagated_s,
+                    record.audio_in_s,
+                    record.audio_out_s,
+                    record.cycles,
+                    record.cycles_attr,
+                    record.cycles_wob,
+                    record.disk_raw,
+                    record.network_bytes_raw,
+                    record.network_tail_raw,
+                    record.extra.get('in_focus_timeline', 0),
+                    record.extra.get('user_input_timeline', 0),
+                    record.extra.get('comp_rendered_timeline', 0),
+                    record.extra.get('comp_dirtied_timeline', 0),
+                    record.extra.get('comp_propagated_timeline', 0),
+                    record.extra.get('audio_in_timeline', 0),
+                    record.extra.get('audio_out_timeline', 0),
+                    record.extra.get('cpu_timeline', 0),
+                    record.extra.get('disk_timeline', 0),
+                    record.extra.get('network_timeline', 0),
+                    record.extra.get('mbb_timeline', 0),
+                    record.extra.get('display_required_timeline', 0),
+                    record.extra.get('keyboard_input_timeline', 0),
+                    record.extra.get('cycles_breakdown', 0),
+                    record.extra.get('cycles_attr_breakdown', 0),
+                    record.extra.get('cycles_wob_breakdown', 0),
+                    record.extra.get('mbb_tail_raw', 0),
+                    record.extra.get('mbb_bytes_raw', 0),
+                ) for record in records]
+                rows, removed = dedupe_exact(rows)
+                if removed:
+                    logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
+                for i in range(0, len(rows), 1000):
+                    cursor.executemany(APP_TIMELINE_INSERT, rows[i:i + 1000])
                     conn.commit()
 
             # Save parsing metadata
@@ -2249,14 +2622,23 @@ class SRUMParser:
                     cursor.execute("""
                         INSERT INTO srum_metadata (
                             parsed_at, srudb_path, total_records_parsed,
-                            parsing_duration_seconds, windows_version, notes
-                        ) VALUES (?, ?, ?, ?, ?, ?)
+                            parsing_duration_seconds, windows_version,
+                            jfm_collected, jfm_path, jfm_size, jfm_modified,
+                            log_files_collected, db_state, recovery_notes, notes
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, (
                         metadata.get('parsed_at', get_current_forensic_timestamp()),
                         metadata.get('srudb_path', self.srudb_path),
                         metadata.get('total_records', total_records),
                         metadata.get('parsing_duration_seconds', 0.0),
                         metadata.get('windows_version', 'Unknown'),
+                        self.recovery_info.get('jfm_collected', 0),
+                        self.recovery_info.get('jfm_path', ''),
+                        self.recovery_info.get('jfm_size', 0),
+                        self.recovery_info.get('jfm_modified', ''),
+                        self.recovery_info.get('log_files_collected', 0),
+                        self.recovery_info.get('db_state', 'clean'),
+                        self.recovery_info.get('recovery_notes', ''),
                         metadata.get('notes', 'Parsed by Crow Eye SRUM Parser')
                     ))
                     conn.commit()
@@ -2564,25 +2946,33 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
             len(parsed_data.get('network_connectivity', [])),
             len(parsed_data.get('network_data_usage', [])),
             len(parsed_data.get('energy_usage', [])),
+            len(parsed_data.get('app_timeline', [])),
         ])
-        
+
         result['statistics'] = {
             'total_records': total_records,
             'application_usage_records': len(parsed_data.get('application_usage', [])),
             'network_connectivity_records': len(parsed_data.get('network_connectivity', [])),
             'network_data_usage_records': len(parsed_data.get('network_data_usage', [])),
             'energy_usage_records': len(parsed_data.get('energy_usage', [])),
+            'app_timeline_records': len(parsed_data.get('app_timeline', [])),
             'parsing_duration_seconds': duration,
             'srudb_path': srudb_path,
         }
         
         # Prepare metadata for database storage
+        windows_version = 'Unknown'
+        try:
+            v = sys.getwindowsversion()
+            windows_version = f"Windows {v.major}.{v.minor}.{v.build}"
+        except Exception:
+            pass
         metadata = {
             'parsed_at': get_current_forensic_timestamp(),
             'srudb_path': srudb_path,
             'total_records': total_records,
             'parsing_duration_seconds': duration,
-            'windows_version': 'Unknown',  # Could be detected from system
+            'windows_version': windows_version,
             'notes': 'Parsed by Crow Eye SRUM Parser v1.0'
         }
         
@@ -2607,7 +2997,9 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
             breakdown_parts.append(f"{result['statistics']['network_data_usage_records']:,} Network Data Usage")
         if result['statistics']['energy_usage_records'] > 0:
             breakdown_parts.append(f"{result['statistics']['energy_usage_records']:,} Energy Usage")
-        
+        if result['statistics']['app_timeline_records'] > 0:
+            breakdown_parts.append(f"{result['statistics']['app_timeline_records']:,} Application Timeline")
+
         if breakdown_parts:
             breakdown_msg = "Records by type: " + ", ".join(breakdown_parts)
             logger.info(f"  {breakdown_msg}")

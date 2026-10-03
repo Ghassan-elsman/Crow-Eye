@@ -57,6 +57,7 @@ class TimestampIndexer:
         'SRUM': ('srum_application_usage', 'timestamp'),
         'USN': ('journal_events', 'timestamp'),
         'MFT': ('mft_records', 'modified_time'),
+        'Browser': ('browser_history', 'visit_time'),
     }
     
     def __init__(self, artifacts_dir: str, timeline_dir: str):

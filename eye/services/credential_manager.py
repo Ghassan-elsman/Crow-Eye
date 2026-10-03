@@ -33,7 +33,7 @@ class CredentialManager:
     SERVICE_NAME = "CrowEye_EYE_Assistant"
     
     def __init__(self):
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         # Local cache to avoid repeated (and potentially slow) OS keychain hits
         self._cache: Dict[str, str] = {}
         # Thread lock for memory cache access

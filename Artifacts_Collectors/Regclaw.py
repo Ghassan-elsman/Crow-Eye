@@ -467,7 +467,12 @@ DECODED_COLUMNS = {
     # one - a File Open/Save dialog inside any program hosts one too, and
     # Windows files the two under different subkeys. Without these the table
     # cannot tell them apart, and a reader is left to assume a person browsed.
-    "Shellbags": {"node_slot": "INTEGER", "bag_views": "TEXT"},
+    "Shellbags": {"node_slot": "INTEGER", "bag_views": "TEXT",
+                  # The value under its BagMRU key ("0", "15") - the item's
+                  # stable identity there. Without it two different items with
+                  # the same name under one key (Pictures 15 and 17, two
+                  # phones' storage GUIDs) were stored as one row.
+                  "value_name": "TEXT"},
 }
 
 
@@ -477,27 +482,57 @@ def apply_decoded_columns(cursor):
         _ensure_columns(cursor, table, columns)
 
 
+def claim_legacy_shellbag(cursor, file_name, registry_path, user_name, value_name):
+    """Give a pre-`value_name` row its value name, once.
+
+    Rows written before the column existed carry NULL there, so a re-parse
+    keyed on value_name would see none of them and append every Shellbag a
+    second time. Instead the first item that matches a legacy row by the old
+    key claims it; a same-name sibling in another slot then finds no unclaimed
+    row and is inserted as the separate item it is. One row per UPDATE.
+    """
+    try:
+        cursor.execute(
+            "UPDATE Shellbags SET value_name = ? WHERE rowid = ("
+            "SELECT rowid FROM Shellbags WHERE file_name IS ? AND registry_path IS ? "
+            "AND user_name IS ? AND value_name IS NULL LIMIT 1)",
+            (value_name, file_name, registry_path, user_name))
+    except Exception as exc:                             # pragma: no cover
+        logging.debug("could not claim a legacy Shellbags row: %s", exc)
+
+
 def backfill_shellbag_view(cursor, file_name, registry_path, user_name,
-                           node_slot, bag_views):
-    """Fill a Shellbags row's view columns, only where they are still empty.
+                           node_slot, bag_views, last_written="", time_basis="",
+                           value_name=None):
+    """Fill a Shellbags row's view / write-time columns, only where still empty.
 
     A re-parse skips a row that is already there, which is what keeps the case
     from growing on every run. But a column added after the case was made is
     empty on every existing row, and skipping would leave it that way forever -
     the columns would only ever be populated on cases parsed after today.
 
-    Guarded on `node_slot IS NULL`, so this adds information to a row and
-    overwrites nothing that was already recorded. Called from the duplicate
-    branch, and deliberately a function rather than four lines inline: the
-    re-parse test reads the dozen lines above an INSERT looking for its
-    check_exists guard, and inlining this pushed the guard out of that window.
+    Guarded on `node_slot IS NULL` (view columns) and on an empty `last_written`
+    (the bag's registry key write time), so each UPDATE adds information to a row
+    and overwrites nothing that was already recorded. Two statements rather than
+    one because a row can carry a NodeSlot yet still be missing last_written -
+    they were added in different versions. Called from the duplicate branch, and
+    deliberately a function rather than inline: the re-parse test reads the dozen
+    lines above an INSERT looking for its check_exists guard, and inlining this
+    pushed the guard out of that window.
     """
     try:
         cursor.execute(
             "UPDATE Shellbags SET node_slot = ?, bag_views = ? "
             "WHERE file_name IS ? AND registry_path IS ? AND user_name IS ? "
-            "AND node_slot IS NULL",
-            (node_slot, bag_views, file_name, registry_path, user_name))
+            "AND value_name IS ? AND node_slot IS NULL",
+            (node_slot, bag_views, file_name, registry_path, user_name, value_name))
+        if last_written:
+            cursor.execute(
+                "UPDATE Shellbags SET last_written = ?, time_basis = ? "
+                "WHERE file_name IS ? AND registry_path IS ? AND user_name IS ? "
+                "AND value_name IS ? AND (last_written IS NULL OR last_written = '')",
+                (last_written, time_basis, file_name, registry_path, user_name,
+                 value_name))
     except Exception as exc:                             # pragma: no cover
         logging.debug("could not back-fill Shellbags view columns: %s", exc)
 
@@ -1023,6 +1058,7 @@ def main_live_reg(db_filename='registry_data.db'):
             highest_sequence INTEGER,
             source_sha256 TEXT,
             acquisition_route TEXT,
+            reorganized_at TEXT,
             reason TEXT,
             parsed_at TEXT
             )''')
@@ -1041,6 +1077,9 @@ def main_live_reg(db_filename='registry_data.db'):
                 if _hs_cols and "acquisition_route" not in _hs_cols:
                     cursor.execute("ALTER TABLE registry_hive_state "
                                    "ADD COLUMN acquisition_route TEXT")
+                if _hs_cols and "reorganized_at" not in _hs_cols:
+                    cursor.execute("ALTER TABLE registry_hive_state "
+                                   "ADD COLUMN reorganized_at TEXT")
             except sqlite3.Error as _e:
                 logging.debug("source_sha256 migration (live): %s", _e)
             # ---- what a tree walk cannot see ------------------------
@@ -1445,7 +1484,8 @@ def main_live_reg(db_filename='registry_data.db'):
                 node_slot INTEGER,
                 bag_views TEXT,
                 parsed_at TEXT,
-                user_name TEXT
+                user_name TEXT,
+                value_name TEXT
             )''')
         # Create indexes for performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
@@ -1848,7 +1888,11 @@ def main_live_reg(db_filename='registry_data.db'):
         shellbags_paths = [
             "Software\\Microsoft\\Windows\\Shell\\BagMRU",
             "Software\\Microsoft\\Windows\\ShellNoRoam\\BagMRU",
-            "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU"
+            "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU",
+            # The UsrClass ShellNoRoam tree - rarely populated on modern Windows,
+            # but enumerated for completeness so a bag that lands there is not
+            # silently lost. Absent keys return [] and cost nothing.
+            "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\ShellNoRoam\\BagMRU"
         ]
        
         # Explorer files a window's view settings under Shell; a common File
@@ -1966,8 +2010,26 @@ def main_live_reg(db_filename='registry_data.db'):
                         node_slot, bag_views = _bag_view(
                             hive_key, bags_path,
                             full_path + BS_SEP + value_name)
+                        # The bag's own registry write time. An item is value N
+                        # of key P naming folder P\N, and it is P\N's key that
+                        # holds this folder's view and children - so its
+                        # last-write is when the folder was last touched, and it
+                        # differs per folder (Shellbags Explorer reports the same
+                        # value). A leaf value has no such subkey; the containing
+                        # key P is then the honest fallback, flagged in time_basis
+                        # so the two are never blurred together. Reading P for a
+                        # leaf gives every leaf in P one time, which is correct
+                        # here (they share the write that set the MRU) rather than
+                        # the "one parent time on rows whose keys differ" trap.
+                        last_written = key_last_write_live(
+                            hive_key, full_path + BS_SEP + value_name)
+                        time_basis = "bag_key" if last_written else ""
+                        if not last_written:
+                            last_written = key_last_write_live(hive_key, full_path)
+                            time_basis = "parent_key" if last_written else ""
                         entries.append((full_path, value_name, data, mru_position,
-                                        parent_readable, node_slot, bag_views))
+                                        parent_readable, node_slot, bag_views,
+                                        last_written, time_basis))
 
                 # Recursively enumerate subkeys
                 try:
@@ -1986,7 +2048,11 @@ def main_live_reg(db_filename='registry_data.db'):
                                 _own = ''
                                 _v = values.get(subkey_name)
                                 if _v and isinstance(_v[0], bytes):
-                                    _own = _shellbag_name(_v[0])
+                                    # Same name the row itself gets, so an
+                                    # unnamed parent still heads its children's
+                                    # path instead of silently dropping out of it.
+                                    _own = (_shellbag_name(_v[0])
+                                            or registry_binary_parser.unnamed_shell_item_name(_v[0]))
                                 child_readable = (f"{parent_readable}\\{_own}"
                                                   if parent_readable and _own
                                                   else (_own or parent_readable))
@@ -2018,7 +2084,7 @@ def main_live_reg(db_filename='registry_data.db'):
             """
             written = 0
             for (registry_path, value_name, binary_data, mru_position,
-                 parent_path, node_slot, bag_views) in entries:
+                 parent_path, node_slot, bag_views, last_written, time_basis) in entries:
                 try:
                     # Parse Shellbag entry with enhanced metadata
                     parsed_data = registry_binary_parser.parse_shellbag_entry(binary_data)
@@ -2040,19 +2106,25 @@ def main_live_reg(db_filename='registry_data.db'):
                     drive_letter = parsed_data.get('drive_letter', '')
                     mft_record_number = parsed_data.get('mft_record_number', 0)
 
-                    # Skip empty entries
+                    # An item whose name does not decode (control panel, phone
+                    # delegate, property-store root) is still an item - and the
+                    # first link of every path beneath it. Kept, named by class.
                     if not file_name:
-                        logging.debug(f"Skipping empty Shellbags entry at {registry_path}/{value_name}")
-                        continue
+                        file_name = registry_binary_parser.unnamed_shell_item_name(binary_data)
 
+                    claim_legacy_shellbag(cursor, file_name, registry_path,
+                                          user_name, value_name)
                     # Keyed by user too: the same folder opened by two accounts is
-                    # two findings. The table carries no constraint, so this check
-                    # is the only thing keeping a re-parse from duplicating it.
+                    # two findings. And by the value it is stored under: two items
+                    # with one name in one key are two items. The table carries no
+                    # constraint, so this check is what keeps a re-parse from
+                    # duplicating rows.
                     if check_exists(cursor, 'Shellbags',
-                                    ['file_name', 'registry_path', 'user_name'],
-                                    (file_name, registry_path, user_name)):
+                                    ['file_name', 'registry_path', 'user_name', 'value_name'],
+                                    (file_name, registry_path, user_name, value_name)):
                         backfill_shellbag_view(cursor, file_name, registry_path,
-                                               user_name, node_slot, bag_views)
+                                               user_name, node_slot, bag_views,
+                                               last_written, time_basis, value_name)
                         logging.debug(f"Skipping duplicate Shellbags entry: {file_name}")
                         continue
 
@@ -2062,14 +2134,16 @@ def main_live_reg(db_filename='registry_data.db'):
                                     created_date, modified_date, accessed_date, attributes,
                                     file_size, special_folder, network_share, server_name, share_name,
                                     drive_letter, mft_record_number, registry_path, parent_path,
-                                    node_slot, bag_views, parsed_at, user_name)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+                                    last_written, time_basis, node_slot, bag_views, parsed_at, user_name,
+                                    value_name)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
                                  (file_name, short_name, shell_item_type, mru_position,
                                   created_date, modified_date, accessed_date, attributes,
                                   file_size, special_folder, network_share, server_name, share_name,
                                   drive_letter, mft_record_number, registry_path, parent_path,
-                                  node_slot, bag_views,
-                                  format_forensic_timestamp(get_current_utc()), user_name))
+                                  last_written, time_basis, node_slot, bag_views,
+                                  format_forensic_timestamp(get_current_utc()), user_name,
+                                  value_name))
 
                     written += 1
                     logging.debug(f"Shellbag {value_name} MRU position: {mru_position}")
@@ -6285,6 +6359,11 @@ def main_live_reg(db_filename='registry_data.db'):
         # keys under Enum\USB and is denied 21 subkeys; the acquired hive
         # reaches 868 and every Properties key with it.
         _hive_routes = {}
+        # hive label -> when it was last reorganised, "" if never. A hive whose
+        # walk did not run is absent, and stays NULL in the row rather than
+        # claiming it was never compacted. Declared out here beside the routes
+        # because the row that consumes it is written in a later try block.
+        _hive_reorg = {}
         try:
             _walk_stamp = format_forensic_timestamp(get_current_utc())
             _tot = {"c": 0, "s": 0, "k": 0, "v": 0}
@@ -6297,6 +6376,29 @@ def main_live_reg(db_filename='registry_data.db'):
             # it as a file.
             _targets = [(_l, None) for _l in
                         ("SYSTEM", "SOFTWARE", "SAM", "SECURITY", "DEFAULT")]
+
+            # The hives nothing was walking. COMPONENTS is the servicing store
+            # - installed packages, update and component history - and at some
+            # fifty megabytes it is the second largest hive on a stock machine;
+            # DRIVERS carries third-party driver installs. Neither had ever
+            # been opened here, so their deleted keys and values were not
+            # merely unrecovered, they were unlooked-for.
+            #
+            # By explicit path rather than through STANDARD_HIVES, because
+            # acquire_hive takes an on_disk_path override and nothing else in
+            # the engine reads these by name. An unknown label finds no
+            # VALIDATE entry, and _validates(path, None) then requires only
+            # that the file opens as a hive - the right check here, since
+            # inventing a key path for COMPONENTS would be a guess dressed as
+            # validation. It finds no REG_PATHS entry either, so a hive that
+            # will not copy falls to the API route with an empty path and is
+            # skipped and recorded, rather than exported by a wrong name.
+            _config_dir = os.path.join(
+                os.environ.get("SystemRoot", r"C:\Windows"), "System32", "config")
+            for _extra in ("COMPONENTS", "DRIVERS", "BBI", "ELAM"):
+                _extra_path = os.path.join(_config_dir, _extra)
+                if os.path.exists(_extra_path):
+                    _targets.append((_extra, _extra_path))
             try:
                 _targets.extend(live_hive_access.user_hives())
             except Exception as _e:
@@ -6391,6 +6493,15 @@ def main_live_reg(db_filename='registry_data.db'):
                     _w = registry_hive_walk.walk_hive(_path)
                     if _w.error:
                         logging.debug("hive walk %s: %s", _label, _w.error)
+
+                    # Whether this hive still holds the free space carving
+                    # reads. Windows compacts a hive on its own schedule and
+                    # discards the freed cells when it does, so without this a
+                    # hive that has just been reorganised and a hive nothing
+                    # was ever deleted from produce the same count and cannot
+                    # be told apart. Formatted here, where _fmt_ft is in scope.
+                    _hive_reorg[_label] = _fmt_ft(
+                        getattr(_w, "reorganized_raw", None))
 
                     for _cn in _w.class_names:
                         cursor.execute(
@@ -6788,6 +6899,19 @@ def main_live_reg(db_filename='registry_data.db'):
             print("[OK] Hive structure: %d class names, %d security descriptors, "
                   "%d carved keys, %d carved values" %
                   (_tot["c"], _tot["s"], _tot["k"], _tot["v"]))
+            # Said here because this is where it changes an answer. Windows
+            # compacts a hive on its own schedule and drops the freed cells
+            # when it does, so after a reorganization the carved counts above
+            # are a floor and not a finding - and the difference between "the
+            # machine was clean" and "the evidence was compacted on Sunday" is
+            # not one an analyst should have to infer from a low number.
+            _compacted = sorted((_v, _k) for _k, _v in _hive_reorg.items() if _v)
+            if _compacted:
+                print("     NOTE: %d of %d hive(s) had been reorganized, most "
+                      "recently %s (%s). Carved counts are a floor; see "
+                      "registry_hive_state for the date per hive."
+                      % (len(_compacted), len(_hive_reorg),
+                         _compacted[-1][0], _compacted[-1][1]))
             print("     acquired by: %s" % _routes)
         except Exception as e:
             logging.error("Error walking acquired hives: %s", e)
@@ -6813,10 +6937,11 @@ def main_live_reg(db_filename='registry_data.db'):
                     'INSERT INTO registry_hive_state (hive_name, hive_path, '
                     'sequence_1, sequence_2, was_dirty, logs_found, log_format, '
                     'replayed, entries_applied, pages_applied, highest_sequence, '
-                    'source_sha256, acquisition_route, reason, parsed_at) '
-                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                    'source_sha256, acquisition_route, reorganized_at, reason, '
+                    'parsed_at) '
+                    'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                     (_label, "", None, None, None, "", "", 0, 0, 0, None, "",
-                     _route,
+                     _route, _hive_reorg.get(_label),
                      "live parse: the running registry is the state, so there is "
                      "no hive file to be mid-transaction", _hs_stamp))
             conn.commit()

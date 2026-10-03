@@ -134,7 +134,7 @@ class ModelRouter:
     def __init__(self, config, credential_manager=None):
         self.config = config
         self.credential_manager = credential_manager
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         self.backend = self._initialize_backend()
         # Built on first use and dropped on switch_model — see _capability_probe.
         self._tool_capability_probe = None

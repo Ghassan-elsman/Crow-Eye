@@ -65,7 +65,7 @@ class LMStudioBackend(LLMBackend):
         """
         self.api_endpoint = api_endpoint.rstrip('/')
         self.model_name = model_name
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         
         # Connection pooling for performance
         # We reuse HTTP connections instead of creating new ones each time - much faster!

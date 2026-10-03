@@ -66,7 +66,7 @@ class ForensicDatabaseService:
         """
         self.case_directory = Path(case_directory)
         self.db_manager = DatabaseManager(case_directory)
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
         # Cache of successfully discovered schemas, keyed by (db, table_or_None),
         # so a learned schema is never re-discovered (and can serve as a fallback
         # if a later live fetch fails).

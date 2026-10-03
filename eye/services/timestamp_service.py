@@ -42,7 +42,7 @@ class TimestampService:
     
     def __init__(self):
         """Initialize the TimestampService."""
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
     
     def parse_timestamp(self, value: Any) -> Optional[str]:
         """

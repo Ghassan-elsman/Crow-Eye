@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Prefetch · Executions</title>
+    <script>
+      // Polyfill for older QWebEngine runtimes.
+      if (!Object.hasOwn) {
+        Object.hasOwn = function (o, p) { return Object.prototype.hasOwnProperty.call(o, p); };
+      }
+    </script>
+    <!-- Qt WebChannel bridge, provided by PyQt at runtime. -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <style>
+      html, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; }
+      body { background: #0a0c10; overflow: hidden; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

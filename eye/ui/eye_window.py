@@ -134,7 +134,17 @@ class EYECompliancePopupWindow(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("Eye AI — GEP Compliance")
-        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        _eye_icon = CrowEyeStyles.resource_icon(
+            "GUI Resources", "the Eye AI agent transparent.png", trim=True)
+        if _eye_icon is not None:
+            self.setWindowIcon(_eye_icon)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says. See CrowEyeStyles.give_window_a_taskbar_button.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         self.resize(900, 800)
 
         layout = QVBoxLayout(self)
@@ -171,7 +181,17 @@ class EYEEvidencePopupWindow(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("Eye AI — Imported Evidence")
-        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        _eye_icon = CrowEyeStyles.resource_icon(
+            "GUI Resources", "the Eye AI agent transparent.png", trim=True)
+        if _eye_icon is not None:
+            self.setWindowIcon(_eye_icon)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says. See CrowEyeStyles.give_window_a_taskbar_button.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         self.resize(1000, 700)
 
         layout = QVBoxLayout(self)
@@ -208,7 +228,17 @@ class EYENarrativeMapPopupWindow(QWidget):
         super().__init__(parent)
         self.setWindowFlags(Qt.Window)
         self.setWindowTitle("Eye AI — Narrative Map")
-        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        _eye_icon = CrowEyeStyles.resource_icon(
+            "GUI Resources", "the Eye AI agent transparent.png", trim=True)
+        if _eye_icon is not None:
+            self.setWindowIcon(_eye_icon)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says. See CrowEyeStyles.give_window_a_taskbar_button.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         self.resize(1100, 800)
 
         layout = QVBoxLayout(self)
@@ -247,7 +277,17 @@ class EYEAssistantWindow(QWidget):
         # Standalone Window Configuration
         self.setWindowFlags(self.windowFlags() | Qt.Window)
         self.setWindowTitle("Eye AI Forensic Assistant")
-        self.setWindowIcon(QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        _eye_icon = CrowEyeStyles.resource_icon(
+            "GUI Resources", "the Eye AI agent transparent.png", trim=True)
+        if _eye_icon is not None:
+            self.setWindowIcon(_eye_icon)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says. See CrowEyeStyles.give_window_a_taskbar_button.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         self.setMinimumSize(1200, 900)
         
         self.case_directory = case_directory

@@ -16,7 +16,7 @@ from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
 
 from uba.engine.behavior_engine import BehaviorEngine
 from uba.engine.evidence import EvidenceFetcher
-from uba.utils.db_access import DbPool, data_status
+from uba.utils.db_access import data_status
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,15 @@ class AnalysisWorker(QThread):
         except Exception as e:
             logger.exception("UBA: analysis worker failed")
             self.failed.emit(str(e))
+        finally:
+            # Every evidence connection the analysis opened belongs to THIS
+            # thread and cannot be closed from anywhere else, so hand them back
+            # here rather than leaving them for the pool's own teardown. Same
+            # contract as timeline/data/query_worker.py at the end of run().
+            try:
+                self.engine.db_pool.cleanup_thread_connections()
+            except Exception:
+                logger.debug("UBA: worker connection cleanup skipped", exc_info=True)
 
 
 class UBABridge(QObject):
@@ -52,7 +61,6 @@ class UBABridge(QObject):
         self.engine = None
         self.worker = None
         self.fetcher = None
-        self._evidence_pool = None
         self._analysis_done = False
 
     # ------------------------------------------------------------------ #
@@ -98,11 +106,14 @@ class UBABridge(QObject):
 
     def _on_analysis_done(self):
         self._analysis_done = True
-        # The engine's DbPool was populated inside the worker thread; SQLite
-        # connections cannot cross threads, so give the fetcher its own
-        # read-only pool bound to this (GUI) thread.
-        self._evidence_pool = DbPool(self.artifacts_dir)
-        self.fetcher = EvidenceFetcher(self._evidence_pool)
+        # The engine's DbPool now opens a connection per thread, so the fetcher
+        # can share it: asking for one on the GUI thread gets a GUI-thread
+        # connection. This used to be a second pool built here by hand, because
+        # the pool was keyed on the database name alone and handing the fetcher
+        # the engine's pool meant handing it the worker's connections. That
+        # workaround covered evidence only - getSessions took the same route
+        # and crashed. See DbPool's docstring.
+        self.fetcher = EvidenceFetcher(self.engine.db_pool)
         summary = {
             "total_events": self.engine.stats.get("total_events", 0),
             "elapsed_seconds": self.engine.stats.get("elapsed_seconds", 0),
@@ -126,6 +137,20 @@ class UBABridge(QObject):
         if not self._ensure_ready():
             return self._dumps({"pending": True, "apps": []})
         return self._dumps({"apps": self.engine.apps()})
+
+    @pyqtSlot(result=str)
+    def getRules(self) -> str:
+        """Every rule with its status and event count — drives the rule picker."""
+        if not self._ensure_ready():
+            return self._dumps({"pending": True, "rules": []})
+        return self._dumps({"rules": self.engine.rules_catalog()})
+
+    @pyqtSlot(result=str)
+    def getSessions(self) -> str:
+        """Sign-in sessions, accounts, machine uptime and the auditing note."""
+        if not self._ensure_ready():
+            return self._dumps({"pending": True, "sessions": []})
+        return self._dumps(self.engine.sessions_report())
 
     @pyqtSlot(result=str)
     def getCoverage(self) -> str:
@@ -193,7 +218,7 @@ class UBABridge(QObject):
     def cleanup(self):
         if self.worker is not None and self.worker.isRunning():
             self.worker.wait(3000)
-        if self._evidence_pool is not None:
-            self._evidence_pool.close()
         if self.engine is not None:
+            # Closes this thread's connections and drops any the worker left;
+            # DbPool.close() will not try to close another thread's.
             self.engine.close()

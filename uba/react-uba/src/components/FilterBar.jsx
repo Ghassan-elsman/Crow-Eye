@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CLASS_STYLE, SEVERITY_STYLE } from '../styles/tokens.js'
+import { CLASS_STYLE, SEVERITY_STYLE, CONFIDENCE_TIER } from '../styles/tokens.js'
 
 const CLASSES = ['user', 'application', 'system']
 const SEVERITIES = ['routine', 'notable', 'suspicious', 'critical']
+const CONFIDENCES = ['corroborated', 'log-only', 'artifact-only', 'presence', 'inference']
 
 function toggle(list, value) {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
@@ -18,7 +19,7 @@ function fromInput(val, endOfMinute) {
   return val.replace('T', ' ') + (endOfMinute ? ':59' : ':00')
 }
 
-export default function FilterBar({ filters, onChange, users, apps, summary }) {
+export default function FilterBar({ filters, onChange, users, apps, rules, summary }) {
   const [search, setSearch] = useState(filters.search)
 
   useEffect(() => {
@@ -94,6 +95,14 @@ export default function FilterBar({ filters, onChange, users, apps, summary }) {
           onChange={(next) => onChange({ ...filters, apps: next })} />
       </div>
 
+      {/* ---- Detection rule ---- */}
+      <div className="filter-group">
+        <span className="filter-label">Rules</span>
+        <RuleSelect rules={rules}
+          selected={filters.rules}
+          onChange={(next) => onChange({ ...filters, rules: next })} />
+      </div>
+
       {/* ---- Class ---- */}
       <div className="chiprow">
         {CLASSES.map((c) => (
@@ -138,6 +147,137 @@ export default function FilterBar({ filters, onChange, users, apps, summary }) {
           <span className="chip" onClick={clearTime} title="Clear time range">Clear</span>
         )}
       </div>
+
+      {/* ---- Certainty ---- */}
+      <div className="filter-group">
+        <span className="filter-label">Certainty</span>
+        <div className="chiprow">
+          {CONFIDENCES.map((c) => {
+            const tier = CONFIDENCE_TIER[c] || { label: c, color: '#8c95ab' }
+            const on = filters.confidences.includes(c)
+            return (
+              <span key={c} className={'chip ' + (on ? 'on' : '')}
+                style={on ? { borderColor: tier.color, color: tier.color } : null}
+                title={`Show only activities whose evidence is ${tier.label.toLowerCase()}`}
+                onClick={() => onChange({
+                  ...filters, confidences: toggle(filters.confidences, c),
+                })}>
+                {tier.label}
+              </span>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ---- Reading order ---- */}
+      <div className="filter-group">
+        <span className="filter-label">Order</span>
+        <select className="preset-select" value={filters.order || 'desc'}
+          title="Read the story newest-first or oldest-first"
+          onChange={(e) => onChange({ ...filters, order: e.target.value })}>
+          <option value="desc">Newest first</option>
+          <option value="asc">Oldest first</option>
+        </select>
+      </div>
+    </div>
+  )
+}
+
+// Detection-rule picker. Same popover shape as AppMultiSelect below, so it
+// inherits the existing styling rather than introducing a second pattern.
+//
+// Each rule shows its event count, which is how a rule that is reported as
+// WORKING but found nothing becomes visible — a distinct statement from "no
+// data for this rule", and one nothing else in the UI makes.
+function RuleSelect({ rules, selected, onChange }) {
+  const [open, setOpen] = useState(false)
+  const [q, setQ] = useState('')
+  const ref = useRef(null)
+
+  useEffect(() => {
+    const onDoc = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
+  const groups = useMemo(() => {
+    const needle = q.trim().toLowerCase()
+    const list = (rules || []).filter((r) => !needle
+      || r.title.toLowerCase().includes(needle)
+      || r.rule_id.toLowerCase().includes(needle))
+    const by = new Map()
+    for (const r of list) {
+      const key = CLASS_STYLE[r.behavior_class] ? r.behavior_class : 'system'
+      if (!by.has(key)) by.set(key, [])
+      by.get(key).push(r)
+    }
+    return [...by.entries()]
+  }, [rules, q])
+
+  const withEvents = useMemo(
+    () => (rules || []).filter((r) => r.event_count > 0).map((r) => r.rule_id),
+    [rules])
+  const flagged = useMemo(
+    () => (rules || []).filter((r) => r.event_count > 0
+      && (r.severity === 'suspicious' || r.severity === 'critical'))
+      .map((r) => r.rule_id),
+    [rules])
+
+  const toggleRule = (id) => onChange(
+    selected.includes(id) ? selected.filter((r) => r !== id) : [...selected, id])
+
+  const label = selected.length === 0
+    ? `All rules (${withEvents.length} with activity)`
+    : `${selected.length} rule${selected.length === 1 ? '' : 's'}`
+
+  return (
+    <div className="app-select rule-select" ref={ref}>
+      <div className="app-select-box" onClick={() => setOpen((v) => !v)}>
+        {selected.length === 0
+          ? <span style={{ color: '#64748B' }}>{label}</span>
+          : <span className="chip on">{label}</span>}
+        <span style={{ marginLeft: 'auto', color: '#64748B' }}>▾</span>
+      </div>
+      {open && (
+        <div className="app-select-pop rule-pop">
+          <input autoFocus type="search" placeholder="Filter rules…" value={q}
+            onChange={(e) => setQ(e.target.value)} />
+          <div className="rule-actions">
+            <button onClick={() => onChange([])}>All</button>
+            <button onClick={() => onChange(withEvents)}
+              title="Only the rules that actually found something in this case">
+              With activity
+            </button>
+            <button onClick={() => onChange(flagged)} disabled={flagged.length === 0}
+              title="Only rules whose findings need analyst review">
+              Needs review
+            </button>
+          </div>
+          <div className="app-select-list">
+            {groups.map(([cls, items]) => (
+              <div key={cls}>
+                <div className="rule-group">{CLASS_STYLE[cls].label}</div>
+                {items.map((r) => (
+                  <label key={r.rule_id}
+                    className={'app-opt rule-opt' + (r.event_count === 0 ? ' dim' : '')}
+                    title={`${r.how || r.title}${r.note ? `\n\n${r.note}` : ''}`}>
+                    <input type="checkbox" checked={selected.includes(r.rule_id)}
+                      onChange={() => toggleRule(r.rule_id)} />
+                    <span className="app-opt-name">{r.title}</span>
+                    {r.status !== 'active' && (
+                      <span className={'rule-status ' + r.status}>
+                        {r.status === 'degraded' ? 'limited' : 'no data'}
+                      </span>
+                    )}
+                    <span className="app-opt-count">{r.event_count.toLocaleString()}</span>
+                  </label>
+                ))}
+              </div>
+            ))}
+            {groups.length === 0 && <div className="app-opt-empty">No rules match.</div>}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -44,7 +44,7 @@ class EvidenceIndexService:
         self.per_table_cap = per_table_cap
         self.max_text_chars = max_text_chars
         self.max_total_rows = max_total_rows
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(__name__)
 
         self.index: List[Dict[str, Any]] = []   # {database, table, rowid, text, embedding}
         self.capped_tables: List[Dict[str, Any]] = []  # {database, table, total, indexed}

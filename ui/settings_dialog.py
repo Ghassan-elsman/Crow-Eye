@@ -130,6 +130,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setWindowTitle("Crow Eye - Settings")
         self.setMinimumSize(900, 700)
         self.setModal(True)
+        # A real window rather than a bare dialog, with minimize and maximize:
+        # Settings is somewhere an investigator reads and compares, and a dialog
+        # that cannot be sent to the taskbar has nowhere to show its name.
+        self.setWindowFlags(QtCore.Qt.Window
+                            | QtCore.Qt.WindowMinimizeButtonHint
+                            | QtCore.Qt.WindowMaximizeButtonHint
+                            | QtCore.Qt.WindowCloseButtonHint)
+        # Owned windows get no taskbar button on Windows, whatever their title
+        # says - so a minimized Crow-Eye window had nowhere to show its name.
+        # See CrowEyeStyles.give_window_a_taskbar_button for the measurements.
+        try:
+            from styles import CrowEyeStyles as _CES
+            _CES.give_window_a_taskbar_button(self)
+        except Exception:
+            pass
         
         # Main layout
         main_layout = QtWidgets.QHBoxLayout(self)
@@ -155,6 +170,7 @@ class SettingsDialog(QtWidgets.QDialog):
         # Updates section is EXE-only: build it only when the updater package ships
         # (the main/portable build has no `update/` -> no auto-update UI at all).
         self.updates_panel = self.create_updates_panel() if _UPDATER_AVAILABLE else None
+        self.logs_panel = self.create_logs_panel()
 
         self.content_stack.addWidget(self.general_panel)
         self.content_stack.addWidget(self.case_mgmt_panel)
@@ -165,6 +181,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.content_stack.addWidget(self.eye_ai_panel)
         if self.updates_panel is not None:
             self.content_stack.addWidget(self.updates_panel)
+        # Logs is added LAST so its stack index is a fixed function of whether the
+        # Updates page exists (8 with it, 7 without) - matching the nav button below.
+        self.content_stack.addWidget(self.logs_panel)
         
         # Bottom buttons
         buttons_layout = QtWidgets.QHBoxLayout()
@@ -275,7 +294,13 @@ class SettingsDialog(QtWidgets.QDialog):
             updates_btn = self.create_nav_button("Updates", 7, "download")
             sidebar_layout.addWidget(updates_btn)
             self.nav_buttons.append(updates_btn)
-        
+
+        # Logs is the last stack page: index 8 when the Updates page exists, else 7.
+        logs_index = 8 if _UPDATER_AVAILABLE else 7
+        logs_btn = self.create_nav_button("Logs", logs_index, "file")
+        sidebar_layout.addWidget(logs_btn)
+        self.nav_buttons.append(logs_btn)
+
         # Disable case settings and pipelines if no active case
         if not self.current_case:
             case_settings_btn.setEnabled(False)
@@ -1468,6 +1493,328 @@ class SettingsDialog(QtWidgets.QDialog):
 
         layout.addWidget(group)
         layout.addStretch()
+        return panel
+
+    # ------------------------------------------------------------------ Logs --
+    _LOG_TITLE_STYLE = """
+        QLabel {
+            color: #00FFFF;
+            font-size: 22px;
+            font-weight: 800;
+            font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
+        }
+    """
+
+    def _log_component(self, fname):
+        """Which Crow-Eye component a log file belongs to (for grouping)."""
+        f = (fname or "").lower()
+        exact = {
+            "crow_eye.log": "Application (all)",
+            "console.log": "Console (raw output)",
+            "parsers.log": "Parsers",
+            "timeline.log": "Timeline",
+            "visualizations.log": "Visualizations",
+            "correlation.log": "Correlation Engine",
+            "eye.log": "Eye AI",
+            "uba.log": "UBA",
+            "dynamic_linking.log": "Dynamic Linking",
+            # `ui/` - the dialogs and table widgets. The main window itself
+            # prints rather than logging, so its output is under Console.
+            "gui.log": "GUI",
+            "case_data.log": "Case data",
+            "parse_status.log": "Parse status",
+            "parse_status.json": "Parse status",
+        }
+        if f in exact:
+            return exact[f]
+        if f.startswith("parse_status.log"):
+            return "Parse status"
+        if f.startswith("mft_usn"):
+            return "MFT/USN"
+        if f.startswith("mft_claw"):
+            return "MFT"
+        if f.startswith("usn_claw"):
+            return "USN"
+        if f.startswith("regclaw_errors"):
+            return "Registry"
+        if f.startswith("offline") or f.startswith("import_"):
+            return "Offline parsing"
+        if f.startswith("failed_prefetch"):
+            return "Prefetch"
+        return "Other"
+
+    def _scan_case_logs(self):
+        """{component: [(filename, abspath)]} across this case's log locations."""
+        import glob
+        groups = {}
+        root = self.current_case_path
+        if not root or not os.path.isdir(root):
+            return groups
+
+        seen = set()
+
+        def add(path, comp=None):
+            path = os.path.abspath(path)
+            if path in seen or not os.path.isfile(path):
+                return
+            seen.add(path)
+            label = comp or self._log_component(os.path.basename(path))
+            groups.setdefault(label, []).append((os.path.basename(path), path))
+
+        # <case>/logs  - the centralized case logs.
+        # "*.log.*" catches the rotated backups: logging_setup rotates at 5 MB
+        # and keeps three, named crow_eye.log.1 .. .3, and a plain "*.log" glob
+        # does not match them - so the moment a log rotated, everything before
+        # the rotation became invisible in this panel.
+        for pat in ("*.log", "*.txt", "*.log.*"):
+            for p in glob.glob(os.path.join(root, "logs", pat)):
+                add(p)
+        # The machine-readable parse status (latest outcome per artifact) -
+        # the only .json kept in <case>/logs, so it is named, not globbed.
+        add(os.path.join(root, "logs", "parse_status.json"), "Parse status")
+        # Target_Artifacts - the per-parser logs written during parsing
+        ta = os.path.join(root, "Target_Artifacts")
+        for pat in ("*.log", "*.txt", "*.log.*"):
+            for p in glob.glob(os.path.join(ta, pat)):
+                add(p)
+        # Known logs/reports at the case root
+        for name in ("offline_parsing_logs.txt", "mft_usn_forensic_report.txt"):
+            add(os.path.join(root, name))
+        for p in glob.glob(os.path.join(root, "*.log")):
+            add(p)
+        # Eye AI keeps its audit trail under EYE_Logs/
+        el = os.path.join(root, "EYE_Logs")
+        if os.path.isdir(el):
+            for dp, _dirs, files in os.walk(el):
+                for fn in files:
+                    if fn.lower().endswith((".log", ".jsonl", ".json")):
+                        add(os.path.join(dp, fn), "Eye AI")
+        return groups
+
+    def _populate_logs_tree(self):
+        tree = self._logs_tree
+        tree.clear()
+        flt = ""
+        if getattr(self, "_logs_filter", None) is not None:
+            flt = (self._logs_filter.text() or "").strip().lower()
+        groups = self._scan_case_logs()
+        if not groups:
+            msg = ("Open a case to view its logs."
+                   if not self.current_case_path
+                   else "No logs for this case yet - they appear as parsers run.")
+            tree.addTopLevelItem(QtWidgets.QTreeWidgetItem([msg]))
+            self._logs_view.setPlainText("")
+            self._logs_meta.setText("")
+            return
+        total = 0
+        for comp in sorted(groups):
+            files = sorted(groups[comp], key=lambda t: t[0].lower())
+            if flt:
+                files = [f for f in files if flt in f[0].lower()]
+            if not files:
+                continue
+            parent = QtWidgets.QTreeWidgetItem(["%s  (%d)" % (comp, len(files))])
+            # Selectable, so "Open full log" can take a whole component and not
+            # only one file. Clicking a group still shows nothing in the right
+            # pane - _on_log_selected ignores an item with no path.
+            parent.setData(0, Qt.UserRole + 1, [pp for _n, pp in files])
+            for name, path in files:
+                child = QtWidgets.QTreeWidgetItem([name])
+                child.setData(0, Qt.UserRole, path)
+                child.setToolTip(0, path)
+                parent.addChild(child)
+                total += 1
+            tree.addTopLevelItem(parent)
+            parent.setExpanded(True)
+        if total == 0:
+            tree.addTopLevelItem(QtWidgets.QTreeWidgetItem(["No files match the filter."]))
+
+    def _on_log_selected(self, item, _column):
+        path = item.data(0, Qt.UserRole)
+        if path:
+            self._load_log_file(path)
+
+    def _open_full_log(self):
+        """Open the selected section in full, in its own window.
+
+        The pane on the right deliberately shows only the last 256 KB so that
+        clicking a large log never stalls the dialog. This is the other half of
+        that bargain: the whole thing, including the rotated backups a plain
+        `*.log` glob never matched, read on a worker thread so the window draws
+        while it loads.
+
+        A file selection opens that file and its rotations; a component
+        selection opens every file in the component.
+        """
+        item = self._logs_tree.currentItem() if self._logs_tree else None
+        if item is None:
+            QMessageBox.information(self, "Logs",
+                                    "Select a log file, or a component, first.")
+            return
+
+        title = item.text(0)
+        path = item.data(0, Qt.UserRole)
+        if path:
+            try:
+                from ui.full_log_dialog import rotation_siblings
+                paths = rotation_siblings(path)
+            except Exception:
+                paths = [path]
+        else:
+            paths = item.data(0, Qt.UserRole + 1) or []
+            if not paths:
+                QMessageBox.information(self, "Logs",
+                                        "Select a log file, or a component, first.")
+                return
+
+        try:
+            from ui.full_log_dialog import FullLogDialog
+        except Exception as exc:
+            QMessageBox.warning(self, "Logs",
+                                "Could not open the full log viewer:\n%s" % exc)
+            return
+        dlg = FullLogDialog(title, paths, self)
+        dlg.show()
+        # Held so the window is not collected the moment this method returns.
+        self._full_log_windows = getattr(self, "_full_log_windows", [])
+        self._full_log_windows.append(dlg)
+        dlg.destroyed.connect(
+            lambda *_a, _d=dlg: self._full_log_windows.remove(_d)
+            if _d in self._full_log_windows else None)
+
+    def _load_log_file(self, path):
+        max_bytes = 256 * 1024
+        note = ""
+        try:
+            size = os.path.getsize(path)
+            with open(path, "rb") as fh:
+                if size > max_bytes:
+                    fh.seek(size - max_bytes)
+                    data = fh.read()
+                    note = "   (showing the last %d KB of %d KB)" % (
+                        max_bytes // 1024, size // 1024)
+                else:
+                    data = fh.read()
+            text = data.decode("utf-8", errors="replace")
+        except Exception as exc:
+            text = "Could not read this log:\n%s" % exc
+        self._logs_view.setPlainText(text)
+        self._logs_view.moveCursor(QtGui.QTextCursor.End)
+        self._logs_meta.setText(path + note)
+
+    def _refresh_logs(self):
+        self._populate_logs_tree()
+
+    def _open_logs_folder(self):
+        root = self.current_case_path
+        if not root or not os.path.isdir(root):
+            return
+        logs = os.path.join(root, "logs")
+        target = logs if os.path.isdir(logs) else root
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+
+    # Scrollbars for the Logs panes. Styling a QScrollBar without naming
+    # add-page/sub-page leaves PyQt5 painting the groove above and below the
+    # handle in the pale native colour - which is exactly what the Logs panel
+    # looked like: a styled handle sliding in a light grey trough. The same fix
+    # is already spelled out for the settings stack further down this file.
+    # Both axes are needed here: the log view is NoWrap, so the horizontal bar
+    # is always present, and ::corner covers the square where they meet.
+    _LOGS_SCROLLBAR_QSS = """
+        QScrollBar:vertical { background: #0B1226; width: 11px; margin: 0; border: none; }
+        QScrollBar:horizontal { background: #0B1226; height: 11px; margin: 0; border: none; }
+        QScrollBar::handle:vertical { background: #334155; border-radius: 5px; min-height: 30px; }
+        QScrollBar::handle:horizontal { background: #334155; border-radius: 5px; min-width: 30px; }
+        QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover { background: #475569; }
+        QScrollBar::handle:vertical:pressed, QScrollBar::handle:horizontal:pressed { background: #00FFFF; }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; border: none; }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; border: none; }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: #0B1226; }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #0B1226; }
+        QScrollBar::corner { background: #0B1226; }
+    """
+
+    def create_logs_panel(self):
+        """Browse and read every log this case has produced, grouped by component."""
+        panel = QtWidgets.QWidget()
+        panel.setStyleSheet("QWidget { background-color: #0F172A; }")
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(16)
+
+        header = QtWidgets.QLabel("LOGS")
+        header.setStyleSheet(self._LOG_TITLE_STYLE)
+        layout.addWidget(header)
+
+        blurb = QtWidgets.QLabel(
+            "Every parser, the timeline, the visualizations, offline parsing and "
+            "the app itself write their logs into this case's logs folder. Browse "
+            "them by component on the left and read them on the right.")
+        blurb.setWordWrap(True)
+        blurb.setStyleSheet("QLabel { color: #CBD5E1; font-size: 14px; }")
+        layout.addWidget(blurb)
+
+        # Toolbar: filter + refresh + open folder
+        bar = QtWidgets.QHBoxLayout()
+        bar.setSpacing(10)
+        self._logs_filter = QtWidgets.QLineEdit()
+        self._logs_filter.setPlaceholderText("Filter log files...")
+        self._logs_filter.setStyleSheet(CrowEyeStyles.INPUT_FIELD)
+        self._logs_filter.textChanged.connect(lambda _t: self._populate_logs_tree())
+        refresh_btn = QtWidgets.QPushButton("Refresh")
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        refresh_btn.clicked.connect(self._refresh_logs)
+        full_btn = QtWidgets.QPushButton("Open full log")
+        full_btn.setCursor(Qt.PointingHandCursor)
+        full_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        full_btn.setToolTip("Open the selected log in full, including its rotated "
+                            "backups - the pane on the right shows only the last 256 KB")
+        full_btn.clicked.connect(self._open_full_log)
+        open_btn = QtWidgets.QPushButton("Open logs folder")
+        open_btn.setCursor(Qt.PointingHandCursor)
+        open_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        open_btn.clicked.connect(self._open_logs_folder)
+        bar.addWidget(self._logs_filter, 1)
+        bar.addWidget(refresh_btn)
+        bar.addWidget(full_btn)
+        bar.addWidget(open_btn)
+        layout.addLayout(bar)
+
+        # Split: component tree | file viewer
+        split = QtWidgets.QSplitter(Qt.Horizontal)
+        self._logs_tree = QtWidgets.QTreeWidget()
+        self._logs_tree.setHeaderHidden(True)
+        self._logs_tree.setMinimumWidth(240)
+        self._logs_tree.setStyleSheet("""
+            QTreeWidget { background-color: #0B1226; color: #E2E8F0; border: 1px solid #334155;
+                          border-radius: 6px; font-size: 14px; font-weight: 600; }
+            QTreeWidget::item { padding: 5px 3px; }
+            QTreeWidget::item:selected { background-color: #1E293B; color: #00FFFF; }
+        """ + self._LOGS_SCROLLBAR_QSS)
+        self._logs_tree.itemClicked.connect(self._on_log_selected)
+
+        self._logs_view = QtWidgets.QTextEdit()
+        self._logs_view.setReadOnly(True)
+        self._logs_view.setLineWrapMode(QtWidgets.QTextEdit.NoWrap)
+        self._logs_view.setStyleSheet("""
+            QTextEdit { background-color: #0B1226; color: #E2E8F0; border: 1px solid #334155;
+                        border-radius: 6px; font-family: 'JetBrains Mono','Consolas',monospace;
+                        font-size: 13.5px; }
+        """ + self._LOGS_SCROLLBAR_QSS)
+        split.addWidget(self._logs_tree)
+        split.addWidget(self._logs_view)
+        split.setStretchFactor(0, 0)
+        split.setStretchFactor(1, 1)
+        split.setSizes([260, 600])
+        layout.addWidget(split, 1)
+
+        self._logs_meta = QtWidgets.QLabel("")
+        self._logs_meta.setWordWrap(True)
+        self._logs_meta.setStyleSheet("QLabel { color: #94A3B8; font-size: 12.5px; }")
+        layout.addWidget(self._logs_meta)
+
+        self._populate_logs_tree()
         return panel
 
     def create_eye_ai_panel(self):

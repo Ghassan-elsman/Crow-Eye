@@ -63,10 +63,20 @@ export default function ActivityCard({ event, isLast, expanded, onToggle, onOpen
             {Array.isArray(event.details?.rename_chain) && event.details.rename_chain.length >= 2 && (
               <RenameChain names={event.details.rename_chain} flagged={flagged} />
             )}
-            <span className="user-chip"
-              title={user.definitive ? 'User named by the evidence' : 'Signed-in user at this time — not proof they performed it'}>
-              {user.definitive ? '👤' : '🕓'} {user.text}{user.basis === 'session' ? ' · logged-in' : ''}
-            </span>
+            <div className="tl-chips">
+              <span className="user-chip"
+                title={user.definitive ? 'User named by the evidence' : 'Signed-in user at this time — not proof they performed it'}>
+                {user.definitive ? '👤' : '🕓'} {user.text}{user.basis === 'session' ? ' · logged-in' : ''}
+              </span>
+              {/* Session context has always been in the payload and rendered
+                  nowhere. It is an annotation, never attribution. */}
+              {event.session_context && (
+                <span className="session-chip"
+                  title="Which sign-in session this moment falls inside — context, not proof of who acted">
+                  {event.session_context}
+                </span>
+              )}
+            </div>
           </div>
 
           <div className="tl-meta">

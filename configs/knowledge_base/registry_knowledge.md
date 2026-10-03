@@ -573,6 +573,32 @@ keeps its own last-written time, which dates the activity rather than the
 deletion. It is **not** evidence that a person deleted anything - uninstallers,
 driver updates and profile maintenance free cells constantly.
 
+**A low carve count is not a finding until you read `reorganized_at`.** Windows
+reorganizes a hive on its own schedule: it compacts the file and discards the
+free space, and every deleted record still sitting there goes with it. So a
+carve of 33 keys where an earlier case of the same machine carved 2,123 usually
+means the hive was compacted in between, not that anything was cleaned. That
+column, in `registry_hive_state`, is what tells the two apart:
+
+```sql
+SELECT h.hive_name, h.reorganized_at, count(k.rowid) AS carved
+FROM registry_hive_state h
+LEFT JOIN registry_carved_keys k ON k.hive_name = h.hive_name
+GROUP BY h.hive_name, h.reorganized_at;
+```
+
+Blank means the hive has never been reorganized, so an empty carve really is
+"nothing recoverable was deleted". A recent date means the carved tables are a
+floor and nothing more. `NULL` means the hive was not walked, so nothing is
+known either way. On a stock Windows 11 machine nearly every hive carries a
+date, often the same one across all of them - Windows compacts them together.
+
+**Which hives are carved.** `SYSTEM`, `SOFTWARE`, `SAM`, `SECURITY`, `DEFAULT`,
+`COMPONENTS`, `DRIVERS`, `BBI` and `ELAM`, plus `NTUSER.DAT` and `UsrClass.dat`
+for every user profile. `COMPONENTS` is the servicing store - installed
+packages and component history, and the second largest hive on a normal machine
+- and `BBI` is small but carves well out of proportion to its size.
+
 **Class names (`registry_class_names`).** A key can carry a class name, a
 second string stored separately from its name. Most keys have none. It is where
 `Control\Lsa\{JD,Skew1,GBG,Data}` keep the machine's boot key, so it is a

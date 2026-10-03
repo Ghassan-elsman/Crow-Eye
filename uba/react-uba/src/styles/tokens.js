@@ -47,9 +47,19 @@ export function isFlagged(event) {
 
 // activity -> { label } for the category pill. Icon comes from icons.jsx.
 export const ACTIVITY_META = {
+  // Browser databases (browser_analysis.db). web_browsing already existed for
+  // the registry-typed-URL rule and is reused by the real history rule.
+  file_download: { label: 'Download' },
+  application_state: { label: 'App state' },
+  configuration_change: { label: 'Setting changed' },
+  account_sync: { label: 'Account sync' },
+  extension_install: { label: 'Browser extension' },
+  credential_storage: { label: 'Stored credentials' },
+  anti_forensics: { label: 'Anti-forensics' },
   logon: { label: 'Session' },
   logoff: { label: 'Session' },
   unlock: { label: 'Session' },
+  failed_logon: { label: 'Failed sign-in' },
   app_launch: { label: 'App launch' },
   program_run: { label: 'App execution' },
   process_created: { label: 'Process start' },
@@ -107,6 +117,17 @@ export const CONFIDENCE_LABEL = {
 
 // Friendly evidence-source names for the inline proof list, by (db, table).
 const SOURCE_BY_TABLE = {
+  browser_history: 'Browser — history',
+  browser_gecko_history: 'Browser — history (Firefox)',
+  browser_downloads: 'Browser — downloads',
+  browser_preferences: 'Browser — profile preferences',
+  browser_extensions: 'Browser — extensions',
+  browser_credentials: 'Browser — saved logins',
+  browser_gecko_credentials: 'Browser — saved logins (Firefox)',
+  browser_payments: 'Browser — payment data',
+  browser_addresses: 'Browser — saved addresses',
+  browser_cookies: 'Browser — cookies',
+  browser_dips: 'Browser — site engagement',
   SecurityLogs: 'Event Log — Security',
   SystemLogs: 'Event Log — System',
   ApplicationLogs: 'Event Log — Application',
@@ -173,6 +194,47 @@ export function displayUser(event) {
     return { text: event.actor_name || 'Program', basis: 'app', definitive: true }
   }
   return { text: 'Unattributed', basis: 'none', definitive: false }
+}
+
+// Windows logon types, for the Sign-ins view. Mirrors
+// uba/utils/log_parser.py::LOGON_TYPE_LABELS — keep the two in step.
+export const LOGON_TYPE_LABEL = {
+  2: 'At the keyboard', 3: 'Over the network', 4: 'Scheduled task',
+  5: 'Windows service', 7: 'Unlocked the screen', 8: 'Network (cleartext)',
+  9: 'Run as another user', 10: 'Remote Desktop', 11: 'Cached sign-in',
+}
+
+export function logonTypeLabel(type) {
+  return LOGON_TYPE_LABEL[Number(type)] || `Logon type ${type}`
+}
+
+// How a session ended. 'open' must never read as a measured end — there is no
+// evidence for one, so the UI says so instead of showing a duration.
+export const END_BASIS_STYLE = {
+  logoff: { label: 'Signed out', color: '#8c95ab' },
+  signout: { label: 'Chose Sign out', color: '#34e0a1' },
+  'same-second': { label: 'Same second', color: '#f0a93b' },
+  open: { label: 'No sign-out recorded', color: '#f0a93b' },
+}
+
+export const END_BASIS_NOTE = {
+  logoff: 'Windows recorded the sign-out for this session.',
+  signout: 'The person chose Sign out; Windows recorded it.',
+  'same-second': 'Windows recorded the sign-out in the same second as the sign-in — '
+    + 'typically the session being torn down at shutdown.',
+  open: 'No sign-out was recorded, so how long this session lasted is not known. '
+    + 'The window below is only how far the evidence can place it.',
+}
+
+// Durations are only ever shown when the evidence supports one.
+export function durationLabel(seconds) {
+  if (seconds === null || seconds === undefined) return '—'
+  const s = Math.round(seconds)
+  if (s < 60) return `${s}s`
+  if (s < 3600) return `${Math.floor(s / 60)}m`
+  const h = Math.floor(s / 3600)
+  const m = Math.round((s % 3600) / 60)
+  return m ? `${h}h ${m}m` : `${h}h`
 }
 
 export const USER_BASIS_NOTE = {
