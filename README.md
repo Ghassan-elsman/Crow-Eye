@@ -139,7 +139,7 @@ flowchart TB
     RES[("correlation_results.db")]
     INTEL[("Crow_Intelligence.db")]
 
-    EYE{{"⑤ EYE<br/>GEP-governed assistant"}}
+    EYE{{"⑤ EYE<br/>GEP-governed assistant<br/>reads every case database"}}
     KB["KNOWLEDGE BASE<br/>guides · schema"]
     NM["NARRATIVE MAP<br/>case memory"]
     COMP["COMPLIANCE<br/>EvidenceSeal audit"]
@@ -161,7 +161,6 @@ flowchart TB
     CE --> RES
     DL --> INTEL
 
-    CASE == "read-only queries" ===> EYE
     RES -. "on demand" .-> EYE
     KB --> EYE
     EYE <== "verdict · narrative" ==> NM
@@ -228,11 +227,13 @@ The overview above is the shape. The four sections below open each stage: what r
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 46, "curve": "basis", "padding": 14}, "themeVariables": {"fontSize": "14px"}} }%%
 flowchart TB
-    L1["CROW-CLAW<br/>crow_claw/<br/>copy · VSS · raw disk"]
-    L3["OFFLINE IMPORTER<br/>Offline_Importer/<br/>SCAN → COLLECT → PARSE"]
-    L2["IMAGE PARSING<br/>Forensics_Image_parsing/<br/>dissect.target · no mounting"]
-    L0["LIVE PARSE<br/>Parse All Artifacts<br/>admin · up to 4 workers"]
-    L4["IMPORT EVIDENCE<br/>FeatherImporter"]
+    subgraph DOORS["② INGEST · five doors"]
+        L1["CROW-CLAW<br/>crow_claw/<br/>copy · VSS · raw disk"]
+        L3["OFFLINE IMPORTER<br/>Offline_Importer/<br/>SCAN → COLLECT → PARSE"]
+        L2["IMAGE PARSING<br/>Forensics_Image_parsing/<br/>dissect.target · no mounting"]
+        L0["LIVE PARSE<br/>Parse All Artifacts<br/>admin · up to 4 workers"]
+        L4["IMPORT EVIDENCE<br/>FeatherImporter"]
+    end
 
     ACQ[("live_acquisition/<br/>copied files · SHA-256")]
     INV[["ParserInvoker<br/>offline_parsers/offline_*.py"]]
@@ -262,6 +263,7 @@ flowchart TB
     class INV,LIVE run
     class REP help
     class ACQ,TA,IE,PS store
+    style DOORS fill:#042f2e,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
     linkStyle default stroke-width:2px
 ```
 
