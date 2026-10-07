@@ -8,7 +8,7 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.13.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.14.0%20pre--release-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -55,7 +55,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.13.0 · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.14.0 (pre-release; latest stable 0.13.0) · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 
@@ -103,107 +103,93 @@ Crow-Eye is built as an integrated loop — each stage feeds the next, from raw 
 Crow-Eye is an integrated pipeline, not a bag of parsers. Evidence flows one way through six stages, and every stage keeps its link back to the source record.
 
 ```mermaid
-%%{init: {"flowchart": {"nodeSpacing": 40, "rankSpacing": 60, "curve": "basis", "padding": 12}, "themeVariables": {"fontSize": "16px", "fontFamily": "system-ui, sans-serif"}} }%%
+%%{init: {"flowchart": {"nodeSpacing": 30, "rankSpacing": 50, "curve": "basis", "padding": 16}, "themeVariables": {"fontSize": "15px"}} }%%
 flowchart TB
 
-    subgraph SRC["① EVIDENCE SOURCES&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
+    subgraph SRC["① SOURCES"]
         S1["Live Windows<br/>system"]
         S2["Forensic image<br/>E01 · VHDX · VMDK · Raw"]
         S3["Collected folder<br/>Velociraptor · KAPE · EDR"]
         S4["Third-party output<br/>Plaso · Autopsy · Volatility"]
     end
 
-    subgraph ING["② INGEST&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
-        I0["LIVE PARSE<br/>Parse All Artifacts"]
+    subgraph ING["② INGEST"]
+        I0["LIVE PARSE<br/>this system, in place"]
         I1["CROW-CLAW<br/>live acquisition"]
-        I2["IMAGE PARSING<br/>direct, no mounting"]
-        I3["OFFLINE IMPORTER<br/>SCAN → COLLECT → PARSE"]
+        I2["IMAGE PARSING<br/>no mounting"]
+        I3["OFFLINE IMPORTER<br/>scan · collect · parse"]
         I4["IMPORT EVIDENCE<br/>CSV · JSON · SQLite"]
     end
 
-    subgraph PAR["ARTIFACT PARSERS · live and offline&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
-        P1["REGISTRY<br/>hive file · log replay · carving"]
-        P2["EXECUTION<br/>Prefetch · AmCache · ShimCache · SRUM"]
-        P3["FILE SYSTEM<br/>MFT · USN · Recycle Bin"]
-        P4["USER ACTIVITY<br/>LNK · Jump Lists · Shellbags · MRUs"]
-        P5["EVENT LOGS<br/>System · Security · Application"]
-        P6["BROWSERS<br/>Chromium · Firefox · Electron"]
-    end
+    PARSERS[["ARTIFACT PARSERS<br/>live and offline"]]
+    REPLAY["DIRTY-HIVE REPLAY<br/>logs applied to a copy"]
+    CASE[("③ CASE DATABASES<br/>Target_Artifacts/<br/>Imported_Evidence/")]
+    PSTAT[("PARSE STATUS<br/>one outcome per artifact")]
 
-    subgraph CASE["③ CASE&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
-        DB[("Target_Artifacts/<br/>artifact databases")]
-        IMP[("Imported_Evidence/<br/>third-party data")]
-        LOG[("logs/<br/>parse status · component logs")]
-    end
-
-    subgraph ANA["④ READ AND ANALYSE · read-only&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
-        TAB["ARTIFACT TABLES<br/>Anatomy · Charts · Why empty?"]
-        VIZ["CHART DASHBOARDS<br/>SRUM · MFT/USN · LNK · Prefetch<br/>Shell Items · Browser"]
-        SRCH["DATABASE SEARCH<br/>every case database"]
-        TL["TIMELINE<br/>heat map · week · day"]
-        UBA["USER BEHAVIOR ANALYTICS<br/>65 behaviours · sign-in sessions"]
+    subgraph ANA["④ ANALYSIS · read-only"]
+        TAB["ARTIFACT TABLES<br/>Anatomy · Why empty?"]
+        VIZ["CHART<br/>DASHBOARDS"]
+        SRCH["DATABASE<br/>SEARCH"]
+        CE["CORRELATION ENGINE<br/>Feathers → Wings →<br/>Engines → Pipelines"]
         DL["DYNAMIC LINKING<br/>SID · MAC · hash → name"]
-        CE["CORRELATION ENGINE<br/>Feathers → Wings → Engines"]
-        RES[("correlation results")]
+        TL["TIMELINE<br/>heat map · day"]
+        UBA["USER BEHAVIOR<br/>ANALYTICS"]
     end
 
-    subgraph AI["⑤ AI LAYER&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"]
-        direction LR
-        EYE["EYE<br/>GEP-governed assistant"]
-        KB["KNOWLEDGE BASE<br/>artifact guides · schema reference"]
-        NM["NARRATIVE MAP<br/>hash-chained case memory"]
-        COMP["COMPLIANCE<br/>EvidenceSeal · GEP status"]
-    end
+    RES[("correlation_results.db")]
+    INTEL[("Crow_Intelligence.db")]
+
+    EYE{{"⑤ EYE<br/>GEP-governed assistant"}}
+    KB["KNOWLEDGE BASE<br/>guides · schema"]
+    NM["NARRATIVE MAP<br/>case memory"]
+    COMP["COMPLIANCE<br/>EvidenceSeal audit"]
 
     OUT["⑥ LIVING REPORT<br/>CSV · JSON · HTML"]
 
-    S1 --> I0
-    S1 --> I1
+    S1 --> I0 & I1
     S2 --> I2
     S3 --> I3
     S4 --> I4
 
-    I0 & I1 & I2 & I3 --> PAR
-    I4 -- "verbatim or converted" --> IMP
-    PAR -- "parsed artifacts" --> DB
-    PAR -. "outcome per artifact" .-> LOG
+    I0 & I1 & I2 & I3 --> PARSERS
+    PARSERS -. "every hive" .-> REPLAY
+    PARSERS == "parsed artifacts" ==> CASE
+    PARSERS -. "status" .-> PSTAT
+    I4 -- "verbatim or<br/>converted" --> CASE
 
-    CASE == "read-only" ==> ANA
+    CASE ==> TAB & VIZ & SRCH & CE & DL & TL & UBA
     CE --> RES
-    CASE == "read-only queries" ==> EYE
+    DL --> INTEL
+
+    CASE == "read-only queries" ===> EYE
     RES -. "on demand" .-> EYE
     KB --> EYE
-    EYE <--> NM
-    EYE -- "audited by" --> COMP
-    EYE -- "report_* tools" --> OUT
+    EYE <== "verdict · narrative" ==> NM
+    EYE -- "every tool call" --> COMP
+    EYE == "report_* tools" ==> OUT
+    COMP -. "audit_trail.json" .-> OUT
 
     classDef src   fill:#334155,stroke:#94a3b8,stroke-width:2px,color:#f1f5f9
     classDef ing   fill:#0f766e,stroke:#2dd4bf,stroke-width:2px,color:#f0fdfa
-    classDef par   fill:#115e59,stroke:#5eead4,stroke-width:1px,color:#f0fdfa
+    classDef hub   fill:#115e59,stroke:#5eead4,stroke-width:3px,color:#f0fdfa
     classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
     classDef ana   fill:#1e40af,stroke:#60a5fa,stroke-width:2px,color:#eff6ff
     classDef ai    fill:#6b21a8,stroke:#c084fc,stroke-width:2px,color:#faf5ff
-    classDef out   fill:#166534,stroke:#4ade80,stroke-width:2px,color:#f0fdf4
+    classDef eye   fill:#7e22ce,stroke:#e9d5ff,stroke-width:3px,color:#faf5ff
+    classDef out   fill:#166534,stroke:#4ade80,stroke-width:3px,color:#f0fdf4
 
     class S1,S2,S3,S4 src
-    class I0,I1,I2,I3,I4 ing
-    class P1,P2,P3,P4,P5,P6 par
-    class DB,IMP,LOG,RES store
-    class TAB,VIZ,SRCH,TL,UBA,DL,CE ana
-    class EYE,KB,NM,COMP ai
+    class I0,I1,I2,I3,I4,REPLAY ing
+    class PARSERS hub
+    class CASE,PSTAT,RES,INTEL store
+    class TAB,VIZ,SRCH,TL,UBA,CE,DL ana
+    class KB,NM,COMP ai
+    class EYE eye
     class OUT out
 
-    style SRC  fill:#0f172a,stroke:#94a3b8,stroke-width:2px,color:#e2e8f0
-    style ING  fill:#042f2e,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
-    style PAR  fill:#042f2e,stroke:#5eead4,stroke-width:1px,stroke-dasharray:5 4,color:#ccfbf1
-    style CASE fill:#2a1505,stroke:#fbbf24,stroke-width:2px,color:#fef3c7
-    style ANA  fill:#0b1a3d,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
-    style AI   fill:#2a0b45,stroke:#c084fc,stroke-width:2px,color:#f3e8ff
+    style SRC fill:#0f172a,stroke:#94a3b8,stroke-width:2px,color:#e2e8f0
+    style ING fill:#042f2e,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
+    style ANA fill:#0b1a3d,stroke:#60a5fa,stroke-width:2px,color:#dbeafe
 
     linkStyle default stroke-width:2px
 ```
@@ -221,7 +207,7 @@ flowchart TB
 | ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses write one outcome per artifact to `logs/parse_status.json` — parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, failed or not run. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, a **Why empty?** button explains every empty table, and each case keeps per-component logs browsable in Settings → Logs. |
 | ③ → ④ | **Nothing reads half-written data.** While a parse or load runs, the readers in stage ④ and the Eye are held — each offers *Open when ready* — so no view opens against tables still being filled. |
 | ③ → ④ | **Every reader is independent and read-only.** The artifact tables carry **Anatomy** (how the artifact is read, byte by byte), **Charts** (the dashboard for that table) and **Why empty?**. The Timeline, UBA, Database Search and the dashboards read the case databases directly — none requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
-| ③ → ④ | **Dynamic Linking** gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact tables** via non-destructive `ATTACH` + `LEFT JOIN`. It changes how records *read*, never the evidence. |
+| ③ → ④ | **Dynamic Linking** gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact tables** through a non-destructive `ATTACH` and a per-row lookup. It changes how records *read*, never the evidence. |
 | ③ → ⑤ | The **Eye** queries the case databases directly, pulls correlation results **on demand**, and is grounded in a knowledge base of artifact guides and the live schema reference. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
 | ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, the analyst writes to it, and its contents are injected into the Eye's prompt every turn. |
 | ⑤ ⟳ | **Compliance audits the Eye.** Every tool call is anchored to the **EvidenceSeal** hash chain; the page renders live per-rule **GEP** status (10 principles) verified from that chain and `EYE_Logs/`, exportable as `audit_trail.json`. |
@@ -229,9 +215,193 @@ flowchart TB
 
 **Independent stages.** The Timeline, UBA, Database Search and the Chart dashboards read the case artifact databases **directly** — none requires a correlation run, and the Timeline does not depend on the Correlation Engine (it applies its own lightweight temporal grouping). Correlation is an additional analysis layer whose results the Eye can query.
 
-**Read-only by design.** Parsing writes to the case database; every downstream stage (the dashboards, Database Search, UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) reads the case databases to build a per-case `Crow_Intelligence.db` of identity mappings and enriches the artifact data tables inline via non-destructive `ATTACH` + `LEFT JOIN` queries rather than rewriting rows.
+**Read-only by design.** Parsing writes to the case database; every downstream stage (the dashboards, Database Search, UBA, the Timeline, correlation viewers, the Eye) opens those databases **read-only**. The original evidence is never modified — [Dynamic Linking](#-analysis-modes) reads the case databases to build a per-case `Crow_Intelligence.db` of identity mappings and enriches the artifact data tables inline through a non-destructive `ATTACH` and a per-row lookup rather than rewriting rows.
 
 **Governed by design.** Every action the Eye takes is anchored to the tamper-evident **EvidenceSeal** hash chain, and the **Compliance** page continuously verifies the Eye against the [Ghassan Elsman Protocol (GEP)](eye/docs/GEP_standard.md) — live per-rule status, exportable to `EYE_Logs/audit_trail.json`.
+
+### 🔬 Architecture in detail
+
+The overview above is the shape. The four sections below open each stage: what runs, which module runs it, what it reads, what it writes, and what it guarantees. Every path is relative to the repository root; every case path is relative to the case folder.
+
+#### ② Ingest — five doors, one set of parsers
+
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 46, "curve": "basis", "padding": 14}, "themeVariables": {"fontSize": "14px"}} }%%
+flowchart TB
+    L1["CROW-CLAW<br/>crow_claw/<br/>copy · VSS · raw disk"]
+    L3["OFFLINE IMPORTER<br/>Offline_Importer/<br/>SCAN → COLLECT → PARSE"]
+    L2["IMAGE PARSING<br/>Forensics_Image_parsing/<br/>dissect.target · no mounting"]
+    L0["LIVE PARSE<br/>Parse All Artifacts<br/>admin · up to 4 workers"]
+    L4["IMPORT EVIDENCE<br/>FeatherImporter"]
+
+    ACQ[("live_acquisition/<br/>copied files · SHA-256")]
+    INV[["ParserInvoker<br/>offline_parsers/offline_*.py"]]
+    LIVE[["Live parsers<br/>*_Claw.py · Regclaw.py"]]
+    IE[("Imported_Evidence/<br/>verbatim · converted · documents")]
+
+    REP["REPAIRED BEFORE READING<br/>dirty hives: LOG1/LOG2 replayed into a copy<br/>SRUM: ESE soft recovery"]
+    TA[("Target_Artifacts/<br/>one database per family")]
+    PS[("logs/parse_status.json<br/>one outcome per artifact")]
+
+    L1 --> ACQ
+    L3 -- "COLLECT" --> ACQ
+    ACQ -- "PARSE" --> INV
+    L2 -- "read out of the image" --> INV
+    L0 --> LIVE
+    L4 --> IE
+
+    INV & LIVE -.-> REP
+    INV & LIVE ==> TA
+    INV & LIVE -.-> PS
+
+    classDef door  fill:#0f766e,stroke:#2dd4bf,stroke-width:2px,color:#f0fdfa
+    classDef run   fill:#115e59,stroke:#5eead4,stroke-width:3px,color:#f0fdfa
+    classDef help  fill:#134e4a,stroke:#99f6e4,stroke-width:1px,stroke-dasharray:4 3,color:#f0fdfa
+    classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
+    class L0,L1,L2,L3,L4 door
+    class INV,LIVE run
+    class REP help
+    class ACQ,TA,IE,PS store
+    linkStyle default stroke-width:2px
+```
+
+| Door | Module | What it does | Writes |
+|---|---|---|---|
+| **Live parse** | `Crow Eye.py` → `utils/concurrency/standalone_parsers.py` | Parses this machine in place. Needs administrator rights. Runs the parsers in a process pool (up to four workers), then MFT → USN → their correlation in sequence. | `Target_Artifacts/*.db` |
+| **Crow-Claw** | `Artifacts_Collectors/crow_claw/` | Live acquisition: copies registry hives with their `.LOG1`/`.LOG2`, NTUSER.DAT and UsrClass.dat, Prefetch, AmCache, LNK and Jump Lists, `$MFT`, the USN journal, Recycle Bin, event logs, SRUM, ShimCache, browsers and partition information. Standard copy always; Volume Shadow Copy and raw-disk access when elevated. | One folder per artifact type, and `collection_manifest.json` with MD5 and SHA-256 of every file |
+| **Image parsing** | `Artifacts_Collectors/Forensics_Image_parsing/` | Reads E01/Ex01, VHDX/VHD, VMDK, ISO and raw (`dd`/`img`/`001`, multi-part sets included) through `dissect.target` — nothing is mounted. Reuses the Offline Importer's collector and coordinator, then parses in `image` mode. | `Target_Artifacts/*.db` |
+| **Offline Importer** | `Artifacts_Collectors/Offline_Importer/` | **SCAN** detects artifact types by name and extension into `.artifact_scan_index.json`; **COLLECT** copies what was found into `live_acquisition/` with a SHA-256 of each file; **PARSE** hands each artifact to `ParserInvoker`, which calls the matching `offline_parsers/offline_*.py`. Works on any Velociraptor, KAPE or EDR collection. | `Target_Artifacts/*.db` |
+| **Import Evidence** | `correlation_engine/feather/importer.py` (`FeatherImporter`) | Brings in third-party output: SQLite is copied verbatim; CSV and JSON are converted to a feather-shaped SQLite with its own `feather_metadata`; documents (PDF, HTML, text, mail) are copied as they are. | `Target_Artifacts/Imported_Evidence/` and `imported_evidence_manifest.json` (SHA-256 of source and copy) |
+
+**Every parser family, and where its output lands** (all under `Target_Artifacts/`):
+
+| Family | Live parser | Offline / image parser | Database | Main tables |
+|---|---|---|---|---|
+| Registry | `Regclaw.py` | `offline_RegClaw.py` | `registry_data.db` | BAM, Shellbags, UserAssist, RecentDocs, OpenSaveMRU, USB storage, MUICache, NetworkProfiles and ~80 more |
+| LNK & Jump Lists | `A_CJL_LNK_Claw.py` | `offline_ACJLClaw.py` | `LnkDB.db` | LNK_Files, Automatic_JumpLists, Custom_JumpLists |
+| Prefetch | `Prefetch_claw.py` | `offline_PrefetchClaw.py` | `prefetch_data.db` | prefetch_data |
+| AmCache | `amcacheparser.py` | `offline_AmCacheClaw.py` | `amcache.db` | InventoryApplication, InventoryApplicationFile, InventoryDriver … |
+| ShimCache | `shimcash_claw.py` | `offline_ShimCacheClaw.py` | `shimcache.db` | shimcache_entries |
+| SRUM | `SRUM_Claw.py` | `offline_SRUM_Claw.py` | `srum_data.db` | application usage, network usage and connectivity, energy, app timeline, metadata |
+| Event logs | `WinLog_Claw.py` | `offline_WinLog_Claw.py` | `Log_Claw.db` | SystemLogs, SecurityLogs, ApplicationLogs |
+| Recycle Bin | `recyclebin_claw.py` | `offline_RecycleBinClaw.py` | `recyclebin_analysis.db` | recycle_bin_entries |
+| $MFT | `MFT_Claw.py` | `offline_MFTClaw.py` | `mft_claw_analysis.db` | mft_records, mft_standard_info, mft_file_names, mft_data_attributes |
+| USN journal | `USN_Claw.py` | `offline_USNClaw.py` | `USN_journal.db` | journal_events, deleted_entries |
+| MFT ↔ USN | `mft_usn_correlator.py` | `offline_MFT_USN_Correlator.py` | `mft_usn_correlated_analysis.db` | mft_usn_correlated, filename_changes |
+| Browsers | `Browser_Claw.py` | — (live only in this release) | `browser_analysis.db` | 37 tables — history, downloads, cookies, Gecko history … |
+
+**Two repairs happen before a parser reads anything, and neither touches the evidence:**
+
+- **Dirty-hive replay.** `Artifacts_Collectors/registry_transaction_log.py` → `hive_for_reading(path)` applies a hive's `.LOG1`/`.LOG2` entries to a copy in a temporary workspace and hands the parser that copy, so a hive is read in the state Windows had not yet finished writing. It returns the original when there is nothing to replay, is memoised per hive, never raises, and deletes its workspace on exit. Every hive reader goes through it — `offline_RegClaw`, `amcacheparser`, `offline_ShimCacheClaw`, `offline_SRUM_Claw`, `security_hive` and `user_identity` — and acquired live hives use the same recovery code.
+- **SRUM ESE recovery.** SRUM is an ESE database that is almost never cleanly closed. The parser first opens a working copy read-only; if that fails, it replays the collected `.jfm`/`.chk`/`SRU*.log` set with `esentutl` soft recovery, and only as a last resort repairs. The outcome — `clean`, `recovered`, `repaired` or `dirty` — is recorded in `srum_metadata`, so a reader knows which state the numbers came from.
+
+#### ③ Case — what is on disk
+
+```text
+<case>/
+├── Target_Artifacts/              one SQLite database per artifact family (table above)
+│   └── Imported_Evidence/         third-party data, found automatically by every reader
+├── live_acquisition/              artifacts copied by Crow-Claw or the Offline Importer
+├── logs/
+│   └── parse_status.json          one outcome per artifact for every parse
+├── Correlation/
+│   ├── feathers/ wings/ pipelines/
+│   └── results/correlation_results.db
+├── Crow_Intelligence.db           identity mappings built by Dynamic Linking
+└── EYE_Logs/                      Eye's sealed logs, Narrative Map, audit_trail.json
+```
+
+The case settings live outside the case, in `config/case_<name>.json` next to the application.
+
+**Parse status says *why*, not only *whether*.** `utils/parse_status.py` writes one outcome per artifact on every live, offline and image parse: `parsed`, `no records`, `source not found`, `feature disabled`, `unsupported format`, `access denied`, `dependency missing`, `partial`, `failed` or `not run`. The first three are **not failures** — an artifact that does not exist on a system is a fact about that system. The Parse Status Report opens when the data loads, and the **Why empty?** button on every empty table reads its reason from the same file.
+
+#### ④ Analysis — independent, read-only readers
+
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 26, "rankSpacing": 50, "curve": "basis", "padding": 14}, "themeVariables": {"fontSize": "14px"}} }%%
+flowchart TB
+    CASE[("Case databases<br/>Target_Artifacts/ · Imported_Evidence/")]
+
+    VIZ["CHART DASHBOARDS<br/>visualizations/<br/>dialog + bridge + React"]
+    SRCH["DATABASE SEARCH<br/>Ctrl+Shift+F"]
+    TL["TIMELINE<br/>timeline/ · artifact_map.py"]
+    UBA["USER BEHAVIOR ANALYTICS<br/>uba/ · 65 rules · Ctrl+Shift+B"]
+    DL["DYNAMIC LINKING<br/>dynamic_mapping/ · 22 rules"]
+    CE["CORRELATION ENGINE<br/>correlation_engine/"]
+
+    INTEL[("Crow_Intelligence.db<br/>value → name")]
+    TAB["ARTIFACT TABLES<br/>names shown beside raw values"]
+    F[("Correlation/feathers/")]
+    RES[("correlation_results.db")]
+
+    CASE ==> VIZ & SRCH & TL & UBA & DL & CE
+    DL -- "ATTACH · gather" --> INTEL
+    INTEL -. "ATTACH · per-row lookup" .-> TAB
+    CE -- "auto-generated feathers" --> F
+    F -- "Wings → engine → Pipelines" --> RES
+
+    classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
+    classDef ana   fill:#1e40af,stroke:#60a5fa,stroke-width:2px,color:#eff6ff
+    class CASE,INTEL,F,RES store
+    class VIZ,SRCH,TL,UBA,DL,CE,TAB ana
+    linkStyle default stroke-width:2px
+```
+
+None of these requires another. Each opens the case databases **read-only**, and each is held — offering *Open when ready* — while a parse or load is still writing them.
+
+| Reader | Module | What it does |
+|---|---|---|
+| **Chart dashboards** | `visualizations/` | Six dashboards — SRUM, MFT/USN, LNK & Jump Lists, Prefetch, Shell Items, Browser — opened by the **Charts** button on their own tables. Each is a Qt dialog hosting a React page; a `QWebChannel` bridge serves the page its data from the case databases. |
+| **Database Search** | `ui/database_search_dialog.py` → `data/unified_search_engine.py` | Searches every database it discovers in the case, imported evidence included. Case-sensitive, exact and regular-expression modes, and an optional time filter on each table's detected timestamp columns. |
+| **Timeline** | `timeline/` | Heat map (per day), week and lane views. `data/artifact_map.py` is the one map of what it plots: 18 artifact types and their time columns. Registry key write times are bounded (*no later than*) and drawn hollow, so they cannot pass for an exact event time. Applies its own lightweight grouping — no correlation run needed. |
+| **User Behavior Analytics** | `uba/` | Replays the case through 65 declarative rules in `uba/config/behavior_rules.json` (38 routine, 24 notable, 2 suspicious, 1 critical) into a plain-English activity story. Sign-in sessions are built from Security events 4624/4634/4647, paired by LogonId. Every statement opens its backing record. |
+| **Dynamic Linking** | `dynamic_mapping/` | 22 rules gather identity mappings — SID → user, MAC → network, hash → file name, USB serial → device, volume GUID → volume name and more — into `Crow_Intelligence.db` by `ATTACH`ing each case database read-only. The artifact tables then show the resolved name beside the raw value through a per-row lookup on the attached database. It changes how a record *reads*, never the record. |
+| **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Identity or Time-Window engine, and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
+
+#### ⑤ AI layer — how a question travels
+
+```mermaid
+%%{init: {"themeVariables": {"fontSize": "14px"}} }%%
+sequenceDiagram
+    autonumber
+    actor A as Analyst
+    participant UI as Eye window<br/>(React)
+    participant B as eye_bridge<br/>(QWebChannel)
+    participant W as QueryWorker
+    participant CM as ContextManager
+    participant QP as QueryProcessor
+    participant MR as ModelRouter
+    participant M as Model backend
+    participant T as Tools
+    A->>UI: question
+    UI->>B: send
+    B->>W: run off the UI thread
+    W->>CM: process_query
+    CM->>CM: history · Narrative Map · knowledge base (RAG)
+    CM->>QP: prompt + 31 tool definitions
+    loop until an answer or the iteration limit
+        QP->>MR: generate (EvidenceSeal seals the exact prompt bytes)
+        MR->>M: request
+        M-->>MR: text or tool call
+        MR-->>QP: response
+        QP->>T: tool call — case DBs read-only, correlation results, report_*
+        T-->>QP: result
+    end
+    QP-->>UI: answer · reasoning trace · evidence
+```
+
+| Component | Module | Role |
+|---|---|---|
+| **Bridge & worker** | `eye/bridge/eye_bridge.py` | The React window talks to Python over `QWebChannel`; a `QueryWorker` thread keeps the interface responsive. |
+| **ContextManager** | `eye/services/context_manager.py` | Builds each turn: conversation history, the Narrative Map, retrieved knowledge, and the tool catalogue. |
+| **QueryProcessor** | `eye/services/query_processor.py` | The agentic loop: ask the model, run the tool it calls, feed the result back, until it answers. |
+| **ModelRouter & backends** | `eye/services/model_router.py`, `eye/backends/` | Local command-line agents (Gemini CLI, Claude Code, Ollama CLI and others), local servers (Ollama, LM Studio, vLLM) or cloud APIs (OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Groq and more). Local backends keep the whole loop on the machine. |
+| **Tools** | `configs/llm_config.json` | 31 tools: database queries and schema, artifact and semantic search, the timeline sweep, correlation results and wing authoring, imported evidence, threat intelligence, and the ten `report_*` tools. |
+| **Knowledge base** | `configs/knowledge_base/` | Artifact guides and the live schema reference, retrieved per question — by embeddings when a model is configured, by a built-in BM25 index when not. |
+| **Narrative Map** | `eye/services/narrative_map_service.py` | Verdict → narrative → evidence, written by the Eye and the analyst alike, hash-chained in `EYE_Logs/narrative_map_audit.jsonl` and injected into every prompt. |
+| **EvidenceSeal** | `eye/services/evidence_seal.py` | Seals the SHA-256 of the exact bytes of every prompt in a hash-chained `EYE_Logs/eye_payload_seal.jsonl`. |
+| **Compliance** | `ProtocolCompliancePanel` | Shows live per-rule GEP status verified from the seal chain and `EYE_Logs/`; **Export Audit JSON** writes `EYE_Logs/audit_trail.json`. |
+| **Living Report** | `report_*` tools | Built by the Eye alone — sections, data tables, images, charts, timelines, heat maps and chain of custody — exported as CSV, JSON or HTML. |
 
 ## 📥 Download & Install
 
@@ -409,7 +579,7 @@ Translate raw technical identifiers — SIDs, MAC addresses, hashes — into hum
 
 ### Detection Coverage
 
-The 40 detections span four severity classes and the full breadth of the parsed artifact set:
+The 65 detections span four severity classes and the full breadth of the parsed artifact set:
 
 | Category | Detections include |
 |---|---|
@@ -500,116 +670,162 @@ The Correlation Engine is **production-ready** and actively used in investigatio
 
 ### System Architecture
 
-The Correlation Engine consists of four main components:
+The Correlation Engine consists of four components. Data flows through them in one direction:
+
+```mermaid
+%%{init: {"flowchart": {"nodeSpacing": 30, "rankSpacing": 44, "curve": "basis", "padding": 14}, "themeVariables": {"fontSize": "14px"}} }%%
+flowchart TB
+    SRC[("Case databases<br/>Target_Artifacts/ · Imported_Evidence/")]
+    F[["① FEATHERS<br/>one normalized SQLite per artifact<br/>feather_metadata · feather_lineage"]]
+    W["② WINGS<br/>JSON rules: which feathers, their weights<br/>and tiers, time window, minimum matches"]
+    SEL{"EngineSelector"}
+    ID["③ IDENTITY ENGINE<br/>who / what first, then when"]
+    TW["③ TIME-WINDOW ENGINE<br/>when first, then who / what"]
+    P["④ PIPELINE<br/>create feathers → run wings → report"]
+    RES[("correlation_results.db")]
+
+    SRC -- "auto-generated · or Feather Builder import" --> F
+    F --> W
+    W --> P
+    P --> SEL
+    SEL -- "identity_based (default)" --> ID
+    SEL -- "time_window_scanning" --> TW
+    ID & TW -- "matches · scores · drop ledger" --> RES
+
+    classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
+    classDef comp  fill:#1e40af,stroke:#60a5fa,stroke-width:2px,color:#eff6ff
+    classDef eng   fill:#6b21a8,stroke:#c084fc,stroke-width:2px,color:#faf5ff
+    class SRC,RES store
+    class F,W,P,SEL comp
+    class ID,TW eng
+    linkStyle default stroke-width:2px
+```
 
 #### 1. 🗄️ Feathers (Data Normalization)
 
-**Purpose**: Transform raw forensic artifacts into a standardized, queryable format.
+**What they are.** A feather is one SQLite database per artifact type, holding that artifact's records in a normalized, queryable shape, plus two bookkeeping tables: `feather_metadata` (artifact type, source, record count) and `feather_lineage` (where every row came from).
 
-- SQLite databases containing normalized forensic artifact data — one feather per artifact type (Prefetch, ShimCache, Event Logs, …) with a standardized schema and metadata for efficient querying.
-- A **universal format** that accepts data from any forensic tool.
+**How they are made.**
+- **Automatically, from the case.** `correlation_engine/integration/auto_feather_generator.py` builds feathers from the case databases into `Correlation/feathers/`, using 41 built-in artifact-to-feather mappings (`*_CrowEyeFeather`).
+- **From any other tool.** The **Feather Builder** (`python -m correlation_engine.feather.feather_builder` opens its window) and Import Evidence turn CSV, JSON or SQLite output — Plaso, Autopsy, Volatility or anything else with headers — into a feather: automatic column mapping, data-type detection and timestamp normalization.
 
 ```
 Any Tool Output → Feather Builder → Normalized Feather Database
 (CSV/JSON/SQLite)                   (SQLite with standard schema)
 
-Examples:
-- Plaso CSV        → Feather Builder → timeline.db
-- Autopsy JSON     → Feather Builder → autopsy_artifacts.db
-- Volatility CSV   → Feather Builder → memory_artifacts.db
-- Custom Output    → Feather Builder → custom.db
-```
-
-**Supported import formats:** CSV (any headered file), JSON (flat or nested), and SQLite (direct import). Automatic column mapping, data-type detection, timestamp normalization to ISO, validation, and optimized indexes.
-
-```
 prefetch.db (Feather)
-├── feather_metadata (artifact type, source, record count)
-├── prefetch_data (executable_name, path, last_executed, hash)
-└── Indexes (timestamp, name, path)
+├── feather_metadata   artifact type, source, record count
+├── feather_lineage    where each row came from
+├── prefetch_data      executable_name, path, last_executed, hash …
+└── indexes            timestamp, name, path
 ```
 
 #### 2. 🎯 Wings (Correlation Rules)
 
-**Purpose**: Define which artifacts to correlate and how.
+**What they are.** A Wing is a JSON rule that answers one investigative question — *was this program executed?*, *was a USB device used?* — by naming the feathers that can prove it, how much each one counts, and how close in time they must be. **Eleven default wings ship** in `correlation_engine/integration/default_wings/`: account logon, anti-forensics, brute force and spray, execution proof, execution without trace, lateral movement, persistence, ransomware mass encryption, security-control tampering, USB and removable media, and user activity. Every Wing is **authorable and sealed** — it records who wrote it, why, and the evidence that motivated it.
 
-- JSON/YAML rules specifying a **time window**, **minimum matches**, **anchor priority**, and the **feathers** (with weights) to correlate — reusable across cases. Every Wing is **authorable and sealed** (records who authored it, why, and the evidence that motivated it).
+**Key fields** (from the shipped *Execution Proof* wing):
 
 ```json
 {
-  "wing_id": "execution-proof",
-  "wing_name": "Execution Proof",
-  "correlation_rules": {
-    "time_window_minutes": 5,
-    "minimum_matches": 2,
-    "anchor_priority": ["Prefetch", "SRUM", "AmCache"]
-  },
+  "wing_id": "default_wing_execution_001",
+  "wing_name": "Execution Proof Correlation",
+  "proves": "…",
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "anchor_priority": ["Prefetch", "ShimCache", "AmCache", "LNK", "Jumplists", "SRUM", "MFT", "Logs", "Registry"],
+  "use_weighted_scoring": true,
   "feathers": [
-    {"feather_id": "prefetch", "weight": 0.4},
-    {"feather_id": "shimcache", "weight": 0.3},
-    {"feather_id": "amcache", "weight": 0.3}
-  ]
+    {"feather_id": "prefetch",  "artifact_type": "Prefetch",  "weight": 0.40, "tier": 1},
+    {"feather_id": "shimcache", "artifact_type": "ShimCache", "weight": 0.25, "tier": 1},
+    {"feather_id": "amcache_app", "artifact_type": "AmCache", "weight": 0.15, "tier": 2}
+  ],
+  "scoring": {"score_interpretation": {
+    "confirmed": {"min": 0.7}, "probable": {"min": 0.4}, "weak": {"min": 0.2}, "not_proven": {"min": 0.0}
+  }}
 }
 ```
 
+The real wing lists fourteen feathers. Other fields: `description`, `author`, `created_date`, `version`, `target_application`, `target_file_path`, `target_event_id`, `apply_to`, `semantic_rules`, `tags`, `case_types`.
+
 #### 3. ⚙️ Engines (Correlation Strategies)
 
-**Purpose**: Execute correlation logic to find relationships between artifacts. Structural links come **first**; a tier-weighted score is layered on top as *interpretation/ranking*, not as the basis for a match.
+Structural links come **first**; the weighted score is layered on top as *interpretation and ranking*, never as the basis for a match. A match must span **more than one feather** — a single artifact corroborates nothing.
 
-**Time-Window Scanning Engine** — best for time-based analysis and systematic temporal correlation. Scans through time in fixed intervals, collects records from all feathers per window, applies semantic field matching + weighted scoring, and prevents duplicates via MatchSet tracking. **O(N log N)** (indexed timestamp queries); batch processing (~2,567 windows/second).
+**Identity-Based Engine** (`engine/identity_correlation_engine.py`) — the default. Best for "what did this program, file or account do?"
+1. **Extract and cluster identities** — every record's name, path and hash are normalized (119 field patterns: 48 name, 48 path, 23 hash) and records are grouped by identity, so `Chrome.exe`, `chrome.exe` and `C:\…\chrome.exe` become one subject.
+2. **Build temporal anchors** inside each identity cluster (180-minute windows by default, or the wing's `time_window_minutes`).
+3. **Choose the primary anchor** for each cluster from the wing's `anchor_priority`.
+4. **Enrich semantically** — the identity-level semantic phase applies the mapping rules.
+5. **Score** each match with the wing's weights.
+6. **Write results**, streaming at constant memory once a run passes 5,000 anchors.
 
-**Identity-Based Correlation Engine** — best for large datasets (>1,000 records) and identity tracking. Extracts and normalizes identities, groups records by identity, builds temporal anchors within each cluster, classifies evidence as primary/secondary/supporting, and streams for very large sets (>5,000 anchors) at constant memory. **O(N log N)**; 40+ identity field patterns per type.
+**Time-Window Scanning Engine** (`engine/time_based_engine.py`) — best for "what happened around this time?"
+1. **Find the time range** from the data itself (no fixed starting year).
+2. **Step through it in windows** of the wing's `time_window_minutes` (180 by default, at most 1,440).
+3. **Collect each window's records** from every feather, then filter and normalize their identities.
+4. **Group by identity** within the window and keep only groups that reach the corroboration floor (records from at least two feathers).
+5. **Score** each surviving group with the wing's weights. Duplicate records inside a window are counted in the diagnostics, not silently discarded.
 
-**Engine selection:** use the Time-Window engine for time-based analysis and the Identity-Based engine for identity tracking — both are production-ready and optimized for large datasets with indexed queries.
+**Scoring** (`engine/weighted_scoring.py`): score = the sum of the matched feathers' weights ÷ the sum of all the wing's weights, from 0 to 1. The wing's `score_interpretation` bands turn the number into words — *Confirmed*, *Probable*, *Weak*, *Not proven*.
+
+**Engine selection:** Identity-Based for following one subject across artifacts; Time-Window for reconstructing a period. Both read feathers through indexed timestamp queries.
 
 #### 4. 🔄 Pipelines (Workflow Orchestration)
 
-**Purpose**: Automate complete analysis workflows from feather creation to result generation. A pipeline reads its config (engine type, wings, feathers), instantiates the right engine via the EngineSelector, executes each wing, aggregates matches, saves results (DB + JSON), and displays them in the GUI with filtering and visualization.
+**What they are.** A pipeline (`config/pipeline_config.py`) bundles feathers, wings, an engine type (`identity_based` by default) and an optional time period (the last 365 days by default) into one repeatable run.
+
+**Pipeline workflow** (`pipeline/pipeline_executor.py`):
+1. **Load the configuration** — feathers, wings, engine type, filters.
+2. **Create the engine** through the `EngineSelector`; if the requested engine cannot be built, fall back to the Identity engine rather than fail.
+3. **Create feathers** that do not exist yet (when `auto_create_feathers` is on).
+4. **Execute every wing** against its feathers.
+5. **Collect the results** — matches, scores and the per-window drop ledger — into `correlation_results.db`.
+6. **Generate the report** and display the results in the Results Viewer.
 
 ```json
 {
+  "config_name": "investigation_pipeline",
   "pipeline_name": "Investigation Pipeline",
   "engine_type": "identity_based",
-  "wings": [{"wing_id": "execution-proof"}, {"wing_id": "file-access"}],
-  "feathers": [
-    {"feather_id": "prefetch", "database_path": "data/prefetch.db"},
-    {"feather_id": "srum", "database_path": "data/srum.db"},
-    {"feather_id": "eventlogs", "database_path": "data/eventlogs.db"}
-  ],
-  "filters": {
-    "time_period_start": "2024-01-01T00:00:00",
-    "time_period_end": "2024-12-31T23:59:59"
-  }
+  "wing_configs": [{"config_name": "execution_proof_correlation"},
+                   {"config_name": "usb_removable_media_correlation"}],
+  "feather_configs": [{"config_name": "Prefetch_CrowEyeFeather"},
+                      {"config_name": "ShimCache_CrowEyeFeather"}],
+  "auto_create_feathers": true,
+  "auto_run_correlation": true,
+  "time_period_start": "2024-01-01T00:00:00",
+  "time_period_end": "2024-12-31T23:59:59"
 }
 ```
 
 ### How It All Works Together
 
 ```
-1. Data Preparation   Raw Forensic Data → Feather Builder → Feather Databases
-2. Configuration      Wing Configs + Feather References → Pipeline Config
-3. Execution          Pipeline Executor → Engine Selector → Correlation Engine
-4. Correlation        Engine loads Feathers + applies Wing rules → Correlation Results
-5. Visualization      Results Database → Results Viewer GUI
+1. Data preparation   Case databases → auto-generated feathers (or Feather Builder imports)
+2. Configuration      Wings + feather references → pipeline config
+3. Execution          Pipeline executor → EngineSelector → Identity or Time-Window engine
+4. Correlation        Engine loads feathers, applies each wing → correlation_results.db
+5. Review             Results Viewer GUI — and the Eye, which queries the results on demand
 ```
 
 ### Example Use Case: Finding Execution Proof
 
 **Scenario**: prove that `malware.exe` was executed on a system.
 
-```json
-{
-  "wing_id": "malware-execution",
-  "correlation_rules": { "time_window_minutes": 5, "minimum_matches": 2 },
-  "feathers": ["prefetch", "shimcache", "amcache"]
-}
-```
+**Step 1 — Feathers.** Load a case and click **RUN CORRELATION**: feathers are generated from the case databases automatically. Output from another tool is added with the Feather Builder or Import Evidence.
+
+**Step 2 — Wing.** Use the shipped *Execution Proof* wing, or copy it and set `target_application` to `malware.exe`.
+
+**Step 3 — Pipeline.** Run it from the Correlation Engine window, or from code:
 
 ```python
 from correlation_engine.pipeline import PipelineExecutor
 executor = PipelineExecutor(pipeline_config)
 results = executor.execute()
 ```
+
+**Step 4 — Results.**
 
 ```
 Identity: malware.exe
@@ -618,7 +834,8 @@ Identity: malware.exe
     ✓ ShimCache: malware.exe modified at 10:30:15
     ✓ AmCache:  malware.exe installed at 10:29:45
 
-  Conclusion: Execution proven with 3 corroborating artifacts
+  Score 0.43 → Probable Execution
+  (0.80 of the wing's 1.85 total weight: 3 of its 14 feathers corroborate)
 ```
 
 ### Performance Benchmarks
@@ -632,7 +849,7 @@ Identity: malware.exe
 
 ### Getting Started with the Correlation Engine
 
-1. **Launch**: `python -m correlation_engine.main`
+1. **Launch**: click **RUN CORRELATION** in Crow-Eye, or run `python -m correlation_engine.gui`
 2. **Create Feathers**: import your forensic artifacts (Prefetch, ShimCache, …).
 3. **Create Wings**: define correlation rules for your investigation.
 4. **Create a Pipeline**: configure which wings and feathers to use.
@@ -834,7 +1051,7 @@ By anchoring the AI layer to documented artifact behavior, Crow-Eye is not askin
 Forensic tooling is only useful if its output can be defended. Crow-Eye's correctness work is deliberately visible:
 
 - **Regression suites.** The Correlation Engine is locked by a pytest suite covering timestamp parsing, identity normalization, multi-timestamp fan-out, the writer contract, Eye authoring (write-side GEP governance), and the standard-fields registry. The UBA engine ships its own suite, including an end-to-end run against a real case.
-- **Validation harness.** A holistic harness exercises all 7 default wings against **both** engines on a real ~700K-record Windows case.
+- **Validation harness.** A holistic harness exercised the seven default wings of the 0.11.0 release against **both** engines on a real ~700K-record Windows case.
 - **Published defect history.** Accuracy regressions and their measured impact are documented openly in [`RELEASE_NOTES.md`](RELEASE_NOTES.md) — including cases where a fix changed records-seen by orders of magnitude. Knowing what was wrong, and when, is part of what makes a result defensible.
 - **Verifiable evidence accounting.** Every record either lands in a match or in a named drop bucket, and the per-window drop ledger makes "no evidence left over" something you can check from the log rather than take on faith.
 - **Tamper-evident logs.** `verify_chain()` re-walks the Narrative Map audit log and the Evidence Seal chain to detect modification — including of human-readable fields.
