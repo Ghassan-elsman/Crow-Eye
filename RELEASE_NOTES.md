@@ -8,1043 +8,269 @@
 
 ### Overview
 
-Version 0.14.1 is organised around four themes:
+Version 0.14.1 is organised around two themes:
 
-- **Complete evidence.** The MFT parser reads the whole `$MFT`, not its first fragment: 3,320,633 records on the test machine instead of 205,056, deleted entries included. Browsers parse from collected folders and forensic images as well as live systems. Every user's registry hive replays its own transaction logs.
-- **Chain of custody.** Every collection, parse, export, import and settings change leaves a record. Copies are verified against their source. Shadow copies Crow-Eye creates are deleted when the run ends. The case keeps a hash-chained ledger of everything done to it.
-- **Large cases, correct results.** The Correlation Engine streams its feathers, so a 3.8-million-row MFT no longer exhausts memory. Semantic mapping finishes in minutes instead of an hour, Stop works inside it, and a run that did not finish still shows its statistics. A second parse of the same machine adds only what is new.
-- **One look, and Linux.** Every window uses the website's design, standard columns are colour-coded, and the Python source version starts on current Linux distributions.
+- **Complete evidence.** The MFT parser reads every fragment of the `$MFT`, not only the first. Browsers are parsed from collected folders and forensic images as well as live systems. Every user's registry hive replays its own transaction logs.
+- **Chain of custody.** Every collection and parse writes a record of what was read, how, and what Crow-Eye changed on the machine. Copies are verified against their source, shadow copies Crow-Eye creates are deleted when the run ends, and each case keeps a hash-chained ledger of everything done to it.
 
 | Measure | 0.14.0 | 0.14.1 |
 |---|---:|---:|
-| Live MFT records read on a 17-fragment `$MFT` (test machine) | 205,056 (first fragment only) | **3,320,633**, deleted entries included |
+| Live MFT records read on a 17-fragment `$MFT` (test machine) | 205,056 | **3,320,633** |
+| MFT file names with corrupted bytes (one `$MFT`) | 13,601 | **0** |
+| In-use files whose size read as 0 | 122,682 of 152,131 | **38,053 of 1,209,142** |
 | MFT rows with an `[Unknown Parent]` path | 50,848 | **135** |
-| MFT file names with corrupted bytes (one `$MFT`) | 13,601 | **0** (NTFS fixups applied) |
-| In-use files whose size read as 0 | 122,682 of 152,131 | **38,053 of 1,209,142** (genuinely empty files) |
-| Renames recorded old → new | 0 | **4,107**, 395 of them moves |
-| MFT record count shown in Parse Status | rows of four tables summed ("18,094,212") | **records** (3,320,633) |
-| Modes that parse browsers | live | **live, offline folder, forensic image** |
+| Renames recorded old → new (one case) | 0 | **4,107** |
+| Modes that parse browsers | live | **live, offline, image** |
 | Copies verified against their source | none | **every copy** |
-| Shadow copies Crow-Eye created, left on the target | all of them | **deleted at the end of the run** |
-| Run kinds with a custody record | 0 | **8**, plus a hash-chained case ledger |
-| Rows stored again by a second parse of the same machine | all of them (Amcache, SRUM, MFT) | **none**; only new rows are added |
-| Identity engine memory on a 3.8-million-row MFT feather | ~18 GB (did not finish) | **~2.1 GB** |
-| Semantic mapping, 105,309 matches | 138 s | **86 s**, identical labels |
-| A run stopped during semantic mapping | thread killed after 15 s, Summary empty | **stops in seconds, saves, opens marked CANCELLED** |
-| Longest GUI stall while a dashboard loads | the whole query (a timeline day: 70 s) | **172 ms** |
+| Shadow copies Crow-Eye created, left on the target | all | **none** |
+| Rows stored again by a second parse of the same machine | all (Amcache, SRUM, MFT) | **none** |
+| Identity engine memory, 3.8-million-row MFT feather | ~18 GB | **~2.1 GB** |
+| Semantic mapping, 105,309 matches | 138 s | **86 s** |
+| Longest interface stall while a dashboard loads | 70 s | **172 ms** |
 | User Behavior Analytics behaviours | 65 | **81** |
 | Event IDs with their own description | 426 | **617** |
-| Eye forensic tools | 31 | **32** |
-| Correlation Engine | 1.7.0 | **1.8.0** |
-| Python source version on Debian 12 / Ubuntu 23.04+ | did not start | **starts, builds its venv, opens every window** |
 | Test files in this repository | 84 | **89** |
 
 ### Highlights
 
-- **The whole MFT.** Every fragment of the `$MFT` is read through its data runs, with NTFS fixups applied, real file sizes, long names ahead of 8.3 aliases, and a rename log (old name → new name).
-- **Chain of custody.** One record per run, a case-wide hash-chained ledger, a **Case → Chain of Custody…** viewer, verified copies, and shadow copies cleaned up by their own ID.
-- **Browsers everywhere.** Offline folders and forensic images produce the same 37 tables as a live parse, older Chrome formats included.
-- **Correlation on large cases.** Feathers stream; semantic mapping skips a prefilter that filtered nothing; Stop is honoured; a stopped or unfinished run keeps its statistics and charts, labelled **NOT FINISHED** or **CANCELLED**.
-- **Parse twice, store once.** Every parser adds only rows the case does not hold, and Parse Status reports read / new / already present.
-- **Forensic images say what went wrong.** A pre-flight check names unsupported formats, missing segments, BitLocker, partial acquisitions and investigator mistakes before extraction starts.
-- **The website's look everywhere**, colour-coded columns, logs in colour, and a live parse checklist.
-- **Linux.** The Python source version starts on Debian 12 / Ubuntu 23.04+ and parses a collected case identically to Windows.
+- **The whole MFT**, read through its own data runs: deleted entries, NTFS fixups, real file sizes, long names and a rename log.
+- **Browser parsing on offline folders and forensic images**, with the same 37 tables as a live parse.
+- **Chain of custody:** a record per run, a case ledger and a viewer.
+- **Re-parsing adds only what is new**, and the Parse Status Report says how much was new.
+- **Forensic images are checked before extraction**, and problems are named with the fix.
+- **The Correlation Engine handles large cases.** Feathers stream, semantic mapping finishes, Stop is honoured, and an unfinished run still shows its statistics.
+- **Linux:** the Python source version starts on Debian 12 and Ubuntu 23.04 and later.
 
 ---
 
-### Complete Evidence
+### MFT and USN Journal
 
-#### MFT and USN — the whole `$MFT`, real sizes, renames old → new
-
-- **The live MFT parser read only the first fragment of the `$MFT`.** It located record N at
-  `start of the $MFT + N × 1024`, which holds only until the first fragment ends. On this machine the
-  `$MFT` is in 17 fragments; the first holds 205,056 records and the parse stopped there, every later
-  record read from unrelated clusters and was dropped as "not a FILE record" with no error. That is why
-  97% of the USN journal's files were "not in the MFT", why 49,000 paths read `[Unknown Parent]`, and
-  why no deleted entry was ever listed. The `$MFT` is now read through its own data runs: 3,320,633
-  records, 1,624,197 of them deleted entries, in 7 min 17 s (it was 231 s for 205,056 one-at-a-time
-  reads; reads are now 1 MB at a time). The raw-disk `$MFT` copy used for offline imports had the
-  same assumption and is fixed the same way.
-- **Real file sizes.** Every file stored outside its MFT record (anything over ~700 bytes) had size 0,
-  Amcache.hve included; the size is now read from the attribute header, and an alternate data stream
-  no longer adds to it. Amcache.hve reads 9,175,040 bytes, its size on disk.
-- **A file's names and size in extension records are merged into the file.** A file with many hard
-  links keeps some names in another record; it had no name and size 0, and the extension record
-  showed up as a nameless file.
-- **Renames, old name → new name.** `filename_changes` (in `mft_usn_correlated_analysis.db`) is now the
-  rename log: each RENAME_OLD_NAME journal record paired with the RENAME_NEW_NAME that follows it for
-  the same file, with the old and new folders and a *moved* flag - 4,107 renames on one case, 395 of
-  them moves. Each file's renames are also on its correlated rows (`filename_change_timeline`), and
-  its other current names (hard links) in `namespace_evolution`. The MFT keeps current names only,
-  so this is the only name history there is.
+- **Every fragment of the `$MFT`.** The parser located record N at the start of the `$MFT` plus N × 1,024 bytes, which holds only within the first fragment. On the test machine that is 205,056 of 3,320,832 records. Later records were read from unrelated clusters and dropped without an error. The `$MFT` is now read through its data runs, both live and in the raw-disk copy used for offline imports. 3,320,633 records are read, deleted entries included. The count matches the MFT size Windows reports.
+- **NTFS fixups are applied.** The last two bytes of every 512-byte stride were never restored, which corrupted 13,601 names on one `$MFT`. There are none now.
+- **Real file sizes.** Every file stored outside its MFT record read as size 0, Amcache.hve included. The size is now read from the attribute header. Alternate data streams no longer add to it.
+- **Extension records are merged into their file.** A file whose names or data sit in an extension record no longer appears as a nameless, zero-byte entry.
+- **Long names first.** The correlator preferred the 8.3 alias (`MIGRAT~1.DAT`) to the long name. On one case, rows named by an alias fell from 136,996 to 2,975.
+- **Renames, old name → new name.** `filename_changes` in `mft_usn_correlated_analysis.db` pairs each journal rename with its new name, folder and a *moved* flag: 4,107 renames on one case, 395 of them moves.
 - **Correlation:**
-  - journal-only events get a full path, from the folder in the MFT or - when the folder is gone -
-    named from the journal's own records (0 events without a folder, was most of 247,224);
-  - a parent folder whose record now holds another folder is shown as `[Reused Parent]`, not walked
-    into a path the file was never in;
-  - re-correlating rebuilds instead of appending (every MFT-only row was duplicated each time);
-  - USN v3 file ids (32 hex digits) decode correctly;
-  - the report counts files by volume, record and sequence.
-- **The dashboard** pages every day list (a day with 42,543 new files used to stop at 200), adds an
-  all-records list across every day (USN records, MFT files or renames), shows renames as
-  *old → new*, applies the same filters to every overview number, accepts a pasted `C:\…` path in the
-  search, draws dates back to 1980 and says how many fall outside, and no longer writes to the case.
-  On a 3.5-million-row case the overview opens in 2.9 s and the strip in 4.7 s.
-- **The correlation wings' MFT/USN conditions named columns that do not exist** (`reason`,
-  `si_created`, `fn_created`, `path`): the mass-delete and both ransomware rules could never fire, and
-  the timestomp rule compared a time with itself. They name the real columns now; the admin-share
-  rule looks for a program written straight into `C:\Windows` (where ADMIN$ lands) instead of any
-  path with a `$` in it, which matched `$MFT`. A file's eight MFT times join the correlation windows
-  once, not once per journal event. Use **Update default wings** to refresh an existing case.
+  - Journal-only events get a full path, from the MFT folder or, when the folder is gone, from the journal's own records.
+  - A parent folder whose record now holds another folder is shown as `[Reused Parent]`.
+  - Re-correlating rebuilds instead of duplicating rows.
+  - USN v3 file IDs decode correctly.
+  - An offline case is never correlated with the examiner's own disk.
+- **Counted in records.** Parse Status reported "MFT 18,094,212", the rows of four MFT tables added together. It now reports MFT records. A file's 8.3 alias is no longer recorded as a second hard link (2.2 million false `Hardlinks` rows on one case).
+- **Faster:**
 
-#### MFT and USN — real names, every record counted, one timeline
+  | Step | 0.14.0 | 0.14.1 |
+  |---|---:|---:|
+  | Live MFT insert, 1.4 million records | 101 s | **51 s** |
+  | Offline MFT, 200,000 records | 30 s | **16 s** |
+  | MFT–USN correlation, 7.10.2026 `$MFT` | 322 s | **258 s** |
 
-- **The MFT parser now applies NTFS fixups.** NTFS replaces the last two bytes of every 512-byte stride of a record with a sequence number, and keeps the real bytes in the record's fixup array. They were never put back. On a real `$MFT`, 44,628 of 201,656 records decoded a different name once fixed; 13,601 names held control characters (`…REV_D8.\x06ock` for `.lock`); some names were wrong but looked valid (`8wekyb3d8bhwe`); and some records lost their long name entirely. After the fix: **0** corrupted names.
-- **Long names, not 8.3 aliases.** The correlator kept a file's DOS name (`MIGRAT~1.DAT`) ahead of its Win32 name (`migration.dat`), and every path built through it inherited the alias. On one case, rows named by an 8.3 alias fell from 136,996 to 2,975, and paths with an 8.3 component from 181,609 to 16,590. Row count and the key columns are otherwise identical.
-- **The name columns were never written.** `filename_change_timeline` and `namespace_evolution` were filled and then rolled back, because the connection closed without a commit; they were empty on every case. They are now written (see *renames* above). The 8.3 alias is no longer recorded as a "change": it was 96% of those rows, and the Timeline plotted each one as "File renamed".
-- **Correlation never parses the examiner's own disk into an offline case.** The MFT/USN *correlate* action, and the offline wrapper, re-parsed the live MFT and USN of the machine Crow-Eye runs on before correlating. They now correlate the databases already parsed; the live machine is parsed only for a live case that has neither.
-- **Offline MFT / USN:**
-  - each collected volume keeps its own label (`OFFLINE`, `OFFLINE_1`, …), where all of them were `OFFLINE`;
-  - a second volume's `$MFT` or `$J` is parsed, where it was skipped because the first had filled the table;
-  - correlation runs once per batch, after both, where it ran from each side, once against the previous run's journal;
-  - an existing correlation is rebuilt when its inputs are newer, where it was kept for ever.
-- **The MFT/USN dashboard, rebuilt:**
-  - one six-month day strip for both sources: MFT files created / modified (distinct files) and **one row per USN reason flag, each with its own colour**;
-  - every aggregate is counted in SQL. A day's drill-down read at most 6,000 events, and one journal day held 283,585;
-  - names and paths for journal-only events, which were blank: 87% of one case's events belong to a reused MFT entry. The folder is rebuilt from the journal itself when it is no longer in the MFT;
-  - files opened by volume, record **and** sequence number;
-  - a **Charts** button on the correlated MFT/USN table, which had none.
+- **Offline volumes keep their own label** (`OFFLINE`, `OFFLINE_1`, …), and a second volume's `$MFT` or `$J` is parsed instead of skipped.
+- **The USN journal is collected into a readable file.** The name `$UsnJrnl:$J` wrote it into an alternate data stream behind a 0-byte file. Older collections are still read.
 
-#### MFT parse and MFT–USN correlation: faster, and counted in records
+### Browser Forensics
 
-- **The live MFT parse no longer slows down as it goes.** It committed every 1,000 records and kept the secondary indexes up to date row by row, so each batch was slower than the last: 9 min 47 s for 3,320,832 records. It now uses the offline path's bulk mode (10,000 records per batch, secondary indexes rebuilt once at the end). On 1.4 million records the insert time halves (101 s → 51 s) and stays linear.
-- **MFT is counted in records, not table rows.** Parse Status read "MFT 18,094,212": the rows of `mft_records`, `mft_standard_info`, `mft_file_names` and `mft_data_attributes` added together. It now reports MFT records (3,320,633), and the log gives the row total beside it.
-- **Hard links are real hard links.** The record header's link count includes the 8.3 alias of a long name, so every file with a short name was recorded as hard-linked: 2,202,687 `Hardlinks` rows on one case, about 95,000 of them real. Only records with more than one real name get a row now. Directories, which cannot be hard-linked, and extension records, whose count is not the file's, get none.
-- **The MFT–USN correlator** reads its MFT query in the primary key's order. It used to sort every joined row before returning the first, 30 s of a 70 s read. Its forensic report counts distinct files over the columns themselves, and "Top 10 Files by Journal Events" replaces a grouping of every row by name and path (17.5 s → 0.9 s). Correlating the 7.10.2026 `$MFT` went from 322 s to 258 s with an identical correlated table. The progress bar counts MFT records instead of rows, so it no longer reads past 100%.
-- **Why a case now holds many more MFT rows than under 0.14.0.** 0.14.0 read only the first fragment of the `$MFT`, which on the test machine is 205,056 of 3,320,832 records. The rest was dropped without an error. The new count matches Windows: `fsutil fsinfo ntfsinfo` reports 3.17 GB of MFT, exactly 3,320,832 records of 1,024 bytes. In-use files are within 1% of a live walk of the drive. About 1.5 million of the records are deleted entries, still named, which the old parser never saw.
+- **Offline folders and forensic images.** The Offline Importer, Parse Offline Artifacts and Forensic Image Parsing produce the same 37 tables as a live parse. On the same machine, 34 tables match the live parse row for row. The others differ only in case-path columns and 3 Service Worker rows.
+- **Each profile keeps its folder tree.** Browser files are collected under `live_acquisition/Browser/<source>/Users/<name>/...`, so two images, drive roots or hosts never merge.
+- **Owners come from the evidence.** The user is the `Users` folder the profile came from, never the analyst's own profile above the case. The SID is read from the evidence's SOFTWARE hive.
+- **Include browser cache** (on by default). Turning it off skips the HTTP and Service Worker caches: on the test machine that is 4.4 GB of a 5.1 GB profile, and the parse drops from 19 minutes to 41 seconds.
+- **Older Chrome formats on images:** pre-2018 cookie columns, pre-M86 session files and the old top-sites table. On a 2016 image, 724 cookies, 143 session entries and 10 top sites are now read.
+- **Uncheckpointed rows are read.** Copies were opened in a mode that ignores the `-wal` file, losing committed rows. This affected live parsing too.
+- **Search engines' creation dates are read.** Chromium stores them in WebKit time, and they were read as Unix seconds, so every one came out blank.
 
-#### Measured on this machine, live and elevated
+### Registry
 
-The complete live MFT (3,320,633 records) correlated with the live journal (216,572 events):
-Amcache.hve and `anatomy_links.py` are found under the record and sequence `fsutil` reports, with
-their real sizes and full paths; no journal event points past the end of the MFT (with the old
-parser 97% did); 9,824 renames, 754 of them moves; deleted files whose folder record now holds
-another folder are marked `[Reused Parent]` (808,976 rows, all of them deleted entries). The
-correlation itself took 356 s for 3.5 million rows.
+- **Every user's hive replays its own transaction logs.** Users' hives were collected into one folder, and renamed collisions separated hives from their logs. One user's transactions could be replayed into another user's hive, and two parses of the same image gave 11,387 and 13,358 records. Each user's files now keep their folder (`Registry_Hives\Users\<name>\...`). A log is replayed only into the hive its header names.
+- **Verified:** two separate parses of the same image give identical counts in all 124 registry tables.
+- **Rows name their owner** (`NTUSER.DAT[<name>]`) in the form the live parser writes.
+- **The analyst's name is no longer put on the evidence.** A case stored under `C:\Users\<analyst>\` labelled every unowned user hive with the analyst's name.
 
-#### Browsers from offline folders and forensic images
+### Event Logs
 
-Browser data is now parsed from collected folders and forensic images, not only from the live machine. The **Offline Importer**, **Parse Offline Artifacts** and **Forensic Image Parsing** produce the same 37 tables in `browser_analysis.db` as a live parse, and the Parse Status Report records Browser as *Parsed* (or *Not found*) for those modes instead of *Not run*.
-
-| Measure | 0.14.0 | This release |
-|---|---:|---:|
-| Modes that parse browsers | live | **live, offline folder, forensic image** |
-| Tables, offline/image | 0 | **37** |
-| Content match, offline vs live (same machine) | — | **34 of 37 tables row for row**; the rest differ only in case-path columns and 3 Service Worker rows |
-
-#### How browser collection works
-
-- **Each profile keeps its folder tree.** Every other artifact is collected into one folder per type under its file name. A browser cannot be: every profile has its own `History`, and only the folders above it say which user, browser and profile it belongs to. Browser files are collected to `live_acquisition/Browser/<source>/Users/<name>/AppData/...`, where `<source>` is `vol_<N>_<id>` for partition N of an image, `src_<folder>_<id>` for each imported source, and `live` for Crow-Claw. The `<id>` is a short hash of the image or folder path, so two images, two drive roots or two hosts in one export never merge.
-- **Browser files are recognised by where they sit**, inside a `Users\<name>\AppData` profile, before the filename rules run. A `.url` file inside a profile is browser evidence, not an LNK. Windows XP `Documents and Settings` profiles and trees without a user folder are handled too. A tree with no user folder is filed under a pseudo-user named for the folder it was found in.
-- **Owners come from the evidence, never from the analyst's machine.** The user is the `Users` folder the profile came from. A `Users` folder *above* the imported folder (the analyst's own profile) is never taken as the owner. The SID is read from the evidence's own SOFTWARE hive (ProfileList, with `<SID>.bak` treated as `<SID>`). It is assigned only when the case holds one browser source: hives are stored flat and cannot be tied to a source, so with several the SID is withheld and the parse records why. A Firefox `profiles.ini` path that points outside the collected tree is ignored, not read from the analyst's disk.
-- **Include browser cache** (on by default) in the Forensic Image and Offline Importer windows. The HTTP cache, Service Worker CacheStorage and Firefox `cache2` are most of a profile's size: on the test machine, 4.4 GB of 5.1 GB and 44,544 of 50,431 files. Turning the option off skipped them, cut the parse from 19 minutes to 41 seconds, and left every other table unchanged.
-- **Crow-Claw** collects browser profiles with the same layout, through its file accessor, so a locked database falls back to a shadow copy. Browser is collected **last**, after `$MFT` and `$UsnJrnl`, so the largest artifact cannot fill the drive first. A full drive now stops the browser step, and a second collection refreshes the earlier copies instead of keeping them.
-- **Re-parsing a case is stable.** Each profile's earlier rows are replaced, not added to. Twelve tables have no unique key and used to double on every re-parse, on live cases too.
-
-#### Older browsers on images
-
-Images are often years old. Measured on a 2016 image, these were read as empty and now parse:
-
-- **Cookies:** pre-2018 Chrome names the columns `secure`, `httponly` and `persistent`. The cookie table failed on them, and 724 cookies are now read.
-- **Sessions:** pre-M86 Chrome keeps `Current Session`, `Last Session`, `Current Tabs` and `Last Tabs` in the profile folder. 143 session entries are now read.
-- **Top sites:** older Chrome uses a `thumbnails` table. 10 top sites are now read.
-- A file that is present but unreadable, such as a `Preferences` file with damaged clusters, is reported as a warning for that profile instead of producing a silently empty table.
-
-#### Browser search engines - creation date
-
-`browser_search_engines.date_created` was read as Unix seconds; current Chromium stores it in WebKit
-time (microseconds since 1601), like `last_modified` beside it, so every value came out blank. It is
-now read by its scale (old builds' Unix seconds still read). A built-in engine stores 0 and stays
-blank.
-
-#### Registry: every user's hive replays its own transaction logs
-
-Two parses of the same image gave 11,387 and 13,358 registry records. Every user's `NTUSER.DAT` and `UsrClass.dat` was collected into one folder and the name collisions renamed - `NTUSER.DAT` became `NTUSER_1.DAT` but its log became `NTUSER.DAT_1.LOG1` - so no hive kept its own logs. Which user got `_1` changed from run to run, and the replay applied one user's transactions to another user's hive, or none.
-
-- **Each user's files keep their folder.** The Offline Importer, Crow-Claw and forensic-image extraction now collect to `Registry_Hives\Users\<name>\NTUSER.DAT` (with its `.LOG1` / `.LOG2`), `...\AppData\Local\Microsoft\Windows\UsrClass.dat` and `Windows\ServiceProfiles\<account>\NTUSER.DAT`. The same applies to LNK files and Jump Lists, which keep their owner's `Recent` folder. The same user name from a second partition or a second image gets `<name>_2`, and the choice is remembered in `live_acquisition\user_folders.json`, so a re-run lands in the same folder.
-- **Two users' identical files are no longer deduplicated.** Each is its own evidence.
-- **A log is replayed only into the hive it belongs to.** A log's base block carries its hive's path and resource-manager GUID; a log written for another hive is refused, recorded and logged. When this happens in a case collected by this version, it is reported as the *Registry log belongs to another hive* issue.
-- **Cases collected before this version are matched by content.** In an old flat folder each hive picks the logs whose header names it, whatever they were renamed to. The two earlier runs of the same image now replay identically.
-- **Rows name their owner after a replay.** A replayed hive is a temporary copy; its owner is now read from the folder it was collected from. Per-user hives are labelled `NTUSER.DAT[Hunter]`, the form the live parser writes, in the hive-state and structure tables, instead of `NTUSER.DAT[1]`.
-- **Verified:** two separate image parses of `4orensics.001` now give identical counts in all 124 registry tables (13,314 records each).
-
-#### Event descriptions
-
-- **617 events now have their own text** (426 before), in `configs/event_descriptions.json`:
-  - 160 taken from the wording this version of Windows ships for them;
-  - Sysmon's 30 event types and PowerShell 4100 written by hand.
-  Every ID in the forensic channels (Sysmon, PowerShell, Task Scheduler, Terminal Services, RDP, Defender, WMI, BITS, Firewall, AppLocker) now has text.
-- **`scripts/curate_event_descriptions.py`** proposes more from a case's gaps. It never writes the catalogue on its own: entries are reviewed, marked approved, then merged. Existing cases keep their old text until re-parsed.
-
-#### Event descriptions — one table, by provider
-
-- **One curated table of (provider, Event ID) descriptions**, `configs/event_descriptions.json`, used by both the live and the offline event-log parsers. The lookup knows the provider. Before, an ID meant the same thing for every source, so EventSystem 4625 read "An account failed to log on", and 9,725 application rows read "Application hang.".
-- **Wrong labels corrected:**
-  - 4670 means permissions on an object changed;
-  - 7036 names the state the service entered;
-  - Winlogon 7001 is a user logon notification;
-  - MsiInstaller 1033 means a product was installed;
-  - WER 1001 is a fault bucket report.
-- **Entries checked against Windows itself.** Where a provider ships a message template (`Get-WinEvent -ListProvider`), the wording follows it. Examples: URL reservations (`HttpService` 112, with the process and user) and VBS trustlets starting and stopping.
-- **Offline rows keep their payload** after the sentence (`<text> | <EventData>`), so queries on `LogonType` and the like keep working.
-- **Live fixes:**
-  - timestamps are converted from local time to UTC (they were labelled UTC while still being local);
-  - the user is the event's SID, not whichever insert came first;
-  - an event log with an unfamiliar file name is routed by the channel recorded in its events.
-
----
+- **617 events have their own description** (426 before), keyed by provider and Event ID in `configs/event_descriptions.json`. The text follows the message templates Windows ships where one exists. Before, an ID meant the same thing for every provider, so EventSystem 4625 read "An account failed to log on".
+- **On the measured case**, the share of rows with a real description rose from 11.0% to 74.8% for System and from 33.4% to 100% for Security.
+- **Each event's own record number** (`RecordNumber`) is stored, so identical-looking events stay distinct.
+- **Live timestamps are converted to UTC.** They were labelled UTC while still in local time.
+- **Offline rows keep their payload** after the description, so queries on fields such as `LogonType` keep working.
 
 ### Chain of Custody
 
-#### Chain of custody for live collection
-
-- **One record per run**, `custody_<run id>.json` with a `.sha256` beside it. The record is never overwritten: each run gets its own file, and an edit after closing no longer matches the hash. The files appear under **Settings → Logs → Chain of custody**.
-- **Per source file:**
-  - path and size;
-  - the modified, accessed and created times, read *before* the file is copied;
-  - how it was read: standard copy, shadow copy (with its ID and creation time), raw disk or in-place read;
-  - SHA-256 of the source and of the copy, and whether they match.
-  A raw-disk read has no independent source hash, and the record says *unverifiable* rather than *verified*.
-- **Live Parse All** reads evidence where it lies. Before parsing, it records an inventory of the files it is about to read: the hives, Amcache, SRUM, Prefetch, the event logs, LNK and Jump Lists, and the Recycle Bin `$I` files. Each gets its size, times and SHA-256. Locked files are recorded with the reason they could not be hashed. A hive acquired through a shadow copy gets a source/copy hash pair even though the copy is temporary.
-- **The footprint on the target:**
-  - every process Crow-Eye started (`vssadmin`, `powershell`, `net start VSS`, `esentutl`), with its purpose and how it ended;
-  - services started;
-  - shadow copies created, deleted, used, or left behind.
-- **A warning when the case folder is on the drive being examined.** Writing there can overwrite unallocated clusters that still hold deleted files. The run is not blocked.
-- **Image parsing** records the image's segments with their sizes and times, and its integrity (below).
-
-#### Chain of custody — a ledger for the whole case, and what the records missed
-
-- **Every case now keeps one ledger of everything done to it**, `<case>/logs/custody_ledger.jsonl`:
-  case created and opened (with the Crow-Eye version and the collection settings in force), every run
-  started and ended (with the SHA-256 of its record), every export, every evidence import into Eye
-  (source and copy hashes, and failed imports), every settings change (old → new; API keys and other
-  secrets are never written), and every correlation or Dynamic Linking run (the database's SHA-256
-  before and after). Each line carries the SHA-256 of the line before it. Editing, removing or moving
-  a line breaks the chain. A run record rewritten or deleted after it closed no longer matches its
-  line, and a ledger cut short no longer holds the line a record points at. The viewer's new
-  **Case ledger** tab walks the chain and says *intact* or names each problem.
-- **A shadow copy Crow-Eye created could be left on the machine for good.** When shadow storage is
-  full, Windows deletes the oldest snapshot to make room for the new one, so the count does not rise
-  (4 → 3 on one live run). The count check then called the creation a failure. The new snapshot was
-  never registered as Crow-Eye's own, the parsers recorded it as "used-existing", and it was never
-  deleted. The ShadowID that `Create()` returns now decides: if it is on the volume, it is Crow-Eye's,
-  and it is deleted at the end of the run. The record names the older snapshot Windows removed
-  (`evicted-by-windows`), because that one cannot be brought back.
-- **Records for the runs that had none:** every single-artifact parse button (live and offline), each
-  Offline Importer collection or scan, each offline parse, and the image scan (a ledger line). An
-  Offline Importer copy is now verified: the copy's SHA-256 against the source's, which the
-  duplicate check had already taken. Before, the copy was never checked.
-- **What a live parse reads and writes, written down:**
-  - each artifact's outcome, with anything other than parsed / not on this machine as a failure (the
-    record said "0 failures" while Parse Status listed failed artifacts);
-  - the SHA-256 of every database the run wrote, `-wal` files included, hashed and not checkpointed;
-  - how SAM and SECURITY were really read: an `NtSaveKeyEx` export, with the export's hash, deleted
-    after the parse. They had shown only "PermissionError";
-  - the raw `$MFT` and USN journal reads (data runs, records, journal ID and USN range), which have no
-    file to hash;
-  - each browser database copy, with source and copy hashes;
-  - the SRUM working copy's SHA-256 before and after an `esentutl /p` repair, which can discard pages;
-  - the time zone, locale and versions of the decoding libraries;
-  - transaction logs, service-account hives, Desktop and Start Menu shortcuts, browser history files
-    and `$R` Recycle Bin files in the source inventory.
-- **Two runs open at once keep two records.** One global "open record" meant the second run took over
-  the first's. A process that fails to start is now a failure entry. Files opened with their default
-  program are recorded as footprint, as are elevation relaunches. After a parse is ended by force,
-  its snapshot is deleted *before* the record is rebuilt, so the record says so.
-- **The viewer** gains **Artifacts**, **Outputs** and **Case ledger** tabs. It also shows the
-  environment, and which worker process did what. The operating system line was empty: it read keys
-  the record never writes. Empty tabs now say what was *recorded* ("No process … was recorded for this
-  run"), not what happened.
-
-#### Chain of custody — what each artifact entry carries
-
-- Each artifact's entry in the custody record now carries the rows read, new and already present, the database totals before and after, and, for failures, the error and the log excerpt.
-- The record's summary and the ledger's "run ended" line total new versus already-present rows.
-- Identity indexes a run adds to case databases are listed per artifact, with a "database changed" ledger line. Skipped MFT extension records and browser files that could not be read (locked) become custody warnings and failures.
-- The custody viewer's Artifacts tab shows New, Already present and the error.
-
-#### Chain-of-custody viewer
-
-- **Case → Chain of Custody…** (and Settings → Logs) opens a run's record in a readable form:
-  - who, where, when, and the options used;
-  - an integrity badge: the record's SHA-256 still matches, or it does not;
-  - every source with its verdict (copy verified, mismatch, not verifiable, read in place hashed or not hashed), filterable to problems only, and exportable as CSV;
-  - processes started, shadow copies created and deleted (any left behind are marked), failures and warnings, and the raw JSON.
-
-#### Shadow copies
-
-- **Created, recorded and deleted.** A snapshot Crow-Eye creates is deleted when the collection or parse ends, by the `ShadowID` that creation returned. Crow-Eye never uses `vssadmin delete shadows /all` or "delete the newest", so a snapshot that was already on the machine is never touched. A delete that fails is recorded as *left behind* and shown in the collection summary.
-- **An old snapshot is no longer read as the live file.** When a file was locked, the collector used the newest snapshot on the volume, whatever its age. With System Restore on, that can be weeks old, and the "live" SYSTEM hive or event log was then weeks old with nothing saying so. A snapshot older than 30 minutes is now not used:
-  - if creating one is allowed, a fresh one is made;
-  - otherwise the next method (raw disk, or the live hive export) reads the current file.
-  The decision is in the custody record.
-- **The setting that forbids snapshot creation now works.** *Settings → Parsing → allow snapshot creation* was saved to the user's settings folder. The parsers read it from a file in the program folder that nothing writes, so it always read as *on*. They now read the saved setting, and SRUM honours it too.
-- **Advice that destroyed evidence is gone.** VSS error messages told the analyst to run `vssadmin delete shadows /all` or `cleanmgr.exe` on the target. Existing shadow copies and unallocated space are evidence. The advice now points to raw disk access and says not to free space on the machine.
-- Turning snapshot creation off no longer crashes a locked-file copy.
-
-#### Copies and headers
-
-- **File headers are checked.** The validator compared an enum with the string the collector passes, so every file was reported valid without being read. Headers are now checked for:
-  - hives and their transaction logs;
-  - event logs and the SRUM database;
-  - Prefetch (`SCCA` or the Windows 10 `MAM` wrapper);
-  - LNK files and Jump Lists;
-  - Recycle Bin `$I` records and `$MFT`.
-  AmCache is now checked as a registry hive; it was being checked as SQLite.
-- **Raw backup-semantics copy:**
-  - `SeBackupPrivilege` is now enabled before the open; it was held but never enabled;
-  - the open offers delete sharing;
-  - an invalid handle is recognised on 64-bit Python;
-  - failures report their real Windows error code instead of 0.
-- **Collection timestamps are UTC.**
-
-#### Image integrity
-
-Every E01 is checked before extraction, by reading the section headers (seconds, not hours):
-
-- whether it carries an acquisition MD5/SHA-1 to verify against;
-- whether its segments hold the whole disk it declares.
-
-On the test image, a 6.4 GB E01 declaring a 992.7 GB disk held **13.95 GB (1.4%)**: an acquisition that stopped early. It opened, its first gigabytes parsed, and nothing said the rest was missing. Both facts are now pre-flight warnings and are written to the custody record. Re-reading the whole image to recompute its hash is available, but is not run by default.
-
-#### Files written to the target or the working folder
-
-- **Temporary work goes under `<case>/tmp`** while a collection or parse runs: hive copies, log replays, the SRUM working copy and browser databases. Before, it went to `%TEMP%` on the examined machine's system drive.
-- **SRUM's ESE engine no longer writes `edb.chk`, `edb.log`, `edbres*.jrs` and `edbtmp.log` into the working folder.** The engine's paths were never set. The two parameter calls that did exist used the wrong IDs: 64 is the page size, not *Recovery*. Measured on a SRUM database, the records are unchanged (49,669 / 214,557 / 2,997 / 2,153 / 58,945), and nothing is left in the working folder (5 files before).
-- **The MFT/USN forensic report is written beside its database** in the case, not into the working folder.
-
----
-
-### Correlation and Analysis
-
-#### The Correlation Engine runs on large cases; collectors count right; faster parsing; every window styled
-
-**Correlation Engine (Identity engine):**
-- **Large cases run.** The engine read each feather completely into memory: one 3.8-million-row MFT feather was about 18 GB of Python objects on a 15 GB machine, and the app froze until it was restarted. Feathers now stream in batches. The engine keeps a small reference per row and reads the full row back only when a match is written.
-  - Case 7.10.2026 loads in about 2.1 GB and correlates its 483,525 identities.
-  - Peak memory on a small case: 979 MB → 650 MB.
-- **The Execution panel shows what is happening:** "Loading mft_usn: 2,605,000 / 3,831,549 rows" and then "Correlating identities: n / N" on the bar, the status line and the log. Before, it showed "0/1 (0.0%)" for as long as an hour. The status update for each wing is no longer dropped.
-- **Cancel works.** The engine received no Cancel at all (the call raised an error), and the window killed the thread after 2 seconds. It now stops between read batches and inside semantic mapping, saves its partial results, and the window waits for that to finish (see *Semantic mapping finishes* below).
-- **No evidence is lost to the duplicate check.** Two MFT records of one file that shared a timestamp were treated as duplicates and one was dropped. Only identical rows are merged now. On the measured case, 15,909 matches keep records they used to lose; all other results are unchanged.
-- **The Time Period Filter works.** It never filtered anything because of a parser error. The default stays on (the last year): records outside the range are dropped and counted under "Dropped by filter".
-
-**Collectors:**
-- **Crow-Claw shows 14/14.** It always collected all 14 artifacts, but a rate limit dropped the "(14/14)" message, so the window showed 13/14 for the whole Web Browsers step. The percentage no longer reaches 100% at the start of the last artifact, and the final summary counts partially collected artifacts. (It said 534 files / 3.74 GB against a real 52,969 / 9.44 GB.)
-- **The USN journal is collected into a readable file.** The `:` in `$UsnJrnl:$J` wrote the journal into an NTFS alternate data stream behind a 0-byte file, so offline USN parsing read nothing. The copy is now `$UsnJrnl_$J`, and older collections are still read from their stream.
-- **The Offline Importer reads EVTX, SRUM and LNK from a Crow-Claw collection.** They looked in other folder names and read nothing; LNK still reported success. Also:
-  - DRIVERS, BBI and ELAM hives are detected;
-  - "System Information.lnk" is a shortcut, not a registry hive;
-  - AmCache is parsed once, not three times;
-  - the MFT-USN correlation runs only when both MFT and USN parsed.
-- Each parser log line is written once (they were written twice).
-
-**Faster parsing, same output** (compared row for row before and after):
-
-| Step | Before | After |
-|---|---:|---:|
-| Offline Registry parse | 153 s | 84 s |
-| Offline MFT, 200k records | 30 s | 16 s |
-| MFT-USN correlator, MFT query | 9.7 s | 4.0 s |
-
-- **Registry:** each hive is opened once per parse instead of once per lookup.
-- **MFT:** records are read in 4 MB chunks, secondary indexes are rebuilt once after the load, and a volume not yet in the database takes the plain insert path.
-
-**Every window styled:**
-- **Menu bars** (File / Edit / View / Help in the Correlation Engine, Feather Builder, Wings Creator and Offline Importer) and their drop-down menus are in the site look: separators, disabled items, check marks and submenu arrows.
-- **Windows themed for the first time:**
-  - Custody Viewer, Elevation, Dynamic Linking and its stats;
-  - Search Filter, Partition;
-  - the Case and Startup dialogs;
-  - the Eye onboarding wizard, Case Setup, Case Summary and approval dialogs;
-  - the main window's message boxes and progress dialog.
-
-#### Semantic mapping finishes, and a stopped run keeps its results
-
-Semantic mapping labels correlation matches ("Web Browser Activity", "LOLBin Execution") after they are written. On large runs it decided how long the whole correlation took:
-
-| Semantic mapping step, 7.10.2026 (842,334 matches) | Time | Result |
-|---|---:|---|
-| Build the FTS5 prefilter index | 10 min | |
-| One MATCH query over 855 search terms | 33 min | kept 99.8% of the matches |
-| The rules themselves | 11 min | |
-
-On a larger case (858,732 matches) the run was still in that query an hour later, and the results never opened.
-
-- **The prefilter is skipped when it cannot filter.** A sample of about 2,000 matches estimates how many it would keep. At 50% or more it is not built, and every match is scanned. Skipping it can only add candidates: the rules still decide every label. On a 105,309-match wing the phase went from 138 s to 86 s with the same 4,669 labels.
-- **Candidates are read and matched in chunks** (20,000 by default) instead of in one read that held every match's records. Progress is logged per chunk: "Semantic mapping: 40,000 / 102,349 matches scanned".
-- **The prefilter index is rebuilt for each run.** One left by an earlier run held none of the new run's matches, so it found nothing and the phase fell back to a full scan after paying for the query.
-- **Stop works inside semantic mapping.** The phase never checked the flag, so Stop waited 15 s and then killed the thread: no totals, no statistics, no log line. It now checks between chunks and every 500 matches. The window waits for the run to save what it found, staying responsive, before a forced stop is considered. On the test case the run stopped about 1 s after Stop and had saved everything about 8 s later. The labels found before the stop are kept.
-- **A stopped run opens its results**, marked **CANCELLED**. The Summary shows its statistics and charts, and the Wing Breakdown says *Stopped*. Before, a stopped run opened nothing.
-- **Statistics are saved before semantic mapping starts.** Feather statistics and the execution's totals were written only after it, so a run that stopped or was killed inside it left an empty Summary. They are now written as soon as the matches are, and again at the end.
-- **A run that never finished still has a Summary.** When a result has matches but no saved statistics, the Summary counts them from what the run left behind:
-  - matches and identities per feather, from the stored matches;
-  - records per feather, from the feather databases the wing read.
-  
-  It shows a small **NOT FINISHED** label, the time as *unknown*, and *Not finished* in the Wing Breakdown.
-- **Matches per feather counted every feather.** The count kept only the text before the first underscore, so `mft_usn`, `security_logs`, `amcache_app` and every other underscored feather read 0 matches and were missing from the Matches by Feather chart.
-- **Identities are reconciled once per wing.** A streaming run merged every identity a second time at the end, finding nothing new, about 6 s per wing.
-- **Opening a case no longer breaks the next correlation.** It closed every database connection in the process, including the engine's in-memory semantic-mapping index, and the next run logged "Cannot operate on a closed database" for every field it tried to map. Only the connections on the closing case's own databases are closed now.
-- **Semantic mapping has its own log and settings.**
-  - `<case>/logs/semantic_mapping.log`, also in `correlation.log`, listed under **Semantic mapping** in Settings → Logs. Each run records the settings it used, whether the prefilter was used and why, and its progress.
-  - **Settings → Semantic Mappings → Semantic mapping engine:** worker threads, the coverage above which the prefilter is skipped, candidates per chunk, and an optional detailed debug log, written to `<case>/logs/semantic_mapping_debug.log` in UTC.
-  - The options file `configs/semantic_mapping_config.json` is found from the application's folder, not the working folder.
-
-#### Correlation engine 1.8.0
-
-- **Faster time-window scans.** Each timestamp is now parsed once per feather instead of once per window, and the commonest ISO shapes skip the failing `strptime` formats. The parser was 74% of a profiled run. All 11 wings of the test pipeline found exactly the same matches as before (count and a hash over every match).
-
-  | Measure (16-2-2026 pipeline) | 1.7.0 | 1.8.0 |
-  |---|---:|---:|
-  | User Activity Correlation | 531.7 s | **373.1 s** |
-  | Full pipeline | 3,968 s | **2,278 s** |
-  | Execution Proof Correlation | 230.7 s | **116.3 s** |
-
-- **Fixed: a wing could return no matches because of a log line.** The time estimate was printed with a variable that one branch never set, and the error aborted the whole wing's scan. It hit "Security Control Tampering Correlation" whenever its inputs held no records at the estimate; on a case where they did, real matches could be lost the same way.
-- **Unix timestamps convert to UTC** in the range and fallback paths, not to the examiner's local time.
-
-#### Parse twice, store once — re-parsing adds only what is new
-
-Running the live parser a second time on the same machine used to duplicate data or delete it.
-
-- **Duplicated.** Amcache stored every row twice: its existence check compared raw value names (`ProgramId`) with column names (`program_id`) and never matched. Case 7.10.2026 held 13,681 Amcache rows, 6,841 of them distinct. SRUM removed duplicates only within one run (457,593 rows, 230,848 distinct). The MFT's child tables were a plain INSERT.
-- **Deleted.** Event Logs dropped their tables at every run. Browsers deleted each profile's earlier rows. History and events that had since rolled out of the live source were lost from the case.
-
-Every writer now stores only the rows the case does not hold yet, through one shared writer (`utils/dedupe_insert.py`, NULL-safe, backed by a plain identity index). Each parser reports how many rows it read, how many were new and how many were already present.
-
-- **Event Logs** now store the event's own record number (`RecordNumber`, the EventRecordID). Two identical-looking events stay two events, and a re-parse matches on it. Events stored before the column existed are matched by content.
-- **ShimCache** matches on path, modified time and size, so an entry that moves down the cache is not stored again.
-- **Recycle Bin**'s check handles empty columns, and it no longer writes a `.bak` copy at every run.
-- **Cases parsed before this release keep the duplicates already in them.** Only new parses are deduplicated.
-
-| Second parse of the same evidence | Before | Now |
-|---|---:|---:|
-| Amcache (6,235 rows) | 6,235 stored again | **0 new** |
-| MFT (1,208,321 records, offline `$MFT`) | child rows stored again | **0 new** |
-| Event Logs (70,895 events) | tables dropped and rebuilt | **0 new**, earlier events kept |
-| Browsers | each profile's earlier rows deleted | **kept**, only new rows added |
-
-#### Parse Status says what a run added, and why something failed
-
-- **New and Already present columns.** `Records` is now what the run read, not the database total. "MFT 19,090,321" was four tables summed. A re-parse reads like "1,024 record(s) read: 0 new, 1,024 already in the case."
-- **Failed and partial rows expand** to the error, the parser's own warning and error lines with the full traceback (colour-coded), and the database rows before and after. **Show parser log** opens that artifact's lines. The loading dialog's checklist shows "12 new, 1,012 already present".
-- **ShimCache no longer shows "Failed".** It read 1,024 entries, all already in the case. Nothing was written, so its database was unchanged, and an unchanged database was read as "produced no output database". That can no longer happen to any parser.
-- **MFT no longer ends "Partial, exit code 1".** 24 extension records pointed at base records that do not exist (file content read as a record number). One foreign-key error rolled back the whole merge and left 53,223 extension records unmerged. Invalid ones are now skipped and listed as a warning. The exit code is no longer reported as a record count ("1 records").
-
-#### Forensic image parsing says what went wrong
-
-An image parse now ends the way a live parse does: with the **Parse Status Report**, one row per artifact, and above it the problems that belong to the whole run. Before, most of these reached the analyst as a console line or not at all, and an image that never opened reported *"Extraction completed successfully"* with 0 artifacts.
-
-- **Checked before anything starts.** The file is identified by its content, not its name:
-  - **Formats:** EWF/E01, Ex01, VHDX, VHD, VMDK (descriptor or sparse extent), ISO and raw (MBR, GPT or a bare volume).
-  - **Unsupported formats are named:** L01, AD1, AFF, ZIP/7-Zip/RAR, QCOW and VDI.
-  - **Each partition's boot sector is read** (NTFS, FAT, exFAT, ReFS, **BitLocker**), and its file system is checked for `Windows\System32\config`.
-- **Investigator mistakes are named, with what to do:**
-  - a later segment chosen (`.E02`, `.002`, or a VMware extent instead of its descriptor);
-  - segments missing from the set;
-  - a text file or a folder chosen as the image (the folder message points to the Offline Importer);
-  - no partition selected;
-  - the image stored inside the case folder;
-  - a case folder that cannot be written;
-  - too little free space.
-- **Image problems are named, with what to do:**
-  - an unreadable or corrupted image;
-  - an image locked by a running virtual machine;
-  - a missing reader library;
-  - a BitLocker volume;
-  - a partition with no readable file system. When the boot sector declares NTFS but the file system will not open, the issue says the image may be a partial acquisition.
-  - no Windows installation on the selected partitions;
-  - folders the file system refused to list.
-- **Errors stop the run before extraction; warnings ask "Continue anyway?".** Every issue appears in the window's new **Issues** tab and in the report, with its cause and the fix.
-- **Statuses that were wrong:**
-  - An artifact found in the image but not copied was reported *Not found (not a failure)*; it is now *Failed* or *Access denied*, with the reason.
-  - Artifacts left out by the type filter are *Not run: not selected*.
-  - A batch that crashed recorded nothing; it now records what finished, marks the rest *Not run*, and adds a *Parsing stopped* issue.
-  - A cancelled parse marks its unfinished artifacts *Not run*, and a cancelled live parse now shows its report.
-  - Prefetch files with an unsupported version, which were skipped silently, now make Prefetch *Unsupported format* and name the files.
-  - A dirty SRUM database read as *Dependency missing*; it now reads *Unsupported format*.
-  - A registry hive the parser cannot read read as *Failed*; it now reads *Unsupported format*.
-  - The MFT/USN correlation now has its own row.
-- **One report per session.** Each run keeps its own rows, so a later run no longer overwrites an earlier report. The report no longer opens on top of the Parse Artifacts dialog. The header shows the image and the partitions read.
-- **ISO images open.** The window passed a list of paths where pycdlib needs one.
-
-#### Forensic Image Parsing window, redesigned
-
-- **Two columns:**
-  - **Setup (left):** the image with health badges; partitions with file system, size, a Windows mark and a BitLocker lock; extraction settings in a grid.
-  - **Run (right):** progress with *Found / Extracted / Failed / Elapsed*, then *Artifacts*, *Log* and *Issues* tabs.
-- **A fixed action bar** at the bottom: *Start analysis*, *Cancel*, *Parse artifacts*, *Export results*, *Close*. It sits outside the scrolling area and cannot be clipped. The window sizes itself to the screen, with a minimum of 960 x 640. The old fixed minimum of 1100 x 800 overrode the layout and hid the Start button.
-- **The Windows partition is pre-selected.** Automatic parsing reads only what this extraction collected, instead of re-parsing every earlier import in the case. The same path in two images of one case no longer overwrites the earlier entry.
-- **The window follows the case.** Opening another case clears the previous case's image, results and issues.
-
-#### UBA, Timeline, LNK
-
-- **UBA counts files, not journal records.** "N files were created" counted every journal record of
-  every file (~3.4× the files; edits ~19×); it now counts files and gives the record count beside.
-  A folder that was not read is *an unknown folder*, not *the drive root*; paths are matched by
-  volume, record and sequence; the AmCache shortcut query read a column that does not exist; a bare
-  `6` is no longer read as 2001-01-01 00:00:06; a time with an offset is converted to UTC.
-- **The LNK and Jump List collection skips Crow-Eye case folders.** It walks the whole profile, and an
-  examiner's old cases hold other machines' shortcuts - 433 of 636 LNK rows on one machine, which UBA
-  then told as this user's activity.
-- **Timeline:** the LNK and Jump List lanes were empty (their query named a removed column); the
-  MFT/USN lane covered only its first 1,000 rows (only one of its nine time columns was narrowed per
-  slice); the AmCache heat map read unparseable raw dates.
-
-#### Browser behaviour in User Behavior Analytics — 16 new rules (65 → 81)
-
-UBA reads the browser databases for what a person searched for, the kinds of site they went to, what they downloaded and opened, and what they left open.
-
-- **Curated site categories**, kept as data in `uba/config/site_categories.json` (validated at start-up, editable without code):
-  - file-sharing;
-  - paste;
-  - anonymiser (Tor and `.onion`, web proxies, throwaway e-mail);
-  - cryptocurrency;
-  - remote-access tools and tunnels;
-  - AI chat;
-  - hacking resources.
-  SharePoint and Google Docs are deliberately not file-sharing: visiting them is ordinary work.
-- **Only a person's own navigation counts**: a link, a typed address, a bookmark or a form. A frame, a redirect or a reload does not. An advert that embeds a file-sharing widget is not a visit to it. One event per user, browser, day and category, naming the hosts.
-- **Web searches**, read from search-engine result pages (Google, Bing, DuckDuckGo, YouTube and others) and from what was typed into the address bar.
-- **Downloads, graded once each**, in this order:
-  - flagged by the browser;
-  - from a risky source: a public raw IP, plain http, or a risky site. Suspicious when the file is also a program;
-  - a program, script, installer or disk image. A double extension (`invoice.pdf.exe`) is called out;
-  - anything else.
-  Downloads from this machine (`127.0.0.1`) and the local network are never "risky": on a real case a local web app was the only plain-http source there was. Firefox downloads are read too.
-- **Downloads the browser opened** are a separate event. The browser records *that* a file was opened, not when, and the event says so.
-- **Inferred uploads.** A form submitted to a file-sharing or paste site, excluding sign-in and account pages. It is marked *inferred*: a form submission does not prove a file was attached.
-- **Chat and collaboration apps** whose profile was collected: Discord, Slack, Teams, Signal, WhatsApp, Telegram, Element, Skype, Zoom.
-- **Cryptocurrency wallet extensions** (MetaMask, Phantom, Coinbase Wallet, Trust, Binance, Exodus, Ronin, TronLink, Keplr, Rabby, OKX and others). Each says whether the wallet holds stored data. The storage is counted, never read.
-- **Tabs open when the browser last closed.** Raised to *notable* when a tab was on a sensitive site. Read from Chromium's `Session_` files only: `Tabs_` files are the recently-*closed* list.
-- **Media played**, with the watch time per site.
-- **Saved logins** are now counted per site category (hosts and counts, never the account).
-- **The history-gap rule works per profile** and includes Firefox: one browser's cookies say nothing about another browser's quiet history.
-- **Fewer false findings in existing rules:**
-  - Browser-shipped component extensions (Web Store, Microsoft Store, Edge Feedback, Brave) are no longer reported as risky extensions. They were 5 of 9 on a real case.
-  - `signin.allowed`, a policy default, no longer reads as "signed in with sync".
-- **Privacy.** No rule reads:
-  - autofill or form-history values;
-  - what was typed into pages;
-  - saved-login usernames;
-  - session tokens (a Discord token is enough to sign in as its owner);
-  - extension or web-storage contents.
-  Tests plant secrets in every one of those columns and check that none reaches an event.
-- **The "Jump to a day" strip showed nothing on some cases.** It walked at most 800 days from the *first* event. One artifact with a timestamp years older than the rest used up all 800 days, and the strip read "800 days, 2 with activity" on a case with 28,000 events. It now ends at the latest activity and counts what falls before it.
-
-#### Eye can run User Behavior Analytics
-
-- A new Eye tool, **`query_user_behavior`**, runs the same 81 UBA rules as the UBA window, once per case, then answers for any day, range or user: who did what, when, how sure, and the evidence rows behind each event. It also reports which behaviours could not be looked for because their artifact was not parsed.
-
-#### Eye setup
-
-The first-run setup (and *Settings → Eye AI → Change backend*) is four steps with a step bar -
-welcome, connection type, backend & model, test & save - pre-filled from the saved setup, with
-missing fields and an unusual key format named in the window. **An API key is written to the
-credential store only after the connection test passes** (it was stored before testing, so a typo
-stayed behind). The test runs off the GUI thread and says why it failed in words; *Settings → Eye AI*
-shows the connection with a *Test connection* button. Cancelling the first-run setup says so instead
-of the Eye silently not opening.
-
-#### Dynamic Linking statistics
-
-After **Link Gathering** and after **Run Dynamic Linking**, a statistics window shows what was linked and where it came from. **Statistics of last run** reopens it.
-
-- **By source:** every rule under the database and table it read, with the value and name columns, the rows read and what became of them: new, merged into a known value, already known, rejected. Skipped and failed rules say why.
-- **By category**, **Linked in tables** (for each artifact table, how many rows now carry a linked name, and from which sources) and **Mapping database** (every link by source).
-- **The same numbers are in `dynamic_linking.log`,** one line per rule and a summary per run. `GatherHistory` keeps them per run, so a past run can be shown again.
-- **The counts are honest now.** Every rule used to report every mapping it saw, so a value already known counted again on every run. A rule whose database was missing printed a console line and left no record; it is now *Skipped: amcache.db not parsed in this case*. A failing custom rule read as *success, 0*.
-- **Fixed:**
-  - A name containing a comma (service display names such as `@%SystemRoot%\system32\x.dll,-101`) was never recognised as already stored, so every run appended it again and the stored name grew without limit.
-  - A custom rule with a mistyped column linked the literal column name to every row; SQLite reads an unknown quoted name as text. The columns are now checked first and the rule fails, naming them.
-  - The intelligence database's schema version was never written, so every open re-ran every migration.
-
-#### Dynamic Linking statistics — after Link Gathering
-
-- The **By source** and **By category** tabs were empty after *Link Gathering* followed by *Run Dynamic Linking*. They now show the gather's rules, labelled with when the gather ran.
-- *Link Gathering* shows its statistics again (a button signal turned them off). The manual rule is kept in the run history. A reopened run shows its real time, not the moment it was reopened.
-
-#### One User Activity dashboard: Shell Items & Registry
-
-The registry tables that record what a user ran or set had no dashboard, beside shell-item tables that had one. They are sources of the same dashboard now, renamed **User Activity: Shell Items & Registry**, and every one of these tables has a **Charts** button that opens it on its own source:
-
-- **On the day strip, by their own time:**
-  - **UserAssist** (run count, focus count and focus time);
-  - **BAM** and **DAM** (last run per account).
-- **Listed undated:** these hold only their key's write time, one upper bound shared by every entry, and plotting all of them on that day would be a false spike. The key time is shown in each item's detail.
-  - **FeatureUsage**;
-  - **Compatibility Assistant**;
-  - **File associations** (FileExts);
-  - **ProgramsCache**.
-- UserAssist's session counters and BAM's `Version` / `SequenceNumber` values are not listed.
-- When the selected source has no dated items, the strip says so instead of drawing every source as an empty row.
-
-#### One User Activity view
-
-- **One window, one timeline.** The **Charts** button on any of the 28 Shell Items and registry user-activity tables opens the same *User Activity* window. A second click re-points that window instead of opening another. Every source stays on the timeline and the clicked one is highlighted; *Show only* still filters.
-- **Camera, microphone and location use** (`ConsentStore`) is a source of its own, dated by each app's last-used start time.
-
-#### Anatomy for every table, inside the app
-
-- **Every User Activity table has its own section**, on the Shell Items or the Registry anatomy page. Each section covers:
-  - the key and hive;
-  - the value format and how Crow-Eye decodes it;
-  - which timestamp exists and what it bounds;
-  - what the table proves and what it does not;
-  - how it appears on the dashboard.
-  Every table's **Anatomy** button opens its own section.
-- **The pages ship with Crow-Eye** (`docs/anatomy`, 13 pages) and open in an in-app viewer at the right section, with no internet needed. Links between bundled pages stay in the viewer; anything else opens in the browser.
-- **16 registry keys the parsers read were missing from the Registry anatomy key tables.** These included BAM, DAM, CIDSizeMRU, StartPage2, Regedit, credential providers and firewall rules. The check that guards the page could not see a key path written as two adjacent string literals; it now reads string constants the way Python joins them.
-- **A dead registry read was removed.** The live parser read `Control\SessionManager\...` (no space) for two values that do not exist there. It never returned a row, and the page listed the misspelt key.
-
-#### Charts load without freezing the window
-
-Every dashboard ran its queries on the GUI thread, so the window froze and the loading overlay stopped mid-animation. Queries now run on a small thread pool and answer through a signal. The newest request wins, so an older answer cannot overwrite a newer view or clear its overlay.
-
-| Measured on case 7.10.2026 | Before | Now |
-|---|---:|---:|
-| Longest GUI-thread stall while any of the 7 dashboards loads | the whole query | **172 ms** |
-| Timeline: one day click | 70 s | **3.1 s** |
-| SRUM: one day's detail | 8.9 s | **0.05 s** (the date filter now uses the index) |
-| SRUM: open | 25–37 s | **6.5 s**, loaded once instead of twice |
-| Browser: open (bounds) | 3.3 s | **0.3 s** |
-| MFT/USN: alternate-data-stream files | 5.2 s | **0.02 s** after a re-parse (new index) |
-| MFT/USN: events by reason | 2.6 s | **0.5 s** after a re-parse (covering index) |
-
-- Each answer is cached until a filter or the database changes.
-- Each call's duration and size go to the visualizations log.
-- Long application, domain and path names on the activity charts are shortened in the middle instead of losing their start.
-- SRUM's CPU-cycles total is shown compactly, with the exact figure on hover.
-
----
-
-### Collection, Parsing and Logs
-
-#### When Crow-Eye is not running as Administrator
-
-- **Asked before, told after.**
-  - **Before** a live parse that needs rights (Parse All, or a single MFT, USN, Prefetch, SRUM, Amcache, event-log, registry, browser or Recycle Bin parse), one question: *Restart as Administrator*, *Run anyway* or *Cancel*. Parse All used to refuse outright.
-  - **After** a live parse that Windows refused, one pop-up names the refused artifacts and offers the restart. It appears in place of the Parse Status report, never as well, and the report is one click away.
-- **Restart as Administrator reopens the same case** (`--open-case`). It is refused while a parse is running. If the Windows prompt is declined, Crow-Eye says so and carries on.
-- **A refusal is now called a refusal.**
-  - `PermissionError`, Windows errors 5, 32 and 1314, and the MFT and USN parsers' new exit code 5 are classified *Access denied*, whatever language the message is in.
-  - A parser that stops itself (`sys.exit`) is *Failed*.
-  - Amcache and SRUM read **"does not exist"** on every unelevated run. `os.path.exists()` answers *False* for a file Windows refuses to show; they are now *Access denied*, with the reason.
-
-#### Parser processes: cancel, close and timeouts
-
-- **Cancel stops everything.**
-  - Queued parsers are dropped. Running ones get 3 seconds, then their process trees are ended, including the processes they started (esentutl, PowerShell).
-  - Cancelling used to wait for every queued parser, and the pool workers outlived Crow-Eye.
-  - What had not finished is reported *Not run (cancelled)*.
-- **Closing the window mid-parse asks first:** *Wait for it to finish* or *Stop and close*. Closing during a loading screen warns that a database may be incomplete.
-- **A killed run still leaves a custody record.** Each process journals its share as it works. If the run had to be ended, the record is rebuilt from the journals and marked *terminated*. A run cut short by a crash is rebuilt the next time the case opens. The run's shadow copy is still deleted.
-- **One shadow copy per run.** The collector makes one before the parsers start, and every parser reads from it. The pool workers' file reads and shadow-copy use now reach the run's custody record, and their scratch files go under the case instead of the examined machine's `%TEMP%`.
-- **A parser that calls `sys.exit()` no longer ends the whole collection.** MFT, USN and the correlation used to never run after it, with nothing reported.
-- **The MFT–USN correlation no longer runs when the MFT was not parsed.** It reported an empty correlation as if it had worked. It is now *Not run*, with the reason.
-- **Every subprocess call has a timeout**, enforced by a source-scan test. Before, a hung parser held the correlation, and with it the whole live Parse All, indefinitely. npm and parser timeouts end the whole process tree.
-- **Parser processes start faster and leaner.** Each one re-ran Crow-Eye's whole start-up: pip scans, the React build check and, unelevated, the UAC prompt, which then exited the child before it parsed anything. About 0.9 s and 70 MB per child, down from 1.3 s and 132 MB, with no launches.
-
-#### Loading and responsiveness
-
-- **Event Logs are paged.** 85,000 events were built into 800,000 table cells at every case open. The three log tabs now show only the rows on screen.
-
-  | Measure | Before | After |
-  |---|---:|---:|
-  | Event Logs load (3.10.2026 case) | ~2.9 s | **0.30 s** |
-  | Crow-Eye memory after opening that case | ~1,060 MB | **~750 MB** |
-
-  - Header clicks sort the whole table, numerically for numbers.
-  - The toolbar search queries the logs' database.
-  - Export writes every row (37,052 System rows in 0.4 s).
-  - The headers read *Event ID*, *Time (UTC)*, … instead of the database column names.
-- **Registry tables are filled once per case open.** Two loader steps refilled the same tabs before the main load, and the LNK table a second time. Removing them was checked on a real case: 159 tables and 40,016 rows came out identical.
-- **Registry and partition tables fill with sorting off.** With sorting on, every cell write re-sorted the table, and a row that moved mid-fill took the rest of its cells to the wrong row.
-- **No event-loop pumping inside fill loops.** A click handled in one of those pumps could start a second load inside the first. Loading screens keep animating through a repaint-only call, and a case load can no longer start again inside itself.
-- **Parse Offline Artifacts' automatic scan runs off the window.** The scan and the parse used to run on the GUI thread. They now run in workers, and Cancel works.
-- **Image parsing can be cancelled** once extraction has finished. Before, Cancel reached nothing.
-- **The Windows partition is remembered per case** instead of being detected again at every open.
-- **Search results switch to the right tab.** The toolbar search never switched to a nested tab for most tables.
-
-#### Faster parsing
-
-| Measure | Before | After |
-|---|---:|---:|
-| Brave Service Worker cache, 26,674 entries | 332 s (8.7 ms per cold open) | **~45 s projected** (1.2 ms per cold open, eight in flight - measured on Edge's cache); identical rows |
-| MFT and USN during live **Parse All** | started after the whole pool | **run beside the pool** in a process of their own |
-| LNK & Jump Lists profile walk (873,260 files) | 30.6 s | **18.1 s**, the same 1,122 files in the same order |
-| Feature gate "does this case have data" (GUI thread) | 1.9 s | **0.006 s** |
-| Image extraction | each file written, then read back for its SHA-256 | **hashed while it is written** |
-| Prefetch | full database integrity check before every file | **once per run** |
-
-- **USN journals extracted from images keep their oldest records.** The sparse-`$J` probe could skip up to 4 MB of data at the start of the journal.
-
-#### Parse and loading screens; logs in colour
-
-- **Logs read like an IDE**: in Settings → Logs, in the parse dialog's log pane and in the full-log window, with a level filter (all / warnings / errors), find, follow and copy.
-- **A parse row says what its warning was.** Hover it: every message and skipped file is listed. The amber icon now comes from the artifact's outcome, so one corrupt Prefetch file of 362 no longer turns the row amber. The Time column no longer flickers. The Crow-Eye logo is back in the dialog.
-- **Prefetch says why** a file could not be parsed or was only partly parsed.
-- **After a parse, the loading screen**, not the parsing screen, fills the tables, one row per step. The Parse Status report opens as soon as it closes, where before it waited out a fixed 1.8–3 s.
-
-#### The parsing dialog shows a live checklist
-
-- **One row per artifact, filled in as it runs:** status, records, time and warnings. *Not found (not a failure)* rows read as such, in the Parse Status vocabulary.
-- **What is happening now:** a *Now:* line shows the artifact and the file or hive being read, or the parser's own progress line, which used to be dropped. The clock gives an estimate of the time left once two artifacts have finished.
-- **The log is still there,** folded behind *Show log (n lines)*.
-- **The single-artifact parse buttons:**
-  - the dialog shows the parse's own title;
-  - it says *parsed and loaded N records*, *nothing to parse* or *see the Parse Status Report* instead of *completed successfully* before anything was checked;
-  - Cancel leaves the parser to finish its current work and does not load its results.
-- **The loading stays visible:** the console capture now continues through the table load after a live parse. Loading parsed data after an offline or image parse shows its own checklist; it used to fill the tables with nothing on screen.
-
-#### Loading and parsing dialogs
-
-- **A cancelled or crashed live Parse All always ends.**
-  - The collector always reports *done*, even when it is cancelled or raises.
-  - The progress reader stops when the collector process dies instead of waiting for ever.
-  - Cancel shuts the workers down off the GUI thread.
-- **Background workers can no longer finish unseen.** Five wait loops started the worker before connecting to its *finished* signal, so a fast worker could finish first and leave the dialog waiting. A worker that raises `SystemExit` now reports back too.
-- **Fewer, cheaper updates:**
-  - log lines are batched in the worker process (every 200 ms) and in the dialog;
-  - the log view keeps the last 5,000 lines and HTML-escapes them;
-  - the progress slots no longer re-enter the event loop.
-- **The event-log tables fill without freezing** the window: sorting is off during the fill and the UI is pumped every 50 rows.
-
-#### Busy notice, and the window that is in the way
-
-- Clicking a tab or a table while Crow-Eye is still parsing or loading now says so: a popup the first time in a run, then a banner. The click still goes through.
-- A click on the main window while a dialog is waiting for an answer brings that dialog forward and names it.
-
-#### Offline Importer
-
-- **Select Files** collects only the chosen files; choosing a folder replaces the selection.
-- Parse results are matched to their artifacts by id, not by position, so the right files are marked parsed.
-- **Collect** after a **Scan** copies exactly as a direct collection does: per-user folders, `.LOG` files beside their hives, the same ids, in the background.
-- Failures are reported as failures ("completed with N error(s)"), and the found / copied counters move during the run.
-- **Cancel** keeps everything copied so far, indexed and ready to parse.
-- Event Logs and SRUM type filters. The ShimCache filter matches what the detector finds.
-- A file already in the case is "already in the case", not a failure. A case switch clears the previous case's results.
-
-#### Parse automatically after collection
-
-New in **Settings → Parsing** (on by default): the Offline Importer parses exactly what a COLLECT
-brought in as soon as it finishes (a SCAN still waits for Parse); *Parse Offline Artifacts* scans and
-parses a never-scanned acquisition without asking; and Image Parsing's *Parse automatically after
-extraction* starts from it. Off, each stops at a ready Parse button.
-
-#### Logs: Offline Importer, Crow-Claw and image parsing
-
-- **Their own case log files**, listed under their own groups in **Settings -> Logs**:
-  - `offline_importer.log`
-  - `crow_claw.log`
-  - `image_parsing.log`
-- **Settings -> Logs also lists** what these tools leave in the case:
-  - the collection manifest;
-  - the import results and the artifact hash list;
-  - the image partition table;
-  - `parsing_errors.log`.
-- **Records that were lost:**
-  - The window logs of all three tools were never saved; they now go to these files.
-  - Crow-Claw and image parsing printed to a console that the packaged build does not have; they now use the logger.
-  - Crow-Claw's error traceback is now logged.
-  - The image window loaded a second copy of the importer, whose records never reached a log.
-- **Rotated backups stay with their file:** `crow_eye.log.1` is grouped with `crow_eye.log`. Without an open case, the panel shows the application log. `console.log` now rotates at 10 MB; it used to grow without limit.
-- **The Offline Importer opened from Crow-Eye collected into `~/.crow_eye/tmp/scan`** until a first collection finished, and kept the previous case after a case switch. It, Crow-Claw and the image window now bind to the open case every time they open.
-- **Smaller fixes:**
-  - The importer's in-window log is written from worker threads safely.
-  - Registry parsing no longer writes `regclaw_errors.log` into the working folder.
-  - Printing no longer raises in the packaged build when no case is capturing output.
-  - Check-mark glyphs in Crow-Claw's shadow-copy checker and the importer's launcher are now ASCII.
-
-#### Every parser and analysis step reaches the case logs
-
-- **Each parser run is framed in `parsers.log`:** a start line with the source, everything the parser prints while it runs (at its level: `[ERROR]` lines as errors, `[WARNING]` as warnings), and a closing line - for example `done: Registry, 13,314 records in 127.9s, 0 warning(s)`. Most parsers report only through `print()`; their output used to reach `console.log` with no name on it.
-- **Live Parse All runs its parsers in worker processes, which had no case logging at all.** Their records are now sent to Crow-Eye and filed under the case.
-- **Loggers that reached no component file now do:**
-  - the registry parsers (live and offline), the SECURITY-hive and user-identity readers, which logged on the root logger;
-  - parser modules imported by their own name (`Regclaw`, `MFT_Claw`, `USN_Claw`, ...).
-- **What the parsing dialog shows is also logged.**
-- **More components log their work:**
-  - the correlation pipeline's run;
-  - UBA's per-extractor counts and rule coverage;
-  - the main window's parse and load phases (`gui.log`).
-- **Fixed:**
-  - The USN parser created `.\Target_Artifacts` and an empty log in the working folder whenever it was imported; its run log now opens beside its database when it runs.
-  - The MFT parser added a new log handler on every run, so a second parse wrote each line twice.
-
-#### From the last case's logs
-
-- VSS writers in state 5 (waiting) are no longer reported as failed.
-- "VSS service not running" is informational (it starts on demand), and the 116 "VSSErrorReporter initialized" lines are gone.
-- Registry: USB `Properties` access-denied (expected even elevated) is one summary line with a count, and missing Shellbags keys are no longer errors.
-- Traceback lines after the first are logged as errors, not information.
-- Browser files locked by a running browser (Cookies) are copied through the shadow-copy and raw-read chain. A file still unread is a Parse Status detail and a custody failure, never a plain "Parsed".
-- The Database Search window no longer raises on close.
-- Eye's built-in queries name the columns that actually exist (Prefetch, Amcache, Run keys, RecentDocs).
-
----
-
-### The Look
-
-#### The look — the website's theme, colour-coded columns, one scroll bar
-
-- **The loading dialog is now in the website's style:**
-  - a dark card with a hairline edge, rounded corners, a soft indigo glow, and the indigo → cyan strip
-    along the top;
-  - the title in Barlow Semi Condensed, with no pulsing box; a slim gradient progress bar with its
-    count above it; the "Now:" line and the log in JetBrains Mono;
-  - a rose-on-hover Cancel, and checklist icons in the site's tones.
-  
-  It can be **moved** (drag any empty part) and **resized** (the corner grip). The text no longer
-  overlaps when the dialog is made small.
-- **Both website fonts ship with Crow-Eye** (SIL Open Font License; the licences sit beside the font
-  files). A Qt stylesheet only ever uses the first font it names, so a font that was not installed
-  fell back to Qt's default. The fonts are now registered at start-up.
-- **Standard columns have their own colour in every artifact table:**
-
-  | Column | Colour |
-  |---|---|
-  | times (created, modified, accessed, last written …) | cyan |
-  | paths, keys and URLs | light indigo |
-  | hashes | violet |
-  | users and SIDs | pink |
-  | sizes | orange |
-  | names | bold white |
-  | `parsed_at` | dimmed |
-
-  Counters, durations and time-zone fields that only look like times (`times_used`, `focus_time`,
-  `time_zone_name`) stay plain.
-- **Settings → Eye AI fits the window.** At the 900 × 700 minimum the page was 866 px wide in a
-  690 px view, with no horizontal scroll bar, so the right of every row was cut off, including Test
-  connection and Change backend. Long checkbox texts now wrap, the form lets rows wrap, the buttons sit
-  under the connection details, and number boxes stop at a sensible width. Minimum content width:
-  337 px.
-- **One scroll-bar style everywhere:** slate on near-black, indigo on hover, cyan while dragged. The
-  custody viewer, Parse Status, the Offline Importer and the correlation windows showed native white
-  scroll bars, and five different recipes were in use elsewhere.
-
-#### Columns — four new colour groups, a brighter `parsed_at`
-
-- `parsed_at` is a brighter slate (`#94A3B8`).
-- **IDs and record numbers** (amber), **registry values and data** (green), **flags and status** (rose), and **network and devices** (teal) join the seven existing groups. They rank below those groups, so `file_id` is still a hash, `user_id` a user and `last_seen_time` a time.
-
-#### Collectors and Settings keep their style; the progress bar is still when idle
-
-- **The Offline Importer's progress bar moved while nothing ran.** The bar draws a gliding light at 0 and a sweep until it reaches 100%, and the importer never switched that off. It moved at open, after a cancel, and after an error. It now moves only while a collection runs, and a finished run shows 100%. Forensic Images already behaved; Crow-Claw uses a plain bar.
-- **Why windows lost style.** Converting a window to the website's look removes each widget's own style sheet and keeps what it meant as a role. That reading kept only colour and size, so these were lost:
-  - bold at weight 600: every Settings form label and Crow-Claw's admin line;
-  - boxed read-outs: "current file" and "access method";
-  - underlined panel titles;
-  - the monospace timer;
-  - small bold headings;
-  - the green "Enabled" checkbox.
-
-  A `:disabled` colour also made every Eye AI checkbox label grey, and a change in round 18 promoted 14pt labels to page titles. The reading now keeps all of these, as roles in the one site sheet: read-out, mono, caption, underlined section, bold, and checkbox status colours.
-- **One button family everywhere.** Plain buttons now use the same font as the main-action, outline, delete and amber buttons beside them, so toolbars no longer mix two fonts. Crowded rows (Settings → Semantic Mappings) use a dense size so nothing is clipped.
-- **Settings sets its look before building its pages**, as every other window does. It also opens faster: 6.0 s → 2.0 s on the measured machine. Its message boxes and the fallback mapping dialog are themed too.
-- **Crow-Claw:** the artifact details and configured-paths panes are mono log wells again, like the collection log.
-- **Parse Artifacts:** the summary and error dialogs it opens after a run were never themed. They are now. Failed and partial artifact types are coloured too, not only successes.
-- Table headers keep the round-16 design: transparent, with a hairline.
-
-#### The Correlation Engine in the website's look
-
-The Correlation Engine now uses the website's look, as the loading dialog, Settings and the collectors already do. The engine covers the main window, Feather Builder, Wings Creator, Semantic Mapping, the pipeline and results dialogs, and Settings → Pipelines. Nothing moved and nothing was renamed: only the style changed.
-
-- **Fonts:** Barlow Semi Condensed and JetBrains Mono everywhere, including the execution log, the JSON viewer and the charts. Before, the engine used Segoe UI, Arial, Consolas and a font the app does not ship.
-- **One button family by role**, instead of green, blue, red, orange and slate buttons that each meant something different:
-  - RUN, Resume, Load Selected, Save and Add use the indigo→cyan main-action button;
-  - everyday actions (Load Last Results, Browse, Export, Refresh, Reset, Select All, Cancel, Close) use an outline;
-  - Cancel during a run, Remove and Delete are rose;
-  - states in between (Pausing…, Cancelling…, Retry) are amber.
-- **Colours that carry meaning keep it**, on one set of status colours:
-  - scores: high green, medium amber, low rose;
-  - severities: critical and high rose, medium amber, low green;
-  - statuses, validation messages and the Issues tab.
-
-  An old table rule painted every cell one colour and hid all of these. It is gone.
-- **Charts:** the same feather now has the same colour in the bar and the pie chart. Both charts use the site palette.
-- **One style source:**
-  - the three old `.qss` files are deleted;
-  - about 390 per-widget style sheets are down to 10, most of which only clear a sheet or set a log well;
-  - the window's sheet is no longer applied twice.
-
-  The engine window opens about 25% faster (0.058 s → 0.044 s). Loading results takes the same time (12.5 s on the measured case).
-
-| Measure | Before | Now |
-|---|---:|---:|
-| Correlation Engine per-widget style sheets | 389, plus 3 `.qss` files | **10**, no `.qss` |
-| Engine windows left open after reopening it | one more per open | **one per case** |
-| Engine window construction | 0.058 s | **0.044 s** |
-
-**Fixed while restyling:**
-
-- **Results**
-  - In the time-window tree, the score and semantic colours were drawn one column to the right.
-  - **Critical** severities were painted green.
-  - Score colours looked for words the engines never write (Strong / Good / Partial Match; Critical … Minimal), so most scores had no colour.
-  - The scoring breakdown never updated when a match was selected (wrong number of arguments, error swallowed), and a stored selection was read from the wrong place.
-  - The results tab's filter controls did nothing.
-  - Unmapped fields in the semantic table raised an error instead of showing "(no mapping)".
-  - The pie chart highlighted the wrong slice under the cursor.
-  - **Retry** stacked a new error banner on top of the old one each time.
-- **Detail dialogs**
-  - Time-window search looked for semantic values under a key that never exists.
-  - A record without a confidence value stopped its detail dialog from opening.
-  - An internal `_semantic_mappings` entry showed as a field row.
-  - Column titles were clipped.
-- **Windows**
-  - Reopening the Correlation Engine built a new window every time and never released the old ones. It now raises the window already open for the same case.
-  - Feather Builder and Wings Creator windows are released when closed.
-  - A second notice in the pipeline builder within 3 seconds restored the first notice instead of the text before it.
-  - The Anatomy offline dialog was never styled: it imported a name that did not exist.
-- **Labels**
-  - "Simple & Advanced" and "Semantic Mapping & Matched Rules" showed as "Simple _Advanced" and "Mapping _Matched" (a single `&` is a keyboard-shortcut marker).
-  - "Tip: Tip:" is now "Tip:".
-- **In the shared theme, so other windows benefit too**
-  - In a dialog styled after it was built, columns sized to their content clipped their titles ("XECUTION II").
-  - In those dialogs, button and title fonts fell back to plain text, and OK / Save / Cancel came out lower-case.
-  - A status label was drawn inside a coloured box.
-
-#### Crow-Claw, Offline Importer and Forensic Images in the website's look; a better Row Details
-
-- **Crow-Claw, the Offline Importer** (and its Parse Artifacts dialog) and **Forensic Images** take the same look as Settings and Database Search. Colours that carry meaning keep it:
-  - the administrator pill and the green/red path labels;
-  - Found / Collected counters;
-  - the image window's badges and its Issues tab, whose severity colour now shows.
-
-  Progress bars keep their text ("37% - Collecting: Prefetch (3/12)").
-- **Row Details** (double-click any row) keeps its sections and indentation: File Info, Timestamps, Attributes, Directories / Files side by side, Resources. On top of that:
-  - a header card;
-  - a filter box;
-  - *Show empty fields*;
-  - every other field in a card for what it holds (Times, Paths & names, Identity, Values & flags, Other);
-  - values in their kind's colour (the table columns' palette);
-  - right-click to copy a value.
-- **Copy all and Export (TXT, CSV, JSON) now work.** They used to produce an empty clipboard and an empty file.
-- **Fixed while checking the work** (an independent review of rounds 15-17):
-  - A **browser** re-parse kept the first parse's values (visit counts, last-access times, extension versions). A changed row is now updated in place, still never duplicated.
-  - A recycled cache file name no longer overwrites a body an earlier row describes.
-  - A live Parse All sat in the browser stage for 40+ minutes on this machine: the re-parse check scanned nearly a profile's whole storage for every row. The check is now an index seek: 60,000 rows re-checked in 0.4 s, and a first parse skips it.
-  - A failed SRUM batch no longer stores rows twice when retried row by row.
-  - A parser that stops without a result is reported FAILED again, not "no new rows".
-  - MFT / USN no longer carry the previous run's counts into a failed run.
-  - **Elevated live parse: the SAM and SECURITY hives were never exported.** A decorator had been displaced onto a helper added above the export function, so every live parse raised and dropped the user-account and security-policy detail. Found by running the suite elevated; on this machine the export now yields 7 accounts and the temporary copies are deleted.
-  - Event Logs' new `RecordNumber` column is in the correlation engine's fallback columns, so an older case still builds an empty feather.
-  - Each window's sheet is applied once (the app's scrollbar policy made it look different and it was applied twice). Opening is about as fast as before: Row Details 15 fields 0.016 s, 150 fields 0.11 s.
-
-#### Settings, Eye AI and Database Search in the website's look
-
-The loading and parsing dialog's design now covers the rest of the windows people configure and search in:
-- **Settings**, every page, including Eye AI and Logs;
-- Eye AI's **Advanced Context & Token Budget** dialog;
-- **Database Search** and **Saved Searches**.
-
-They share one theme (`ui/site_theme.py`):
-- Barlow Semi Condensed and JetBrains Mono;
-- slate cards;
-- pill buttons: indigo for the main action, a ghost outline for the rest, rose on hover for anything that stops or deletes;
-- quiet tables with uppercase headers and indigo selection;
-- the log views' level pills.
-
-The Eye's own name is never uppercased.
-
-- **Faster:** each window sets one stylesheet instead of one per widget. Database Search's per-widget styling (about 490 lines) is gone, and scrolling 5,000 results repaints faster (0.16 s -> 0.09 s for 50 steps).
-- **No glow, native frame.** These windows keep the native Windows title bar, with snapping, minimise and maximise. There is no translucent glow, which would make every table repaint cost more.
-- **The loading dialog's glow is cached.** It used to be redrawn as 14 rounded outlines on every progress-bar frame. It is now drawn once per window size: 0.16 ms -> 0.008 ms a frame, pixel-identical. The logo's breathing halo stops while the checklist is shown.
-- **Fixed on the way:**
-  - The Advanced dialog's Token Budget spin boxes were squeezed until their numbers did not show. Each tab now scrolls.
-  - Table headers drew in the general font instead of their own.
-
-- **The Parse Status report that opens after a parse showed plain white table headers.** Opened over the main window, its table header was styled under the main window's look before the report's own, and setting the report's look later never reached it. Opened from the Case menu it looked right. The header is re-styled once the report's look is set, and its count columns are right-aligned over their numbers.
-
----
-
-### Platform
-
-#### Linux (Python source version)
-
-Tested in Docker. A first-run test used Debian 12 with only the system Python, which is externally managed (PEP 668). A second container (`python:3.12`, Xvfb) opened every window and parsed a collected Windows case.
-
-- **It now starts on Debian 12 / Ubuntu 23.04+.** It used to `pip install` into the system Python before creating its venv, and those systems refuse that, so Crow-Eye exited. It now creates its venv first and installs inside it.
-  - A half-made venv (no pip) is rebuilt instead of reused.
-  - A missing `python3-venv` gets the `apt install` line.
-  - Start-up output printed before the restart into the venv is no longer lost.
-- **A root `requirements.txt`**, with Windows-only packages marked, and the Qt system libraries Linux needs listed in it. `beautifulsoup4` was missing from the requirement list.
-- **Every module imports on Linux** (482 of 488). The other 6 fail the same way on Windows: five modules nothing imports, and Crow-Claw's setup script. Windows-only imports in the Recycle Bin parser, the file signature detector and the USN parser are guarded. The USN parser no longer runs `pip install wmi` at import.
-- **Windows:**
-  - the main window builds with all 210 tables;
-  - the Eye, the User Activity dashboard and the Anatomy viewer render;
-  - Crow-Claw and the Partition Analyzer are hidden, since they need a running Windows.
-- **Fonts:** `Consolas` and `Segoe UI` map to DejaVu Sans Mono / Noto / DejaVu Sans. Hex views, offset columns and path tables were rendering in a proportional font.
-- **Web views paint without a GPU.** In a VM or container with no GPU render node (`/dev/dri`), Chromium's GPU process fails and a web view can stay blank. Software rendering is now used there (`CROW_EYE_KEEP_GPU=1` overrides). The sandbox is turned off where the kernel forbids unprivileged user namespaces.
-- **The same collected case parses identically on both platforms.** A 2016 Windows case was parsed through the Offline Importer on Windows and on Linux, and all 196 tables in 33 databases have the same row counts. The comparison covered the registry, AmCache, event logs, Prefetch, LNK/Jump Lists, SRUM and MFT.
-- **AmCache found nothing on Linux.** The parser looked for a lowercase `amcache` folder; the collected folder is `AmCache`.
-- **Offline browser parsing found no Firefox profile on Linux.** The vendor paths were joined as one folder name (`Mozilla\Firefox`).
-- **Other path and setting fixes:**
-  - ShimCache finds a `system` hive whatever its case;
-  - image extraction classifies folders correctly;
-  - settings live in `~/.config/crow-eye`;
-  - the default cases folder is `~/Cases`;
-  - a Linux host is not reported as a failed Windows-partition detection.
-
----
+- **One record per run**, `<case>/logs/custody_<run>.json`, with its SHA-256 beside it. It covers Crow-Claw, live Parse All, image parsing, single-artifact parses, Offline Importer collections and offline parses. Each record holds:
+  - who ran it, where and when (UTC), and the tool version and settings;
+  - per source file: size and times read before the copy, how it was read (standard copy, shadow copy, raw disk, in place), and the SHA-256 of source and copy, which must match;
+  - what Crow-Eye changed on the machine: processes and services started, and shadow copies created, used and deleted;
+  - per artifact: rows read, new and already present, and the hash of every database written.
+- **A case ledger**, `<case>/logs/custody_ledger.jsonl`, records case creation and every open, run, export, evidence import, settings change (secrets are never written), correlation and Dynamic Linking run. Each line carries the SHA-256 of the line before it, so an edit, removal or reorder breaks the chain.
+- **Case → Chain of Custody…** opens a record with an integrity badge, every source with its verdict, the footprint, and a **Case ledger** tab that walks the chain.
+- **Shadow copies:**
+  - A snapshot Crow-Eye creates is deleted at the end of the run, by the ID its creation returned. Existing snapshots are never touched.
+  - A snapshot older than 30 minutes is no longer read as the live file.
+  - The setting that forbids creating snapshots now works.
+  - Advice to run `vssadmin delete shadows /all` or `cleanmgr.exe` on the target is gone.
+- **File headers are checked** for hives, logs, event logs, SRUM, Prefetch, LNK, Jump Lists, `$I` and `$MFT`. Before, every file was reported valid without being read.
+- **Image integrity.** An E01's section headers are read before extraction: whether it carries an acquisition hash, and whether its segments hold the whole disk. A 6.4 GB E01 declaring a 992.7 GB disk held 1.4% of it, and nothing said so. It is now a pre-flight warning.
+- **Nothing is written to the target's system drive.** Working files go under `<case>/tmp`, and the SRUM engine no longer leaves `edb.*` files in the working folder. Crow-Eye warns when the case folder is on the drive being examined.
+
+### Re-parsing Adds Only What Is New
+
+- A second live parse of the same machine duplicated or deleted data:
+  - Amcache stored every row twice;
+  - SRUM removed duplicates only within one run;
+  - the MFT child tables were plain inserts;
+  - Event Logs and Browsers dropped their earlier rows.
+- Every parser now stores only the rows the case does not hold, through one shared writer, and earlier rows are kept.
+- On a second parse of the same evidence: Amcache 0 new of 6,235, MFT 0 new of 1,208,321 records, Event Logs 0 new of 70,895 with earlier events kept.
+
+### Parse Status and Forensic Image Diagnostics
+
+- **New and Already present columns.** *Records* is what the run read: "1,024 record(s) read: 0 new, 1,024 already in the case."
+- **Failed and partial rows expand** to the error, the parser's warning and error lines with the traceback, and the database rows before and after.
+- **Forensic images are checked before extraction.** Formats are identified by content, and unsupported ones are named (L01, AD1, AFF, archives, QCOW, VDI). Each partition's boot sector is read, BitLocker included.
+- **Mistakes and problems are named with the fix:**
+  - investigator mistakes: a later segment chosen, segments missing, a folder chosen instead of an image, no partition selected, the image stored inside the case;
+  - image problems: corrupted or locked images, BitLocker volumes, unreadable file systems, no Windows installation.
+- **Errors stop the run before extraction, and warnings ask before continuing.** Both appear in the image window's **Issues** tab and in the report.
+- **Correct statuses:**
+  - an artifact found but not copied is *Failed* or *Access denied*, not *Not found*;
+  - a crashed batch records what finished;
+  - unsupported Prefetch versions and dirty SRUM databases read as *Unsupported format*.
+- **The image window is redesigned:** setup on the left, the run on the right, and a fixed action bar. The Windows partition is pre-selected.
+
+### Collection and Parsing
+
+- **Administrator rights:**
+  - Before a live parse that needs rights, Crow-Eye offers *Restart as Administrator*, *Run anyway* or *Cancel*.
+  - After a parse Windows refused, one pop-up names the refused artifacts.
+  - The restart reopens the same case.
+  - Refusals are classified *Access denied*, including Amcache and SRUM, which used to read *does not exist*.
+- **Cancel stops everything.** Queued parsers are dropped, and running ones are ended with their child processes. Closing the window mid-parse asks first. A run that had to be ended still leaves its custody record, and its shadow copy is deleted.
+- **Every subprocess call has a timeout.** A hung parser held the whole live Parse All indefinitely.
+- **A live checklist** in the parsing dialog: one row per artifact with status, records, time and warnings, a *Now:* line, and the log folded below.
+- **Offline Importer:**
+  - *Select Files* collects only the chosen files.
+  - *Collect* after a *Scan* copies exactly as a direct collection.
+  - *Cancel* keeps what was copied.
+  - EVTX, SRUM and LNK are read from Crow-Claw collections, which they used to miss.
+- **Parse automatically after collection**, a new setting in **Settings → Parsing** (on by default).
+- **Crow-Claw** shows 14/14. It always collected all 14 artifacts, but a rate limit dropped the last progress line.
+- **Faster:**
+  - Registry offline parse: 153 s → 84 s.
+  - LNK and Jump List profile walk: 30.6 s → 18.1 s.
+  - A Brave Service Worker cache: projected from 332 s to about 45 s.
+
+### Loading and Responsiveness
+
+- **Dashboards no longer freeze the window.** Queries run off the interface thread, and the newest request wins. The longest stall on the measured case is 172 ms:
+  - a timeline day click: 70 s → 3.1 s;
+  - SRUM open: 25–37 s → 6.5 s.
+- **Event Logs are paged.** On one case, loading went from 2.9 s to 0.30 s, and memory after opening the case from about 1,060 MB to 750 MB. Sorting, search and export cover every row.
+- **Tables are filled once per case open**, with sorting off during the fill, so rows no longer land in the wrong place.
+- **Background scans and parses run off the window**, and Cancel reaches them.
+
+### Case Logging
+
+- **New log files:** `offline_importer.log`, `crow_claw.log`, `image_parsing.log` and `semantic_mapping.log`. All are listed in **Settings → Logs**, together with the collection manifest, import results and image partition table.
+- **Every parser run is framed in `parsers.log`**, from its start line to its outcome. That includes the worker processes of a live Parse All, which had no case logging.
+- **Logs in colour**, in Settings → Logs, the parsing dialog and the full-log window, with a level filter, find and follow.
+- `console.log` rotates at 10 MB.
+
+### Visualizations
+
+- **The MFT/USN dashboard is rebuilt:**
+  - one six-month strip for both sources, with a colour per USN reason;
+  - every aggregate counted in SQL (a journal day's drill-down was capped at 6,000 events, and one day held 283,585);
+  - renames shown old → new, and an all-records list;
+  - a **Charts** button on the correlated table.
+
+  On a 3.5-million-row case, the overview opens in 2.9 s and the strip in 4.7 s.
+- **One User Activity dashboard** covers the 28 Shell Items and registry user-activity tables, now including UserAssist, BAM and DAM, and camera, microphone and location use. Each table's **Charts** button opens it on its own source.
+
+### Anatomy
+
+- **The anatomy pages ship with Crow-Eye** (13 pages) and open in an in-app viewer at the right section, with no internet needed.
+- **Every User Activity table has its own section:** the key and hive, the value format, which timestamp exists and what it bounds, and what the table proves and does not.
+
+### User Behavior Analytics
+
+- **Behaviours: 65 → 81.** Sixteen browser rules:
+  - visits by site category (file sharing, paste, anonymisers, cryptocurrency, remote access, AI chat, hacking resources), counting only a person's own navigation;
+  - web searches;
+  - downloads, graded by risk, and the downloads the browser opened;
+  - inferred uploads, marked as inferred;
+  - chat applications, cryptocurrency wallet extensions, tabs left open, and media played.
+
+  The site categories are data in `uba/config/site_categories.json`. No rule reads autofill, typed page content, usernames, session tokens or storage contents.
+- **Files, not journal records.** "N files were created" counted every journal record, about 3.4 times the files. It now counts files.
+- **Fewer false findings:** browser-shipped extensions are no longer risky extensions, and the history-gap rule works per profile.
+- **Collected cases are no longer read as the examiner's activity.** The LNK and Jump List collection skips Crow-Eye case folders, which held 433 of 636 LNK rows on one machine.
+
+### Eye AI
+
+- **`query_user_behavior`**, a new tool, runs the 81 UBA rules once per case and answers for any day, range or user, with the evidence rows behind each event. Tools: 31 → 32.
+- **Setup in four steps.** An API key is stored only after its connection test passes.
+- The Eye's built-in queries name the columns that exist.
+
+### Correlation Engine and Timeline
+
+- **Large cases run.** The Identity engine read each feather completely into memory: about 18 GB for one 3.8-million-row MFT feather on a 15 GB machine. Feathers now stream: about 2.1 GB on that case, which correlates its 483,525 identities.
+- **Semantic mapping finishes.** On a 842,334-match case it took 55 minutes, 43 of them in an FTS5 prefilter that kept 99.8% of the matches. A sample now decides whether the prefilter can filter. Candidates are read in chunks, and progress is logged. On a 105,309-match wing: 138 s → 86 s, with identical labels.
+- **Stop works.** Cancel never reached the engine, and semantic mapping never checked it. The window killed the thread after 15 seconds, leaving no statistics. The engine now stops within seconds, inside semantic mapping too, and saves what it has. The window waits for that.
+- **A stopped or unfinished run still has a Summary.** Statistics are saved before semantic mapping. For a run that never saved them, matches, identities and records per feather are counted from what it left. A small **CANCELLED** or **NOT FINISHED** label marks it.
+- **Matches by Feather counts every feather.** Feathers with an underscore in their name (`mft_usn`, `security_logs`, `amcache_app`) read 0.
+- **Opening a case no longer breaks the next correlation.** It closed every database connection in the process, the engine's own included.
+- **Correlation Engine 1.8.0.** Each timestamp is parsed once per feather. The full test pipeline went from 3,968 s to 2,278 s with identical matches.
+- **Wing conditions** named MFT/USN columns that do not exist, so the mass-delete and ransomware rules could never fire. Use **Update default wings** to refresh a case.
+- **Settings → Semantic Mappings** sets the semantic-mapping engine: worker threads, the prefilter threshold, chunk size and a detailed debug log.
+- **Dynamic Linking statistics:** after *Link Gathering* and *Run Dynamic Linking*, a statistics window shows what was linked, by source, category and table. The counts are honest: a value already known is no longer counted again on every run.
+- **Timeline:** the LNK and Jump List lanes are drawn, and the MFT/USN lane covers all its rows.
+
+### Interface
+
+- **The website's look across the application:** Settings, Database Search, the Correlation Engine, Crow-Claw, the Offline Importer, Forensic Images, Row Details and the loading dialog.
+- **Colour that carries meaning is kept:** status, score and severity colours.
+- **Bundled fonts:** Barlow Semi Condensed and JetBrains Mono, under the SIL Open Font License.
+- **Standard columns are colour-coded** in every artifact table: times, paths, hashes, users, sizes, names, IDs, values, flags and network fields.
+- **One scroll-bar style** everywhere.
+- **Row Details** groups fields by kind and adds a filter. *Copy all* and *Export* (TXT, CSV, JSON) work.
+- **A busy notice** says when a click lands while Crow-Eye is parsing or loading.
+
+### Linux
+
+- **The Python source version starts on Debian 12 and Ubuntu 23.04 and later.** It installed into the system Python, which those systems refuse. It now creates its venv first. A root `requirements.txt` lists the dependencies, with Windows-only packages marked.
+- **The same case parses identically on both platforms:** all 196 tables in 33 databases have the same row counts.
+- **Fixed on the way:** Linux path handling for AmCache, Firefox profiles and ShimCache; font substitutes; and web views that paint without a GPU.
 
 ### Bug Fixes
 
-- **Eye AI did not open:** `NameError: name 'CrowEyeStyles' is not defined`.
-- **Undefined names, each a `NameError` when its line ran:**
-  - `identity_correlation_engine` had no `logger` (142 uses);
-  - `report_parser` had no `json`, so chart blocks came back empty;
-  - the case coordinator had no `os`, so scanned-artifact metadata was never saved.
-  The same class of bug was fixed in the timeline renderer, the timestamp parser, the feather builder, the SRUM offline parser, AmCache and Image parsing. A test now runs pyflakes over every package.
-- **An exception inside a Qt slot no longer closes the application.** It is logged and shown.
-- **`show_error` referenced the exception after its block had ended**, which aborted the application.
-- **The analyst's own name was put on the evidence's registry hives.** For a case stored under `C:\Users\<analyst>\...`, every user hive collected without a profile folder was labelled `NTUSER.DAT[<analyst>]`. The owner was read from the analyst's own `Users` folder above the case. Now only a `Users` folder inside the collected tree names the owner. Found by comparing a Windows and a Linux parse of the same case: the Linux case path had no `Users` folder, and the labels differed.
-- **A parse hung with no error** when the root logger had no handlers (scripted or headless runs). The first warning it printed was written back into the captured output from inside the capture, which then waited on its own lock.
-- **Crow-Claw and Dynamic Linking could be opened mid-parse.** They were the two openers without the busy guard every other tool has; Dynamic Linking now also waits for case data.
-- **Shellbags lost `value_name` in the correlation engine** when a feather was built from the fallback column list, which had not been updated when the column was added to the parser.
-- **The offline event-log, LNK and live event-log databases went to the working folder** when `Target_Artifacts` did not exist yet.
-- **SQLite `-wal` rows were dropped.** Copied databases were opened with `immutable=1`, which makes SQLite ignore the `-wal` file. Measured: 1 of 2 committed rows was read. Copies are now opened read-only with the WAL applied. This affected live parsing as well.
-- **Same-named databases shared a temporary folder**, so one profile's leftover `-wal` could attach to another profile's database. Each copy now gets its own folder.
-- **The same profile was parsed twice on live systems.** `AppData\Local\Application Data` is a junction back to `Local`, so a profile found through it was listed twice (Spark Desktop on the test machine). Profiles are now deduplicated by their real path.
-- **Extracted cache bodies could overwrite each other** across sources with the same browser, user and profile names. Extraction folders now include the profile's path.
-- **Image extraction stopped on an artifact type with no case folder.** One unmapped type ended the whole extraction with an empty result. It is now reported for that item only.
-- **Image streaming skipped the leading zeros of any file over 100 MB.** That logic was written for `$UsnJrnl:$J`. Browser files are now copied byte for byte.
-- **The Jump Lists type filter matched nothing** in the Forensic Image and Offline Importer windows (`JumpLists` instead of `link_jumplist`), and the main window had no refresh entry for `link_jumplist`.
-- **Offline and image LNK / Jump List parsing failed every time.** The parser was called with a progress callback it did not accept, and it reported *1 record* when it did run. It now parses, and reports the records written.
-- **USN Journal: purged journal ranges ended the volume's parse.** The writer for the `deleted_entries` table did not exist, so reaching a range Windows had purged raised an error. The range is now recorded.
-- **Parser console output is ASCII** in the MFT / USN parsers too; a block-character progress bar or a check mark aborts a parse on a cp1252 console. The guard test now covers that folder.
-- **The MFT record of a file with an 8.3 alias was reported as a hard link** (see *MFT parse and MFT–USN correlation* above).
-- **A test hard-coded a private case path.** The UBA end-to-end test now reads its case from `CROW_EYE_UBA_TEST_CASE` and skips without it.
+- **Elevated live parses never exported the SAM and SECURITY hives**, losing the user-account and security-policy detail.
+- **A browser re-parse kept the first parse's values.** Changed rows are now updated in place.
+- **A live Parse All could sit in the browser stage for 40 minutes** while its re-parse check scanned the whole profile for every row.
+- **ShimCache reported "Failed"** when every entry was already in the case.
+- **MFT ended "Partial, exit code 1"** because 24 invalid extension records rolled back the whole merge.
+- **Offline and image LNK and Jump List parsing failed every time.**
+- **A purged USN journal range ended the volume's parse.**
+- **The Eye did not open**, raising `NameError`. Other undefined names were fixed across several packages, and a test now runs pyflakes over every package.
+- **An exception inside a Qt slot no longer closes the application.**
+- **The Parse Status report opened after a parse showed plain white table headers.**
+- **A time-window wing could return no matches** because of an error in a log line.
 
 ### Known Limitations
 
-- With browser trees from more than one source in a case, SIDs are left empty. A collected SOFTWARE hive cannot be tied to the source it came from.
-- On offline and image cases, `source_path`, `manifest_path` and the extracted-key path point into the case folder. The part after `Users\` is the original location on the evidence drive.
-- Clicking a live **Parse Browsers** button on an offline or image case still parses the analyst's own machine, as every live parse button does.
-- LNK and Jump List rows have no owner column; the owner is the `Users\<name>` folder in `Source_Path`.
-- Hives collected before this version have no owner folder, so their labels stay `NTUSER.DAT[1]`. Re-collect to name the owner.
-- Cases parsed before this release keep the rows already in them: a re-parse adds only what is new. For the whole-MFT, name, size and hard-link fixes, parse the evidence into a fresh case.
-- A stopped correlation keeps the semantic labels found before the stop; the rest of its matches have none. Resume or re-run the wing to label them.
-- Statistics counted for an unfinished run have no extraction rate: how many records yielded an identity is recorded only when the run saves its statistics.
+- With browser data from more than one source in a case, SIDs are left empty: a collected SOFTWARE hive cannot be tied to its source.
+- On offline and image cases, browser path columns point into the case folder. The part after `Users\` is the original location on the evidence drive.
+- Hives collected before this version have no owner folder and stay labelled `NTUSER.DAT[1]`. Re-collect to name the owner.
+- A stopped correlation keeps only the semantic labels found before the stop.
 
 ### Compatibility and Upgrading
 
-- **Source release.** Run `python "Crow Eye.py"`. A root `requirements.txt` now lists the dependencies, Windows-only packages marked.
-- **Existing cases open as before.** To pick up the parser fixes (whole MFT, NTFS fixups and names, real sizes, hard links, browser offline/image parsing, per-user registry replay), parse the evidence into a new case.
-- **Correlation wings:** use **Update default wings** to refresh an existing case's MFT/USN conditions.
-- **New settings:** *Settings → Parsing → Parse automatically after collection* (on by default) and *Settings → Semantic Mappings → Semantic mapping engine*.
-- **New test variable:** `CROW_EYE_UBA_TEST_CASE` for the UBA end-to-end test.
+- **Existing cases are not modified**, and they open as before.
+- **Parse the evidence into a new case** to apply the MFT, browser and registry fixes. A re-parse into an existing case adds only new rows, so rows produced by the earlier code remain.
+- **Correlation:** use **Update default wings** in existing cases.
+- **New settings:**
+  - Settings → Parsing → *Parse automatically after collection*;
+  - Settings → Semantic Mappings → *Semantic mapping engine*.
+- **Upgrading:** replace the source tree. On Linux, run `python3 "Crow Eye.py"`; it creates its venv on first start.
 
 ---
 
