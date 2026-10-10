@@ -10,6 +10,9 @@ from PyQt5.QtWidgets import (QGraphicsEllipseItem, QGraphicsRectItem,
 from PyQt5.QtCore import Qt, QRectF, QPointF
 from PyQt5.QtGui import QColor, QPen, QBrush, QPainterPath, QFont
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EventRenderer:

@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Automatic Jump Lists Forensics — How They Work, Explained</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+    
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+      .ref-table, .kb-table { min-width: 600px; }
+      .full-reference, .kb-section, .narrative-section { padding: 24px 16px; border-radius: 16px; }
+      .selection-grid-2 { grid-template-columns: 1fr !important; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How Windows Automatic Jump Lists (automaticDestinations-ms) work: the DestList stream and OLE/CFB structure that record recent and frequent files and applications.">
+  <meta name="keywords" content="automatic jump list, AutomaticDestinations-ms, jump list forensics, DestList stream, recently opened files, windows jump lists">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/automatic_jumplist">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/automatic_jumplist">
+  <meta property="og:title" content="Automatic Jump Lists Forensics — How They Work, Explained">
+  <meta property="og:description" content="How Windows Automatic Jump Lists (automaticDestinations-ms) work: the DestList stream and OLE/CFB structure that record recent and frequent files and applications.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Automatic Jump Lists Forensics — How They Work, Explained">
+  <meta name="twitter:description" content="How Windows Automatic Jump Lists (automaticDestinations-ms) work: the DestList stream and OLE/CFB structure that record recent and frequent files and applications.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "The Windows AutomaticDestinations-ms Jump List format and its forensic interpretation",
+      "keywords": "automatic jump list, AutomaticDestinations-ms, jump list forensics, DestList stream, recently opened files, windows jump lists",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Automatic Jump Lists Forensics — How They Work, Explained",
+      "description": "How Windows Automatic Jump Lists (automaticDestinations-ms) work: the DestList stream and OLE/CFB structure that record recent and frequent files and applications.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "Windows Automatic Jump Lists",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/automatic_jumplist"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Automatic Jump Lists",
+          "item": "https://crow-eye.com/Eye-Describe/automatic_jumplist"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Where are Automatic Jump Lists stored?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "In the user's Recent folder under AppData, in the AutomaticDestinations subfolder. Each file is named with the AppID of the application that created it, so the filename itself identifies which program the recent-file history belongs to."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What does an Automatic Jump List contain?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "An OLE compound file holding a LNK-format stream per recent item, plus a DestList stream that orders them by recency and records access counts - so it preserves both what was opened and roughly how often and in what order."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Which Windows versions have Jump Lists?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Jump Lists were introduced with Windows 7 and are present in later versions. They are absent from XP and Vista images, where the Recent folder's LNK files are the fallback."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What is an AppID in a Jump List filename?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "A hash identifying the application. Published AppID lists map the value to a program, which is how a Jump List is attributed to, say, Word or Explorer rather than an unnamed process."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>Automatic Jump Lists: structure, contents and evidential limits</h1>
+      <p class="header-sub">Unified binary stream mapping of the AutomaticDestinations-ms Jump List &mdash; the DestList stream and its modern Version 4 entries in Windows 11 &mdash; and what it proves about recently opened files.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#destlist-header">DestList header (version 3/4)</a></li>
+        <li><a href="#destlist">DestList entry (version 3/4)</a></li>
+        <li><a href="#appid">AppID hash (application identity)</a></li>
+        <li><a href="#limits">What a DestList entry supports, and what it does not</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <div class="dissection-layout">
+      <div class="map-container"><span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div></div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);"><p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-list-ul"></i></p><p>Select any field in the map to reveal a deep forensic dive.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="narrative-section reveal">
+      <div class="narrative-title">What are Automatic Jump Lists?</div>
+      <div class="narrative-text">
+        <p><strong>Automatic Jump Lists</strong> (<code>.automaticDestinations-ms</code>) are <strong>OLE Compound File Binary (CFB)</strong> containers used by Windows to track user productivity. They act like a mini-filesystem inside a single file.</p>
+        <p><strong>Why Microsoft Created Them:</strong> To power the "Recent" and "Frequent" Taskbar categories. Instead of scanning the drive, Windows caches these links to provide immediate access to the user's workflow.</p>
+        <p><strong>Forensic Value:</strong> They provide proof of file interaction, usage frequency, and exact target paths, even for deleted or wiped files. They are a master record of user activity.</p>
+      </div>
+    </div>
+
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr><th style="width: 80px;">Offset</th><th style="width: 60px;">Size</th><th style="width: 200px;">Field Name</th><th>Forensic Meaning & Value</th></tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="destlist-header">DestList header (version 3/4)</h2>
+        <span class="cap">Table 2</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th style="width: 100px;">Offset</th><th>Field Name</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x00 - 0x03</td><td style="font-weight: 600; color: var(--tx);">Version Number</td><td>Determines layout: 1 (Win 7/8), 3 (Win 10), 4 (Win 11).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x04 - 0x07</td><td style="font-weight: 600; color: var(--tx);">Total Current Entries</td><td>Number of items currently tracked in the jump list.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x08 - 0x0B</td><td style="font-weight: 600; color: var(--tx);">Total Pinned Entries</td><td>Number of explicitly pinned items (never age out).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x10 - 0x17</td><td style="font-weight: 600; color: var(--tx);">Last Issued ID</td><td>Total lifetime entries ever assigned (monotonically increasing).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x18 - 0x1F</td><td style="font-weight: 600; color: var(--tx);">Number of Actions</td><td>Total lifetime interactions across all items.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="destlist">DestList entry (version 3/4)</h2>
+        <div class="forensic-text" style="margin-top:0; margin-bottom: 16px;">
+          <p>Unlike Custom Destinations which are purely sequential LNKs, Automatic Destinations contain a central <strong>DestList index stream</strong> containing massive forensic value not found inside the individual embedded LNKs. <a class="see-also" href="lnk_anatomy.html#dissection">Explained in full: the LNK format</a></p>
+        </div>
+        <p style="color: var(--tx2); font-size: 15px; line-height: 1.75; margin-bottom: 16px;">Each row below is one field of a DestList entry: its name, and the single thing it lets an investigator say. Read them as a set &mdash; the identity fields place the entry on a machine, the time fields place it in a sequence, and the counter says how often it was refreshed.</p>
+        <span class="cap">Table 3</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th style="width: 100px;">Key Field</th><th>Forensic Value</th></tr></thead>
+            <tbody>
+              <tr><td style="font-weight: 600; color: var(--tx);">Object UUIDs</td><td><strong>Birth</strong> is the object's first identity, <strong>New</strong> its identity after a move, so the pair traces a file across volumes. A <em>version&nbsp;1</em> UUID also encodes the MAC address of the machine that minted it — not every UUID here is version 1, so read the version nibble before attributing one.</td></tr>
+              <tr><td style="font-weight: 600; color: var(--tx);">NetBIOS Name</td><td>Records the <code>%COMPUTERNAME%</code> where the entry was created. Vital for attribution.</td></tr>
+              <tr><td style="font-weight: 600; color: var(--tx);">Last Access Time</td><td>Definitive event timestamp for jump list interaction, independent of LNK file times.</td></tr>
+              <tr><td style="font-weight: 600; color: var(--tx);">Access Counter</td><td>A counter the shell increments each time the entry is refreshed, so it separates a habitual working document from a single-use one. It counts the shell's own updates, not a person's openings, and it never decreases.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="appid">AppID hash (application identity)</h2>
+        <div class="forensic-text" style="margin-top:0; margin-bottom: 16px;">
+          <p>The Application Identity (AppID) is not explicitly stored inside the Automatic Destinations format. The <strong>filename itself</strong> is the hex representation of the AppID (e.g., <code>1b4dd67f29cb1962.automaticDestinations-ms</code>).</p>
+        </div>
+        <span class="cap">Table 4</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th style="width: 150px;">AppID Hash</th><th>Target Application</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">1b4dd67f29cb1962</td><td style="color: var(--tx);">Windows Explorer</td></tr>
+              <tr><td style="font-family: 'Space Mono';">f01b4d95cf55d32a</td><td style="color: var(--tx);">Command Prompt (cmd.exe)</td></tr>
+              <tr><td style="font-family: 'Space Mono';">5d696d521ea23821</td><td style="color: var(--tx);">Google Chrome</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+
+    const masterFields = [
+      { section: 'OLE Compound File', name: 'Magic Signature', offset: 0, size: 8, type: 'header-color', val: '0xD0CF11E0A1B11AE1', forensic: 'Standard OLE binary marker. Identifies the .automaticDestinations-ms file as a Microsoft Compound Document.' },
+      { section: 'OLE Compound File', name: 'CLSID', offset: 8, size: 16, type: 'header-color', val: 'Empty', forensic: 'Reserved CLSID for the OLE container. Always zeroed.' },
+      { section: 'OLE Compound File', name: 'Version', offset: 24, size: 4, type: 'header-color', val: '0x003E0003', forensic: 'Minor and Major version of the OLE format.' },
+      { section: 'OLE Compound File', name: 'Byte Order', offset: 28, size: 2, type: 'header-color', val: '0xFFFE', forensic: 'Little-endian byte order mark.' },
+      { section: 'OLE Compound File', name: 'Sector Size Shift', offset: 30, size: 2, type: 'header-color', val: '0x0009 (512 Bytes)', forensic: '2^9 = 512 byte sectors. Defines the sector size for the OLE container.' },
+      
+      { section: 'OLE Directory', name: 'Stream Name', offset: 32, size: 18, type: 'identity-color', val: '"DestList"', forensic: 'The master index stream pointer. UTF-16LE string telling the OS where to find the access tracking data.' },
+      
+      { section: 'DestList Header', name: 'Version Number', offset: 50, size: 4, type: 'metrics-color', val: '0x00000003 (v3/v4)', forensic: 'A critical field determining the DestList layout. <code>1</code> = Win 7/8, <code>3</code> = Win 10, <code>4</code> = Win 11.' },
+      { section: 'DestList Header', name: 'Total Current Entries', offset: 54, size: 4, type: 'metrics-color', val: '0x00000002 (2)', forensic: 'The number of DestList entries currently present. Represents the current tracking capacity for this application.' },
+      { section: 'DestList Header', name: 'Total Pinned Entries', offset: 58, size: 4, type: 'metrics-color', val: '0x00000001 (1)', forensic: 'How many of the current entries are pinned. A high pin count indicates the user deliberately organized their recent items list.' },
+      { section: 'DestList Header', name: 'Reserved', offset: 62, size: 4, type: 'reserved', val: '0x00000000', forensic: 'Padding. Not used by parsers.' },
+      { section: 'DestList Header', name: 'Last Issued ID Number', offset: 66, size: 8, type: 'metrics-color', val: '0x0000000000000004 (4)', forensic: 'The highest entry ID number ever assigned in this file\'s lifetime. If this value is much larger than "Current Entries", it indicates heavy sustained historical usage that has aged out.' },
+      { section: 'DestList Header', name: 'Number of Actions', offset: 74, size: 8, type: 'metrics-color', val: '0x000000000000000A (10)', forensic: 'The total count of access events ever recorded. Every jump list interaction increments this counter, persisting across entry aging.' },
+      
+      { section: 'DestList Entry (v3/v4)', name: 'Checksum', offset: 82, size: 8, type: 'times-color', val: '0x9E7A314B20C1F4D3', forensic: 'A hash value computed over the entry\'s path used to verify integrity.' },
+      { section: 'DestList Entry (v3/v4)', name: 'New Volume ID', offset: 90, size: 16, type: 'times-color', val: 'Volume UUID', forensic: 'A GUID identifying the NTFS volume where the target file currently lives. Same tracking GUID used by the Distributed Link Tracking service ($Volume).' },
+      { section: 'DestList Entry (v3/v4)', name: 'New Object ID (v1 UUID)', offset: 106, size: 16, type: 'times-color', val: 'Object UUID', forensic: 'Uniquely identifies the target file object. It is a UUID v1, meaning it encodes an independent creation timestamp and the MAC address of the NIC active when assigned.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Birth Volume ID', offset: 122, size: 16, type: 'times-color', val: 'Volume UUID', forensic: 'The volume GUID where the file was originally created. If different from New Volume ID, the file was copied or moved from a different volume.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Birth Object ID (v1 UUID)', offset: 138, size: 16, type: 'times-color', val: 'Object UUID', forensic: 'The object GUID assigned when the file was originally created. Its embedded MAC address can reveal a two-machine chain of custody if the file moved.' },
+      { section: 'DestList Entry (v3/v4)', name: 'NetBIOS Hostname', offset: 154, size: 16, type: 'times-color', val: '"WORKSTATION-01"', forensic: 'A null-padded ASCII string containing the Windows computer name (%COMPUTERNAME%) where the target file lives. Critical for direct machine attribution.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Entry ID Number', offset: 170, size: 4, type: 'times-color', val: '0x00000004 (4)', forensic: 'The unique numeric identifier for this entry. In hex, this matches the name of the OLE stream containing the embedded LNK file (e.g. ID 4 -> stream "4").' },
+      { section: 'DestList Entry (v3/v4)', name: 'Reserved / Unused', offset: 174, size: 8, type: 'reserved', val: '0x0000000000000000', forensic: 'Padding bytes inserted due to layout shifts in version 3/4.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Last Recorded Access', offset: 182, size: 8, type: 'times-color', val: 'FILETIME', forensic: 'The definitive "when was this file last opened" timestamp. This is independent of the LNK timestamps and records the exact access event written by Windows.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Pin Status', offset: 190, size: 4, type: 'times-color', val: '0xFFFFFFFF (Unpinned)', forensic: 'If 0xFFFFFFFF, the item is auto-managed. Any other value indicates the pin position (order) the user deliberately assigned.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Access Counter', offset: 194, size: 4, type: 'times-color', val: '0x00000006 (6)', forensic: 'How many times this specific item was accessed. A high count indicates habitual, regular use of the file. (Stored as float in v1, integer in v3/v4).' },
+      { section: 'DestList Entry (v3/v4)', name: 'Reserved Padding', offset: 198, size: 12, type: 'reserved', val: 'Zeroed', forensic: 'Additional structural padding in the modern v3/v4 DestList entry header.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Path Size (Characters)', offset: 210, size: 2, type: 'times-color', val: '0x000B (11)', forensic: 'Number of UTF-16LE characters in the path string that follows.' },
+      { section: 'DestList Entry (v3/v4)', name: 'Path Data (UTF-16LE)', offset: 212, size: 22, type: 'times-color', val: '"C:\\file.txt"', forensic: 'The full path to the target file. Provides a secondary independent source of the file path allowing cross-validation against the embedded LNK stream.' },
+      
+      { section: 'Embedded LNK Stream', name: 'OLE Stream Name (Entry ID)', offset: 234, size: 4, type: 'volumes-color', forensic: 'The embedded LNK file is stored in a separate OLE stream named after the Entry ID in hex (e.g. stream "4").' },
+      { section: 'Embedded LNK Stream', name: 'LNK Header Size', offset: 238, size: 4, type: 'volumes-color', forensic: 'Start of the embedded LNK file inside OLE stream "4". LNK Header size must be 76 (0x4C).' },
+      { section: 'Embedded LNK Stream', name: 'Link CLSID', offset: 242, size: 16, type: 'volumes-color', forensic: 'The standard shortcut GUID confirming this OLE stream contains a valid Windows Shortcut (LNK) payload.' },
+      { section: 'Embedded LNK Stream', name: 'Link Flags', offset: 258, size: 4, type: 'volumes-color', forensic: 'Bitmask specifying what optional LNK structures follow the header.' },
+      { section: 'Embedded LNK Stream', name: 'File Attributes', offset: 262, size: 4, type: 'volumes-color', forensic: 'Target file attributes at the time of LNK creation.' },
+      { section: 'Embedded LNK Stream', name: 'Creation Time (LNK MAC)', offset: 266, size: 8, type: 'volumes-color', forensic: 'Target file creation time as recorded in the LNK. Useful to compare against the Birth Object UUID timestamp.' },
+      { section: 'Embedded LNK Stream', name: 'Access Time (LNK MAC)', offset: 274, size: 8, type: 'volumes-color', forensic: 'Target file access time as recorded in the LNK.' },
+      { section: 'Embedded LNK Stream', name: 'Write Time (LNK MAC)', offset: 282, size: 8, type: 'volumes-color', forensic: 'Target file write time as recorded in the LNK.' }
+    ];
+
+    const masterHex = [
+      // OLE Compound File Header
+      "D0","CF","11","E0","A1","B1","1A","E1", // Magic
+      "00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00", // CLSID
+      "3E","00","03","00", // Version
+      "FE","FF", // Byte Order
+      "09","00", // Sector Size Shift (512)
+      
+      // OLE Directory Entry
+      "44","00","65","00","73","00","74","00","4C","00","69","00","73","00","74","00","00","00", // "DestList\0"
+      
+      // DestList Header (32 bytes)
+      "03","00","00","00", // Version (v3)
+      "02","00","00","00", // Total Current Entries (2)
+      "01","00","00","00", // Pinned Entries (1)
+      "00","00","00","00", // Reserved
+      "04","00","00","00","00","00","00","00", // Last Issued ID (4)
+      "0A","00","00","00","00","00","00","00", // Number of Actions (10)
+      
+      // DestList Entry (v3/v4) - 130 bytes fixed header + string
+      "D3","F4","C1","20","4B","31","7A","9E", // Checksum
+      "A1","B2","C3","D4","E5","F6","78","90","12","34","56","78","90","AB","CD","EF", // New Volume ID
+      "11","22","33","44","55","66","77","88","99","AA","BB","CC","DD","EE","FF","00", // New Object ID
+      "A1","B2","C3","D4","E5","F6","78","90","12","34","56","78","90","AB","CD","EF", // Birth Volume ID
+      "11","22","33","44","55","66","77","88","99","AA","BB","CC","DD","EE","FF","00", // Birth Object ID
+      "57","4F","52","4B","53","54","41","54","49","4F","4E","2D","30","31","00","00", // NetBIOS (WORKSTATION-01)
+      "04","00","00","00", // Entry ID Number (4)
+      "00","00","00","00","00","00","00","00", // Reserved
+      "00","D5","A0","F2","89","3B","D6","01", // Last Recorded Access (FILETIME)
+      "FF","FF","FF","FF", // Pin Status (-1 / Unpinned)
+      "06","00","00","00", // Access Counter (6)
+      "00","00","00","00","00","00","00","00","00","00","00","00", // Reserved Padding
+      "0B","00", // Path Size (11 chars)
+      "43","00","3A","00","5C","00","66","00","69","00","6C","00","65","00","2E","00","74","00","78","00","74","00", // Path "C:\file.txt"
+      
+      // Embedded LNK Stream
+      "34","00","00","00", // OLE Stream Name "4"
+      "4C","00","00","00", // Header Size
+      "01","14","02","00","00","00","00","00","C0","00","00","00","00","00","00","46", // Link CLSID
+      "8F","00","00","00", // Link Flags
+      "20","00","00","00", // File Attributes
+      "00","D5","A0","F2","89","3B","D6","01", // Creation Time
+      "00","D5","A0","F2","89","3B","D6","01", // Access Time
+      "00","D5","A0","F2","89","3B","D6","01"  // Write Time
+    ];
+
+    function init() {
+      const map = document.getElementById('master-map');
+      const table = document.getElementById('table-body');
+      let curSec = ""; let curF = null; let fieldIdx = 0;
+
+      masterHex.forEach((byte, i) => {
+        const f = masterFields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curSec) {
+          const div = document.createElement('div'); div.className = 'divider-row'; div.textContent = f.section; map.appendChild(div);
+          curSec = f.section;
+          fieldIdx = 0;
+        }
+        if (f && f !== curF) { curF = f; fieldIdx++; }
+        
+        const cell = document.createElement('div'); cell.className = 'byte-cell'; 
+        if (f) {
+           if (f.type === 'reserved') {
+              cell.classList.add('reserved');
+           } else {
+              const pal = palettes[f.type] || [{bg: 'var(--bg2)', fg: 'var(--tx3)'}];
+              const color = pal[fieldIdx % pal.length];
+              cell.style.backgroundColor = color.bg;
+              cell.style.color = color.fg;
+           }
+        }
+        else cell.classList.add('reserved');
+        cell.textContent = byte; cell.dataset.idx = i;
+        cell.onclick = () => selectField(f, i);
+        map.appendChild(cell);
+      });
+
+      let tableSec = "";
+      masterFields.forEach(f => {
+        if (f.section !== tableSec) {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td colspan="4" class="ref-section-head">${f.section}</td>`;
+          table.appendChild(row);
+          tableSec = f.section;
+        }
+        const row = document.createElement('tr'); row.style.cursor = "pointer";
+        row.onclick = () => selectField(f, f.offset);
+        row.innerHTML = `
+          <td style="font-family:'Space Mono';">0x${f.offset.toString(16).padStart(2,'0').toUpperCase()}</td>
+          <td>${f.size}B</td>
+          <td style="font-weight:700; color:var(--tx);">${f.name}</td>
+          <td>${f.forensic}</td>
+        `;
+        table.appendChild(row);
+      });
+    }
+
+    function selectField(f, index) {
+      if (!f) return;
+      document.querySelectorAll('.byte-cell').forEach(c => c.classList.remove('active'));
+      const start = f.offset; const end = f.offset + f.size - 1;
+      const fieldBytes = masterHex.slice(start, end + 1);
+      document.querySelectorAll('.byte-cell').forEach(c => {
+         const bIdx = parseInt(c.dataset.idx);
+         if (bIdx >= start && bIdx <= end) c.classList.add('active');
+      });
+      
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      document.getElementById('selection-output').innerHTML = `
+        <div class="field-name">${f.name}</div>
+        
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx);">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2);">${asciiString}</div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Decoded Value</span>
+            <div class="meta-v" style="color: var(--accent); font-size: 15px;">${f.val}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Data Type</span>
+            <div class="meta-v" style="color: var(--tx2); font-size: 13px; font-family: 'Space Mono';">Little-Endian Hex</div>
+          </div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Byte Offset Range</span>
+            <div class="meta-v" style="font-family: 'Space Mono'; font-size: 13px;">0x${start.toString(16).toUpperCase().padStart(4, '0')} - 0x${end.toString(16).toUpperCase().padStart(4, '0')}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Section / Size</span>
+            <div class="meta-v" style="font-size: 13px;">${f.section} <span style="color:var(--tx3); margin:0 4px;">|</span> ${f.size} Bytes</div>
+          </div>
+        </div>
+
+        <div class="forensic-text" style="margin-top: 16px;">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+    }
+    window.onload = init;
+  </script>
+  <div class="wrap">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin:8px auto 40px;max-width:820px;">
+      <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">See it in the dashboard</div>
+      <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;margin:0;">The <strong>Charts</strong> button on the LNK and Jump-List tabs opens the
+        <strong>opened-files dashboard</strong> &mdash; LNK shortcuts, automatic and custom jump lists on one timeline, with a per-target profile and a
+        volume/device-history trail. Documented in
+        <a href="lnk_anatomy.html#dashboard">Reading the LNK / Jump-List dashboard</a>.</p>
+    </div>
+  </div>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Let Crow-Eye rebuild the Jump List timeline</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">Crow-Eye parses every AutomaticDestinations file — the DestList stream and its embedded LNKs — into a clean per-application file-access timeline, with no manual OLE compound-file carving.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- LIMITS -->
+    <section id="limits" style="margin-top:40px;">
+      <h2>What a DestList entry supports, and what it does not</h2>
+      <p class="map-intro">An Automatic Jump List is the shell's own record of what an application
+      was recently used with, and it survives the deletion of both the file and the application's
+      own history. Three claims it does not carry:</p>
+
+      <div class="myth">
+        <h4>An entry means the shell added the item, which is usually but not only an open</h4>
+        <p>The list is maintained by the shell, not by the application. Opening a document adds an
+        entry &mdash; and so does pinning one, and so do some programmatic routes that never showed
+        the file to a person. The access counter is the shell's count of those additions, not a
+        count of times a human looked at the document.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The AppID names an application, not a version, a path or a user</h4>
+        <p>The filename is a hash derived from the application's launch path, so two installs of the
+        same program at different paths produce different AppIDs, and a single AppID can span
+        versions. It says which program's recent list this is. It does not say which build ran, from
+        where, or who was at the keyboard &mdash; that last one comes from the profile the file sits
+        in, and nothing finer.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The list is trimmed, so an absent entry is not an absent open</h4>
+        <p>Windows keeps a bounded number of destinations per application and drops the oldest as
+        new ones arrive; a user can also clear the list from the taskbar without touching any other
+        artifact. A document with no entry may never have been opened in that application, or may
+        have been opened long enough ago to have fallen off the end.</p>
+      </div>
+
+      <p class="map-intro"><strong style="color:var(--tx);">What it is genuinely good for:</strong>
+      tying a file to the <em>application</em> that touched it, and to the machine it came from. No
+      other artifact pairs a target path with the program that opened it as directly as the AppID
+      does, and the embedded LNK stream carries the volume serial, the NetBIOS name and, where a
+      tracker block survives, the originating machine &mdash; so a document can be followed back to
+      a host that is not the one being examined.</p>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Where are Automatic Jump Lists stored?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">In the user's Recent folder under AppData, in the AutomaticDestinations subfolder. Each file is named with the AppID of the application that created it, so the filename itself identifies which program the recent-file history belongs to.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What does an Automatic Jump List contain?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">An OLE compound file holding a LNK-format stream per recent item, plus a DestList stream that orders them by recency and records access counts - so it preserves both what was opened and roughly how often and in what order.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Which Windows versions have Jump Lists?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Jump Lists were introduced with Windows 7 and are present in later versions. They are absent from XP and Vista images, where the Recent folder's LNK files are the fallback.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is an AppID in a Jump List filename?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">A hash identifying the application. Published AppID lists map the value to a program, which is how a Jump List is attributed to, say, Word or Explorer rather than an unnamed process.</p>
+      </div>
+    </section>
+  </div>
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script></body>
+</html>

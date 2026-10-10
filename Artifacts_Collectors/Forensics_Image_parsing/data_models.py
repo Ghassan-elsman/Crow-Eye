@@ -29,6 +29,13 @@ class PartitionInfo:
     file_system_type: str
     description: str
     is_bootable: bool = False
+    # What the partition's own first sector says (image_preflight.classify_boot_sector):
+    # BitLocker / NTFS / FAT32 / ... / unknown.
+    boot_kind: str = "unknown"
+    # Windows\System32\config exists on it: True / False / None (not checked).
+    has_windows: Optional[bool] = None
+    # False for the whole-image fallback offered when no partition table was read.
+    verified: bool = True
     
     def __str__(self) -> str:
         """String representation for display."""

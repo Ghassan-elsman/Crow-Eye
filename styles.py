@@ -29,6 +29,33 @@ class Colors:
     BORDER_SUBTLE = "#334155" # Subtle borders
     BORDER_ACCENT = "#475569" # Accent borders
 
+    # The website's tokens (crow-eye.com style.css :root), for surfaces that
+    # follow the site's look - the loading dialog first.
+    SITE_BG = "#0A0C10"
+    SITE_CARD = "#0F172A"
+    SITE_INDIGO = "#6366F1"
+    SITE_INDIGO_HOVER = "#818CF8"
+    SITE_CYAN = "#22D3EE"
+    SITE_ROSE = "#F43F5E"
+    SITE_TEXT = "#F8FAFC"
+    SITE_MUTED = "#94A3B8"
+    SITE_HAIRLINE = "rgba(255, 255, 255, 0.08)"
+
+    # Standard columns in every artifact table (ui/column_colors.py): one
+    # tint per kind of value, from the site's indigo / cyan family, all
+    # readable on the #11151c / #141923 table rows.
+    COL_TIME = "#67E8F9"
+    COL_PATH = "#A5B4FC"
+    COL_HASH = "#C4B5FD"
+    COL_USER = "#F9A8D4"
+    COL_SIZE = "#FDBA74"
+    COL_NAME = "#F8FAFC"
+    COL_PARSED = "#94A3B8"
+    COL_ID = "#FDE68A"
+    COL_VALUE = "#86EFAC"
+    COL_FLAG = "#FCA5A5"
+    COL_NET = "#5EEAD4"
+
 class CrowEyeStyles:
     """Centralized style definitions for the Crow Eye application."""
 
@@ -94,6 +121,64 @@ QToolTip {{
 }}
 """
 
+    # Windows fonts the styles name, and what stands in for them elsewhere.
+    _FONT_SUBSTITUTES = {
+        "Consolas": ["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Ubuntu Mono", "Monospace"],
+        "Cascadia Mono": ["DejaVu Sans Mono", "Liberation Mono", "Noto Sans Mono", "Monospace"],
+        "Courier New": ["Liberation Mono", "DejaVu Sans Mono", "Monospace"],
+        "Segoe UI": ["Noto Sans", "Ubuntu", "Cantarell", "DejaVu Sans", "Liberation Sans"],
+        "Bahnschrift": ["Barlow Semi Condensed", "Noto Sans", "DejaVu Sans Condensed", "DejaVu Sans"],
+        "Arial": ["Liberation Sans", "DejaVu Sans"],
+        "Arial Black": ["DejaVu Sans", "Liberation Sans"],
+    }
+
+    @staticmethod
+    def install_font_substitutions():
+        """Map the Windows fonts in the styles onto fonts Linux has.
+
+        Qt takes the FIRST family of a style sheet's font-family list and lets
+        the platform substitute when it is missing - and fontconfig substitutes
+        its default sans for everything, monospace included. On Linux every
+        hex view, offset column and path table rendered "Consolas" in a
+        proportional font, so columns stopped lining up. One substitution
+        table covers the style sheets and the QFont("Consolas") calls alike.
+        No effect on Windows, where the fonts exist.
+        """
+        import sys
+        if sys.platform.startswith("win"):
+            return
+        try:
+            from PyQt5.QtGui import QFont
+            for family, subs in CrowEyeStyles._FONT_SUBSTITUTES.items():
+                QFont.insertSubstitutions(family, subs)
+        except Exception:
+            pass
+
+    @staticmethod
+    def install_scrollbar_policy():
+        """Every widget's own scrollbar rules become SCROLLBAR_STYLE.
+
+        Seventeen files wrote scrollbar QSS inline, in five different looks;
+        a widget-level rule beats the application-wide one, so the app-wide
+        rule alone could not make them match. QWidget.setStyleSheet is wrapped
+        once: a sheet that names QScrollBar keeps everything else and has its
+        scrollbar rules replaced by the shared ones. Sheets without
+        scrollbar rules pass through untouched (they inherit the app-wide
+        rule). Idempotent.
+        """
+        from PyQt5 import QtWidgets
+        original = QtWidgets.QWidget.setStyleSheet
+        if getattr(original, "_crow_eye_scrollbar_policy", False):
+            return
+
+        def set_style_sheet(widget, sheet):
+            if sheet and "QScrollBar" in sheet:
+                sheet = _one_scrollbar_style(sheet)
+            return original(widget, sheet)
+
+        set_style_sheet._crow_eye_scrollbar_policy = True
+        QtWidgets.QWidget.setStyleSheet = set_style_sheet
+
     @staticmethod
     def apply_global_dark_theme(app):
         """Apply the app-wide dark theme once, right after the QApplication is created.
@@ -113,6 +198,7 @@ QToolTip {{
         """
         from PyQt5.QtGui import QPalette, QColor
 
+        CrowEyeStyles.install_font_substitutions()
         c = Colors
         pal = QPalette()
         pal.setColor(QPalette.Window, QColor(c.BG_PRIMARY))
@@ -142,7 +228,9 @@ QToolTip {{
         # Append the popup stylesheet once (don't clobber existing app QSS).
         existing = app.styleSheet() or ""
         if CrowEyeStyles._GLOBAL_THEME_MARKER not in existing:
-            app.setStyleSheet((existing + "\n" + CrowEyeStyles.POPUP_STYLESHEET).strip())
+            app.setStyleSheet((existing + "\n" + CrowEyeStyles.POPUP_STYLESHEET
+                               + "\n" + CrowEyeStyles.SCROLLBAR_STYLE).strip())
+        CrowEyeStyles.install_scrollbar_policy()
 
         CrowEyeStyles.apply_application_identity(app)
 
@@ -1826,77 +1914,48 @@ QToolTip {{
         }
     """
 
-    # Scrollbar Style - Enhanced Cyberpunk Theme
+    # The one scrollbar of the app, in the website's colours: a slim slate
+    # handle on the page's near-black, indigo on hover, cyan while dragged.
+    # Applied app-wide by apply_global_dark_theme, so any widget that does not
+    # style its own scrollbars still gets this one - five different recipes
+    # (and native white bars on the custody viewer, Parse Status, the Offline
+    # Importer and the correlation windows) were in use before.
     SCROLLBAR_STYLE = """
         QScrollBar:vertical {
             border: none;
             background: #0B1220;
-            width: 12px;
+            width: 10px;
             margin: 0;
-            border-radius: 6px;
+            border-radius: 5px;
         }
-        
         QScrollBar::handle:vertical {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #334155, stop:1 #1E293B);
-            min-height: 30px;
-            border-radius: 6px;
-            margin: 1px;
-            border: 1px solid rgba(0, 255, 255, 0.2);
+            background: #334155;
+            min-height: 32px;
+            border-radius: 5px;
+            margin: 2px;
         }
-        
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-            height: 0px;
-            background: none;
-        }
-        
-        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
-            background: none;
-        }
-        
-        QScrollBar::handle:vertical:hover {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #475569, stop:1 #334155);
-            border: 1px solid rgba(148, 163, 184, 0.28);
-        }
-        
-        QScrollBar::handle:vertical:pressed {
-            background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1E293B, stop:1 #0F172A);
-            border: 1px solid #00FFFF;
-        }
-        
+        QScrollBar::handle:vertical:hover { background: #6366F1; }
+        QScrollBar::handle:vertical:pressed { background: #22D3EE; }
         QScrollBar:horizontal {
             border: none;
             background: #0B1220;
-            height: 12px;
+            height: 10px;
             margin: 0;
-            border-radius: 6px;
+            border-radius: 5px;
         }
-        
         QScrollBar::handle:horizontal {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #334155, stop:1 #1E293B);
-            min-width: 30px;
-            border-radius: 6px;
-            margin: 1px;
-            border: 1px solid rgba(0, 255, 255, 0.2);
+            background: #334155;
+            min-width: 32px;
+            border-radius: 5px;
+            margin: 2px;
         }
-        
-        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
-            width: 0px;
-            background: none;
+        QScrollBar::handle:horizontal:hover { background: #6366F1; }
+        QScrollBar::handle:horizontal:pressed { background: #22D3EE; }
+        QScrollBar::add-line, QScrollBar::sub-line {
+            width: 0px; height: 0px; border: none; background: none;
         }
-        
-        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
-            background: none;
-        }
-        
-        QScrollBar::handle:horizontal:hover {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #475569, stop:1 #334155);
-            border: 1px solid rgba(148, 163, 184, 0.28);
-        }
-        
-        QScrollBar::handle:horizontal:pressed {
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1E293B, stop:1 #0F172A);
-            border: 1px solid #00FFFF;
-        }
+        QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+        QAbstractScrollArea::corner { background: #0B1220; border: none; }
     """
 
     # Modern Main Window Style
@@ -2763,72 +2822,61 @@ QToolTip {{
     # DARK CYBERPUNK LOADING DIALOG STYLES
     # ============================================================================
 
-    # Loading dialog backdrop
+    # The loading dialog follows the website (crow-eye.com): a #0f172a card
+    # with a hairline edge and 20 px corners, indigo -> cyan accents, Barlow
+    # Semi Condensed text and JetBrains Mono for paths, times and the log.
+    # The gradient strip along the top and the soft indigo glow around the
+    # card are painted in ui/Loading_dialog.py; fonts are set there in code
+    # (ui.app_fonts), because a stylesheet uses only the first family named.
+
+    # The card. Scoped by object name: a bare `QFrame` rule also reached
+    # every QLabel inside (QLabel is a QFrame) and drew borders round them.
     LOADING_DIALOG_BACKDROP = """
-        QFrame {
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
-                                      stop: 0 rgba(10, 25, 41, 0.95),
-                                      stop: 0.5 rgba(26, 35, 50, 0.95),
-                                      stop: 1 rgba(10, 25, 41, 0.95));
-            border: 3px solid #00ffff;
-            border-radius: 15px;
+        QFrame#loadingCard {
+            background-color: rgba(15, 23, 42, 0.97);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 20px;
         }
     """
 
-    # Loading dialog main title
+    # The title: no box, no pulsing glow - bright text, set in Barlow 800
+    # uppercase by the dialog.
     LOADING_DIALOG_TITLE = """
         QLabel {
-            color: #00ffff;
-            font-size: 32px;
-            font-weight: bold;
-            font-family: 'Consolas', 'Courier New', monospace;
-            padding: 5px 20px 5px 20px;
-            background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 rgba(0, 255, 255, 0.15),
-                                      stop: 0.5 rgba(0, 255, 255, 0.25),
-                                      stop: 1 rgba(0, 255, 255, 0.15));
-            border: 2px solid #00ffff;
-            border-radius: 10px;
+            color: #F8FAFC;
+            background: transparent;
+            border: none;
+            padding: 0;
         }
     """
 
-    # Loading dialog icon/logo — 3px gradient cyan border, flush to the icon
-    # (no padding). The outer halo glow is applied in code via QGraphicsDropShadowEffect.
+    # The big logo (case load and the other non-checklist runs): a 2 px
+    # indigo -> cyan frame; the indigo halo is a QGraphicsDropShadowEffect.
     LOADING_DIALOG_ICON = """
         QLabel {
-            background-color: rgba(0, 255, 255, 0.05);
-            border: 4px solid qlineargradient(
-                x1: 0, y1: 0, x2: 1, y2: 1,
-                stop: 0 #00ffff,
-                stop: 0.3 #00bcff,
-                stop: 0.7 #00ffaa,
-                stop: 1 #00ffff);
-            border-radius: 16px;
+            background-color: rgba(99, 102, 241, 0.06);
+            border: 2px solid qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+                                              stop: 0 #6366F1, stop: 1 #22D3EE);
+            border-radius: 24px;
             padding: 8px;
         }
     """
 
-    # Loading dialog progress bar
+    # A slim pill: slate track, the site's indigo -> cyan gradient as fill.
+    # Its text is shown above it by the dialog, not inside.
     LOADING_DIALOG_PROGRESS = """
         QProgressBar {
-            border: 2px solid #00ffff;
-            border-radius: 8px;
-            text-align: center;
-            font-family: 'Consolas', 'Courier New', monospace;
-            font-weight: 900;
-            font-size: 14px;
-            /* Qt doesn't support text-shadow, using contrasting color and font styling instead */
-            color: #ffffff;
-            /* Removed text-shadow: 0 0 5px #00ffff, 0 0 10px #00ffff; */
-            font-weight: 900;
-            background-color: rgba(10, 25, 41, 0.8);
-            min-height: 30px;
+            border: none;
+            border-radius: 5px;
+            background-color: #1E293B;
+            color: transparent;
+            min-height: 10px;
+            max-height: 10px;
         }
         QProgressBar::chunk {
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
-                                      stop: 0 #00ffff, stop: 0.5 #0099cc, stop: 1 #00ffff);
-            border-radius: 6px;
-            margin: 2px;
+                                      stop: 0 #6366F1, stop: 1 #22D3EE);
+            border-radius: 5px;
         }
     """
 
@@ -2866,6 +2914,21 @@ QToolTip {{
     """
 
     # Loading dialog log display
+    # The parse dialog's log pane: plain text coloured by ui/log_highlighter.py.
+    # (Scrollbars: the app-wide SCROLLBAR_STYLE.)
+    LOADING_DIALOG_LOG_DISPLAY_PLAIN = """
+        QPlainTextEdit {
+            background-color: #0A0C10;
+            color: #E2E8F0;
+            font-family: 'JetBrains Mono';
+            font-size: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 12px;
+            padding: 8px;
+            selection-background-color: rgba(99, 102, 241, 0.45);
+        }
+    """
+
     LOADING_DIALOG_LOG_DISPLAY = """
         QTextEdit {
             background-color: rgba(0, 10, 20, 0.9);
@@ -3094,3 +3157,26 @@ QToolTip {{
         f"}}"
     )
 
+
+
+def _one_scrollbar_style(qss):
+    """`qss` with its own scrollbar rules replaced by SCROLLBAR_STYLE.
+
+    The constants above carried five scrollbar recipes between them (cyan
+    handles, #1e3a5f handles, gradients); a widget styled with one of them
+    looked different from its neighbour. Every rule whose selector names
+    QScrollBar (or the scroll-area corner) is dropped and the shared one
+    appended, so a widget keeps its stylesheet and gets THE scrollbar.
+    """
+    import re
+    if "QScrollBar" not in qss:
+        return qss
+    kept = re.sub(r"[^{}]*(?:QScrollBar|::corner)[^{}]*\{[^{}]*\}", "", qss)
+    return kept.rstrip() + "\n" + CrowEyeStyles.SCROLLBAR_STYLE
+
+
+for _name, _value in list(vars(CrowEyeStyles).items()):
+    if (_name != "SCROLLBAR_STYLE" and isinstance(_value, str)
+            and "QScrollBar" in _value):
+        setattr(CrowEyeStyles, _name, _one_scrollbar_style(_value))
+del _name, _value

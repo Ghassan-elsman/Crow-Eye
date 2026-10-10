@@ -210,7 +210,7 @@ class GenericCLIBackend(LLMBackend):
                 # If we just use process.kill() with shell=True, it only kills cmd.exe,
                 # leaving node.exe/etc running and keeping the pipes open, causing a permanent deadlock!
                 if is_windows:
-                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True)
+                    subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True, timeout=30)
                 else:
                     process.kill()
                     

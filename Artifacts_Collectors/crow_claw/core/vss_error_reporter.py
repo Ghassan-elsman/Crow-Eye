@@ -73,7 +73,8 @@ class VSSErrorReporter:
     
     def __init__(self):
         """Initialize the VSSErrorReporter."""
-        logger.info("[VSSErrorReporter] Initialized")
+        # Debug: one reporter is built per file access (116 lines per run).
+        logger.debug("[VSSErrorReporter] Initialized")
     
     def generate_error_report(
         self,
@@ -387,8 +388,9 @@ class VSSErrorReporter:
             elif 'disk space' in issue_lower or 'quota' in issue_lower:
                 steps.append(RemediationStep(
                     step_number=step_num,
-                    description=f"Free up disk space on {volume} by deleting unnecessary files",
-                    command="cleanmgr.exe",
+                    description=f"Leave {volume} as it is: deleting files there overwrites "
+                                "unallocated clusters that may hold deleted evidence",
+                    command=None,
                     requires_admin=False,
                     requires_reboot=False,
                     estimated_time="1-5 minutes"
@@ -396,8 +398,9 @@ class VSSErrorReporter:
                 step_num += 1
                 steps.append(RemediationStep(
                     step_number=step_num,
-                    description=f"Delete old shadow copies to free VSS quota",
-                    command=f"vssadmin delete shadows /for={volume} /oldest",
+                    description="Collect the locked files by raw disk access instead - do not delete "
+                                "shadow copies or files on the target, they are evidence",
+                    command=None,
                     requires_admin=True,
                     requires_reboot=False,
                     estimated_time="< 1 minute"

@@ -1172,7 +1172,8 @@
       "requires": {
         "any_tables": {
           "browser": [
-            "browser_downloads"
+            "browser_downloads",
+            "browser_gecko_downloads"
           ]
         }
       },
@@ -1301,6 +1302,303 @@
       },
       "how": "Browsers keep no deletion log, so a cleared history can only be inferred: history goes quiet for days while cookies or site-engagement records are still being written in the same window.",
       "degrade_note": "Inference, not observation. The same pattern fits a profile that simply was not used for browsing while other state was written."
+    },
+    {
+      "id": "browser_web_search",
+      "behavior_class": "user",
+      "activity": "web_search",
+      "title": "Searched the web",
+      "extractor": "browser_web_search",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history",
+            "browser_shortcuts"
+          ]
+        }
+      },
+      "how": "Reads the words searched for from search-engine result pages in history (Google, Bing, DuckDuckGo, YouTube and others) and from what was typed into the address bar (the shortcuts table). One event per user, browser and day.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_file_sharing",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited a file-sharing site",
+      "extractor": "browser_site_visits",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the file-sharing sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts. Corporate collaboration (SharePoint, Google Docs) is deliberately not in the list.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_paste_site",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited a paste site",
+      "extractor": "browser_site_visits",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the paste sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_anonymiser",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited an anonymiser",
+      "extractor": "browser_site_visits",
+      "severity": "suspicious",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the anonymiser (Tor and .onion, web proxies, throwaway e-mail) sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_crypto",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited a cryptocurrency site",
+      "extractor": "browser_site_visits",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the cryptocurrency exchange, wallet and mixer sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_remote_access",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited a remote-access or tunnelling site",
+      "extractor": "browser_site_visits",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the remote-access tool and tunnel (AnyDesk, TeamViewer, ngrok, Cloudflare tunnels) sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_ai_chat",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Used an AI chat service",
+      "extractor": "browser_site_visits",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the AI chat sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_visit_hacking_resource",
+      "behavior_class": "user",
+      "activity": "site_visit",
+      "title": "Visited a hacking resource",
+      "extractor": "browser_site_visits",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history",
+            "browser_gecko_history"
+          ]
+        }
+      },
+      "how": "Reads the browser's own history and keeps only a person's own navigations (a link, a typed address, a bookmark, a form - never a frame, a redirect or a reload) to the hacking tool, exploit and leaked-data sites listed in uba/config/site_categories.json. One event per user, browser and day, naming up to ten hosts.",
+      "degrade_note": "A signed-in profile synchronises history between devices, so a visit here may have happened on another machine. Private browsing is never recorded."
+    },
+    {
+      "id": "browser_upload_inferred",
+      "behavior_class": "user",
+      "activity": "file_upload",
+      "title": "Submitted a form to a file-sharing or paste site",
+      "extractor": "browser_upload_inferred",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_history"
+          ]
+        }
+      },
+      "how": "A history visit the browser marked as a form submission, to a file-sharing or paste site, excluding sign-in, sign-up and account pages - the step an upload takes.",
+      "degrade_note": "Inferred: a form submission does not prove a file was attached. Chromium only - Firefox records no form-submit marker."
+    },
+    {
+      "id": "browser_download_executable",
+      "behavior_class": "user",
+      "activity": "file_download",
+      "title": "Downloaded a program, script or installer",
+      "extractor": "browser_downloads",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_downloads",
+            "browser_gecko_downloads"
+          ]
+        }
+      },
+      "how": "A download whose file name ends in a program, script, installer or disk-image extension. A double extension (invoice.pdf.exe) is raised to suspicious."
+    },
+    {
+      "id": "browser_download_risky_source",
+      "behavior_class": "user",
+      "activity": "file_download",
+      "title": "Downloaded from a risky source",
+      "extractor": "browser_downloads",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_downloads",
+            "browser_gecko_downloads"
+          ]
+        }
+      },
+      "how": "A download from a public raw IP address, over plain http from a non-local host, or from a file-sharing, paste, anonymiser or hacking-resource site. Suspicious when the file is also a program, script or installer. Downloads from this machine (127.0.0.1) and the local network are never counted as risky."
+    },
+    {
+      "id": "browser_download_opened",
+      "behavior_class": "user",
+      "activity": "file_opened",
+      "title": "Opened a download from the browser",
+      "extractor": "browser_downloads",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_downloads"
+          ]
+        }
+      },
+      "how": "The browser's download record says the file was opened from its download list. Notable when the file is a program, script or installer.",
+      "degrade_note": "The browser records that the file was opened, not when; Firefox keeps no such flag."
+    },
+    {
+      "id": "browser_comm_app_present",
+      "behavior_class": "user",
+      "activity": "communication_app",
+      "title": "Chat or collaboration app in use",
+      "extractor": "browser_comm_apps",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_metadata",
+            "browser_files"
+          ]
+        }
+      },
+      "how": "An Electron chat app (Discord, Slack, Teams, Signal, WhatsApp, Telegram, Element, Skype, Zoom) whose profile Crow-Eye collected - a channel for messages and files outside the browser. Names only: no token, key or value is read.",
+      "degrade_note": "Presence, not activity: no time is given, because the collected files' times are when Crow-Eye extracted them."
+    },
+    {
+      "id": "browser_crypto_wallet",
+      "behavior_class": "user",
+      "activity": "crypto_wallet",
+      "title": "Cryptocurrency wallet extension",
+      "extractor": "browser_crypto_wallet",
+      "severity": "notable",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_extensions"
+          ]
+        }
+      },
+      "how": "A wallet extension (MetaMask, Phantom, Coinbase Wallet, Trust, Binance, Exodus, Ronin, TronLink, Keplr, Rabby, OKX and others) and whether it holds stored data. The storage is counted, never read - a wallet vault is an encrypted seed phrase."
+    },
+    {
+      "id": "browser_open_tabs_at_exit",
+      "behavior_class": "user",
+      "activity": "open_tabs",
+      "title": "Tabs open when the browser last closed",
+      "extractor": "browser_open_tabs",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_sessions",
+            "browser_gecko_sessions"
+          ]
+        }
+      },
+      "how": "The newest session file of each profile and the page each tab last showed - what the browser would restore. Notable when a tab was on a sensitive site. What was typed into pages (form_text) is never read.",
+      "degrade_note": "Timeless: the session file is dated when that session started, not when it closed."
+    },
+    {
+      "id": "browser_media_playback",
+      "behavior_class": "user",
+      "activity": "media_playback",
+      "title": "Watched or listened to media",
+      "extractor": "browser_media_playback",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "any_tables": {
+          "browser": [
+            "browser_media_history"
+          ]
+        }
+      },
+      "how": "The browser's media history: sites that played audio or video, with the watch time it recorded, per user, browser and day."
     }
   ],
   "requires_collection": [

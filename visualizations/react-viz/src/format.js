@@ -4,6 +4,14 @@ export function fmtInt(n) {
   return (n || 0).toLocaleString()
 }
 
+// A total too long for a tile: CPU cycles summed over months reach 17 digits
+// and wrapped onto a second line. Compact form on screen, exact in the title.
+export function fmtCompact(n) {
+  n = n || 0
+  if (Math.abs(n) < 1e6) return fmtInt(n)
+  return n.toLocaleString(undefined, { notation: 'compact', maximumFractionDigits: 1 })
+}
+
 export function fmtBytes(n) {
   n = n || 0
   if (n < 1024) return `${n} B`

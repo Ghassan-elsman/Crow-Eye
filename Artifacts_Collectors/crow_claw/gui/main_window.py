@@ -11,7 +11,10 @@ Phase 2: GUI Main Window
 import sys
 import os
 from pathlib import Path
+import logging
 from typing import Optional
+
+logger = logging.getLogger("crow_claw.gui.main_window")
 
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -35,6 +38,12 @@ if str(crow_eye_root) not in sys.path:
 
 # Import from crow_claw package
 from crow_claw.core import Artifact, get_all_artifacts, ArtifactType
+try:
+    # The site look (ui/site_theme.py); absent when Crow-Claw runs on its own.
+    from ui.site_theme import (apply_site_theme, begin_site_theme, set_variant, keep_style,
+                               restyle, log_view_sheet)
+except Exception:                                        # pragma: no cover
+    apply_site_theme = begin_site_theme = set_variant = keep_style = restyle = log_view_sheet = None
 from crow_claw.core.validator import PathValidator
 
 try:
@@ -148,7 +157,7 @@ class HeaderPanel(QWidget):
         admin_label.setFont(admin_label_font)
         admin_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
         admin_label.setMinimumWidth(150)
-        
+
         self.admin_status_indicator = QLabel("Checking...")
         indicator_font = QFont()
         indicator_font.setPointSize(9)
@@ -174,7 +183,7 @@ class HeaderPanel(QWidget):
         partition_label.setFont(partition_label_font)
         partition_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
         partition_label.setMinimumWidth(150)
-        
+
         self.partition_info = QLabel("Detecting...")
         partition_info_font = QFont()
         partition_info_font.setPointSize(9)
@@ -202,7 +211,7 @@ class HeaderPanel(QWidget):
             case_label.setFont(case_label_font)
             case_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             case_label.setMinimumWidth(150)
-            
+
             self.case_path = QLabel("(No case directory)")
             case_path_font = QFont()
             case_path_font.setPointSize(9)
@@ -227,7 +236,7 @@ class HeaderPanel(QWidget):
             artifact_label.setFont(artifact_label_font)
             artifact_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             artifact_label.setMinimumWidth(150)
-            
+
             self.target_artifact_path = QLabel("(Not set)")
             target_font = QFont()
             target_font.setPointSize(9)
@@ -253,7 +262,7 @@ class HeaderPanel(QWidget):
             output_label.setFont(output_label_font)
             output_label.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_KEY)
             output_label.setMinimumWidth(150)
-            
+
             # Output path - RED when not selected, GREEN when selected (no border)
             self.output_path = QLabel("(No directory selected)")
             output_path_font = QFont()
@@ -265,7 +274,7 @@ class HeaderPanel(QWidget):
                 f"font-weight: 600; "
                 f"background-color: transparent;"
             )
-            
+
             self.output_button = QPushButton("BROWSE...")
             button_font = QFont()
             button_font.setPointSize(9)
@@ -299,10 +308,10 @@ class HeaderPanel(QWidget):
         display_text = path
         if len(display_text) > 50:
             display_text = "..." + display_text[-47:]
-        
+
         self.output_path.setText(f"✓ {display_text}")
         self.output_path.setToolTip(path)
-        
+
         # Change to GREEN when path is selected (no border)
         self.output_path.setStyleSheet(CrowEyeStyles.CROWCLAW_LABEL_PATH)
 
@@ -313,7 +322,7 @@ class HeaderPanel(QWidget):
 
     def set_admin_status(self, is_admin: bool):
         """Set admin status display with prominent visual indicator.
-        
+
         Args:
             is_admin: Whether the application is running with admin privileges
         """
@@ -329,14 +338,15 @@ class HeaderPanel(QWidget):
 
 class CollectionWorker(QThread):
     """Worker thread for artifact collection to prevent GUI freezing."""
-    
+
     # Signals for communication with main thread
     log_signal = pyqtSignal(str)
     progress_signal = pyqtSignal(int)
+    artifact_signal = pyqtSignal(int, int, str)   # index, total, name - never rate-limited
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool, object)  # success, statistics
     error_signal = pyqtSignal(str)
-    
+
     def __init__(self, artifacts, output_directory, windows_partition, is_admin=False):
         super().__init__()
         self.artifacts = artifacts
@@ -344,34 +354,36 @@ class CollectionWorker(QThread):
         self.windows_partition = windows_partition
         self.is_admin = is_admin
         self.collector = None
-        
+
     def run(self):
         """Run collection in background thread."""
         try:
             from ..core.collector import ArtifactCollector
             import time
-            
+
             # Create collector with admin status from main thread
             self.collector = ArtifactCollector(verbose=True, is_admin=self.is_admin)
-            
+
             # Rate limiting for GUI updates to prevent flooding
             last_log_time = 0
             last_status_time = 0
             log_interval = 0.3  # Minimum 300ms between log updates (was 0.1)
             status_interval = 0.15  # Minimum 150ms between status updates (was 0.05)
-            
+
             # Set up callbacks that emit signals with rate limiting
             def log_callback(message: str):
                 nonlocal last_log_time
                 current_time = time.time()
-                # Rate limit log messages to prevent GUI flooding
-                if current_time - last_log_time >= log_interval:
+                # Rate limit log messages to prevent GUI flooding - but never
+                # an artifact's own start line: "Collecting: Web Browsers
+                # (14/14)" came 160 ms after USN's and was dropped.
+                if message.startswith("Collecting: ") or current_time - last_log_time >= log_interval:
                     self.log_signal.emit(message)
                     last_log_time = current_time
-            
+
             def progress_callback(percent: int):
                 self.progress_signal.emit(percent)
-            
+
             def status_callback(message: str):
                 nonlocal last_status_time
                 current_time = time.time()
@@ -379,11 +391,14 @@ class CollectionWorker(QThread):
                 if current_time - last_status_time >= status_interval:
                     self.status_signal.emit(message)
                     last_status_time = current_time
-            
+
             # Set callbacks
             self.collector.set_progress_callback(progress_callback)
             self.collector.set_status_callback(status_callback)
-            
+            if hasattr(self.collector, "set_artifact_callback"):
+                self.collector.set_artifact_callback(
+                    lambda i, n, name: self.artifact_signal.emit(i, n, name))
+
             # Override log method with rate limiting
             original_log = self.collector.log
             def custom_log(message: str):
@@ -395,7 +410,7 @@ class CollectionWorker(QThread):
                     # Don't crash on logging errors
                     pass
             self.collector.log = custom_log
-            
+
             # Collect artifacts
             success, statistics = self.collector.collect_artifacts(
                 artifacts=self.artifacts,
@@ -403,12 +418,15 @@ class CollectionWorker(QThread):
                 windows_partition=self.windows_partition,
                 handle_locked_files="skip"
             )
-            
+
             # Emit finished signal
             self.finished_signal.emit(success, statistics)
-            
+
         except Exception as e:
             import traceback
+            # The traceback goes to crow_claw.log; the window only shows the
+            # message, and closing it used to lose the details entirely.
+            logger.error("Collection failed: %s", e, exc_info=True)
             error_details = f"{str(e)}\n{traceback.format_exc()}"
             self.error_signal.emit(error_details)
 
@@ -471,8 +489,39 @@ class CrowClawMainWindow(QMainWindow):
         # Check admin status
         self.check_admin_status()
 
+        self._apply_site_look()
+
+    def _apply_site_look(self):
+        """One sheet for the window (ui/site_theme.py). The status labels keep
+        their own colours - green / red / blue carry meaning there."""
+        if apply_site_theme is None:
+            return
+        h = self.header
+        for name in ("admin_status_indicator", "partition_info", "case_path",
+                     "target_artifact_path", "output_path"):
+            w = getattr(h, name, None)
+            if w is not None:
+                keep_style(w)
+        # The three text wells (collection log, artifact details, configured
+        # paths) are the loading dialog's log well: mono, #0A0C10. Only the log
+        # kept it in round 17; the other two fell back to a plain input.
+        for name in ("log_text", "detail_text", "path_text"):
+            w = getattr(self, name, None)
+            if w is not None:
+                w.setStyleSheet(log_view_sheet())
+                keep_style(w)
+        apply_site_theme(self)
+        from ui.site_theme import set_role
+        for lab in h.findChildren(QLabel):
+            if lab.text() == "CROW-CLAW":
+                set_role(lab, "title")
+
     def apply_crow_eye_styles(self):
         """Apply Crow-Eye styling to the main window."""
+        if begin_site_theme is not None:
+            # The site look, set before the widgets exist (ui/site_theme.py).
+            begin_site_theme(self)
+            return
         try:
             # Use PathUtils for robust root resolution (Requirement 11.2)
             from utils.path_utils import PathUtils
@@ -565,7 +614,7 @@ class CrowClawMainWindow(QMainWindow):
             QFrame {
                 background-color: #0F172A;
             }
-            
+
             /* Scrollbar Styling */
             QScrollBar:vertical {
                 background-color: #0F172A;
@@ -626,7 +675,7 @@ class CrowClawMainWindow(QMainWindow):
             QScrollBar::sub-page:vertical {
                 background: none;
             }
-            
+
             /* Horizontal Scrollbar */
             QScrollBar:horizontal {
                 background-color: #0F172A;
@@ -734,8 +783,11 @@ class CrowClawMainWindow(QMainWindow):
 
         for step_text, step_id in steps:
             btn = QPushButton(step_text)
-            btn.setMinimumHeight(60)
-            btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_INACTIVE)
+            btn.setMinimumHeight(48)
+            if set_variant is not None:
+                set_variant(btn, "nav")
+            else:
+                btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_INACTIVE)
             btn.clicked.connect(lambda checked, sid=step_id: self.switch_step(sid))
             self.step_buttons[step_id] = btn
             steps_layout.addWidget(btn)
@@ -773,7 +825,9 @@ class CrowClawMainWindow(QMainWindow):
 
             # Highlight current step button
             for btn_id, btn in self.step_buttons.items():
-                if btn_id == step_id:
+                if restyle is not None:
+                    restyle(btn, active=(btn_id == step_id))
+                elif btn_id == step_id:
                     btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_ACTIVE)
                 else:
                     btn.setStyleSheet(CrowEyeStyles.CROWCLAW_STEP_BUTTON_INACTIVE)
@@ -804,16 +858,16 @@ class CrowClawMainWindow(QMainWindow):
             display_name = artifact.name
             if artifact.required_admin:
                 display_name = f"{artifact.name}"
-            
+
             item = QListWidgetItem(display_name)
             item.setData(Qt.UserRole, artifact)
-            
+
             # Color code admin-required artifacts
             if artifact.required_admin:
                 from PyQt5.QtGui import QColor, QBrush
                 item.setForeground(QBrush(QColor(Colors.WARNING)))  # Amber for admin-required
                 item.setToolTip(f"{artifact.name} - Requires Administrator Privileges")
-            
+
             self.artifact_list.addItem(item)
         self.artifact_list.itemSelectionChanged.connect(self.on_artifact_selected)
         left_layout.addWidget(self.artifact_list)
@@ -829,13 +883,13 @@ class CrowClawMainWindow(QMainWindow):
 
         self.detail_text = QTextEdit()
         self.detail_text.setReadOnly(True)
-        
+
         # Enhanced styling with better font
         detail_font = QFont()
         detail_font.setFamily("Consolas")
         detail_font.setPointSize(10)
         self.detail_text.setFont(detail_font)
-        
+
         self.detail_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
         details_layout.addWidget(self.detail_text)
 
@@ -947,7 +1001,10 @@ class CrowClawMainWindow(QMainWindow):
         # Collection button
         self.collect_button = QPushButton("Start Collection")
         self.collect_button.setMinimumHeight(50)
-        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
+        if set_variant is not None:
+            set_variant(self.collect_button, "primary")
+        else:
+            self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
         self.collect_button.clicked.connect(self.start_collection)
         layout.addWidget(self.collect_button)
 
@@ -964,14 +1021,14 @@ class CrowClawMainWindow(QMainWindow):
         # Current item being collected + Access Method on same line
         status_row_layout = QHBoxLayout()
         status_row_layout.setSpacing(20)
-        
+
         # Left side: Current Collection Progress
         current_section = QVBoxLayout()
         current_section.setSpacing(5)
         current_label = QLabel("Current Collection Progress:")
         current_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         current_section.addWidget(current_label)
-        
+
         self.current_item = QLabel("(Waiting to start)")
         self.current_item.setStyleSheet(
             f"color: {Colors.TEXT_PRIMARY}; padding: 6px 10px; "
@@ -979,14 +1036,14 @@ class CrowClawMainWindow(QMainWindow):
             f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;"
         )
         current_section.addWidget(self.current_item)
-        
+
         # Right side: Access Method
         access_section = QVBoxLayout()
         access_section.setSpacing(5)
         access_method_label = QLabel("Access Method:")
         access_method_label.setStyleSheet(CrowEyeStyles.CROWCLAW_SECTION_HEADER)
         access_section.addWidget(access_method_label)
-        
+
         self.access_method_display = QLabel("(Not started)")
         self.access_method_display.setStyleSheet(
             f"color: {Colors.TEXT_PRIMARY}; padding: 6px 10px; "
@@ -994,11 +1051,11 @@ class CrowClawMainWindow(QMainWindow):
             f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 4px;"
         )
         access_section.addWidget(self.access_method_display)
-        
+
         # Add both sections to horizontal layout
         status_row_layout.addLayout(current_section, 1)  # Give more space to current progress
         status_row_layout.addLayout(access_section, 1)   # Equal space for access method
-        
+
         layout.addLayout(status_row_layout)
 
         # Status log
@@ -1043,7 +1100,7 @@ class CrowClawMainWindow(QMainWindow):
             return
 
         artifact = self.selected_artifact
-        
+
         # Build admin requirement warning if needed
         admin_warning = ""
         if artifact.required_admin:
@@ -1051,7 +1108,7 @@ class CrowClawMainWindow(QMainWindow):
             admin_warning += '<p style="margin: 0; font-size: 11pt;"><b style="color: #FFAA00; font-size: 12pt;">⚠ ADMINISTRATOR PRIVILEGES REQUIRED</b></p>'
             admin_warning += '<p style="margin: 5px 0 0 0; color: #FFD700; font-size: 10pt;">This artifact requires administrator privileges to collect successfully.</p>'
             admin_warning += '</div>'
-        
+
         details = f"""
 <div style="font-family: 'Segoe UI', Arial, sans-serif; line-height: 1.6;">
 <p style="margin: 0 0 15px 0;"><b style="color: #3B82F6; font-size: 14pt;">{artifact.name.upper()}</b></p>
@@ -1115,7 +1172,7 @@ class CrowClawMainWindow(QMainWindow):
     def refresh_path_display(self):
         """Refresh path display showing actual paths that will be collected."""
         is_admin = PathValidator.is_admin()
-        
+
         # Enhanced header with better styling
         text = f"""
 <div style="background-color: #0F172A; padding: 10px; margin-bottom: 10px;">
@@ -1141,7 +1198,7 @@ class CrowClawMainWindow(QMainWindow):
         for artifact in self.artifacts:
             if artifact.enabled:
                 enabled_count += 1
-                
+
                 # Add admin indicator if required
                 admin_indicator = ""
                 if artifact.required_admin:
@@ -1150,7 +1207,7 @@ class CrowClawMainWindow(QMainWindow):
                         admin_indicator = ' <span style="background-color: #3B2F1F; color: #FFAA00; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtbGluZWpvaW49InJvdW5kIj4KICA8cmVjdCB4PSI1IiB5PSIxMSIgd2lkdGg9IjE0IiBoZWlnaHQ9IjkiIHJ4PSIyIiBzdHJva2U9IiMwMEZGRkYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgogIDxwYXRoIGQ9Ik04IDExIFY4IGE0IDQgMCAwIDEgOCAwIHYzIiBzdHJva2U9IiMwMEZGRkYiIHN0cm9rZS13aWR0aD0iMiIgZmlsbD0ibm9uZSIvPgogIDxjaXJjbGUgY3g9IjEyIiBjeT0iMTUuNSIgcj0iMS4zIiBmaWxsPSIjMDBGRkZGIi8+Cjwvc3ZnPgo=" width="11" height="11" style="vertical-align:middle"> ADMIN REQUIRED</span>'
                     else:
                         admin_indicator = ' <span style="background-color: #3B1F1F; color: #FF6B6B; padding: 2px 6px; border-radius: 3px; font-size: 8pt; font-weight: bold;">⚠ ADMIN REQUIRED</span>'
-                
+
                 # Artifact header with box styling
                 text += f"""
 <div style="background-color: #1E293B; border-left: 4px solid #00FFFF; padding: 8px; margin: 8px 0; border-radius: 4px;">
@@ -1276,19 +1333,19 @@ class CrowClawMainWindow(QMainWindow):
 
     def show_styled_message(self, title: str, message: str, msg_type: str = "info"):
         """Show a custom styled message dialog matching Crow-Claw theme.
-        
+
         Args:
             title: Dialog title
             message: Message text
             msg_type: Type of message - "success", "error", "warning", "info"
         """
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
-        
+
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
         dialog.setMinimumWidth(500)
         dialog.setModal(True)
-        
+
         # Set dialog background
         dialog.setStyleSheet(f"QDialog {{ background-color: {Colors.BG_PRIMARY}; }}")
 
@@ -1309,10 +1366,10 @@ class CrowClawMainWindow(QMainWindow):
             "warning": Colors.WARNING,
             "info": Colors.ACCENT_BLUE,
         }
-        
+
         icon = icon_map.get(msg_type, "ℹ")
         color = color_map.get(msg_type, Colors.ACCENT_BLUE)
-        
+
         # Title with icon
         title_label = QLabel(f"{icon} {title}")
         title_font = QFont()
@@ -1322,13 +1379,13 @@ class CrowClawMainWindow(QMainWindow):
         title_label.setFont(title_font)
         title_label.setStyleSheet(f"color: {color}; background-color: transparent; letter-spacing: 2px;")
         layout.addWidget(title_label)
-        
+
         # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setStyleSheet(f"background-color: {color}; border: none; height: 2px;")
         layout.addWidget(separator)
-        
+
         # Message text
         msg_label = QLabel(message)
         msg_font = QFont()
@@ -1343,7 +1400,7 @@ class CrowClawMainWindow(QMainWindow):
             f"border: 1px solid {Colors.BORDER_SUBTLE};"
         )
         layout.addWidget(msg_label)
-        
+
         # OK button
         ok_button = QPushButton("OK")
         ok_button_font = QFont()
@@ -1370,8 +1427,12 @@ class CrowClawMainWindow(QMainWindow):
         )
         ok_button.clicked.connect(dialog.accept)
         layout.addWidget(ok_button)
-        
+
         dialog.setLayout(layout)
+        if apply_site_theme is not None:
+            # Fonts and background only: the title, separator and icon box
+            # carry the outcome's colour (success / error / warning).
+            apply_site_theme(dialog, clear_inline=False)
         dialog.exec_()
 
     def select_file_or_directory(self) -> tuple:
@@ -1406,10 +1467,10 @@ class CrowClawMainWindow(QMainWindow):
     def check_admin_status(self):
         """Check and display admin status."""
         is_admin = PathValidator.is_admin()
-        
+
         # Update header admin status indicator
         self.header.set_admin_status(is_admin)
-        
+
         # Update collection widget status if it exists
         if hasattr(self, 'admin_status'):
             status = PathValidator.get_admin_status_string()
@@ -1425,7 +1486,7 @@ class CrowClawMainWindow(QMainWindow):
         if not self.full_output_path and not self.integrated_mode:
             self.show_styled_message("⚠ No Output Directory", "Please select an output directory before starting the collection.", "warning")
             return
-            
+
         # In integrated mode, the output path is derived from the case directory
         if self.integrated_mode and not self.full_output_path:
             if self.case_directory:
@@ -1440,10 +1501,10 @@ class CrowClawMainWindow(QMainWindow):
         if not is_admin:
             # Get list of enabled admin-required artifacts
             admin_required_artifacts = [
-                artifact.name for artifact in self.artifacts 
+                artifact.name for artifact in self.artifacts
                 if artifact.enabled and artifact.required_admin
             ]
-            
+
             if admin_required_artifacts:
                 warning_msg = "⚠ Running without Administrator Privileges\n\n"
                 warning_msg += "The following artifacts require administrator privileges and may fail to collect:\n\n"
@@ -1451,7 +1512,7 @@ class CrowClawMainWindow(QMainWindow):
                     warning_msg += f"  • {artifact_name}\n"
                 warning_msg += "\nTo collect these artifacts, please restart the application as Administrator.\n\n"
                 warning_msg += "Do you want to continue anyway?"
-                
+
                 reply = QMessageBox.question(
                     self,
                     "Administrator Privileges Required",
@@ -1459,7 +1520,7 @@ class CrowClawMainWindow(QMainWindow):
                     QMessageBox.Yes | QMessageBox.No,
                     QMessageBox.No
                 )
-                
+
                 if reply == QMessageBox.No:
                     return
 
@@ -1472,17 +1533,20 @@ class CrowClawMainWindow(QMainWindow):
         self.log_text.append(f"Windows Partition: {self.windows_partition}")
         self.log_text.append(f"Output Directory: {self.full_output_path}")
         self.log_text.append(f"Admin Status: {'Administrator' if is_admin else 'Standard User'}\n")
-        
+
         # Initialize access method display
         self.access_method_display.setText("(Initializing...)")
-        
+
         # Update button to show collection in progress
         self.collect_button.setText("Collecting...")
         self.collect_button.setEnabled(False)
-        self.collect_button.setStyleSheet(
-            f"QPushButton {{ background-color: {Colors.WARNING}; color: {Colors.BG_PRIMARY}; "
-            f"font-size: 14px; font-weight: 800; border: none; border-radius: 6px; padding: 10px 18px; }}"
-        )
+        if restyle is not None:
+            restyle(self.collect_button, "danger")
+        else:
+            self.collect_button.setStyleSheet(
+                f"QPushButton {{ background-color: {Colors.WARNING}; color: {Colors.BG_PRIMARY}; "
+                f"font-size: 14px; font-weight: 800; border: none; border-radius: 6px; padding: 10px 18px; }}"
+            )
 
         # Track current artifact for progress display
         self.current_artifact_name = ""
@@ -1496,14 +1560,15 @@ class CrowClawMainWindow(QMainWindow):
             windows_partition=self.windows_partition,
             is_admin=is_admin
         )
-        
+
         # Connect signals to slots
         self.worker.log_signal.connect(self.on_log_message)
+        self.worker.artifact_signal.connect(self.on_artifact_started)
         self.worker.progress_signal.connect(self.on_progress_update)
         self.worker.status_signal.connect(self.on_status_update)
         self.worker.finished_signal.connect(self.on_collection_finished)
         self.worker.error_signal.connect(self.on_collection_error)
-        
+
         # Start worker thread
         self.worker.start()
 
@@ -1516,10 +1581,10 @@ class CrowClawMainWindow(QMainWindow):
                 formatted_message = f'<span style="color: #FF3333; font-weight: bold; background-color: #3D0000; padding: 2px 4px; border-radius: 2px;">{message}</span>'
                 self.log_text.append(formatted_message)
                 return
-        
+
         # Regular message handling
         self.log_text.append(message)
-        
+
         # Extract artifact name from log messages for progress bar
         if message.startswith("Collecting: "):
             parts = message.split("Collecting: ")
@@ -1534,7 +1599,7 @@ class CrowClawMainWindow(QMainWindow):
                             self.current_artifact_index = int(idx_part)
                         except:
                             pass
-        
+
         # Extract file count information from log messages
         # Pattern: "✓ ArtifactName: X files (size) via method"
         if "files (" in message and "via" in message:
@@ -1552,10 +1617,18 @@ class CrowClawMainWindow(QMainWindow):
             except:
                 pass
 
+    def on_artifact_started(self, index: int, total: int, name: str):
+        """The artifact now being collected: "(n/N)" comes from here, not from
+        log lines (which are rate-limited)."""
+        self.current_artifact_index = index
+        self.total_artifacts = total
+        self.current_artifact_name = name
+        self.progress.setFormat(f"%p% - Collecting: {name} ({index}/{total})")
+
     def on_progress_update(self, percent: int):
         """Handle progress updates from worker thread."""
         self.progress.setValue(percent)
-        
+
         # Update progress bar text with current artifact info
         if self.current_artifact_name:
             if self.total_artifacts > 0:
@@ -1575,11 +1648,11 @@ class CrowClawMainWindow(QMainWindow):
         """Handle status updates from worker thread."""
         # Parse and enhance status message display
         display_message = message
-        
+
         # Check if this is an error message - also log it
         if message.startswith("✗"):
             self.log_text.append(f"[ERROR] {message}")
-        
+
         # Check for real-time file collection progress
         # Pattern: "[X/Y] ArtifactName: Collecting filename..." or "[X/Y] ArtifactName: Collected N files so far..."
         if message.startswith("[") and "/" in message and "]" in message:
@@ -1587,17 +1660,17 @@ class CrowClawMainWindow(QMainWindow):
                 # Extract file progress [X/Y]
                 bracket_content = message.split("]")[0].replace("[", "")
                 current_file, total_files = bracket_content.split("/")
-                
+
                 # This is a multi-file collection progress message
                 display_message = message  # Use as-is, it's already well formatted
-                
+
                 # Extract artifact name if available
                 if ":" in message:
                     artifact_part = message.split(":")[0].split("]")[1].strip()
                     self.current_artifact_name = artifact_part
             except:
                 pass
-        
+
         # Check if this is a collection complete message with file counts
         # Pattern: "✓ ArtifactName: X files (size) via method"
         elif "✓" in message and " files (" in message:
@@ -1607,45 +1680,45 @@ class CrowClawMainWindow(QMainWindow):
                 if len(parts) >= 2:
                     artifact_part = parts[0].replace("✓", "").strip()
                     info_part = parts[1].strip()
-                    
+
                     # Extract file count
                     file_count_str = info_part.split(" files")[0].strip()
                     if file_count_str.isdigit():
                         file_count = int(file_count_str)
-                        
+
                         # Extract size if available
                         size_match = info_part.split("(")[1].split(")")[0] if "(" in info_part else ""
-                        
+
                         # Create enhanced display message
                         display_message = f"✓ {artifact_part}: Collected {file_count} files ({size_match})"
-                        
+
                         # Also log successful collections
                         self.log_text.append(f"[OK] {display_message}")
             except:
                 pass
-        
+
         # Check if this is a collecting message
         elif "Collecting" in message:
             # Extract artifact name from status message
             if "Collecting: " in message:
                 artifact_name = message.split("Collecting: ")[1].split(" (")[0] if "(" in message else message.split("Collecting: ")[1]
                 self.current_artifact_name = artifact_name
-                
+
                 # Show artifact index if available
                 if self.current_artifact_index > 0 and self.total_artifacts > 0:
                     display_message = f"[{self.current_artifact_index}/{self.total_artifacts}] Collecting: {artifact_name}..."
-                
+
                 self.on_progress_update(self.progress.value())  # Refresh progress text
-        
+
         self.current_item.setText(display_message)
-        
+
         # Update access method statistics display in real-time
         self._update_access_method_display()
 
     def on_collection_finished(self, success: bool, statistics):
         """Handle collection completion from worker thread."""
         from datetime import datetime
-        
+
         # Collection complete
         end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self.current_item.setText("Collection complete!")
@@ -1654,12 +1727,34 @@ class CrowClawMainWindow(QMainWindow):
         self.log_text.append(f"[*] Total artifacts collected: {statistics.total_artifacts_collected}/{statistics.total_artifacts_requested}")
         self.log_text.append(f"[*] Total files collected: {statistics.total_files_collected}")
         self.log_text.append(f"[*] Total bytes collected: {self._format_size(statistics.total_bytes_collected)}")
-        
+
         if statistics.total_errors > 0:
             self.log_text.append(f"[WARNING] Errors occurred: {statistics.total_errors}")
         if statistics.total_skipped > 0:
             self.log_text.append(f"[INFO] Artifacts skipped: {statistics.total_skipped}")
-        
+
+        # Chain of custody: what was hashed, what was changed on this machine.
+        custody_summary = getattr(self.worker.collector, "custody_summary", None)
+        custody_path = getattr(self.worker.collector, "custody_path", None)
+        if custody_summary:
+            s = custody_summary
+            self.log_text.append("\n=== Chain of Custody ===")
+            self.log_text.append(f"  Copies verified against their source (SHA-256): {s['copies_verified']}")
+            if s["copies_mismatched"]:
+                self.log_text.append(f"  [WARNING] Copies that differ from their source: {s['copies_mismatched']}")
+            if s["copies_unverifiable"]:
+                self.log_text.append(f"  Copies with no independent source hash (raw disk / locked): "
+                                     f"{s['copies_unverifiable']}")
+            self.log_text.append(f"  Changes made on this machine (processes, services, snapshots): "
+                                 f"{s['footprint_items']}")
+            if s["shadow_copies_left_behind"]:
+                self.log_text.append("  [WARNING] Shadow copies created and NOT deleted: "
+                                     + ", ".join(s["shadow_copies_left_behind"]))
+            elif s["shadow_copies_created"]:
+                self.log_text.append(f"  Shadow copies created and deleted: {s['shadow_copies_created']}")
+        if custody_path:
+            self.log_text.append(f"  Record: {custody_path} (+ .sha256)")
+
         # Display access method statistics
         if hasattr(self.worker.collector, 'access_method_stats') and self.worker.collector.access_method_stats:
             self.log_text.append(f"\n=== Access Method Statistics ===")
@@ -1667,7 +1762,7 @@ class CrowClawMainWindow(QMainWindow):
                 if count > 0:
                     method_display = self._format_access_method(method)
                     self.log_text.append(f"  {method_display}: {count} artifacts")
-        
+
         # Display detailed per-artifact results
         self.log_text.append(f"\n{'='*60}")
         self.log_text.append(f"=== DETAILED COLLECTION RESULTS ===")
@@ -1683,51 +1778,59 @@ class CrowClawMainWindow(QMainWindow):
             else:
                 status_icon = "✗"
                 status_text = "FAILED"
-            
+
             size_str = self._format_size(result.bytes_collected)
             self.log_text.append(f"\n{status_icon} {result.artifact_name}: {status_text}")
             self.log_text.append(f"    Files Collected: {result.files_collected}")
             self.log_text.append(f"    Total Size: {size_str}")
-            
+
             # Show errors if any
             if result.errors:
                 self.log_text.append(f"    Errors ({len(result.errors)}):")
                 for error in result.errors:
                     self.log_text.append(f"      • {error}")
-        
+
         self.log_text.append(f"{'='*60}\n")
-        
+
         self.progress.setValue(100)
         self.progress.setFormat(f"100% - Complete! Collected {statistics.total_files_collected} files from {statistics.total_artifacts_collected} artifacts")
-        
+
         # Reset button to original state
         self.collect_button.setText("Start Collection")
         self.collect_button.setEnabled(True)
-        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
+        if set_variant is not None:
+            set_variant(self.collect_button, "primary")
+        else:
+            self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
 
         # Generate collection manifest using the collector's results
         self.generate_collection_manifest_from_collector(self.worker.collector, statistics, end_time)
-        
+
         # Save artifact paths to case configuration for offline parsers
         if self.integrated_mode and self.case_directory:
             self.save_artifact_paths_to_case_config(self.worker.collector)
 
         self.collection_started.emit()
-        
+
         # Show completion dialog with statistics
         self.show_completion_dialog_from_collector(self.worker.collector, statistics)
 
     def on_collection_error(self, error_message: str):
         """Handle collection errors from worker thread."""
+        logger.error("Collection failed (shown to the analyst): %s",
+                     (error_message or "").splitlines()[0] if error_message else "")
         self.log_text.append(f"\n[ERROR] Collection failed: {error_message}")
         self.current_item.setText("Collection failed!")
         self.access_method_display.setText("✗ Error occurred")
-        
+
         # Reset button
         self.collect_button.setText("Start Collection")
         self.collect_button.setEnabled(True)
-        self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
-        
+        if set_variant is not None:
+            set_variant(self.collect_button, "primary")
+        else:
+            self.collect_button.setStyleSheet(CrowEyeStyles.CROWCLAW_PRIMARY_BUTTON)
+
         self.show_styled_message("✗ Collection Error", f"An error occurred during collection:\n\n{error_message}", "error")
 
     def generate_collection_manifest_from_collector(self, collector, statistics, end_time: str):
@@ -1739,14 +1842,17 @@ class CrowClawMainWindow(QMainWindow):
             end_time: End time of collection (formatted string)
         """
         import json
-        from datetime import datetime
+        from datetime import datetime, timezone
 
         # Create manifest data
         manifest = {
             "collection_info": {
                 "mode": "integrated" if self.integrated_mode else "standalone",
-                "timestamp": datetime.now().isoformat(),
-                "end_time": end_time,
+                "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+                "end_time_local": end_time,
+                # The hashed, per-file record of this run; this manifest is a summary.
+                "custody_record": getattr(collector, "custody_path", None),
+                "custody_summary": getattr(collector, "custody_summary", None),
             },
             "collection_status": {
                 "artifacts_requested": statistics.total_artifacts_requested,
@@ -1797,20 +1903,20 @@ class CrowClawMainWindow(QMainWindow):
         except Exception as e:
             self.log_text.append(f"\n[WARNING] Could not save manifest: {str(e)}")
             print(f"[WARNING] Error saving manifest: {e}")
-    
+
     def save_artifact_paths_to_case_config(self, collector):
         """Save collected artifact paths to case configuration for offline parsers.
-        
+
         This method updates the case_config.json file with artifact paths so that
         offline parsers can directly access the collected artifacts without manual browsing.
-        
+
         Args:
             collector: ArtifactCollector instance with collection_results
         """
         import json
         from datetime import datetime
         from pathlib import Path
-        
+
         try:
             # Build artifact paths dictionary
             artifact_paths = {}
@@ -1819,10 +1925,10 @@ class CrowClawMainWindow(QMainWindow):
                     # Use artifact type as key
                     artifact_type = result.artifact_type
                     artifact_paths[artifact_type] = result.dest_path
-            
+
             # Get case config path
             case_config_path = os.path.join(self.case_directory, "case_config.json")
-            
+
             # Load existing config or create new one
             if os.path.exists(case_config_path):
                 with open(case_config_path, 'r') as f:
@@ -1832,21 +1938,21 @@ class CrowClawMainWindow(QMainWindow):
                     "case_id": os.path.basename(self.case_directory),
                     "created_at": datetime.now().isoformat()
                 }
-            
+
             # Update with artifact paths
             case_config["artifact_paths"] = artifact_paths
             case_config["live_acquisition_path"] = self.full_output_path
             case_config["modified_at"] = datetime.now().isoformat()
-            
+
             # Save updated config
             with open(case_config_path, 'w') as f:
                 json.dump(case_config, f, indent=2)
-            
+
             self.log_text.append(f"\n[OK] Artifact paths saved to case configuration")
             self.log_text.append(f"[INFO] Offline parsers can now directly access collected artifacts")
             print(f"[INFO] Saved artifact paths to: {case_config_path}")
             print(f"[INFO] Artifact types saved: {list(artifact_paths.keys())}")
-            
+
         except Exception as e:
             self.log_text.append(f"\n[WARNING] Could not save artifact paths to case config: {str(e)}")
             print(f"[WARNING] Error saving artifact paths: {e}")
@@ -1855,7 +1961,7 @@ class CrowClawMainWindow(QMainWindow):
 
     def show_completion_dialog_from_collector(self, collector, statistics):
         """Show completion dialog with statistics from collector.
-        
+
         Args:
             collector: ArtifactCollector instance
             statistics: CollectionStatistics object
@@ -1864,28 +1970,28 @@ class CrowClawMainWindow(QMainWindow):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit, QFrame
         from PyQt5.QtCore import Qt
         from PyQt5.QtGui import QFont
-        
+
         # Create custom dialog with dark theme
         dialog = QDialog(self)
         dialog.setWindowTitle("Collection Complete")
         dialog.setMinimumWidth(700)
         dialog.setMaximumWidth(900)
-        
+
         # Apply dark theme to dialog
         dialog.setStyleSheet(
             f"QDialog {{ background-color: {Colors.BG_PRIMARY}; "
             f"color: {Colors.TEXT_PRIMARY}; }} "
             f"QLabel {{ color: {Colors.TEXT_PRIMARY}; }}"
         )
-        
+
         # Main layout
         layout = QVBoxLayout()
         layout.setSpacing(16)
         layout.setContentsMargins(24, 24, 24, 24)
-        
+
         # Header with icon and title
         header_layout = QHBoxLayout()
-        
+
         # Success/Warning icon with dark background
         icon_label = QLabel("✓" if statistics.total_errors == 0 else "⚠")
         icon_font = QFont()
@@ -1904,7 +2010,7 @@ class CrowClawMainWindow(QMainWindow):
         )
         icon_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(icon_label)
-        
+
         # Title
         title_label = QLabel("Collection Complete!")
         title_font = QFont("Segoe UI", 18)
@@ -1913,9 +2019,9 @@ class CrowClawMainWindow(QMainWindow):
         title_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY}; padding-left: 12px;")
         header_layout.addWidget(title_label)
         header_layout.addStretch()
-        
+
         layout.addLayout(header_layout)
-        
+
         # Summary section (dark theme)
         summary_frame = QFrame()
         summary_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
@@ -1926,7 +2032,7 @@ class CrowClawMainWindow(QMainWindow):
         )
         summary_layout = QVBoxLayout(summary_frame)
         summary_layout.setSpacing(8)
-        
+
         # Summary title
         summary_title = QLabel("SUMMARY")
         summary_title_font = QFont("Segoe UI", 10)
@@ -1934,7 +2040,7 @@ class CrowClawMainWindow(QMainWindow):
         summary_title.setFont(summary_title_font)
         summary_title.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; letter-spacing: 1px;")
         summary_layout.addWidget(summary_title)
-        
+
         # Summary stats in compact format with dark theme
         _err_color = Colors.ERROR if statistics.total_errors > 0 else Colors.SUCCESS
         summary_text = (
@@ -1960,9 +2066,9 @@ class CrowClawMainWindow(QMainWindow):
         summary_label.setTextFormat(Qt.RichText)
         summary_label.setStyleSheet(f"color: {Colors.TEXT_PRIMARY};")
         summary_layout.addWidget(summary_label)
-        
+
         layout.addWidget(summary_frame)
-        
+
         # Access method statistics (if available) with dark theme
         if hasattr(collector, 'access_method_stats') and collector.access_method_stats:
             access_frame = QFrame()
@@ -1974,14 +2080,14 @@ class CrowClawMainWindow(QMainWindow):
             )
             access_layout = QVBoxLayout(access_frame)
             access_layout.setSpacing(6)
-            
+
             access_title = QLabel("ACCESS METHODS")
             access_title_font = QFont("Segoe UI", 9)
             access_title_font.setBold(True)
             access_title.setFont(access_title_font)
             access_title.setStyleSheet(f"color: {Colors.ACCENT_BLUE}; letter-spacing: 1px;")
             access_layout.addWidget(access_title)
-            
+
             access_text = ""
             for method, count in collector.access_method_stats.items():
                 if count > 0:
@@ -1991,13 +2097,13 @@ class CrowClawMainWindow(QMainWindow):
                         f"{method_display}: <b style='color: {Colors.ACCENT_BLUE};'>{count}</b>"
                         f"</span><br>"
                     )
-            
+
             access_label = QLabel(access_text)
             access_label.setTextFormat(Qt.RichText)
             access_layout.addWidget(access_label)
-            
+
             layout.addWidget(access_frame)
-        
+
         # Detailed results in scrollable text area with dark theme
         details_label = QLabel("DETAILED RESULTS")
         details_label_font = QFont("Segoe UI", 10)
@@ -2007,12 +2113,12 @@ class CrowClawMainWindow(QMainWindow):
             f"color: {Colors.TEXT_SECONDARY}; letter-spacing: 1px; margin-top: 8px;"
         )
         layout.addWidget(details_label)
-        
+
         details_text = QTextEdit()
         details_text.setReadOnly(True)
         details_text.setMaximumHeight(300)
         details_text.setStyleSheet(CrowEyeStyles.CROWCLAW_LOG_AREA)
-        
+
         # Build detailed results with dark theme colors
         details_content = ""
         for result in collector.collection_results:
@@ -2047,12 +2153,12 @@ class CrowClawMainWindow(QMainWindow):
                     f"&nbsp;&nbsp;&nbsp;<span style='color: {Colors.ERROR};'>"
                     f"Errors: {len(result.errors)}</span><br>"
                 )
-            
+
             details_content += "<br>"
-        
+
         details_text.setHtml(details_content)
         layout.addWidget(details_text)
-        
+
         # OK button with modern dark theme
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -2070,50 +2176,54 @@ class CrowClawMainWindow(QMainWindow):
         )
         ok_button.clicked.connect(dialog.accept)
         button_layout.addWidget(ok_button)
-        
+
         layout.addLayout(button_layout)
-        
+
         dialog.setLayout(layout)
+        if apply_site_theme is not None:
+            # Fonts and background only: the title, separator and icon box
+            # carry the outcome's colour (success / error / warning).
+            apply_site_theme(dialog, clear_inline=False)
         dialog.exec_()
-    
+
     def _update_access_method_display(self, finished: bool = False):
         """Update the access method statistics display in real-time.
-        
+
         Args:
             finished: If True, show "Collection finished" message
         """
         if finished:
             self.access_method_display.setText("✓ Collection finished")
             return
-        
+
         # Get current access method stats from collector
         if not hasattr(self, 'worker') or not self.worker or not hasattr(self.worker, 'collector') or not self.worker.collector:
             return
-        
+
         if not hasattr(self.worker.collector, 'access_method_stats'):
             return
-        
+
         stats = self.worker.collector.access_method_stats
-        
+
         # Build display text with current statistics
         display_parts = []
         for method, count in stats.items():
             if count > 0:
                 method_display = self._format_access_method(method)
                 display_parts.append(f"{method_display}: {count}")
-        
+
         if display_parts:
             display_text = " | ".join(display_parts)
             self.access_method_display.setText(display_text)
         else:
             self.access_method_display.setText("(In progress...)")
-    
+
     def _format_access_method(self, method: str) -> str:
         """Format access method for display.
-        
+
         Args:
             method: Access method name (standard, vss, raw_disk)
-            
+
         Returns:
             Formatted method name
         """
@@ -2124,13 +2234,13 @@ class CrowClawMainWindow(QMainWindow):
             "": "Unknown"
         }
         return method_map.get(method.lower(), method)
-    
+
     def _format_size(self, bytes_size: int) -> str:
         """Format bytes to human-readable size.
-        
+
         Args:
             bytes_size: Size in bytes
-            
+
         Returns:
             Formatted size string
         """
@@ -2149,7 +2259,7 @@ class CrowClawMainWindow(QMainWindow):
 
         import platform
         import subprocess
-        
+
         try:
             if platform.system() == "Windows":
                 os.startfile(self.full_output_path)

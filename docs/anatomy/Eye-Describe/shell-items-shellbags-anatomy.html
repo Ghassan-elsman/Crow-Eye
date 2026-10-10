@@ -1,0 +1,3548 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shell Items &amp; Shellbags: What Folder Access They Prove</title>
+  
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+    
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+    
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+ 
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+    
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+    
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* Intro definition card shown above the byte map */
+    /* Intro definition card - the entire card IS the tooltip. */
+    @keyframes intro-icon-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55); }
+      50%      { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0); }
+    }
+    .intro-card { position: relative; background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%); border: 1px solid var(--border2); border-radius: 18px; padding: 22px 26px; margin-bottom: 28px; display: flex; gap: 18px; align-items: flex-start; box-shadow: 0 6px 24px rgba(0,0,0,0.35); overflow: hidden; max-width: 1400px; max-height: 800px; transform: scale(1); transition: max-width 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), max-height 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), padding 0.5s cubic-bezier(0.4, 0.0, 0.2, 1), gap 0.5s cubic-bezier(0.4, 0.0, 0.2, 1), border-radius 0.45s ease, transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s ease; }
+    .intro-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 100%); border-radius: 18px 0 0 18px; transition: opacity 0.35s; }
+    .intro-card.collapsed { max-width: 66px; max-height: 66px; padding: 16px; gap: 0; border-radius: 999px; cursor: pointer; box-shadow: 0 4px 18px rgba(59, 130, 246, 0.35); }
+    .intro-card.collapsed::before { opacity: 0; }
+    .intro-icon { flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-dim); border: 1px solid var(--accent); display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 15px; cursor: pointer; transition: background 0.25s, color 0.25s, transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.4s; }
+    .intro-icon:hover { background: var(--accent); color: #fff; transform: scale(1.12); }
+    .intro-card.collapsed .intro-icon { background: var(--accent); color: #fff; border-radius: 999px; animation: intro-icon-pulse 2.2s ease-in-out infinite; }
+    .intro-card.collapsed .intro-icon:hover { transform: scale(1.18); animation: none; }
+    .intro-content { flex: 1 1 0; min-width: 0; max-width: 1400px; max-height: 800px; overflow: hidden; transition: max-width 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), max-height 0.55s cubic-bezier(0.4, 0.0, 0.2, 1); }
+    .intro-card.collapsed .intro-content { max-width: 0; max-height: 0; pointer-events: none; }
+    .intro-icon-tip { display: none; }
+    .intro-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 20px; font-weight: 800; color: var(--tx); margin-bottom: 6px; white-space: nowrap; opacity: 1; transform: translateY(0) scale(1) rotate(0deg); transform-origin: left center; transition: opacity 0.28s ease, transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .intro-card.collapsed .intro-title { opacity: 0; transform: translateY(-50px) scale(0.2) rotate(-8deg); }
+    .intro-body { font-size: 14.5px; color: var(--tx2); line-height: 1.65; opacity: 1; transform: translateY(0) scale(1); transition: opacity 0.3s ease 0.06s, transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) 0.06s; }
+    .intro-card.collapsed .intro-body { opacity: 0; transform: translateY(60px) scale(0.85); }
+    .intro-body strong { color: var(--tx); }
+    .intro-body code { font-family: 'Space Mono', monospace; font-size: 13px; background: var(--bg); padding: 2px 6px; border-radius: 4px; color: var(--accent); border: 1px solid var(--border); }
+
+    /* Fact grid for retention caps + history */
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    /* .fact-card look -> anatomy.css */
+    /* .fact-card:hover look -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 8px; }
+    .fact-value { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.1; }
+    .fact-detail { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+
+    /* Timeline of format evolution */
+    .timeline { position: relative; padding-left: 28px; margin-top: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 50%, var(--props-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 22px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+    .timeline-text code { font-family: 'Space Mono', monospace; font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="Windows shell items and Shellbags from a real UsrClass.dat: the ID list, the BEEF0004 block, MRUListEx ordering, and why a bag records a view, not a person.">
+  <meta name="keywords" content="shell items, shellbags, shellbag forensics, bagmru, usrclass.dat, beef0004, mrulistex, recentdocs, opensavemru, folder access evidence, windows explorer forensics">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/shell-items-shellbags-anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/shell-items-shellbags-anatomy">
+  <meta property="og:title" content="Shell Items &amp; Shellbags: What Folder Access They Prove">
+  <meta property="og:description" content="Windows shell items and Shellbags from a real UsrClass.dat: the ID list, the BEEF0004 block, MRUListEx ordering, and why a bag records a view, not a person.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Shell Items &amp; Shellbags: What Folder Access They Prove">
+  <meta name="twitter:description" content="Windows shell items and Shellbags from a real UsrClass.dat: the ID list, the BEEF0004 block, MRUListEx ordering, and why a bag records a view, not a person.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "Shell Items &amp; Shellbags: What Folder Access They Prove",
+      "keywords": "shellbags, shellbag forensics, bagmru, usrclass.dat, shell item, beef0004, mrulistex, folder access evidence, windows explorer forensics",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Shell Items &amp; Shellbags: What Folder Access They Prove",
+      "description": "How Windows shell items and Shellbags work and what they prove: the shell item ID list byte by byte, the BEEF0004 extension block, MRUListEx ordering, why the timestamps inside belong to the folder rather than to the visit, and why a bag records a shell view rather than a person.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "inLanguage": "en",
+      "dateModified": "2026-08-21",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/shell-items-shellbags-anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Shell Items &amp; Shellbags Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/shell-items-shellbags-anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "What is an MRU key in the Windows registry?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A most-recently-used list: numbered values that each hold one remembered entry, plus an order value (MRUList, MRUListEx or numbered names) recording which was used last. The key has a single last-write time, which belongs to the newest entry; every other entry has a position, not a date. Shellbags, RecentDocs, the ComDlg32 dialog keys, RunMRU, TypedPaths and WordWheelQuery are all MRU keys."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does a Shellbag actually prove?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "That a container was displayed as a shell view under that user account, and that Windows saved the view settings for it. It does not prove a person browsed there - Explorer hosts shell views, and so does every File Open or Save dialog inside another program, which Windows records separately under Bags as ComDlg rather than Shell. It does not prove any file inside was opened, and it does not prove the folder still exists. A Shellbag for a removable drive or a network share survives long after the drive is gone, which is most of why the artifact matters."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Are the timestamps in a Shellbag the time the folder was viewed?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No, and this is the most common error. The DOS timestamps inside a shell item are the folder's own created, modified and accessed times, copied from the file system when the item was written. The time of the visit is the last-written time of the registry KEY holding the item, which is a different field in a different place."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Where do Shellbags live?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Two places per user. UsrClass.dat holds Local Settings\\Software\\Microsoft\\Windows\\Shell\\BagMRU and Bags, which covers most navigation; NTUSER.DAT holds a smaller set under Software\\Microsoft\\Windows\\Shell. A parse that reads only one of the two reports a fraction of the history and looks complete."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between BagMRU and Bags?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "BagMRU is the tree: one key per folder, nested the way the folders are, each holding the shell items that name it. Bags holds the view settings for those folders - icon size, sort column, window position. BagMRU is where the forensic value is; Bags is what the feature exists for."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can Shellbags be deleted?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "The keys can, and cleaning tools do. But the hive keeps freed cells until something reuses them, so a deleted Shellbag frequently survives in unallocated space with its name and timestamp intact. Crow-Eye carves those and marks them, rather than reporting only what the tree can reach."
+      }
+    }
+  ]
+}
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>Shell items and shellbags: structure, contents and evidential limits</h1>
+      <p class="header-sub">The shell item is the unit Windows uses to remember a place, and the registry keeps it in more than one family of keys - Shellbags, RecentDocs, the OpenSave and LastVisited MRUs, TypedPaths, RunMRU and the search box. This page takes the item apart byte by byte, then sets out what each family can and cannot prove. A shell view is not the same thing as a person.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#what-they-are">Why shellbags exist</a></li>
+        <li><a href="#what-a-shell-item-is">What a shell item is</a></li>
+        <li><a href="#artifacts-overview">The artifacts built from shell items</a></li>
+        <li><a href="#item-type-overview">Every shell item type, and what it names</a></li>
+        <li><a href="#shell-item-map">One shell item, byte by byte</a></li>
+        <li><a href="#item-types">Twelve type bytes, and what actually separates them</a></li>
+        <li><a href="#shell-item-structure">The structure is not a registry structure</a></li>
+        <li><a href="#beef0004">The BEEF0004 block, and what it carries</a></li>
+        <li><a href="#mrulistex">MRUListEx: the access order</a></li>
+        <li><a href="#mru-family">The MRU family: same idea, different payloads</a></li>
+        <li><a href="#every-table">Every shell-item and MRU table, one by one</a></li>
+        <li><a href="#who-wrote-it">A bag is a view, and a view is not a person</a></li>
+        <li><a href="#limits">What a shell item supports, and what it does not</a></li>
+        <li><a href="#how-crow-eye-reads-it">How Crow-Eye reads shell items</a></li>
+        <li><a href="#versions">How Shellbags changed across Windows</a></li>
+        <li><a href="#reference">Reference</a></li>
+        <li><a href="#anti-forensics">Anti-forensic handling, and what survives it</a></li>
+        <li><a href="#dashboard">Reading the user activity dashboard</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+
+
+
+    <style>
+      .factgrid { display: grid; grid-template-columns: repeat(auto-fit,
+                  minmax(200px, 1fr)); gap: 14px; margin: 20px 0; }
+      .factcard { background: var(--bg2, #0b1220); border: 1px solid #1e2a3a;
+                  border-radius: 8px; padding: 16px; }
+      .factcard .n { font-family: 'Space Mono', monospace; font-size: 22px;
+                     color: #34d399; display: block; }
+      .factcard .l { font-size: 12px; color: #94a3b8; margin-top: 6px;
+                     display: block; }
+      .myth { border-left: 3px solid #f87171; padding: 14px 18px; margin: 18px 0;
+              background: rgba(248,113,113,0.06); border-radius: 0 8px 8px 0; }
+      .myth h4 { color: #f87171; margin: 0 0 8px; font-size: 15px; }
+      /* overview tables: long key paths wrap instead of pushing columns off-screen */
+      .ref-table.wrap-code { table-layout: fixed; width: 100%; min-width: 760px; }
+      .ref-table.wrap-code code { white-space: normal; overflow-wrap: anywhere; }
+      .ref-table.wrap-code td { white-space: normal; }
+      .ref-table.wrap-code th:nth-child(1) { width: 17%; }
+      .ref-table.wrap-code th:nth-child(2) { width: 25%; }
+      .overview-list { margin: 10px 0 16px 22px; line-height: 1.7; }
+      .overview-list li { margin-bottom: 6px; }
+    </style>
+
+    <section>
+      <h2 id="what-they-are">Why shellbags exist</h2>
+      <p>Open a folder in Explorer, switch it to Details view, sort by date, resize the window. Close
+      it. Opened again a month later, it returns exactly as it was left. That memory is the
+      feature, and Shellbags are where it lives.</p>
+
+      <p>It is a convenience feature with no security purpose whatsoever, which is precisely what
+      makes it evidence. Windows is not recording navigation for any benefit but the user's own,
+      so it does not stop, it does not ask, and it keeps the record for folders that no longer
+      exist: a USB stick removed years ago, a network share that was mapped once, a folder deleted
+      the same afternoon it was made.</p>
+
+<!-- SBFACTS:START - generated by gen_shellbags_bytemap.py -->
+      <div class="factgrid">
+        <div class="factcard"><span class="n">94</span><span class="l">bytes in the folder entry mapped below</span></div>
+        <div class="factcard"><span class="n">0x31</span><span class="l">type indicator: a directory entry</span></div>
+        <div class="factcard"><span class="n">0x18</span><span class="l">where its BEEF0004 block starts</span></div>
+        <div class="factcard"><span class="n">227</span><span class="l">bags written by a file dialog rather than by an Explorer window</span></div>
+      </div>
+<!-- SBFACTS:END -->
+    </section>
+
+    <section>
+      <h2 id="what-a-shell-item-is">What a shell item is</h2>
+      <p>A path is how a person names a file. It is not how Windows' shell
+      names anything. The shell keeps a namespace that is larger than the
+      filesystem - This PC, Control Panel, a phone attached over MTP, a
+      vendor's own tree grafted in beside them - and most of what is in it has
+      no path to have. So the shell names things with an <strong>ID list</strong> —
+      a <code>PIDL</code>, short for <em>pointer to an identifier list</em> — and a
+      <strong>shell item</strong> is one entry in one.</p>
+
+      <p>An item begins with two bytes of size and one byte of type, and after
+      that it is <strong>whatever the owner of that corner of the namespace
+      decided to put there</strong>. There is no schema. That is why this one
+      machine holds a dozen different type bytes, why their sizes run from 14
+      bytes to over 9,000, and why every parser that reads them needs a
+      fallback rather than a table - the next Windows feature to add a
+      namespace extension adds a shell item layout with it, and does not
+      publish one.</p>
+
+      <p>A <em>list</em> is a chain, read outside in: the desktop, then This
+      PC, then a volume, then each folder, then the thing. Each link is an item
+      of some type, and the type changes along the way - a GUID at the root, a
+      drive string at the volume, a name for each folder after it. A Shellbag
+      value is a chain of exactly one link, because the key it sits under
+      supplies the rest; the ComDlg32 keys further down this page store the
+      whole chain in one value.</p>
+
+      <div class="myth">
+        <h4>The item is a copy, which is why it is evidence</h4>
+        <p>A shell item is not a reference to the object. It is what the shell
+        wrote down about the object at the moment it looked, and it stays
+        exactly that after the object is gone. The name, the size and the
+        timestamps in a bag are what that folder looked like then - readable
+        long after the folder was deleted, and after the volume it lived on
+        was reformatted or thrown away.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="artifacts-overview">The artifacts built from shell items</h2>
+      <p>Shell items are not one artifact. They are the unit a dozen different records are built
+      from, and each record keeps them for its own reason: Explorer remembering how a folder looked,
+      a file dialog remembering where it last pointed, a shortcut remembering what it opens. This
+      section names every one of those records and what each proves, before the rest of the page
+      takes the item itself apart.</p>
+
+      <h3 id="what-an-mru-is">What an MRU is</h3>
+      <p><strong>MRU</strong> stands for <em>most recently used</em>. An MRU key is a short list kept
+      in the registry: a set of numbered values, each holding one remembered entry, plus one extra
+      value that records the order in which they were last used. A new entry takes the next free
+      number. Using an old entry again does not move or rewrite it - only the order value changes.
+      Three ways of recording that order occur:</p>
+      <ul class="overview-list">
+        <li><code>MRUList</code> - a string of letters, each naming a value (<code>a</code>,
+        <code>b</code>, <code>c</code> ...), newest first. Used by <code>RunMRU</code> and by the
+        dialog keys of Windows XP.</li>
+        <li><code>MRUListEx</code> - an array of 4-byte little-endian value numbers, newest first,
+        ending in <code>0xFFFFFFFF</code>. Used by Shellbags, <code>RecentDocs</code>, the ComDlg32
+        PIDL keys and <code>WordWheelQuery</code>.</li>
+        <li>Numbered names with no order value at all - in <code>TypedPaths</code>,
+        <code>url1</code> is always the newest.</li>
+      </ul>
+      <p>Whatever the scheme, the key carries <strong>one timestamp</strong>: its last-write time,
+      which belongs to the change that put the newest entry on top. Every other entry in the list
+      has a position, not a date. The order value is decoded byte by byte in
+      <a href="#mrulistex">MRUListEx: the access order</a>, and every MRU key is compared side by
+      side in <a href="#mru-family">the MRU family</a>.</p>
+
+      <h3 id="shell-item-families">Every record that holds shell items</h3>
+      <p>Paths below sit under <code>NTUSER.DAT\Software\Microsoft\Windows\CurrentVersion\Explorer</code>
+      unless another hive is named. Three of the keys are listed although they hold no shell item,
+      because they live beside the ones that do and are read together with them.</p>
+      <div class="responsive-table-wrap">
+      <table class="ref-table wrap-code">
+        <thead><tr><th>Record</th><th>Where it lives</th><th>What one entry holds</th><th>What it shows</th></tr></thead>
+        <tbody>
+          <tr><td>Shellbags: <code>BagMRU</code></td><td><code>UsrClass.dat</code>: <code>Local Settings\Software\Microsoft\Windows\Shell\BagMRU</code>, plus three older trees (<a href="#shellbag-keys">all four keys</a>)</td><td>One shell item per value. The nesting of the numbered subkeys rebuilds the path, one link per level, and <code>NodeSlot</code> points at the matching <code>Bags</code> entry.</td><td>A folder was displayed - in an Explorer window or a file dialog - including folders on drives, phones and shares long since gone.</td></tr>
+          <tr><td>Shellbags: <code>Bags</code></td><td>The sibling key, <code>...\Shell\Bags\&lt;NodeSlot&gt;</code></td><td>View settings only: view mode, icon size, sort column, window placement. No path and no shell item.</td><td>How the folder was shown, and - through its <code>Shell</code> or <code>ComDlg</code> subkey - whether Explorer or a file dialog wrote it (<a href="#who-wrote-it">a bag is a view</a>).</td></tr>
+          <tr><td><code>RecentDocs</code></td><td><code>RecentDocs</code>, with one subkey per file extension</td><td>A file name in UTF-16, followed by a shell link to the shortcut Windows made in the Recent folder.</td><td>A document or folder was opened through something that reports to the shell.</td></tr>
+          <tr><td><code>OpenSavePidlMRU</code></td><td><code>ComDlg32\OpenSavePidlMRU\&lt;extension&gt;</code></td><td>A complete shell item list, from the root down to the file.</td><td>A file was chosen in a common Open or Save dialog - chosen, not necessarily read.</td></tr>
+          <tr><td><code>LastVisitedPidlMRU</code></td><td><code>ComDlg32\LastVisitedPidlMRU</code></td><td>A program name in UTF-16, then the shell item list of the folder its dialog was last in.</td><td>Which program used a dialog, and where it was pointing.</td></tr>
+          <tr><td><code>CIDSizeMRU</code></td><td><code>ComDlg32\CIDSizeMRU</code></td><td>A program name and a window size. No shell item and no path.</td><td>That the program opened a common dialog - nothing about a file or folder.</td></tr>
+          <tr><td><code>TypedPaths</code></td><td><code>TypedPaths</code></td><td>A path typed as plain text. No shell item.</td><td>Deliberate navigation through the address bar.</td></tr>
+          <tr><td><code>RunMRU</code></td><td><code>RunMRU</code></td><td>A command line as text. No shell item.</td><td>A command was typed into the Run box - not that it ran.</td></tr>
+          <tr><td><code>WordWheelQuery</code></td><td><code>WordWheelQuery</code></td><td>A search term in UTF-16. No shell item.</td><td>A search was typed into Explorer's search box.</td></tr>
+          <tr><td><code>.lnk</code> shortcut</td><td>The <code>LinkTargetIDList</code> of every shortcut file</td><td>The target's full shell item list, in exactly the format mapped below.</td><td>What the shortcut opened, even after the target moved or vanished (<a href="lnk_anatomy.html#dissection">the LNK anatomy</a>).</td></tr>
+          <tr><td>Jump Lists</td><td><code>*.automaticDestinations-ms</code> in the user's Recent folder: a <code>DestList</code> stream plus one LNK-format stream per entry</td><td>A shell item list inside every entry.</td><td>Files and folders opened by one specific application (<a href="automatic_jumplist.html#destlist">the Jump List anatomy</a>).</td></tr>
+          <tr><td><code>OpenSaveMRU</code>, <code>LastVisitedMRU</code></td><td><code>ComDlg32</code> on Windows XP</td><td>Plain path strings, ordered by <code>MRUList</code>.</td><td>The pre-Vista form of the two dialog keys above, replaced by the PIDL keys from Vista on.</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="item-type-overview">Every shell item type, and what it names</h2>
+      <p>The third byte of every item is its <strong>class type</strong>. The high bits choose a
+      family and the low bits are flags within it: <code>0x31</code> is the file-entry family
+      (<code>0x30</code>) with the directory flag (<code>0x01</code>) set, and <code>0x32</code> is
+      the same family with the file flag (<code>0x02</code>). The rows below cover every type
+      documented in the libyal <em>Windows Shell Item format</em> specification, the standard public
+      reference for structures Microsoft never published. <a href="#item-types">Table 2</a> further
+      down counts which of them the reference system actually carries.</p>
+      <div class="responsive-table-wrap">
+      <table class="ref-table wrap-code">
+        <thead><tr><th>Type</th><th>Family</th><th>What identifies the object</th><th>Where it is met</th></tr></thead>
+        <tbody>
+          <tr><td><code>0x1F</code></td><td>Root folder</td><td>A shell folder GUID - This PC, Network, the Recycle Bin, the user's folder - and a one-byte sort index.</td><td>The first link of almost every list: the top of the namespace.</td></tr>
+          <tr><td><code>0x20</code>-<code>0x2F</code></td><td>Volume</td><td>A drive string such as <code>C:\</code> when flag <code>0x01</code> is set; a GUID when it is not, as in <code>0x2E</code>. Flag <code>0x08</code> marks removable media. Values seen: <code>0x23</code>, <code>0x25</code>, <code>0x29</code>, <code>0x2A</code>, <code>0x2E</code>, <code>0x2F</code>.</td><td>A drive letter, fixed or removable - the link that ties a folder to a volume that may no longer exist.</td></tr>
+          <tr><td><code>0x30</code>-<code>0x3F</code></td><td>File entry</td><td>An 8.3 short name, a DOS timestamp and attributes, then the <code>BEEF0004</code> extension with the long name, two more timestamps and, on NTFS, the MFT reference. Flags: <code>0x01</code> directory, <code>0x02</code> file, <code>0x04</code> Unicode names, <code>0x80</code> class identifier. Values seen: <code>0x30</code>, <code>0x31</code>, <code>0x32</code>, <code>0x35</code>, <code>0x36</code>, <code>0xB1</code>.</td><td>Every folder and file on a filesystem path (<a href="#beef0004">the BEEF0004 block</a>).</td></tr>
+          <tr><td><code>0x40</code>-<code>0x4F</code>, <code>0xC3</code></td><td>Network location</td><td>A UNC path or network name. Low bits: <code>0x01</code> domain or workgroup, <code>0x02</code> server, <code>0x03</code> share, <code>0x06</code> Microsoft Windows Network, <code>0x07</code> Entire Network. Values seen: <code>0x41</code>, <code>0x42</code>, <code>0x46</code>, <code>0x47</code>, <code>0x4C</code>, <code>0xC3</code>.</td><td>Browsing the network and its shares, including shares unmapped long ago.</td></tr>
+          <tr><td><code>0x61</code></td><td>URI</td><td>A URL; an FTP site carries further sub-items for its folders.</td><td>An FTP or web location opened through the shell.</td></tr>
+          <tr><td><code>0x71</code></td><td>Control Panel item</td><td>The GUID of one Control Panel applet.</td><td>A Control Panel page opened through the namespace.</td></tr>
+          <tr><td><code>0x01</code></td><td>Control Panel category</td><td>Twelve bytes: the signature <code>0x39DE2184</code> and a category number - System and Security, Programs, User Accounts and so on.</td><td>A Control Panel category view.</td></tr>
+          <tr><td><code>0x74</code></td><td>Delegate folder</td><td>An inner item, usually a file entry, followed by the delegate class GUID <code>5e591a74-df96-48d3-8d67-1733bcee28ba</code> and the GUID of the folder that owns it.</td><td>Folders a namespace extension serves on behalf of the filesystem, such as the user's own files folder.</td></tr>
+          <tr><td><code>0x00</code></td><td>Signature-typed items</td><td>Nothing in the type byte. A four-byte signature after it says what the item is: <code>0x23FEBBEE</code> for a users property view holding a known-folder GUID, <code>GFSI</code> for the Games folder, signatures for MTP devices and Control Panel <code>.cpl</code> files.</td><td>Phones and cameras attached over MTP, library and user views, Control Panel applets.</td></tr>
+          <tr><td>No fixed type</td><td>Compressed folder</td><td>Recognised by position, after the file entry of a <code>.zip</code> archive: the archived entry's sizes, compression method and CRC-32.</td><td>Browsing inside a ZIP archive in Explorer, where the shell invents folders the archive never stored.</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p>Anything outside these families is undocumented. On the reference system that means
+      <code>0x79</code> and <code>0x7E</code>, which Crow-Eye keeps through the fallback described
+      under <a href="#shell-item-map">one shell item, byte by byte</a> rather than discarding.</p>
+    </section>
+
+<!-- BYTEMAP:START - generated by gen_shellbags_bytemap.py -->
+    <section>
+      <h2 id="shell-item-map">One shell item, byte by byte</h2>
+      <p>Six real items, read out of the reference system's BagMRU and redrawn here. The tabs are item <em>types</em>, not versions of one thing: a root, a volume, a folder, a file, an item the parser does not recognise, and the extension block that carries the timestamps, on its own. The same structure appears inside <code>.lnk</code> files and Jump Lists, which is why decoding it is not registry work at all.</p>
+
+      <p>This tree holds <strong>859 values across 12 item type bytes</strong>. 833 of them fall inside a range <code>parse_shell_item_id()</code> has a branch for; the other 26 reach the fallback, which keeps a plausible name and records the type as <code>unknown</code>. Every one of the 859 is a one-item list - a shell item followed by a two-byte end-of-list marker - which is why the last field of every map here is that marker.</p>
+
+      <p style="color:var(--tx3,#7d8590);font-size:13px">
+        Structure is real and measured. Names are replaced with a placeholder
+        of the same byte length, so every offset still adds up and nothing here
+        identifies the machine it came from.
+      </p>
+
+      <div class="version-selector" id="bm-tabs" role="tablist"></div>
+
+      <div class="dissection-layout">
+        <div class="map-container">
+          <span class="cap">Figure 1</span>
+      <div class="unified-map" id="bm-map"></div>
+        </div>
+        <div class="dynamic-side">
+          <span class="panel-label">Live Byte Selection</span>
+          <div id="bm-panel"></div>
+        </div>
+      </div>
+
+      <h3>Full dissection reference</h3>
+      <p>The same fields as a table. Both are drawn from one definition, so
+         the map and the table cannot disagree with each other.</p>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>What it is</th></tr></thead>
+          <tbody id="bm-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <script src="bytemap.js"></script>
+    <script>
+      /* Generated by gen_shellbags_bytemap.py from the live BagMRU.
+         Do not hand-edit - regenerate. */
+      window.BYTEMAP_DATA = {
+ "root1f": {
+  "label": "Root folder  type 0x1F  22B",
+  "hex": [
+   "14",
+   "00",
+   "1F",
+   "00",
+   "05",
+   "39",
+   "8E",
+   "08",
+   "23",
+   "03",
+   "02",
+   "4B",
+   "98",
+   "26",
+   "5D",
+   "99",
+   "42",
+   "8E",
+   "11",
+   "5F",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Shell item",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "20 bytes",
+    "forensic": "<strong>UInt16 - the length of this item, including these two bytes.</strong> Shell items are chained end to end with no separator, so this field is the only thing that finds the next one. An item whose size reads zero terminates the list; a size that is wrong walks the reader into the middle of the following item, which then decodes into something that looks like a real folder and is not."
+   },
+   {
+    "section": "Shell item",
+    "name": "Type indicator",
+    "offset": 2,
+    "size": 1,
+    "type": "header",
+    "val": "0x1F  - root folder",
+    "forensic": "<strong>One byte saying what kind of thing this item is.</strong> <code>0x1F</code> is a root folder such as Desktop or This PC, <code>0x2F</code> a volume, <code>0x31</code> a directory, <code>0x32</code> a file, <code>0x35</code> a shell extension, <code>0x71</code> a control panel item, <code>0xC3</code> a network location. Only the high nibble is dependable - the low bits carry sub-type flags that vary by Windows version. Crow-Eye dispatches on it in <code>parse_shell_item_id()</code>, which has branches for <code>0x1F</code>, <code>0x20-0x2F</code>, <code>0x30-0x3F</code> and <code>0x40-0x4F</code> and a fallback for everything else."
+   },
+   {
+    "section": "Shell item",
+    "name": "Sort index",
+    "offset": 3,
+    "size": 1,
+    "type": "flags",
+    "val": "0x00",
+    "forensic": "<strong>Where the shell sorts this root among its siblings.</strong> Presentation, not evidence. It is the one byte in this item that carries no forensic meaning at all, and it is drawn because a parser still has to account for every byte it steps over."
+   },
+   {
+    "section": "Shell item",
+    "name": "Known-folder GUID",
+    "offset": 4,
+    "size": 16,
+    "type": "name",
+    "val": "16 bytes, mixed-endian",
+    "forensic": "<strong>Which shell root this is - Desktop, This PC, the Recycle Bin - as a GUID rather than a name.</strong> The encoding is mixed-endian: the first three groups are little-endian and the last two are not, which is why a GUID read straight out of a structure so often comes out backwards. Crow-Eye formats it in <code>_format_guid()</code> and looks it up in a static table; an unrecognised GUID is stored as the GUID itself rather than given an invented name, because a GUID is a fact an examiner can look up and a guess is not. This names a place in the shell namespace, not a place on disk, so there is no path to recover from it - it is the root the folder chain beneath it hangs from."
+   },
+   {
+    "section": "ID list",
+    "name": "End of list",
+    "offset": 20,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The two zero bytes that end the ID list.</strong> Every conforming value in this tree is one item followed by this marker - the value is a one-item list, not a bare item. A reader that takes the whole value for a single item walks two bytes past the end of it, and a reader that trusts the declared size without checking the marker cannot tell a truncated value from a whole one."
+   }
+  ]
+ },
+ "drive2f": {
+  "label": "Volume  type 0x2F  27B",
+  "hex": [
+   "19",
+   "00",
+   "2F",
+   "43",
+   "3A",
+   "5C",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Shell item",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "25 bytes",
+    "forensic": "<strong>UInt16 - the length of this item, including these two bytes.</strong> Shell items are chained end to end with no separator, so this field is the only thing that finds the next one. An item whose size reads zero terminates the list; a size that is wrong walks the reader into the middle of the following item, which then decodes into something that looks like a real folder and is not."
+   },
+   {
+    "section": "Shell item",
+    "name": "Type indicator",
+    "offset": 2,
+    "size": 1,
+    "type": "header",
+    "val": "0x2F  - volume",
+    "forensic": "<strong>One byte saying what kind of thing this item is.</strong> <code>0x1F</code> is a root folder such as Desktop or This PC, <code>0x2F</code> a volume, <code>0x31</code> a directory, <code>0x32</code> a file, <code>0x35</code> a shell extension, <code>0x71</code> a control panel item, <code>0xC3</code> a network location. Only the high nibble is dependable - the low bits carry sub-type flags that vary by Windows version. Crow-Eye dispatches on it in <code>parse_shell_item_id()</code>, which has branches for <code>0x1F</code>, <code>0x20-0x2F</code>, <code>0x30-0x3F</code> and <code>0x40-0x4F</code> and a fallback for everything else."
+   },
+   {
+    "section": "Shell item",
+    "name": "Drive string  (ASCII)",
+    "offset": 3,
+    "size": 3,
+    "type": "name",
+    "val": "a drive letter, colon and separator",
+    "forensic": "<strong>The volume, in single-byte characters, with no length field - it runs to a null.</strong> This is the only item type here that names a volume, and it is where a reconstructed path starts: without it every folder item beneath it is a name with nowhere to sit. Crow-Eye's <code>_extract_drive_path()</code> does not read it from a fixed offset - it scans for a letter followed by a colon, in both single-byte and UTF-16 form, because the 0x20-0x2F family covers several sub-types that place it differently."
+   },
+   {
+    "section": "Shell item",
+    "name": "Padding",
+    "offset": 6,
+    "size": 19,
+    "type": "reserved",
+    "val": "19 bytes of zero",
+    "forensic": "<strong>Padding to a fixed width.</strong> A volume item is written at a constant size whatever the length of the drive string, so the tail carries nothing. It is worth knowing it is padding and not a field nobody has decoded yet."
+   },
+   {
+    "section": "ID list",
+    "name": "End of list",
+    "offset": 25,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The two zero bytes that end the ID list.</strong> Every conforming value in this tree is one item followed by this marker - the value is a one-item list, not a bare item. A reader that takes the whole value for a single item walks two bytes past the end of it, and a reader that trusts the declared size without checking the marker cannot tell a truncated value from a whole one."
+   }
+  ]
+ },
+ "folder31": {
+  "label": "Folder entry  type 0x31  94B",
+  "hex": [
+   "5C",
+   "00",
+   "31",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "10",
+   "00",
+   "3C",
+   "4E",
+   "41",
+   "4D",
+   "45",
+   "3E",
+   "2E",
+   "2E",
+   "2E",
+   "00",
+   "44",
+   "00",
+   "09",
+   "00",
+   "04",
+   "00",
+   "EF",
+   "BE",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "18",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Shell item",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "92 bytes",
+    "forensic": "<strong>UInt16 - the length of this item, including these two bytes.</strong> Shell items are chained end to end with no separator, so this field is the only thing that finds the next one. An item whose size reads zero terminates the list; a size that is wrong walks the reader into the middle of the following item, which then decodes into something that looks like a real folder and is not."
+   },
+   {
+    "section": "Shell item",
+    "name": "Type indicator",
+    "offset": 2,
+    "size": 1,
+    "type": "header",
+    "val": "0x31  - directory entry",
+    "forensic": "<strong>One byte saying what kind of thing this item is.</strong> <code>0x1F</code> is a root folder such as Desktop or This PC, <code>0x2F</code> a volume, <code>0x31</code> a directory, <code>0x32</code> a file, <code>0x35</code> a shell extension, <code>0x71</code> a control panel item, <code>0xC3</code> a network location. Only the high nibble is dependable - the low bits carry sub-type flags that vary by Windows version. Crow-Eye dispatches on it in <code>parse_shell_item_id()</code>, which has branches for <code>0x1F</code>, <code>0x20-0x2F</code>, <code>0x30-0x3F</code> and <code>0x40-0x4F</code> and a fallback for everything else."
+   },
+   {
+    "section": "Shell item",
+    "name": "Unknown",
+    "offset": 3,
+    "size": 1,
+    "type": "reserved",
+    "val": "",
+    "forensic": "One undocumented byte between the type and the size."
+   },
+   {
+    "section": "Shell item",
+    "name": "File size",
+    "offset": 4,
+    "size": 4,
+    "type": "size",
+    "val": "0 bytes",
+    "forensic": "<strong>UInt32 - the size of the target as Explorer last saw it.</strong> Zero for directories. For a file entry this is a real measurement of something that may no longer exist anywhere on the disk, which is what makes Shellbags useful long after a folder is deleted."
+   },
+   {
+    "section": "Shell item",
+    "name": "Modified  (DOS date/time)",
+    "offset": 8,
+    "size": 4,
+    "type": "time",
+    "val": "0x00000000",
+    "forensic": "<strong>Packed DOS date and time - two UInt16s, not a FILETIME.</strong> Date in the high word (year since 1980 in bits 9-15, month 5-8, day 0-4), time in the low word, and the seconds field holds <em>half</em> seconds, so the format cannot express an odd second. <strong>Two-second granularity and local time, with no zone recorded.</strong> Crow-Eye converts it with <code>_convert_dos_datetime()</code>. This is the folder's timestamp, not the timestamp of the visit - the single most misread thing about Shellbags."
+   },
+   {
+    "section": "Shell item",
+    "name": "File attributes",
+    "offset": 12,
+    "size": 2,
+    "type": "flags",
+    "val": "0x0010",
+    "forensic": "<strong>UInt16 - the standard FILE_ATTRIBUTE bitmask.</strong> The <strong>hidden</strong> and <strong>system</strong> bits are the interesting ones: they record what the target looked like when it was visited, so a folder that is no longer hidden can still be shown to have been hidden at the time somebody opened it. The directory bit is also how a folder is told from a file without trusting the type byte alone.",
+    "struct": [
+     {
+      "off": "bit 0",
+      "size": "0x01",
+      "name": "read-only"
+     },
+     {
+      "off": "bit 1",
+      "size": "0x02",
+      "name": "hidden"
+     },
+     {
+      "off": "bit 2",
+      "size": "0x04",
+      "name": "system"
+     },
+     {
+      "off": "bit 4",
+      "size": "0x10",
+      "name": "directory"
+     },
+     {
+      "off": "bit 5",
+      "size": "0x20",
+      "name": "archive"
+     }
+    ]
+   },
+   {
+    "section": "Shell item",
+    "name": "Short name  (8.3, ASCII)",
+    "offset": 14,
+    "size": 9,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The 8.3 short name, single-byte and null terminated.</strong> The name appears <em>twice</em> in a filesystem entry: here, and again as UTF-16LE inside the extension block below. That duplication is the reason this page redacts both - an earlier draft replaced only this copy and published the real folder name in the hex dump's ASCII column, spelled out one character at a time by the UTF-16 encoding."
+   },
+   {
+    "section": "Shell item",
+    "name": "Alignment",
+    "offset": 23,
+    "size": 1,
+    "type": "reserved",
+    "val": "1 byte(s)",
+    "forensic": "<strong>Padding to an even offset.</strong> The extension block is two-byte aligned, so a short name of odd length costs a byte here. It is a byte, and it is also the reason the block cannot be reached by arithmetic from the front of the item."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Block size",
+    "offset": 24,
+    "size": 2,
+    "type": "size",
+    "val": "68 bytes",
+    "forensic": "<strong>UInt16 - the size of the extension block.</strong> The block is found by searching for its signature rather than by arithmetic, because the short name in front of it is variable length; Crow-Eye's <code>find_extension_block()</code> scans for it. This field is what says where the block ends once it has been found."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Version",
+    "offset": 26,
+    "size": 2,
+    "type": "header",
+    "val": "9",
+    "forensic": "<strong>UInt16 - and everything after it moves depending on this number.</strong> Version 3 has no MFT reference and puts the long name at 0x14 inside the block; version 7 inserts an eight-byte file reference and pushes it to 0x26; versions 8 and 9 move it again, to 0x2A and 0x2E. <code>_beef0004_name_offset()</code> exists solely to hold that table. Hard-coding any one of those offsets reads a name out of the middle of a timestamp on every other Windows build, and it comes back as plausible-looking text rather than as an error."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Signature  BEEF0004",
+    "offset": 28,
+    "size": 4,
+    "type": "header",
+    "val": "0xBEEF0004",
+    "forensic": "<strong>The block's magic, little-endian.</strong> Shell items carry several BEEF-prefixed extension blocks - <code>BEEF0000</code>, <code>BEEF0003</code>, <code>BEEF0004</code>, <code>BEEF0026</code> - and only <code>0004</code> carries the creation and access times, the MFT reference and the long name. This is what a Shellbags parser is really looking for."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Created  (DOS date/time)",
+    "offset": 32,
+    "size": 4,
+    "type": "time",
+    "val": "0x00000000",
+    "forensic": "<strong>The target's creation time, packed DOS format.</strong> Two-second granularity, local time, no zone recorded. Because it is a copy Explorer took at visit time, it can disagree with the live filesystem - and when it does, the disagreement is the finding."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Accessed  (DOS date/time)",
+    "offset": 36,
+    "size": 4,
+    "type": "time",
+    "val": "0x00000000",
+    "forensic": "<strong>The target's last access time as of the visit.</strong> Worth less than it looks: NTFS last-access updates are off by default on modern Windows, so this often mirrors the creation or modification time rather than recording anything separate."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 40,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Four bytes between the timestamps and the file reference that nobody has published a meaning for. A parser has to step over them by width, which is only possible because the version above says how wide the header is."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "MFT file reference",
+    "offset": 44,
+    "size": 8,
+    "type": "size",
+    "val": "6-byte record number, 2-byte sequence",
+    "forensic": "<strong>The NTFS record the target occupied at visit time - the strongest field in the whole structure.</strong> Six bytes of record number and two of sequence number. It survives a rename, and it is what ties a Shellbag to an MFT entry or a USN record for the same object; the sequence number is what distinguishes that object from whatever later reused the same record. Crow-Eye stores both, and only from version 7 upward - earlier blocks simply do not carry it."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 52,
+    "size": 8,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Eight more undocumented bytes. Present from version 7."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long string size",
+    "offset": 60,
+    "size": 2,
+    "type": "size",
+    "val": "0",
+    "forensic": "<strong>The size of a localised-name string that usually is not there.</strong> When it is non-zero the block carries a resource reference such as <code>windows.storage.dll,-21779</code> in place of a readable name, which is why Crow-Eye runs <code>resolve_mui_reference()</code> over the result - an unresolved reference on a report is not a folder name."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 62,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 66,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long name  (UTF-16LE)",
+    "offset": 70,
+    "size": 20,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The name a person actually saw in Explorer, null-terminated UTF-16.</strong> This is the field the version table above exists to locate, and reading it from the wrong offset is the single most common way a Shellbags parser goes wrong. On this page it is a placeholder of the original length, so every offset after it still adds up."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "First extension offset",
+    "offset": 90,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0018",
+    "forensic": "<strong>The offset of the first extension block, written at the end of the last one.</strong> It points back at the block itself, which is how a reader that walked in from the end of the item finds the chain. It is also a cheap consistency check: a block whose trailing offset does not point at a block is not a block."
+   },
+   {
+    "section": "ID list",
+    "name": "End of list",
+    "offset": 92,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The two zero bytes that end the ID list.</strong> Every conforming value in this tree is one item followed by this marker - the value is a one-item list, not a bare item. A reader that takes the whole value for a single item walks two bytes past the end of it, and a reader that trusts the declared size without checking the marker cannot tell a truncated value from a whole one."
+   }
+  ]
+ },
+ "file32": {
+  "label": "File entry  type 0x32  116B",
+  "hex": [
+   "72",
+   "00",
+   "32",
+   "00",
+   "B0",
+   "C7",
+   "AD",
+   "00",
+   "53",
+   "5C",
+   "F6",
+   "52",
+   "20",
+   "00",
+   "3C",
+   "4E",
+   "41",
+   "4D",
+   "45",
+   "3E",
+   "2E",
+   "2E",
+   "2E",
+   "2E",
+   "2E",
+   "00",
+   "58",
+   "00",
+   "09",
+   "00",
+   "04",
+   "00",
+   "EF",
+   "BE",
+   "53",
+   "5C",
+   "E0",
+   "52",
+   "53",
+   "5C",
+   "F6",
+   "52",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "B0",
+   "03",
+   "02",
+   "00",
+   "00",
+   "00",
+   "04",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "60",
+   "4B",
+   "B7",
+   "00",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "1A",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Shell item",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "114 bytes",
+    "forensic": "<strong>UInt16 - the length of this item, including these two bytes.</strong> Shell items are chained end to end with no separator, so this field is the only thing that finds the next one. An item whose size reads zero terminates the list; a size that is wrong walks the reader into the middle of the following item, which then decodes into something that looks like a real folder and is not."
+   },
+   {
+    "section": "Shell item",
+    "name": "Type indicator",
+    "offset": 2,
+    "size": 1,
+    "type": "header",
+    "val": "0x32  - file entry",
+    "forensic": "<strong>One byte saying what kind of thing this item is.</strong> <code>0x1F</code> is a root folder such as Desktop or This PC, <code>0x2F</code> a volume, <code>0x31</code> a directory, <code>0x32</code> a file, <code>0x35</code> a shell extension, <code>0x71</code> a control panel item, <code>0xC3</code> a network location. Only the high nibble is dependable - the low bits carry sub-type flags that vary by Windows version. Crow-Eye dispatches on it in <code>parse_shell_item_id()</code>, which has branches for <code>0x1F</code>, <code>0x20-0x2F</code>, <code>0x30-0x3F</code> and <code>0x40-0x4F</code> and a fallback for everything else."
+   },
+   {
+    "section": "Shell item",
+    "name": "Unknown",
+    "offset": 3,
+    "size": 1,
+    "type": "reserved",
+    "val": "",
+    "forensic": "One undocumented byte between the type and the size."
+   },
+   {
+    "section": "Shell item",
+    "name": "File size",
+    "offset": 4,
+    "size": 4,
+    "type": "size",
+    "val": "11388848 bytes",
+    "forensic": "<strong>UInt32 - the size of the target as Explorer last saw it.</strong> Zero for directories. For a file entry this is a real measurement of something that may no longer exist anywhere on the disk, which is what makes Shellbags useful long after a folder is deleted."
+   },
+   {
+    "section": "Shell item",
+    "name": "Modified  (DOS date/time)",
+    "offset": 8,
+    "size": 4,
+    "type": "time",
+    "val": "0x52F65C53",
+    "forensic": "<strong>Packed DOS date and time - two UInt16s, not a FILETIME.</strong> Date in the high word (year since 1980 in bits 9-15, month 5-8, day 0-4), time in the low word, and the seconds field holds <em>half</em> seconds, so the format cannot express an odd second. <strong>Two-second granularity and local time, with no zone recorded.</strong> Crow-Eye converts it with <code>_convert_dos_datetime()</code>. This is the folder's timestamp, not the timestamp of the visit - the single most misread thing about Shellbags."
+   },
+   {
+    "section": "Shell item",
+    "name": "File attributes",
+    "offset": 12,
+    "size": 2,
+    "type": "flags",
+    "val": "0x0020",
+    "forensic": "<strong>UInt16 - the standard FILE_ATTRIBUTE bitmask.</strong> The <strong>hidden</strong> and <strong>system</strong> bits are the interesting ones: they record what the target looked like when it was visited, so a folder that is no longer hidden can still be shown to have been hidden at the time somebody opened it. The directory bit is also how a folder is told from a file without trusting the type byte alone.",
+    "struct": [
+     {
+      "off": "bit 0",
+      "size": "0x01",
+      "name": "read-only"
+     },
+     {
+      "off": "bit 1",
+      "size": "0x02",
+      "name": "hidden"
+     },
+     {
+      "off": "bit 2",
+      "size": "0x04",
+      "name": "system"
+     },
+     {
+      "off": "bit 4",
+      "size": "0x10",
+      "name": "directory"
+     },
+     {
+      "off": "bit 5",
+      "size": "0x20",
+      "name": "archive"
+     }
+    ]
+   },
+   {
+    "section": "Shell item",
+    "name": "Short name  (8.3, ASCII)",
+    "offset": 14,
+    "size": 11,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The 8.3 short name, single-byte and null terminated.</strong> The name appears <em>twice</em> in a filesystem entry: here, and again as UTF-16LE inside the extension block below. That duplication is the reason this page redacts both - an earlier draft replaced only this copy and published the real folder name in the hex dump's ASCII column, spelled out one character at a time by the UTF-16 encoding."
+   },
+   {
+    "section": "Shell item",
+    "name": "Alignment",
+    "offset": 25,
+    "size": 1,
+    "type": "reserved",
+    "val": "1 byte(s)",
+    "forensic": "<strong>Padding to an even offset.</strong> The extension block is two-byte aligned, so a short name of odd length costs a byte here. It is a byte, and it is also the reason the block cannot be reached by arithmetic from the front of the item."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Block size",
+    "offset": 26,
+    "size": 2,
+    "type": "size",
+    "val": "88 bytes",
+    "forensic": "<strong>UInt16 - the size of the extension block.</strong> The block is found by searching for its signature rather than by arithmetic, because the short name in front of it is variable length; Crow-Eye's <code>find_extension_block()</code> scans for it. This field is what says where the block ends once it has been found."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Version",
+    "offset": 28,
+    "size": 2,
+    "type": "header",
+    "val": "9",
+    "forensic": "<strong>UInt16 - and everything after it moves depending on this number.</strong> Version 3 has no MFT reference and puts the long name at 0x14 inside the block; version 7 inserts an eight-byte file reference and pushes it to 0x26; versions 8 and 9 move it again, to 0x2A and 0x2E. <code>_beef0004_name_offset()</code> exists solely to hold that table. Hard-coding any one of those offsets reads a name out of the middle of a timestamp on every other Windows build, and it comes back as plausible-looking text rather than as an error."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Signature  BEEF0004",
+    "offset": 30,
+    "size": 4,
+    "type": "header",
+    "val": "0xBEEF0004",
+    "forensic": "<strong>The block's magic, little-endian.</strong> Shell items carry several BEEF-prefixed extension blocks - <code>BEEF0000</code>, <code>BEEF0003</code>, <code>BEEF0004</code>, <code>BEEF0026</code> - and only <code>0004</code> carries the creation and access times, the MFT reference and the long name. This is what a Shellbags parser is really looking for."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Created  (DOS date/time)",
+    "offset": 34,
+    "size": 4,
+    "type": "time",
+    "val": "0x52E05C53",
+    "forensic": "<strong>The target's creation time, packed DOS format.</strong> Two-second granularity, local time, no zone recorded. Because it is a copy Explorer took at visit time, it can disagree with the live filesystem - and when it does, the disagreement is the finding."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Accessed  (DOS date/time)",
+    "offset": 38,
+    "size": 4,
+    "type": "time",
+    "val": "0x52F65C53",
+    "forensic": "<strong>The target's last access time as of the visit.</strong> Worth less than it looks: NTFS last-access updates are off by default on modern Windows, so this often mirrors the creation or modification time rather than recording anything separate."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 42,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Four bytes between the timestamps and the file reference that nobody has published a meaning for. A parser has to step over them by width, which is only possible because the version above says how wide the header is."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "MFT file reference",
+    "offset": 46,
+    "size": 8,
+    "type": "size",
+    "val": "6-byte record number, 2-byte sequence",
+    "forensic": "<strong>The NTFS record the target occupied at visit time - the strongest field in the whole structure.</strong> Six bytes of record number and two of sequence number. It survives a rename, and it is what ties a Shellbag to an MFT entry or a USN record for the same object; the sequence number is what distinguishes that object from whatever later reused the same record. Crow-Eye stores both, and only from version 7 upward - earlier blocks simply do not carry it."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 54,
+    "size": 8,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Eight more undocumented bytes. Present from version 7."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long string size",
+    "offset": 62,
+    "size": 2,
+    "type": "size",
+    "val": "0",
+    "forensic": "<strong>The size of a localised-name string that usually is not there.</strong> When it is non-zero the block carries a resource reference such as <code>windows.storage.dll,-21779</code> in place of a readable name, which is why Crow-Eye runs <code>resolve_mui_reference()</code> over the result - an unresolved reference on a report is not a folder name."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 64,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 68,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long name  (UTF-16LE)",
+    "offset": 72,
+    "size": 40,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The name a person actually saw in Explorer, null-terminated UTF-16.</strong> This is the field the version table above exists to locate, and reading it from the wrong offset is the single most common way a Shellbags parser goes wrong. On this page it is a placeholder of the original length, so every offset after it still adds up."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "First extension offset",
+    "offset": 112,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x001A",
+    "forensic": "<strong>The offset of the first extension block, written at the end of the last one.</strong> It points back at the block itself, which is how a reader that walked in from the end of the item finds the chain. It is also a cheap consistency check: a block whose trailing offset does not point at a block is not a block."
+   },
+   {
+    "section": "ID list",
+    "name": "End of list",
+    "offset": 114,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The two zero bytes that end the ID list.</strong> Every conforming value in this tree is one item followed by this marker - the value is a one-item list, not a bare item. A reader that takes the whole value for a single item walks two bytes past the end of it, and a reader that trusts the declared size without checking the marker cannot tell a truncated value from a whole one."
+   }
+  ]
+ },
+ "delegate74": {
+  "label": "Delegate item  type 0x74  138B",
+  "hex": [
+   "88",
+   "00",
+   "74",
+   "00",
+   "1E",
+   "00",
+   "43",
+   "46",
+   "53",
+   "46",
+   "18",
+   "00",
+   "31",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "47",
+   "5C",
+   "94",
+   "1B",
+   "10",
+   "00",
+   "3C",
+   "4E",
+   "41",
+   "4D",
+   "45",
+   "3E",
+   "2E",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "00",
+   "74",
+   "1A",
+   "59",
+   "5E",
+   "96",
+   "DF",
+   "D3",
+   "48",
+   "8D",
+   "67",
+   "17",
+   "33",
+   "BC",
+   "EE",
+   "28",
+   "BA",
+   "C5",
+   "CD",
+   "FA",
+   "DF",
+   "9F",
+   "67",
+   "56",
+   "41",
+   "89",
+   "47",
+   "C5",
+   "C7",
+   "6B",
+   "C0",
+   "B6",
+   "7F",
+   "44",
+   "00",
+   "09",
+   "00",
+   "04",
+   "00",
+   "EF",
+   "BE",
+   "45",
+   "5C",
+   "78",
+   "8B",
+   "47",
+   "5C",
+   "94",
+   "1B",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "D8",
+   "EF",
+   "01",
+   "00",
+   "00",
+   "00",
+   "02",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "84",
+   "2B",
+   "55",
+   "00",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "44",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Shell item",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "136 bytes",
+    "forensic": "<strong>UInt16 - the length of this item, including these two bytes.</strong> Shell items are chained end to end with no separator, so this field is the only thing that finds the next one. An item whose size reads zero terminates the list; a size that is wrong walks the reader into the middle of the following item, which then decodes into something that looks like a real folder and is not."
+   },
+   {
+    "section": "Shell item",
+    "name": "Type indicator",
+    "offset": 2,
+    "size": 1,
+    "type": "header",
+    "val": "0x74  - delegate item",
+    "forensic": "<strong>One byte saying what kind of thing this item is.</strong> <code>0x1F</code> is a root folder such as Desktop or This PC, <code>0x2F</code> a volume, <code>0x31</code> a directory, <code>0x32</code> a file, <code>0x35</code> a shell extension, <code>0x71</code> a control panel item, <code>0xC3</code> a network location. Only the high nibble is dependable - the low bits carry sub-type flags that vary by Windows version. Crow-Eye dispatches on it in <code>parse_shell_item_id()</code>, which has branches for <code>0x1F</code>, <code>0x20-0x2F</code>, <code>0x30-0x3F</code> and <code>0x40-0x4F</code> and a fallback for everything else."
+   },
+   {
+    "section": "Shell item",
+    "name": "Unknown",
+    "offset": 3,
+    "size": 1,
+    "type": "reserved",
+    "val": "",
+    "forensic": "One undocumented byte."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner data size",
+    "offset": 4,
+    "size": 2,
+    "type": "size",
+    "val": "30 bytes",
+    "forensic": "<strong>How much of this item is the wrapped item.</strong> A delegate item is a container: it carries an ordinary shell item inside itself, plus two GUIDs saying which shell extension owns it. This field spans the signature, the inner item and its own end-of-list marker."
+   },
+   {
+    "section": "Shell item",
+    "name": "Signature  CFSF",
+    "offset": 6,
+    "size": 4,
+    "type": "header",
+    "val": "CFSF",
+    "forensic": "<strong>Four ASCII bytes marking the start of the wrapped item.</strong> Left unredacted on this page because it is structure, not a name - a redaction that flattened it would leave a reader unable to tell the two apart."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner item size",
+    "offset": 10,
+    "size": 2,
+    "type": "size",
+    "val": "24 bytes",
+    "forensic": "<strong>The wrapped item's own size field.</strong> The bytes from here are a complete shell item in their own right, with the same layout as the folder entry on the other tab."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner type indicator",
+    "offset": 12,
+    "size": 1,
+    "type": "header",
+    "val": "0x31",
+    "forensic": "<strong>The wrapped item's type.</strong> It is a filesystem entry, which is why the fallback path finds a usable name in this item at all - it is reading a real shell item that happens to be nested inside one it does not recognise."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner header fields",
+    "offset": 13,
+    "size": 11,
+    "type": "reserved",
+    "val": "size, timestamp and attributes",
+    "forensic": "The wrapped item's unknown byte, file size, DOS timestamp and attribute word - the same fields as a folder entry, in the same order. They are grouped here because the subject of this map is the wrapper; the folder tab dissects them one by one."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner short name  (ASCII)",
+    "offset": 24,
+    "size": 8,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The wrapped item's 8.3 name, at offset 14 of the wrapped item - exactly where it would sit if that item stood on its own.</strong> An earlier draft of this map put it at 12 and drew a field map that was contiguous, covered every byte and was wrong - the name sat two bytes further on, untouched, and only the redaction check noticed."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner padding",
+    "offset": 32,
+    "size": 2,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding inside the wrapped item."
+   },
+   {
+    "section": "Shell item",
+    "name": "Inner end of list",
+    "offset": 34,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The wrapped item is itself a one-item ID list.</strong> The same construction as the registry value that holds all of this, one level down."
+   },
+   {
+    "section": "Shell item",
+    "name": "Delegate item GUID",
+    "offset": 36,
+    "size": 16,
+    "type": "name",
+    "val": "16 bytes, mixed-endian",
+    "forensic": "<strong>The GUID that says this is a delegate item.</strong> A constant, the same in every delegate item on every machine, which is what makes the type recognisable without a branch for it."
+   },
+   {
+    "section": "Shell item",
+    "name": "Shell folder GUID",
+    "offset": 52,
+    "size": 16,
+    "type": "name",
+    "val": "16 bytes, mixed-endian",
+    "forensic": "<strong>Which shell extension owns the wrapped item.</strong> This is the part that carries meaning: it names the namespace handler - a cloud provider, a device namespace, a library - that Explorer was showing when the folder was visited. Crow-Eye records none of it, because 0x74 falls outside every branch of <code>parse_shell_item_id()</code>."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Block size",
+    "offset": 68,
+    "size": 2,
+    "type": "size",
+    "val": "68 bytes",
+    "forensic": "<strong>UInt16 - the size of the extension block.</strong> The block is found by searching for its signature rather than by arithmetic, because the short name in front of it is variable length; Crow-Eye's <code>find_extension_block()</code> scans for it. This field is what says where the block ends once it has been found."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Version",
+    "offset": 70,
+    "size": 2,
+    "type": "header",
+    "val": "9",
+    "forensic": "<strong>UInt16 - and everything after it moves depending on this number.</strong> Version 3 has no MFT reference and puts the long name at 0x14 inside the block; version 7 inserts an eight-byte file reference and pushes it to 0x26; versions 8 and 9 move it again, to 0x2A and 0x2E. <code>_beef0004_name_offset()</code> exists solely to hold that table. Hard-coding any one of those offsets reads a name out of the middle of a timestamp on every other Windows build, and it comes back as plausible-looking text rather than as an error."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Signature  BEEF0004",
+    "offset": 72,
+    "size": 4,
+    "type": "header",
+    "val": "0xBEEF0004",
+    "forensic": "<strong>The block's magic, little-endian.</strong> Shell items carry several BEEF-prefixed extension blocks - <code>BEEF0000</code>, <code>BEEF0003</code>, <code>BEEF0004</code>, <code>BEEF0026</code> - and only <code>0004</code> carries the creation and access times, the MFT reference and the long name. This is what a Shellbags parser is really looking for."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Created  (DOS date/time)",
+    "offset": 76,
+    "size": 4,
+    "type": "time",
+    "val": "0x8B785C45",
+    "forensic": "<strong>The target's creation time, packed DOS format.</strong> Two-second granularity, local time, no zone recorded. Because it is a copy Explorer took at visit time, it can disagree with the live filesystem - and when it does, the disagreement is the finding."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Accessed  (DOS date/time)",
+    "offset": 80,
+    "size": 4,
+    "type": "time",
+    "val": "0x1B945C47",
+    "forensic": "<strong>The target's last access time as of the visit.</strong> Worth less than it looks: NTFS last-access updates are off by default on modern Windows, so this often mirrors the creation or modification time rather than recording anything separate."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 84,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Four bytes between the timestamps and the file reference that nobody has published a meaning for. A parser has to step over them by width, which is only possible because the version above says how wide the header is."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "MFT file reference",
+    "offset": 88,
+    "size": 8,
+    "type": "size",
+    "val": "6-byte record number, 2-byte sequence",
+    "forensic": "<strong>The NTFS record the target occupied at visit time - the strongest field in the whole structure.</strong> Six bytes of record number and two of sequence number. It survives a rename, and it is what ties a Shellbag to an MFT entry or a USN record for the same object; the sequence number is what distinguishes that object from whatever later reused the same record. Crow-Eye stores both, and only from version 7 upward - earlier blocks simply do not carry it."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 96,
+    "size": 8,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Eight more undocumented bytes. Present from version 7."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long string size",
+    "offset": 104,
+    "size": 2,
+    "type": "size",
+    "val": "0",
+    "forensic": "<strong>The size of a localised-name string that usually is not there.</strong> When it is non-zero the block carries a resource reference such as <code>windows.storage.dll,-21779</code> in place of a readable name, which is why Crow-Eye runs <code>resolve_mui_reference()</code> over the result - an unresolved reference on a report is not a folder name."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 106,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Unknown",
+    "offset": 110,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "Long name  (UTF-16LE)",
+    "offset": 114,
+    "size": 20,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The name a person actually saw in Explorer, null-terminated UTF-16.</strong> This is the field the version table above exists to locate, and reading it from the wrong offset is the single most common way a Shellbags parser goes wrong. On this page it is a placeholder of the original length, so every offset after it still adds up."
+   },
+   {
+    "section": "BEEF0004 extension",
+    "name": "First extension offset",
+    "offset": 134,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0044",
+    "forensic": "<strong>The offset of the first extension block, written at the end of the last one.</strong> It points back at the block itself, which is how a reader that walked in from the end of the item finds the chain. It is also a cheap consistency check: a block whose trailing offset does not point at a block is not a block."
+   },
+   {
+    "section": "ID list",
+    "name": "End of list",
+    "offset": 136,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x0000",
+    "forensic": "<strong>The two zero bytes that end the ID list.</strong> Every conforming value in this tree is one item followed by this marker - the value is a one-item list, not a bare item. A reader that takes the whole value for a single item walks two bytes past the end of it, and a reader that trusts the declared size without checking the marker cannot tell a truncated value from a whole one."
+   }
+  ]
+ },
+ "beef0004": {
+  "label": "BEEF0004 block  88B",
+  "hex": [
+   "58",
+   "00",
+   "09",
+   "00",
+   "04",
+   "00",
+   "EF",
+   "BE",
+   "53",
+   "5C",
+   "E0",
+   "52",
+   "53",
+   "5C",
+   "F6",
+   "52",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "B0",
+   "03",
+   "02",
+   "00",
+   "00",
+   "00",
+   "04",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "60",
+   "4B",
+   "B7",
+   "00",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "1A",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Extension block",
+    "name": "Block size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "88 bytes",
+    "forensic": "<strong>UInt16 - the size of the extension block.</strong> The block is found by searching for its signature rather than by arithmetic, because the short name in front of it is variable length; Crow-Eye's <code>find_extension_block()</code> scans for it. This field is what says where the block ends once it has been found."
+   },
+   {
+    "section": "Extension block",
+    "name": "Version",
+    "offset": 2,
+    "size": 2,
+    "type": "header",
+    "val": "9",
+    "forensic": "<strong>UInt16 - and everything after it moves depending on this number.</strong> Version 3 has no MFT reference and puts the long name at 0x14 inside the block; version 7 inserts an eight-byte file reference and pushes it to 0x26; versions 8 and 9 move it again, to 0x2A and 0x2E. <code>_beef0004_name_offset()</code> exists solely to hold that table. Hard-coding any one of those offsets reads a name out of the middle of a timestamp on every other Windows build, and it comes back as plausible-looking text rather than as an error."
+   },
+   {
+    "section": "Extension block",
+    "name": "Signature  BEEF0004",
+    "offset": 4,
+    "size": 4,
+    "type": "header",
+    "val": "0xBEEF0004",
+    "forensic": "<strong>The block's magic, little-endian.</strong> Shell items carry several BEEF-prefixed extension blocks - <code>BEEF0000</code>, <code>BEEF0003</code>, <code>BEEF0004</code>, <code>BEEF0026</code> - and only <code>0004</code> carries the creation and access times, the MFT reference and the long name. This is what a Shellbags parser is really looking for."
+   },
+   {
+    "section": "Extension block",
+    "name": "Created  (DOS date/time)",
+    "offset": 8,
+    "size": 4,
+    "type": "time",
+    "val": "0x52E05C53",
+    "forensic": "<strong>The target's creation time, packed DOS format.</strong> Two-second granularity, local time, no zone recorded. Because it is a copy Explorer took at visit time, it can disagree with the live filesystem - and when it does, the disagreement is the finding."
+   },
+   {
+    "section": "Extension block",
+    "name": "Accessed  (DOS date/time)",
+    "offset": 12,
+    "size": 4,
+    "type": "time",
+    "val": "0x52F65C53",
+    "forensic": "<strong>The target's last access time as of the visit.</strong> Worth less than it looks: NTFS last-access updates are off by default on modern Windows, so this often mirrors the creation or modification time rather than recording anything separate."
+   },
+   {
+    "section": "Extension block",
+    "name": "Unknown",
+    "offset": 16,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Four bytes between the timestamps and the file reference that nobody has published a meaning for. A parser has to step over them by width, which is only possible because the version above says how wide the header is."
+   },
+   {
+    "section": "Extension block",
+    "name": "MFT file reference",
+    "offset": 20,
+    "size": 8,
+    "type": "size",
+    "val": "6-byte record number, 2-byte sequence",
+    "forensic": "<strong>The NTFS record the target occupied at visit time - the strongest field in the whole structure.</strong> Six bytes of record number and two of sequence number. It survives a rename, and it is what ties a Shellbag to an MFT entry or a USN record for the same object; the sequence number is what distinguishes that object from whatever later reused the same record. Crow-Eye stores both, and only from version 7 upward - earlier blocks simply do not carry it."
+   },
+   {
+    "section": "Extension block",
+    "name": "Unknown",
+    "offset": 28,
+    "size": 8,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Eight more undocumented bytes. Present from version 7."
+   },
+   {
+    "section": "Extension block",
+    "name": "Long string size",
+    "offset": 36,
+    "size": 2,
+    "type": "size",
+    "val": "0",
+    "forensic": "<strong>The size of a localised-name string that usually is not there.</strong> When it is non-zero the block carries a resource reference such as <code>windows.storage.dll,-21779</code> in place of a readable name, which is why Crow-Eye runs <code>resolve_mui_reference()</code> over the result - an unresolved reference on a report is not a folder name."
+   },
+   {
+    "section": "Extension block",
+    "name": "Unknown",
+    "offset": 38,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "Extension block",
+    "name": "Unknown",
+    "offset": 42,
+    "size": 4,
+    "type": "reserved",
+    "val": "",
+    "forensic": "Padding the header out to the version-dependent name offset. These bytes are why the name cannot be found by counting from the signature."
+   },
+   {
+    "section": "Extension block",
+    "name": "Long name  (UTF-16LE)",
+    "offset": 46,
+    "size": 40,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The name a person actually saw in Explorer, null-terminated UTF-16.</strong> This is the field the version table above exists to locate, and reading it from the wrong offset is the single most common way a Shellbags parser goes wrong. On this page it is a placeholder of the original length, so every offset after it still adds up."
+   },
+   {
+    "section": "Extension block",
+    "name": "First extension offset",
+    "offset": 86,
+    "size": 2,
+    "type": "reserved",
+    "val": "0x001A",
+    "forensic": "<strong>The offset of the first extension block, written at the end of the last one.</strong> It points back at the block itself, which is how a reader that walked in from the end of the item finds the chain. It is also a cheap consistency check: a block whose trailing offset does not point at a block is not a block."
+   }
+  ]
+ }
+};
+      ByteMap.mount({
+        mapEl:   document.getElementById('bm-map'),
+        panelEl: document.getElementById('bm-panel'),
+        tableEl: document.getElementById('bm-table'),
+        tabsEl:  document.getElementById('bm-tabs'),
+        variants: window.BYTEMAP_DATA
+      });
+    </script>
+<!-- BYTEMAP:END -->
+
+<!-- PROVENANCE -->
+    <section>
+      <div class="provenance" style="border-left:3px solid var(--accent,#3b82f6);padding:14px 18px;margin:18px 0;background:rgba(59,130,246,0.06);border-radius:0 8px 8px 0">
+        <p style="margin:0"><strong>Where these figures come from.</strong> The shell item dissected here was read out of a live Windows 11 system's <code>UsrClass.dat</code> - <strong>the reference system</strong> - captured through a Volume Shadow Copy. The folder names are replaced by placeholders of the same length, so every offset in the item still adds up.</p>
+      </div>
+    </section>
+
+<!-- SBMODEL:START - generated by gen_shellbags_bytemap.py -->
+    <style>
+      /* GENERATED with the two blocks this file writes, and emitted with
+         the first of them. The styling lives inside the markers on purpose:
+         kept in the page's own head it would sit outside them, and a
+         regeneration could leave a new figure unstyled with nothing to say
+         so. */
+      .sb-figs { display: grid; grid-template-columns: 1fr; gap: 24px; margin: 8px 0 34px; }
+      .sb-card { background: #0f1218; border: 1px solid var(--border2); border-radius: 20px; padding: 24px 26px; overflow-x: auto; }
+      .sb-card h4 { font-family: 'Barlow Semi Condensed','Bahnschrift','DIN',sans-serif; font-size: 20px; font-weight: 800; color: var(--tx); margin-bottom: 6px; }
+      .sb-card p.dg-sub { font-size: 13.5px; color: var(--tx2); margin-bottom: 18px; line-height: 1.6; }
+      /* A floor, not a size. Left to shrink with the card this figure hit
+         about six-pixel type at the stacked breakpoint - legible in a
+         screenshot and not on a phone. The card already scrolls sideways, so
+         below this width it scrolls rather than shrinking, which keeps the
+         page body from scrolling. */
+      /* 1600, not the 1240 the viewBox is drawn at: the page
+         container is 1760 now, and a figure capped at its own
+         drawing width would have been the one thing that did not
+         take the extra room. SVG scales cleanly, so the figure's
+         labels come up from 10-13px to something closer to the
+         body text around them. */
+      .sb-card svg { display: block; width: 100%; min-width: 900px; max-width: 1600px; overflow: visible; }
+
+      /* The model figure: boxes that ARE the tabs of the map above, and the
+         lines that say how each one is reached. */
+      .mdl text { font-family: 'Space Mono', ui-monospace, monospace; fill: #8899aa; }
+      .mdl .lay-cap { font-size: 11px; fill: #60a5fa; text-transform: uppercase; letter-spacing: 0.14em; font-weight: 700; }
+      .mdl .nd { cursor: pointer; }
+      .mdl .nd:focus { outline: none; }
+      .mdl .nd-b { fill: #131a24; stroke: #2a2f3a; stroke-width: 1; transition: stroke 0.15s, filter 0.15s; }
+      .mdl .nd:hover .nd-b, .mdl .nd:focus .nd-b, .mdl .nd.is-on .nd-b { stroke: #60a5fa; stroke-width: 2; filter: brightness(1.25); }
+      .mdl .nd-root1f { fill: #164e63; }
+      .mdl .nd-drive2f { fill: #0891b2; }
+      .mdl .nd-folder31 { fill: #10303a; }
+      .mdl .nd-file32 { fill: #1b2b3d; }
+      .mdl .nd-delegate74 { fill: #3a2410; }
+      .mdl .nd-beef0004 { fill: #2a1f3d; }
+      .mdl .nd-t { font-size: 13px; fill: #dbe4f0; text-anchor: middle; font-weight: 700; }
+      .mdl .nd-s { font-size: 10.5px; fill: #8899aa; text-anchor: middle; }
+      .mdl .box { fill: none; stroke: #2a2f3a; stroke-width: 1; stroke-dasharray: 4 4; }
+      .mdl .edg { cursor: pointer; }
+      .mdl .edg:focus { outline: none; }
+      .mdl .edg-hit { stroke: transparent; stroke-width: 16; fill: none; }
+      .mdl .edg-p { stroke: #8899aa; stroke-width: 1.6; fill: none; transition: stroke 0.15s, stroke-width 0.15s; }
+      .mdl .edg:hover .edg-p, .mdl .edg:focus .edg-p, .mdl .edg.is-on .edg-p { stroke: #60a5fa; stroke-width: 2.6; }
+      .mdl .edg-l { font-size: 10px; fill: #8899aa; text-anchor: middle; }
+      .mdl marker path { fill: #8899aa; }
+
+      /* The readout the figure fills. .dg-read is defined on the ShimCache and
+         AmCache pages by their own generators; a class that exists on one page
+         is not a class that exists on this one. */
+      .dg-read { margin-top: 16px; padding: 11px 13px; border: 1px solid var(--border2); border-radius: 10px; background: #0a0c10; min-height: 74px; font-family: 'Space Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.6; }
+      .dg-read-k { color: #60a5fa; text-transform: uppercase; letter-spacing: 0.1em; font-weight: 700; }
+      .dg-read-t { color: #dbe4f0; }
+      .dg-read-d { color: #8899aa; }
+
+      /* The ID-list map's table drives the map beside it, on click. */
+      #sbl-table tr[data-off] { cursor: pointer; }
+      #sbl-table tr[data-off]:focus { outline: none; }
+      #sbl-table tr[data-off]:focus > td { background: rgba(96,165,250,0.14); }
+      .sblist p.dg-sub { margin-bottom: 14px; }
+    </style>
+    <section>
+      <div class="sb-figs">
+        <div class="sb-card">
+          <span class="cap">Figure 2</span>
+          <h4>How the six views relate, and how a reader reaches each one</h4>
+          <p class="dg-sub">The map above offers six tabs, and they are not six unrelated things. Four of them are the links of one path, spread across registry keys rather than laid end to end in bytes, and three of them contain the fourth. Hover a box or a line to read what it is; click a box to open that view in the map above.</p>
+          <svg class="mdl" viewBox="0 0 1240 494" width="100%" preserveAspectRatio="xMidYMin meet" role="img" aria-label="How the six shell item views relate">
+<defs><marker id="sbah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 5 L10 5 L6 1 M10 5 L6 9"/></marker></defs>
+<text class="lay-cap" x="0" y="14">How a full path is rebuilt - one item per registry key</text>
+<g class="nd" tabindex="0" role="button" data-var="root1f" data-note="A known-folder GUID and nothing else. It names a place in the shell namespace, not a place on disk, so the path a reconstruction produces starts empty here. A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>Root folder  type 0x1F</title><rect class="nd-b nd-root1f" x="0" y="40" width="280" height="72" rx="9"/><text class="nd-t" x="140" y="64">Root folder  type 0x1F</text><text class="nd-s" x="140" y="82">BagMRU\6</text><text class="nd-s" x="140" y="98">22 bytes</text></g>
+<g class="nd" tabindex="0" role="button" data-var="drive2f" data-note="The drive string, and the first thing in the chain that is part of a path. Lose it and every folder beneath is a name with nowhere to sit. A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>Volume  type 0x2F</title><rect class="nd-b nd-drive2f" x="320" y="40" width="280" height="72" rx="9"/><text class="nd-t" x="460" y="64">Volume  type 0x2F</text><text class="nd-s" x="460" y="82">BagMRU\6\0</text><text class="nd-s" x="460" y="98">27 bytes</text></g>
+<g class="edg" tabindex="0" data-note="A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>A key holds N numbered values and N subkeys with the same names. Value</title><path class="edg-hit" d="M280 76 L320 76"/><path class="edg-p" d="M280 76 L320 76" marker-end="url(#sbah)"/></g>
+<g class="nd" tabindex="0" role="button" data-var="folder31" data-note="Four keys deep on this branch, and one path component each - 122, 82, 134 and 82 bytes. Four items of one type at four different sizes, because the name is inside them. A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>Folder entry  type 0x31</title><rect class="nd-b nd-folder31" x="640" y="40" width="280" height="72" rx="9"/><text class="nd-t" x="780" y="64">Folder entry  type 0x31</text><text class="nd-s" x="780" y="82">BagMRU\6\0\0 ... \5\1</text><text class="nd-s" x="780" y="98">four items, 122-134 bytes</text></g>
+<g class="edg" tabindex="0" data-note="A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>A key holds N numbered values and N subkeys with the same names. Value</title><path class="edg-hit" d="M600 76 L640 76"/><path class="edg-p" d="M600 76 L640 76" marker-end="url(#sbah)"/></g>
+<g class="nd" tabindex="0" role="button" data-var="file32" data-note="The leaf. A file rather than a folder, which is the attribute word saying so rather than the type byte. A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>File entry  type 0x32</title><rect class="nd-b nd-file32" x="960" y="40" width="280" height="72" rx="9"/><text class="nd-t" x="1100" y="64">File entry  type 0x32</text><text class="nd-s" x="1100" y="82">BagMRU\6\0\0\0\5\1\0</text><text class="nd-s" x="1100" y="98">114 bytes</text></g>
+<g class="edg" tabindex="0" data-note="A key holds N numbered values and N subkeys with the same names. Value &lt;code&gt;k&lt;/code&gt; of a key is the item for that key's subkey &lt;code&gt;k&lt;/code&gt;, and that subkey holds the item's own children. So an item is stored one level above the key that continues the path."><title>A key holds N numbered values and N subkeys with the same names. Value</title><path class="edg-hit" d="M920 76 L960 76"/><path class="edg-p" d="M920 76 L960 76" marker-end="url(#sbah)"/></g>
+<text class="edg-l" x="300" y="70">its subkey</text>
+<text class="edg-l" x="620" y="70">its subkey</text>
+<text class="edg-l" x="940" y="70">its subkey</text>
+<text class="nd-s" x="620" y="140" style="font-size:11px">No item on this chain holds a path. Each holds one component, and the order is the key chain - nothing else.</text>
+<text class="lay-cap" x="0" y="196">What lives inside one item - containment, not sequence</text>
+<rect class="box" x="0" y="216" width="380" height="172" rx="14"/>
+<rect class="box" x="430" y="216" width="380" height="172" rx="14"/>
+<rect class="box" x="860" y="216" width="380" height="240" rx="14"/>
+<g class="nd" tabindex="0" role="button" data-var="folder31" data-note="A directory. Its fixed header is addressable by constant; everything after the short name moves."><title>Folder entry  0x31</title><rect class="nd-b nd-folder31" x="20" y="232" width="340" height="72" rx="9"/><text class="nd-t" x="190" y="256">Folder entry  0x31</text><text class="nd-s" x="190" y="274">94 bytes</text><text class="nd-s" x="190" y="290">one path component</text></g>
+<g class="nd" tabindex="0" role="button" data-var="file32" data-note="A file. The same layout as a folder entry - what separates them is the directory bit in the attribute word, not the type byte."><title>File entry  0x32</title><rect class="nd-b nd-file32" x="450" y="232" width="340" height="72" rx="9"/><text class="nd-t" x="620" y="256">File entry  0x32</text><text class="nd-s" x="620" y="274">116 bytes</text><text class="nd-s" x="620" y="290">the leaf of a chain</text></g>
+<g class="nd" tabindex="0" role="button" data-var="delegate74" data-note="A container: a CFSF signature, a complete filesystem item nested inside it, and two GUIDs naming the shell extension that owns it. It falls outside every branch of parse_shell_item_id(), so Crow-Eye keeps a plausible name from it and records the type as unknown."><title>Delegate item  0x74</title><rect class="nd-b nd-delegate74" x="880" y="232" width="340" height="72" rx="9"/><text class="nd-t" x="1050" y="256">Delegate item  0x74</text><text class="nd-s" x="1050" y="274">138 bytes</text><text class="nd-s" x="1050" y="290">a wrapper</text></g>
+<g class="nd" tabindex="0" role="button" data-var="delegate74" data-note="The wrapped item is itself a one-item ID list, with its own size, its own type byte and its own 8.3 name at offset 14 - the same layout as the folder entry on the left."><title>CFSF + an inner 0x31 item</title><rect class="nd-b nd-delegate74" x="880" y="318" width="340" height="46" rx="9"/><text class="nd-t" x="1050" y="342">CFSF + an inner 0x31 item</text><text class="nd-s" x="1050" y="360"></text><text class="nd-s" x="1050" y="376">a whole shell item, one level down</text></g>
+<g class="nd" tabindex="0" role="button" data-var="beef0004" data-note="The same block in all three, found by its signature rather than by arithmetic. It carries the name a person actually saw, the creation and access times, and from version 7 the MFT file reference - the strongest field in the structure."><title>BEEF0004 block</title><rect class="nd-b nd-beef0004" x="20" y="318" width="340" height="46" rx="9"/><text class="nd-t" x="190" y="342">BEEF0004 block</text><text class="nd-s" x="190" y="360">88 bytes</text><text class="nd-s" x="190" y="376">long name, times, MFT reference</text></g>
+<g class="nd" tabindex="0" role="button" data-var="beef0004" data-note="The same block in all three, found by its signature rather than by arithmetic. It carries the name a person actually saw, the creation and access times, and from version 7 the MFT file reference - the strongest field in the structure."><title>BEEF0004 block</title><rect class="nd-b nd-beef0004" x="450" y="318" width="340" height="46" rx="9"/><text class="nd-t" x="620" y="342">BEEF0004 block</text><text class="nd-s" x="620" y="360">88 bytes</text><text class="nd-s" x="620" y="376">long name, times, MFT reference</text></g>
+<g class="nd" tabindex="0" role="button" data-var="beef0004" data-note="The same block in all three, found by its signature rather than by arithmetic. It carries the name a person actually saw, the creation and access times, and from version 7 the MFT file reference - the strongest field in the structure."><title>BEEF0004 block</title><rect class="nd-b nd-beef0004" x="880" y="392" width="340" height="46" rx="9"/><text class="nd-t" x="1050" y="416">BEEF0004 block</text><text class="nd-s" x="1050" y="434">88 bytes</text><text class="nd-s" x="1050" y="450">long name, times, MFT reference</text></g>
+<text class="nd-s" x="620" y="482" style="font-size:11px">The root and the volume carry no extension block: a GUID and a drive string have no name, no timestamps and no MFT record to carry.</text>
+</svg>
+          <div class="dg-read" id="sbm-read" role="status" aria-live="polite" data-rest="Hover any box or line. Click a box to open it in the map above."></div>
+      <script>
+        (function () {
+          var read = document.getElementById('sbm-read');
+          var svg  = document.querySelector('.mdl');
+          if (!read || !svg) { return; }
+          var rest = read.getAttribute('data-rest') || '';
+          function plain() {
+            read.textContent = rest;
+            Array.prototype.forEach.call(
+              svg.querySelectorAll('.is-on'),
+              function (e) { e.classList.remove('is-on'); });
+          }
+          function esc(t) {
+            var d = document.createElement('div');
+            d.textContent = String(t);
+            return d.innerHTML;
+          }
+          function say(el, head, body) {
+            plain();
+            el.classList.add('is-on');
+            read.innerHTML =
+              '<div><span class="dg-read-k">' + esc(head) +
+              '</span></div><div class="dg-read-d">' + esc(body) +
+              '</div>';
+          }
+          function each(sel, fn) {
+            Array.prototype.forEach.call(svg.querySelectorAll(sel), fn);
+          }
+
+          /* INSPECT - fills this figure's readout and nothing else. */
+          each('.nd', function (n) {
+            var key = n.getAttribute('data-var');
+            var name = n.querySelector('.nd-t');
+            function tell() {
+              say(n, name ? name.textContent : key,
+                  n.getAttribute('data-note') || '');
+            }
+            n.addEventListener('mouseenter', tell);
+            n.addEventListener('focus', tell);
+
+            /* COMMIT - the node is a tab, so open it. */
+            function open() {
+              var v = window.BYTEMAP_DATA && window.BYTEMAP_DATA[key];
+              if (!v) { return; }
+              var tabs = document.querySelectorAll('#bm-tabs .v-tab');
+              Array.prototype.forEach.call(tabs, function (t) {
+                if (t.textContent.trim() === (v.label || '').trim()) {
+                  t.click();
+                  if (t.scrollIntoView) {
+                    t.scrollIntoView(
+                      { behavior: 'smooth', block: 'center' });
+                  }
+                }
+              });
+            }
+            n.addEventListener('click', open);
+            n.addEventListener('keydown', function (e) {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault(); open();
+              }
+            });
+          });
+
+          each('.edg', function (g) {
+            function tell() {
+              say(g, 'how it is reached', g.getAttribute('data-note') || '');
+            }
+            g.addEventListener('mouseenter', tell);
+            g.addEventListener('focus', tell);
+          });
+
+          svg.addEventListener('mouseleave', plain);
+          plain();
+        }());
+      </script>
+        </div>
+      </div>
+    </section>
+<!-- SBMODEL:END -->
+
+<!-- SBTYPES:START - generated by gen_shellbags_bytemap.py -->
+    <section>
+      <h2 id="item-types">Twelve type bytes, and what actually separates them</h2>
+      <p>Everything above is one item of one type. A type byte is not a label on the same structure - it decides what the rest of the item <em>is</em>, and the families have almost nothing in common past the size and the type itself. One carries a GUID and no name. One carries a drive string and no times. One carries another item inside it. The table is measured off this tree rather than listed from documentation, so the counts are what is there.</p>
+
+      <span class="cap">Table 2</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Type</th><th>Values</th><th>Identified by</th><th>Carries a name</th><th>Carries times</th><th>Size</th><th>Crow-Eye records</th></tr></thead>
+        <tbody>
+          <tr><td><code>0x31</code> folder</td><td>766</td><td>an 8.3 short name and a long name</td><td>704 of 766</td><td>all 766</td><td>70-289 B</td><td><code>filesystem</code></td></tr>
+          <tr><td><code>0x1F</code> root</td><td>52</td><td>a known-folder GUID</td><td>32 of 52</td><td>24 of 52</td><td>22-1101 B</td><td><code>special_folder</code></td></tr>
+          <tr><td><code>0x32</code> file</td><td>11</td><td>an 8.3 short name and a long name</td><td>all 11</td><td>all 11</td><td>104-180 B</td><td><code>filesystem</code></td></tr>
+          <tr><td><code>0x74</code> delegate</td><td>10</td><td>another shell item, nested inside this one</td><td>all 10</td><td>all 10</td><td>132-162 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+          <tr><td><code>0x00</code></td><td>9</td><td>nothing the shell documents</td><td>8 of 9</td><td>none</td><td>34-1175 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+          <tr><td><code>0x71</code></td><td>3</td><td>a Control Panel GUID</td><td>1 of 3</td><td>none</td><td>32-9215 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+          <tr><td><code>0x01</code></td><td>2</td><td>nothing - fourteen bytes, and no name in any of them</td><td>none</td><td>none</td><td>14 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+          <tr><td><code>0x2F</code> volume</td><td>2</td><td>a drive string, <code>C:\</code></td><td>none</td><td>none</td><td>27 B</td><td><code>drive</code></td></tr>
+          <tr><td><code>0x37</code></td><td>1</td><td>an 8.3 short name and a long name</td><td>all 1</td><td>none</td><td>118 B</td><td><code>filesystem</code></td></tr>
+          <tr><td><code>0x3E</code></td><td>1</td><td>an 8.3 short name and a long name</td><td>all 1</td><td>none</td><td>134 B</td><td><code>filesystem</code></td></tr>
+          <tr><td><code>0x79</code></td><td>1</td><td>undocumented</td><td>all 1</td><td>all 1</td><td>788 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+          <tr><td><code>0x7E</code></td><td>1</td><td>undocumented</td><td>all 1</td><td>none</td><td>134 B</td><td><code>unknown</code> <em>(fallback)</em></td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="myth">
+        <h4>Decodable, named, dated - and recorded as unknown</h4>
+        <p>All 10 of the <code>0x74</code> delegate items in this tree carry an extension block with times in it and a name that reads cleanly, and all 10 fall outside every range <code>parse_shell_item_id()</code> dispatches on, so Crow-Eye records the type as <code>unknown</code> and takes the name only because the item genuinely carries one. That gap is a limit of the parser, not of the artifact, and the page says so rather than drawing a coverage it does not have.</p>
+      </div>
+      <p>5 of the 12 types above have a byte map in the tabs earlier on this page. The other 7 - <code>0x00</code>, <code>0x01</code>, <code>0x37</code>, <code>0x3E</code>, <code>0x71</code>, <code>0x79</code>, <code>0x7E</code> - do not, because there is nothing decoded to draw: 4 of them are a single value, 1 carries nothing that reads as a name, and none of them has a published field map. A map of undocumented bytes would be a picture of a guess.</p>
+
+      <h3>Types Windows writes that this machine does not hold</h3>
+      <p>The table above is a census of one tree, and a census is not a specification. These exist and would appear in another capture.</p>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Type</th><th>What it is</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td><code>0x35</code></td><td>Directory entry, Unicode names</td><td>The file-entry family with both the directory flag and the Unicode flag set: a folder whose names are stored in UTF-16.</td></tr>
+          <tr><td><code>0x40-0x4F</code></td><td>Network location</td><td>A UNC path. The parser has a branch for the whole range and records it as <code>network</code>; nothing in this tree exercises it.</td></tr>
+          <tr><td><code>0xC3</code></td><td>Network share</td><td>A share reached by name. Evidence that a share was browsed rather than merely mapped.</td></tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+<!-- SBTYPES:END -->
+
+    <section>
+      <h2 id="shell-item-structure">The structure is not a registry structure</h2>
+      <p>A Shellbag value is a <strong>shell item ID list</strong> - the same structure Windows
+      writes inside a <a href="lnk_anatomy.html#dissection"><code>.lnk</code> shortcut</a>, and the same one it passes around internally to
+      mean "this thing in the shell namespace". The registry is storing it, not describing it. To
+      the hive it is a <code>REG_BINARY</code> blob and nothing more, which is why decoding it lives
+      in Crow-Eye's shared binary parser beside the LNK code rather than in the registry parser.</p>
+
+      <p>That sharing is the point: an examiner who understands one has understood the other. A
+      shell item in a Jump List, a shell item in a shortcut and a shell item in a Shellbag are the
+      same bytes with the same meanings.
+      <a class="see-also" href="automatic_jumplist.html#destlist">Explained in full: Jump Lists</a></p>
+
+
+<!-- SBLIST:START - generated by gen_shellbags_bytemap.py -->
+    <div class="sblist">
+      <h3>The same value, cut at the list level</h3>
+      <p>These are the folder entry's bytes again - the same definition the map above is drawn from, so the two cannot disagree - but grouped the way a reader walking a list sees them rather than field by field. Five regions: the size that finds the next item, a fixed header, the first variable-length field, the extension block, and the two bytes that end the list.</p>
+      <p class="dg-sub">Click any byte, or any row of the table below, to read the region it belongs to.</p>
+
+      <div class="dissection-layout">
+        <div class="map-container">
+          <div class="unified-map" id="sbl-map"></div>
+        </div>
+        <div class="dynamic-side">
+          <span class="panel-label">Live Byte Selection</span>
+          <div id="sbl-live"></div>
+        </div>
+      </div>
+
+      <span class="cap">Table 3</span>
+      <div class="responsive-table-wrap">
+        <table class="ref-table" id="sbl-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Region</th><th>This value</th></tr></thead>
+          <tbody>
+            <tr data-off="0" tabindex="0"><td><code>0x00</code></td><td>2</td><td>Item size</td><td>92, and the value is 94 bytes - the difference is the terminator</td></tr>
+            <tr data-off="2" tabindex="0"><td><code>0x02</code></td><td>12</td><td>Fixed header</td><td>12 bytes: type, file size, a DOS timestamp and the attribute word</td></tr>
+            <tr data-off="14" tabindex="0"><td><code>0x0E</code></td><td>10</td><td>Short name, then alignment</td><td>9 bytes including its null terminator, then 1 of padding</td></tr>
+            <tr data-off="24" tabindex="0"><td><code>0x18</code></td><td>68</td><td>BEEF0004 extension block</td><td>68 bytes, located by its signature at 0x1C</td></tr>
+            <tr data-off="92" tabindex="0"><td><code>0x5C</code></td><td>2</td><td>End of list</td><td>two bytes of zero</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p>The arithmetic closes: 2 bytes of size, 12 of fixed header, 10 of name and padding and 68 of extension block gives 92, which is what the size field reads - and the value is 94, so the last two bytes are the list terminator. A misread of that first field raises no error. It produces a walk that lands in the middle of the next item and returns names that are fragments of two folders.</p>
+      <script>
+        window.SBLIST_DATA = {
+ "list": {
+  "label": "One value, 94 bytes",
+  "hex": [
+   "5C",
+   "00",
+   "31",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "10",
+   "00",
+   "3C",
+   "4E",
+   "41",
+   "4D",
+   "45",
+   "3E",
+   "2E",
+   "2E",
+   "2E",
+   "00",
+   "44",
+   "00",
+   "09",
+   "00",
+   "04",
+   "00",
+   "EF",
+   "BE",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "18",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "The value, as the hive hands it over",
+    "name": "Item size",
+    "offset": 0,
+    "size": 2,
+    "type": "size",
+    "val": "92, and the value is 94 bytes - the difference is the terminator",
+    "forensic": "<strong>The only field a list walk needs.</strong> Each item says how long it is and the next one begins immediately after. Nothing in the value is searched for."
+   },
+   {
+    "section": "The value, as the hive hands it over",
+    "name": "Fixed header",
+    "offset": 2,
+    "size": 12,
+    "type": "header",
+    "val": "12 bytes: type, file size, a DOS timestamp and the attribute word",
+    "forensic": "<strong>Every filesystem entry starts with the same 12 bytes.</strong> This is the part a parser can address by constant. Everything after it moves."
+   },
+   {
+    "section": "The value, as the hive hands it over",
+    "name": "Short name, then alignment",
+    "offset": 14,
+    "size": 10,
+    "type": "name",
+    "val": "9 bytes including its null terminator, then 1 of padding",
+    "forensic": "<strong>The first variable-length field, and the reason the block after it cannot be reached by arithmetic.</strong> Its length decides where everything else sits, which is why the extension block is found by searching for a signature instead."
+   },
+   {
+    "section": "The value, as the hive hands it over",
+    "name": "BEEF0004 extension block",
+    "offset": 24,
+    "size": 68,
+    "type": "time",
+    "val": "68 bytes, located by its signature at 0x1C",
+    "forensic": "<strong>Where the useful evidence is</strong> - the long name, the creation and access times, and the MFT reference. The map above opens it field by field on its own tab."
+   },
+   {
+    "section": "The value, as the hive hands it over",
+    "name": "End of list",
+    "offset": 92,
+    "size": 2,
+    "type": "reserved",
+    "val": "two bytes of zero",
+    "forensic": "<strong>The item ends, and so does the list.</strong> This is what makes the value an ID list rather than a bare item, and it is two bytes a reader that trusts the size field alone will walk past."
+   }
+  ]
+ }
+};
+        (function () {
+          var map  = document.getElementById('sbl-map');
+          var live = document.getElementById('sbl-live');
+          if (!map || !live) { return; }
+          if (!window.ByteMap || !window.SBLIST_DATA) { return; }
+          var bm = ByteMap.mount({
+            mapEl:   map,
+            panelEl: live,
+            variants: window.SBLIST_DATA
+          });
+          if (!bm) { return; }
+          Array.prototype.forEach.call(
+            document.querySelectorAll('#sbl-table tr[data-off]'),
+            function (r) {
+              var off = parseInt(r.getAttribute('data-off'), 10);
+              function open() { bm.focusField('list', off); }
+              r.addEventListener('click', open);
+              r.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault(); open();
+                }
+              });
+            });
+        }());
+      </script>
+    </div>
+<!-- SBLIST:END -->
+    </section>
+
+    <section>
+      <h2 id="beef0004">The BEEF0004 block, and what it carries</h2>
+      <p>The fixed part of a file entry carries an 8.3 short name and a DOS timestamp with two-second
+      resolution. Neither is much use. The extension block that follows carries the real name in
+      UTF-16, the created and accessed times, and on many systems the folder's MFT reference.</p>
+
+      <p>Its signature is <code>0xBEEF0004</code>, and where it lands inside an
+      item is not fixed - it sits after the short name, whose length varies, which is why it is
+      found by searching for the signature rather than by counting. The map above shows where it
+      falls in each of the items it draws. It carries a <strong>version</strong> word that decides
+      where the long name starts.
+      That offset is not fixed: it moved between Windows XP, Vista, 7 and 8. A parser that hardcodes
+      one of them reads a name that begins a few bytes into itself on every other version, and
+      returns something that still looks like a name.</p>
+
+      <div class="myth">
+        <h4>The MFT reference is a gift, and it is not always there</h4>
+        <p>Later versions store the folder's MFT entry number and sequence number in the extension
+        block. When present it ties a Shellbag directly to a file system record, which survives a
+        rename. It is absent on older systems and on non-NTFS volumes, and a number read out of a
+        block that does not contain one is a number that points at an unrelated file.</p>
+      </div>
+    </section>
+
+    <section>
+      <h2 id="mrulistex">MRUListEx: the access order</h2>
+      <p>Each BagMRU key holds numbered values - the shell items - and one called
+      <code>MRUListEx</code>: a list of four-byte indices, most recent first, terminated by
+      <code>0xFFFFFFFF</code>. On the reference system the sample key's order runs
+      <code>8, 0, 9, 7, 6, 3, 5, 4, 1, 2</code>.</p>
+
+      <p>The numbers on the values are allocation order. The MRU list is <em>visit</em> order. They
+      are not the same, and reporting the values in numeric order silently reorders the user's
+      history into the order Windows happened to allocate slots. Entry 8 here was
+      touched most recently despite whatever its slot number suggests.</p>
+    </section>
+
+<!-- SBMRU:START - generated by gen_shellbags_bytemap.py -->
+    <section>
+      <h2 id="mru-family">The MRU family: same idea, different payloads</h2>
+      <p>A shellbag is one MRU key among several, and the shell item taken apart above turns up inside four of the others. They are usually listed together as if they were one artifact with several names. They are not. What separates them is not how they order themselves - two of them do not order the same way at all - but what a single value <em>contains</em>, and that is what decides which sentence a row can support.</p>
+
+      <p>Three of the columns below need a word first. <strong>Ordering</strong> says how the key records which entry was used last: <code>MRUListEx</code> is the modern form, a list of 4-byte little-endian value numbers in most-recent-first order terminated by <code>0xFFFFFFFF</code>; <code>MRUList</code> is the older form that does the same job with single letters; and <code>none</code> means the key keeps no order at all, so its values can only be read as a set. <strong>What one value holds</strong> is the payload - a shell item, a plain string, or a structure of its own - and it is what decides <strong>what a row supports</strong>, the sentence a single entry can honestly be used to write.</p>
+
+      <span class="cap">Table 4</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Key</th><th>Entries</th><th>Ordering</th><th>What one value holds</th><th>What a row supports</th></tr></thead>
+        <tbody>
+          <tr><td><code>RunMRU</code></td><td>2</td><td><code>MRUList</code></td><td>A command line as <code>REG_SZ</code>, with a trailing <code>\1</code> Windows appends and Crow-Eye strips.</td><td>Somebody typed this into the Run box. Not that it ran, and not that it existed.</td></tr>
+          <tr><td><code>TypedPaths</code></td><td>17</td><td>none</td><td>A path as <code>REG_SZ</code>, under a value named <code>url1</code>, <code>url2</code> and so on.</td><td>A path was typed into Explorer's address bar - deliberate navigation, as against clicking through folders.</td></tr>
+          <tr><td><code>WordWheelQuery</code></td><td>2</td><td><code>MRUListEx</code></td><td>A search term as <code>REG_BINARY</code>: a bare UTF-16 string and its terminator. Binary, and not a shell item.</td><td>A term was typed into Explorer's search box, in this user's session.</td></tr>
+          <tr><td><code>RecentDocs</code></td><td>0 - empty here</td><td>none</td><td>A file name in UTF-16 followed by a shell link, grouped into a subkey per file extension.</td><td>A document was opened by something that reports to the shell.</td></tr>
+          <tr><td><code>OpenSavePidlMRU</code></td><td>43 subkeys</td><td><code>MRUListEx</code></td><td>A shell item <em>list</em> - the same structure mapped above, chained from a root down to the file - in a subkey named for the extension.</td><td>A file was chosen in a common Open or Save dialog. Chosen, not necessarily read: a Save dialog writes this for a file that was never created.</td></tr>
+          <tr><td><code>LastVisitedPidlMRU</code></td><td>21</td><td><code>MRUListEx</code></td><td>An application name in UTF-16, then a shell item list for the folder that program's dialog was last in.</td><td>Which program opened a dialog, and where it was pointing. The one key in this family that links a program to a place.</td></tr>
+          <tr><td><code>CIDSizeMRU</code></td><td>22</td><td><code>MRUListEx</code></td><td>An application name in UTF-16, then a fixed-size window placement record. <strong>No path anywhere in it.</strong></td><td>That program opened a common dialog, and how big its window was. Nothing about a file, a folder or a drive.</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <p style="color:var(--tx3,#7d8590);font-size:13px"><code>RecentDocs</code> exists on the reference system and holds nothing. An empty key is a finding - it is what a cleared history looks like, and it is not the same as a key that was never there.</p>
+
+      <h3>Three ways to say "most recent"</h3>
+      <p><code>MRUListEx</code> is an array of four-byte indices, most recent first, closed by <code>0xFFFFFFFF</code>. On the reference system <code>LastVisitedPidlMRU</code> opens <code>1, 4, 20, 19, 5, 18&hellip;</code>, so the value named <code>1</code> was the last one used.</p>
+      <p><code>RunMRU</code> is older and uses <code>MRUList</code>: a string of <em>letters</em> rather than numbers, and its values are named <code>a</code>, <code>b</code>, <code>c</code> to match. Here it reads <code>ba</code>, which is 2 entries in use order.</p>
+      <p><code>TypedPaths</code> has <strong>no ordering value at all</strong>. Its values are named <code>url1</code> to <code>url17</code> and the number is the order - <code>url1</code> is the most recent, and Windows renumbers the rest down when a new path arrives. A parser that goes looking for an <code>MRUListEx</code> here finds none and reports the key as unordered, which is the one case where numeric order is the right answer.</p>
+
+      <div class="myth">
+        <h4>Binary does not mean shell item</h4>
+        <p><code>WordWheelQuery</code> is <code>REG_BINARY</code> and holds a bare UTF-16 string - no size field, no type byte, nothing to walk. <code>CIDSizeMRU</code> is <code>REG_BINARY</code> and holds a window size. Reaching for the shell item reader because a value is binary reads a size out of the first two letters of whatever somebody searched for, and then walks that far into the next field.</p>
+      </div>
+
+      <h3>What the one timestamp is worth</h3>
+      <p>An MRU key has a single last-write time and no per-entry time anywhere. It dates the newest entry, and it dates nothing else: the other nineteen values under the same key were written earlier, by an unknown amount. Crow-Eye stores it as <code>key_last_write</code> and leaves <code>access_date</code> empty rather than assigning the key's time to whichever entry the ordering value happens to name first - which would be an invention and would look exactly like evidence.</p>
+
+      <div class="version-selector" id="mru-tabs" role="tablist"></div>
+
+      <div class="dissection-layout">
+        <div class="map-container">
+          <span class="cap">Figure 3</span>
+          <div class="unified-map" id="mru-map"></div>
+        </div>
+        <div class="dynamic-side">
+          <span class="panel-label">Live Byte Selection</span>
+          <div id="mru-panel"></div>
+        </div>
+      </div>
+
+      <h3>What one value looks like in each key</h3>
+      <p>The same values as a table. Names are replaced with a placeholder of the same byte length, so every size field still points where it pointed.</p>
+      <span class="cap">Table 5</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>What it is</th></tr></thead>
+          <tbody id="mru-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <script>
+      /* Generated by gen_shellbags_bytemap.py from the live MRU
+         keys. Do not hand-edit - regenerate. */
+      window.MRU_BYTEMAP_DATA = {
+ "lastvisited": {
+  "label": "LastVisitedPidlMRU  app name + shell items  82B",
+  "hex": [
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "3A",
+   "00",
+   "1F",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "identity",
+    "name": "Application name  (UTF-16)",
+    "offset": 0,
+    "size": 20,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The executable that opened the dialog.</strong> Not the file, not the folder - the program. This is the only field in the MRU family that names a process, and it is why <code>LastVisitedPidlMRU</code> is the key that ties a program to a place."
+   },
+   {
+    "section": "identity",
+    "name": "Name terminator",
+    "offset": 20,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "Two zero bytes. Everything after this offset is the payload, and what the payload IS is the whole difference between these two keys."
+   },
+   {
+    "section": "target",
+    "name": "Item 1 size",
+    "offset": 22,
+    "size": 2,
+    "type": "u16",
+    "val": "0x003A",
+    "forensic": "How far to the next item. The list is walked by these sizes and by nothing else - there is no count anywhere in the value."
+   },
+   {
+    "section": "target",
+    "name": "Item 1 type",
+    "offset": 24,
+    "size": 1,
+    "type": "u8",
+    "val": "0x1F",
+    "forensic": "Type <code>0x1F</code>, a root item - the same type byte the map above dispatches on. A shell item inside an MRU value is the same structure as a shell item inside a bag."
+   },
+   {
+    "section": "target",
+    "name": "Item 1 body",
+    "offset": 25,
+    "size": 55,
+    "type": "raw",
+    "val": "redacted - real length kept",
+    "forensic": "The item's own fields. Whatever names were in here are replaced by a placeholder of the same length, so every size above still adds up."
+   },
+   {
+    "section": "target",
+    "name": "End of list",
+    "offset": 80,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "Two zero bytes close the list. A reader that keeps going past this walks into whatever the registry stored next."
+   }
+  ]
+ },
+ "cidsize": {
+  "label": "CIDSizeMRU  app name + window size  first 128B of 592",
+  "hex": [
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "identity",
+    "name": "Application name  (UTF-16)",
+    "offset": 0,
+    "size": 22,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>The executable that opened the dialog.</strong> Not the file, not the folder - the program. This is the only field in the MRU family that names a process, and it is why <code>LastVisitedPidlMRU</code> is the key that ties a program to a place."
+   },
+   {
+    "section": "identity",
+    "name": "Name terminator",
+    "offset": 22,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "Two zero bytes. Everything after this offset is the payload, and what the payload IS is the whole difference between these two keys."
+   },
+   {
+    "section": "metrics",
+    "name": "Window placement  (first 104 bytes)",
+    "offset": 24,
+    "size": 104,
+    "type": "raw",
+    "val": "no path in any of it",
+    "forensic": "<strong>This is where the other ComDlg32 key keeps a shell item list, and this one keeps the size and position of a window.</strong> The value runs to 592 bytes and 32 of them are non-zero; four consecutive DWORDs near the end read as a rectangle, which on this value is a 768 by 480 dialog window. <code>CIDSizeMRU</code> proves a program opened a dialog. It cannot place that program anywhere, and a report that treats it as file access is reading a window size as a path."
+   }
+  ]
+ },
+ "opensave": {
+  "label": "OpenSavePidlMRU  a shell item list  60B",
+  "hex": [
+   "3A",
+   "00",
+   "1F",
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "target",
+    "name": "Item 1 size",
+    "offset": 0,
+    "size": 2,
+    "type": "u16",
+    "val": "0x003A",
+    "forensic": "How far to the next item. The list is walked by these sizes and by nothing else - there is no count anywhere in the value."
+   },
+   {
+    "section": "target",
+    "name": "Item 1 type",
+    "offset": 2,
+    "size": 1,
+    "type": "u8",
+    "val": "0x1F",
+    "forensic": "Type <code>0x1F</code>, a root item - the same type byte the map above dispatches on. A shell item inside an MRU value is the same structure as a shell item inside a bag."
+   },
+   {
+    "section": "target",
+    "name": "Item 1 body",
+    "offset": 3,
+    "size": 55,
+    "type": "raw",
+    "val": "redacted - real length kept",
+    "forensic": "The item's own fields. Whatever names were in here are replaced by a placeholder of the same length, so every size above still adds up."
+   },
+   {
+    "section": "target",
+    "name": "End of list",
+    "offset": 58,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "Two zero bytes close the list. A reader that keeps going past this walks into whatever the registry stored next."
+   }
+  ]
+ },
+ "wordwheel": {
+  "label": "WordWheelQuery  binary, and not a shell item  10B",
+  "hex": [
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "string",
+    "name": "Search term  (UTF-16)",
+    "offset": 0,
+    "size": 8,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>Binary, and not a shell item.</strong> The value is a search term and its terminator - no size field, no type byte, nothing to walk. A parser that saw REG_BINARY and reached for the shell item reader would read a size out of the first two letters of what somebody searched for."
+   },
+   {
+    "section": "string",
+    "name": "Terminator",
+    "offset": 8,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "The value ends here. There is no shell item, no extension block and no timestamp anywhere in it."
+   }
+  ]
+ },
+ "runmru": {
+  "label": "RunMRU  a string, with a byte appended  22B",
+  "hex": [
+   "3C",
+   "00",
+   "4E",
+   "00",
+   "41",
+   "00",
+   "4D",
+   "00",
+   "45",
+   "00",
+   "3E",
+   "00",
+   "2E",
+   "00",
+   "2E",
+   "00",
+   "5C",
+   "00",
+   "31",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "string",
+    "name": "Command  (UTF-16)",
+    "offset": 0,
+    "size": 16,
+    "type": "name",
+    "val": "redacted - real length kept",
+    "forensic": "<strong>What was typed into the Run box.</strong> A string, not a shell item - so unlike every ComDlg32 key, there is no path structure to walk and no folder to resolve. What is here is what the user typed, including a typo."
+   },
+   {
+    "section": "string",
+    "name": "Trailing  \\1",
+    "offset": 16,
+    "size": 4,
+    "type": "raw",
+    "val": "\\1",
+    "forensic": "Windows appends <code>\\1</code> to every RunMRU entry. It is part of the stored string and not part of the command; Crow-Eye strips it for the <code>command</code> column and a reader that does not gets a command line that never existed."
+   },
+   {
+    "section": "string",
+    "name": "Terminator",
+    "offset": 20,
+    "size": 2,
+    "type": "u16",
+    "val": "0x0000",
+    "forensic": "Two zero bytes end the string."
+   }
+  ]
+ }
+};
+      ByteMap.mount({
+        mapEl:   document.getElementById('mru-map'),
+        panelEl: document.getElementById('mru-panel'),
+        tableEl: document.getElementById('mru-table'),
+        tabsEl:  document.getElementById('mru-tabs'),
+        variants: window.MRU_BYTEMAP_DATA
+      });
+    </script>
+<!-- SBMRU:END -->
+
+<!-- TABLES:START - hand-maintained, one section per Crow-Eye table -->
+    <section>
+      <h2 id="every-table">Every shell-item and MRU table, one by one</h2>
+      <p>Each table below is one tab in Crow-Eye, and each has an <strong>Anatomy</strong> button that opens
+      its own section here. Its <strong>Charts</strong> button opens the
+      <a href="#dashboard">User Activity dashboard</a>, where it shares one timeline with every other
+      shell-item and registry user-activity source. Shellbags have the rest of this page:
+      <a href="#what-they-are">start there</a>.</p>
+      <h3 id="table-recentdocs">RecentDocs</h3>
+      <p>Explorer's list of the files and folders this user recently opened, kept once overall and once per file extension. The value data starts with the item's name and is followed by the shell item of the shortcut Explorer wrote into the <code>Recent</code> folder.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\RecentDocs</code>, plus one subkey per extension (<code>.docx</code>, <code>.pdf</code>, ...) and <code>Folder</code></td></tr>
+            <tr><td>Values</td><td>Numbered binary values; <code>MRUListEx</code> holds their order, most recent first</td></tr>
+            <tr><td>Timestamp</td><td>Only the key's (or subkey's) last-write time, which is when its <em>most recent</em> entry was written. Every other entry has no time of its own.</td></tr>
+            <tr><td>Proves</td><td>A file or folder with that name was opened through the shell by this user</td></tr>
+            <tr><td>Does not prove</td><td>The full path (the name only; the path is in the matching LNK in <code>Recent</code>), when older entries were opened, or that the file still exists</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>RecentDocs</strong>: subkey, decoded name, MRU position, key last-write, user</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>RecentDocs</em>, dated by the key write time, so a subkey's entries share one day</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="myth">
+        <h4>The order is in MRUListEx, not in the value names</h4>
+        <p>Value 0 is not the newest entry. The names are allocation slots; only <code>MRUListEx</code> says what was opened most recently.</p>
+      </div>
+
+      <h3 id="table-opensavemru">OpenSaveMRU (OpenSavePidlMRU)</h3>
+      <p>Files chosen in the common <em>Open</em> and <em>Save</em> dialogs, by any program that uses them. Vista and later store a shell item ID list per entry; XP stored plain strings under <code>OpenSaveMRU</code>.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU</code>, one subkey per extension plus <code>*</code> (all types)</td></tr>
+            <tr><td>Values</td><td>Numbered binary values, each a shell item ID list naming the chosen file; <code>MRUListEx</code> orders them</td></tr>
+            <tr><td>Timestamp</td><td>The subkey's last-write time: when its most recent entry was chosen</td></tr>
+            <tr><td>Proves</td><td>This user selected that file in an Open or Save dialog</td></tr>
+            <tr><td>Does not prove</td><td>Which program showed the dialog (see LastVisitedPidlMRU), or that a save completed</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>OpenSaveMRU</strong>: full path, file name, extension, drive, key time, MRU position</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>OpenSaveMRU</em>; a file on another drive or a share counts in the removable / network insights</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-lastsavemru">LastSaveMRU (LastVisitedPidlMRU)</h3>
+      <p>For each program that used a common dialog: the program's executable name and the folder the dialog was last in. Crow-Eye's table is called LastSaveMRU.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU</code></td></tr>
+            <tr><td>Values</td><td>Numbered binary values: a UTF-16 executable name, then the shell item ID list of the folder; <code>MRUListEx</code> orders them</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time: the most recent entry</td></tr>
+            <tr><td>Proves</td><td>That program opened a common dialog, and where the dialog last was</td></tr>
+            <tr><td>Does not prove</td><td>Which file was opened or saved - pair it with OpenSavePidlMRU</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>LastSaveMRU</strong>: application, folder path and name, drive, key time</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>LastSaveMRU (LastVisited)</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-typedpaths">TypedPaths</h3>
+      <p>Paths typed or pasted into the Explorer address bar.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\TypedPaths</code></td></tr>
+            <tr><td>Values</td><td><code>url1</code> to <code>url25</code>, strings; <code>url1</code> is the most recent</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time, which belongs to <code>url1</code></td></tr>
+            <tr><td>Proves</td><td>The user typed that path into Explorer - a deliberate act, not a side effect</td></tr>
+            <tr><td>Does not prove</td><td>That the path existed or opened</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>TypedPaths</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>TypedPaths</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-runmru">RunMRU</h3>
+      <p>Commands typed into the Run box (Win+R).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\RunMRU</code></td></tr>
+            <tr><td>Values</td><td><code>a</code>, <code>b</code>, <code>c</code>, ... strings ending in <code>\1</code>; <code>MRUList</code> is a string of those letters, most recent first</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time: when the first command in <code>MRUList</code> was typed</td></tr>
+            <tr><td>Proves</td><td>The user typed that command - <code>cmd</code>, <code>powershell</code>, a UNC path, <code>regedit</code></td></tr>
+            <tr><td>Does not prove</td><td>That it ran successfully</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>RunMRU</strong>: command, MRU position, key time</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>RunMRU</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-wordwheelquery">WordWheelQuery (Explorer search)</h3>
+      <p>Terms typed into the Explorer search box (Windows 7 and later).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery</code></td></tr>
+            <tr><td>Values</td><td>Numbered values holding UTF-16 search terms; <code>MRUListEx</code> orders them</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time: the most recent search</td></tr>
+            <tr><td>Proves</td><td>The user searched their files for that term</td></tr>
+            <tr><td>Does not prove</td><td>Searches made from the Start menu or the taskbar on Windows 10 and later, which are kept elsewhere</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>WordWheelQuery</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Search</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-cidsizemru">CIDSizeMRU</h3>
+      <p>Programs that opened a common Open/Save dialog, with the dialog's window size. No path at all.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\CIDSizeMRU</code></td></tr>
+            <tr><td>Values</td><td>Numbered binary values: a UTF-16 executable name, then window placement data; <code>MRUListEx</code> orders them</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time: the most recent program</td></tr>
+            <tr><td>Proves</td><td>That program ran and showed a dialog for this user</td></tr>
+            <tr><td>Does not prove</td><td>Which file or folder</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>cid_size_mru</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>CIDSizeMRU</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-taskband">Taskband (taskbar pins)</h3>
+      <p>The items pinned to the taskbar, stored by Explorer as a list of shell items.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband</code>, value <code>Favorites</code></td></tr>
+            <tr><td>Values</td><td>One binary value: a sequence of shell items, one per pinned shortcut, plus pinned Store apps by app ID</td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time: when the pins last changed</td></tr>
+            <tr><td>Proves</td><td>What is pinned now</td></tr>
+            <tr><td>Does not prove</td><td>When each item was pinned, or that it was ever launched from the taskbar (see FeatureUsage)</td></tr>
+            <tr><td>In Crow-Eye</td><td>One row of <strong>system_configuration</strong> (setting <code>Favorites</code>)</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Taskbar pins</em>: the one row is split into one item per pin</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-mountpoints2">MountPoints2 and the mapped network drive MRU</h3>
+      <p>One subkey for every volume and network share this user's Explorer mounted - removable drives included - and the list of shares typed into <em>Map Network Drive</em>.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Keys</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\MountPoints2</code> (subkeys named by volume GUID <code>{...}</code>, drive letter, or share <code>##server#share</code>); <code>...\Explorer\Map Network Drive MRU</code> (strings ordered by <code>MRUList</code>)</td></tr>
+            <tr><td>Timestamp</td><td>Each subkey's last-write time, close to the last time this user's session mounted it</td></tr>
+            <tr><td>Proves</td><td>This user's session saw that volume or share - the per-user link a USB device history lacks</td></tr>
+            <tr><td>Does not prove</td><td>Which files were used; tie the volume GUID to a device through <code>MountedDevices</code> in SYSTEM</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>MountPoints2</strong> (Map Network Drive MRU rows included)</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>MountPoints2</em>; shares count in the network insight, other volumes in the removable one</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><a class="see-also" href="registry_anatomy.html#usb-devices">Explained in full: what was plugged in</a></p>
+
+      <h3 id="table-user-shell-folders">User shell folders</h3>
+      <p>Where each known folder - Desktop, Documents, Downloads - actually points for this user.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders</code> (and the machine-wide copy in SOFTWARE)</td></tr>
+            <tr><td>Values</td><td>One <code>REG_EXPAND_SZ</code> per folder, such as <code>%USERPROFILE%\Desktop</code></td></tr>
+            <tr><td>Timestamp</td><td>None that belongs to a folder</td></tr>
+            <tr><td>Proves</td><td>A redirection: Documents on another drive, on a network share, or inside OneDrive</td></tr>
+            <tr><td>Does not prove</td><td>Any use of the folder</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>user_shell_folders</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>User Shell Folders</em>, undated: listed under All items</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="myth">
+        <h4>A redirected documents folder changes every other artifact</h4>
+        <p>If Documents points at <code>D:\</code> or a share, the paths in RecentDocs and the dialog MRUs point there too. Read this table before concluding that files were copied off the system drive.</p>
+      </div>
+
+      <h3 id="table-shell-extensions">Shell extensions: open commands, icon overlays, delayed-load objects</h3>
+      <p>Three registrations that make Explorer run code, read from three tables.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>shell_open_command</td><td><code>Software\Classes\&lt;ProgID&gt;\shell\open\command</code> (HKCU and HKLM): the command that runs when a file of that type is opened. A per-user entry overrides the machine's - a well-known way to make a file type launch something else</td></tr>
+            <tr><td>shell_icon_overlay_identifiers</td><td><code>SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers</code>: CLSIDs of icon overlay handlers (OneDrive, Dropbox, TortoiseGit), each a DLL Explorer loads</td></tr>
+            <tr><td>shell_service_object_delay_load</td><td><code>...\CurrentVersion\ShellServiceObjectDelayLoad</code>: CLSIDs Explorer loads when it starts</td></tr>
+            <tr><td>Timestamp</td><td>None per entry</td></tr>
+            <tr><td>Proves</td><td>What Explorer will load or run; an unexpected DLL path or command line is a persistence lead</td></tr>
+            <tr><td>Does not prove</td><td>That it has run</td></tr>
+            <tr><td>In Crow-Eye</td><td>Tables <strong>shell_open_command</strong>, <strong>shell_icon_overlay_identifiers</strong>, <strong>shell_service_object_delay_load</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Shell extensions</em>, undated</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><a class="see-also" href="registry_anatomy.html#persistence">Explained in full: what will run again</a></p>
+    </section>
+<!-- TABLES:END -->
+
+<!-- SBVIEWS:START - generated by gen_shellbags_bytemap.py -->
+    <section>
+      <h2 id="who-wrote-it">A bag is a view, and a view is not a person</h2>
+      <p>A shellbag is written when a <strong>shell view</strong> of a container is created, or when its settings change. Explorer hosts shell views. So does every common File Open and Save dialog, inside whatever program opened it, and so do Windows' own broker processes - two of the programs this capture records as having used a dialog are <code>PickerHost.exe</code> and <code>OpenWith.exe</code>, which nobody launches. None of that requires a person to navigate anywhere, and in <code>BagMRU</code> none of it looks any different.</p>
+
+      <p><strong>Windows records the difference itself, one level over.</strong> A <code>BagMRU</code> key carries a <code>NodeSlot</code> number naming a subkey of the <code>Bags</code> tree beside it, and that subkey holds the view settings - filed under <code>Shell</code> when an Explorer window made the view, and under <code>ComDlg</code> when a common dialog did. On the reference system 799 of 859 items resolve to a bag that way. The other 60 are keys that have never been given a view of their own, and Crow-Eye leaves the columns empty on those rather than guessing.</p>
+
+      <span class="cap">Table 6</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>View kind</th><th>Bags</th><th>What made it</th></tr></thead>
+        <tbody>
+          <tr><td><code>Shell</code></td><td>574</td><td>an Explorer window, and nothing else</td></tr>
+          <tr><td><code>Shell</code> and <code>ComDlg</code></td><td>224</td><td>both - the same container reached through a window and through a dialog</td></tr>
+          <tr><td><code>ComDlg</code></td><td>3</td><td>only ever a File Open or Save dialog, hosted inside some other program</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p><strong>227 of the 801 bags on this machine carry a dialog's view</strong> - more than a quarter of them. A report that reads every row as somebody browsing is wrong about a quarter of its rows, and there is nothing in the row itself to say which quarter.</p>
+
+      <div class="myth">
+        <h4>The containers nobody browsed to</h4>
+        <p>3 of the bags on the reference system have a <code>ComDlg</code> view and no <code>Shell</code> view at all: the container was shown inside another program's file dialog and never in an Explorer window. Every one of them is a <strong>search result</strong> - <code>Generic.SearchResults</code>, <code>Pictures.SearchResults</code> - which is not a folder at all. Nobody opened a directory; a program's Open dialog showed a list of matches, and Windows kept the view settings for it.</p>
+      </div>
+
+      <p>Nor is everything with a bag a directory. Sorted by the view class Windows recorded against it, this tree holds 17 <code>CompressedFolder</code> views - a zip file opened as though it were a folder - 49 storage-provider views, which are a cloud provider's namespace rather than a path on disk, 15 search-result views and 3 control panel pages. A control panel page is not a folder anybody walked to.</p>
+
+      <p><strong>What a row does support</strong>, then: a container with that name was rendered as a shell view under that account, by some process running as that account, at some point. Whether a person chose it is a separate question, and it needs a separate artifact.</p>
+
+      <p>Crow-Eye stores the answer it can: <code>node_slot</code> is the number on the key, and <code>bag_views</code> is which subkeys the bag actually has. For the program's name, <code>ComDlg32\LastVisitedPidlMRU</code> records which executable last used a dialog in which folder, and Crow-Eye parses it into <code>LastSaveMRU</code> with an <code>application</code> column. On the reference capture that column names twenty programs, two of which - <code>PickerHost.exe</code> and <code>OpenWith.exe</code> - are Windows' own brokers, launched by no one. UserAssist, RecentDocs, Jump Lists and <a href="prefetch_anatomy.html#dissection">Prefetch</a> say what was running at the time; the key's own last-write time says when. Those are what answer <em>who</em>, and a Shellbag on its own does not.</p>
+    </section>
+<!-- SBVIEWS:END -->
+
+    <section>
+      <h2 id="limits">What a shell item supports, and what it does not</h2>
+
+      <div class="myth">
+        <h4>A Shellbag is a view, not an access</h4>
+        <p>It records that a container was rendered as a shell view. It says nothing about whether
+        any file in it was opened, copied or run, and nothing about how long anything was looked at:
+        a folder shown once by accident and a folder worked in for a week are identical rows.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The timestamps inside belong to the folder, not the visit</h4>
+        <p>Every date in the shell item was copied from the file system when the item was written.
+        The time of the visit is the last-written timestamp of the registry key holding the item.
+        Confusing the two produces a timeline that is confidently wrong by whatever the gap between
+        them happens to be.</p>
+      </div>
+
+      <div class="myth">
+        <h4>Absence proves nothing</h4>
+        <p>Shellbags are written when a view is closed or settings change, not on every visit.
+        A folder opened and closed without the shell deciding to persist anything leaves nothing.
+        Explorer alternatives and command-line navigation leave nothing at all.</p>
+      </div>
+
+      <p>What it does prove, and what nothing else proves as well: <strong>a container with that
+      name existed on this machine at some point, and a shell view of it was created under that user
+      account</strong> - by some process running as that account, which is not necessarily a person
+      and not necessarily Explorer. For removable media and network shares that are long gone, the
+      Shellbag may be the only record they were ever attached.
+      <a class="see-also" href="shell-items-shellbags-anatomy.html#who-wrote-it">Which process, and how to tell</a></p>
+    </section>
+
+    <section>
+      <h2 id="how-crow-eye-reads-it">How Crow-Eye reads shell items</h2>
+      <p>Both hives, both trees: <code>UsrClass.dat</code> and <code>NTUSER.DAT</code>, per user
+      profile. The decoding is <code>registry_binary_parser</code>, shared with the LNK and Jump
+      List parsers because a shell item is a shell item wherever it is stored.</p>
+
+      <h3 id="shellbag-keys">Every Shellbag key Crow-Eye reads</h3>
+      <p>Four <code>BagMRU</code> trees, each read together with its sibling <code>Bags</code> key,
+      which holds the view settings for the slots the tree points at. On a live system the
+      UsrClass.dat trees are reached through the merged <code>Software\Classes</code> view; on an
+      image, UsrClass.dat is opened directly and the same keys sit under
+      <code>Local Settings\...</code> with no <code>Classes</code> prefix. An absent tree reads
+      as empty, not as an error, because most systems carry only one or two of the four.</p>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it holds</th></tr></thead>
+          <tbody>
+            <tr><td><code>Local Settings\Software\Microsoft\Windows\Shell\BagMRU</code></td><td>UsrClass.dat</td><td>The Shellbag tree from Windows 7 onward, and the one that carries nearly every bag on a modern system - folders opened in Explorer, including on drives and shares removed long ago.</td></tr>
+            <tr><td><code>Local Settings\Software\Microsoft\Windows\ShellNoRoam\BagMRU</code></td><td>UsrClass.dat</td><td>The local, non-roaming tree inside UsrClass.dat. Rarely populated on Windows 7 and later, which makes a bag found here worth a second look rather than an assumption.</td></tr>
+            <tr><td><code>Software\Microsoft\Windows\Shell\BagMRU</code></td><td>NTUSER.DAT</td><td>The roaming tree used before Windows 7 moved Shellbags into UsrClass.dat. On a modern system it holds a small set - typically desktop and a few shell namespace views.</td></tr>
+            <tr><td><code>Software\Microsoft\Windows\ShellNoRoam\BagMRU</code></td><td>NTUSER.DAT</td><td>The local tree of the XP and Vista era, where folders on local and removable drives were recorded. A collection that takes only NTUSER.DAT from an older system still gets these.</td></tr>
+          </tbody>
+      </table>
+      </div>
+      <p>The same four keys appear in the registry anatomy's full key list.
+      <a class="see-also" href="registry_anatomy.html#user-activity">Every key Crow-Eye reads for user activity</a></p>
+
+      <p>Deleted Shellbags are carved out of the hive's freed cells and written with the key path
+      reconstructed where the parent chain survives - and left blank where it does not, because a
+      guessed path on a recovered artifact is worse than no path. The
+      <a href="registry-internals.html#carving">registry internals guide</a> covers how that
+      carving works and why most recovered keys cannot be placed at all: of the 533
+      keys carved from free space on the reference system, 384 - 72.0 per cent - resolve to no
+      parent, and each is recorded with an empty path rather than a guessed one.</p>
+    </section>
+
+<!-- DEPTH:START - generated by scratchpad/add_page_depth.py -->
+    <section>
+      <h2 id="versions">How Shellbags changed across Windows</h2>
+      <p>Each row below records a change that alters what a reader may conclude, not only how the bytes are arranged. A parser written against one Windows release returns nothing against another, and does so without raising an error.</p>
+      <span class="cap">Table 7</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Windows</th><th>What changed</th><th>What it means for a reader</th></tr></thead><tbody><tr><td>XP</td><td>Shellbags kept in <code>NTUSER.DAT</code> under <code>Software\Microsoft\Windows\Shell</code></td><td>One hive holds everything. Roaming profiles carried bags between machines.</td></tr><tr><td>Vista</td><td><code>Shell</code> and <code>ShellNoRoam</code> split</td><td>Two trees to walk instead of one; missing the second loses local-only folders.</td></tr><tr><td>7 and later</td><td>Moved to <code>UsrClass.dat</code> under <code>Local Settings\Software\Microsoft\Windows\Shell</code></td><td><strong>A collection that grabs only NTUSER.DAT gets almost no Shellbags on any modern Windows.</strong> UsrClass.dat is a separate file and is routinely forgotten.</td></tr><tr><td>8 and later</td><td><code>BEEF0004</code> gains an MFT file reference and the block version climbs</td><td>The long name moves. A fixed offset reads a name out of the middle of a timestamp and returns plausible text.</td></tr></tbody></table></div>
+    </section>
+    <section>
+      <h2 id="reference">Reference</h2>
+      <h3>BEEF0004 versions</h3>
+      <span class="cap">Table 8</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Version</th><th>Long name at</th><th>Ships with</th></tr></thead><tbody><tr><td>3</td><td>offset 12</td><td>Windows XP and Vista</td></tr><tr><td>7</td><td>offset 26</td><td>Windows 7 and 8, adds an 8-byte MFT reference</td></tr><tr><td>8</td><td>offset 30</td><td>Windows 8.1</td></tr><tr><td>9</td><td>offset 34</td><td>Windows 10 and 11 - the version in the map above</td></tr></tbody></table></div>
+    </section>
+    <section>
+      <h2 id="anti-forensics">Anti-forensic handling, and what survives it</h2>
+      <p>The preceding sections describe what intact shell items support. This section describes them after an attempt to remove or evade it, which is the condition in which it is frequently encountered. <strong>In most rows the attempt leaves a trace of its own.</strong></p>
+      <span class="cap">Table 9</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Technique</th><th>What is done</th><th>What survives</th></tr></thead><tbody><tr><td>Deleting the bag</td><td>The key is removed and the parent's <code>MRUListEx</code> is rewritten.</td><td><strong>The freed cell usually survives.</strong> A carve of <code>UsrClass.dat</code> recovers unlinked bag keys with their names and timestamps intact - see the <a href="registry-internals.html#carving">internals guide</a>.</td></tr><tr><td>Wiping UsrClass.dat</td><td>The file is deleted or replaced while logged out.</td><td>A hive with almost no free space and a very recent creation time is itself the anomaly. Compare the bag count against the machine's age.</td></tr><tr><td>Never opening Explorer</td><td>Using only a command line leaves no bags.</td><td><strong>This is why an absence proves nothing</strong> - but it is a weaker claim than it looks. Shellbags record shell views, and Explorer is the commonest host of one rather than the only one: a program's Open or Save dialog writes them too. "They never opened Explorer" is not the same as "they left no bags".</td></tr><tr><td>Timestomping the folder</td><td>The folder's own times are changed before the visit.</td><td>The bag copies what Explorer saw. Compare against <a href="mft_anatomy.html#record"><code>$FILE_NAME</code> in the MFT</a>, which is far harder to change.</td></tr></tbody></table></div>
+    </section>
+<!-- DEPTH:END -->
+
+  </div>
+
+  <div class="wrap">
+    <h2 id="dashboard">Reading the user activity dashboard</h2>
+    <p class="map-intro">The <strong>Charts</strong> button on any of the shell-item and registry
+      user-activity tabs &mdash; Shellbags, the MRUs, UserAssist, BAM and DAM, FeatureUsage, the
+      Compatibility Assistant, file associations, camera / microphone use and the rest, 28 tabs in all &mdash;
+      opens one window, <strong>User Activity: Shell Items &amp; Registry</strong>, over
+      <code style="color:var(--accent);">registry_data.db</code>. Every source shares one timeline, so
+      <strong>where the user went, what they opened and what they ran</strong> read together. The tab the window was opened
+      from is highlighted, not filtered; <em>Show only</em> narrows the view to that source on request. The
+      colour language is the <strong>artifact source</strong>.</p>
+
+    <div class="full-reference">
+      <span class="cap">Sources</span>
+      <div class="responsive-table-wrap">
+        <table class="ref-table">
+          <thead><tr><th style="width:190px;">Source</th><th>What it records</th><th style="width:100px;">Colour</th></tr></thead>
+          <tbody>
+            <tr><td>Shellbags (BagMRU)</td><td>Folders browsed, with the folder's own embedded FAT times</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:6px;"></span>#4aa8ff</td></tr>
+            <tr><td>RecentDocs</td><td>Files &amp; folders recently opened, per extension</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:6px;"></span>#39d353</td></tr>
+            <tr><td>OpenSaveMRU</td><td>Files an Open/Save dialog touched</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fbbf24;vertical-align:-1px;margin-right:6px;"></span>#fbbf24</td></tr>
+            <tr><td>LastSaveMRU (LastVisited)</td><td>Which program used a dialog, in which folder</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#22d3ee;vertical-align:-1px;margin-right:6px;"></span>#22d3ee</td></tr>
+            <tr><td>TypedPaths</td><td>Paths typed into the Explorer address bar</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:6px;"></span>#a78bfa</td></tr>
+            <tr><td>RunMRU</td><td>Commands typed into the Run box</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f43f5e;vertical-align:-1px;margin-right:6px;"></span>#f43f5e</td></tr>
+            <tr><td>Search</td><td>Terms typed into the Explorer search box</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#94a3b8;vertical-align:-1px;margin-right:6px;"></span>#94a3b8</td></tr>
+            <tr><td>CIDSizeMRU</td><td>Programs that opened a common dialog (no path)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fb923c;vertical-align:-1px;margin-right:6px;"></span>#fb923c</td></tr>
+            <tr><td>Taskbar pins</td><td>Items pinned to the taskbar</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#e879f9;vertical-align:-1px;margin-right:6px;"></span>#e879f9</td></tr>
+            <tr><td>MountPoints2</td><td>Volumes and shares this user mounted</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#2dd4bf;vertical-align:-1px;margin-right:6px;"></span>#2dd4bf</td></tr>
+            <tr><td>Office MRU</td><td>Documents opened in Office, trusted documents</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f97316;vertical-align:-1px;margin-right:6px;"></span>#f97316</td></tr>
+            <tr><td>TypedURLs</td><td>Addresses typed into the IE address bar</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#818cf8;vertical-align:-1px;margin-right:6px;"></span>#818cf8</td></tr>
+            <tr><td>RDPClientMRU</td><td>Remote Desktop hosts</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fda4af;vertical-align:-1px;margin-right:6px;"></span>#fda4af</td></tr>
+            <tr><td>RecentApps</td><td>Recently used apps (early Windows 10)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#a3e635;vertical-align:-1px;margin-right:6px;"></span>#a3e635</td></tr>
+            <tr><td>App MRUs</td><td>PuTTY, WinSCP, WinRAR, 7-Zip and others</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#facc15;vertical-align:-1px;margin-right:6px;"></span>#facc15</td></tr>
+            <tr><td>Regedit last key</td><td>The last key open in Registry Editor</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#cbd5e1;vertical-align:-1px;margin-right:6px;"></span>#cbd5e1</td></tr>
+            <tr><td>UserAssist</td><td>Programs run through Explorer, with run and focus counts</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f472b6;vertical-align:-1px;margin-right:6px;"></span>#f472b6</td></tr>
+            <tr><td>BAM</td><td>Last run of each program, per account</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#ff6b6b;vertical-align:-1px;margin-right:6px;"></span>#ff6b6b</td></tr>
+            <tr><td>DAM</td><td>Last run, on Modern Standby devices</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#c4b5fd;vertical-align:-1px;margin-right:6px;"></span>#c4b5fd</td></tr>
+            <tr><td>Camera / mic / location</td><td>When each app last used them</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fb7185;vertical-align:-1px;margin-right:6px;"></span>#fb7185</td></tr>
+            <tr><td>MUICache</td><td>Programs the shell handled (no time)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#67e8f9;vertical-align:-1px;margin-right:6px;"></span>#67e8f9</td></tr>
+            <tr><td>User Shell Folders</td><td>Where known folders point (no time)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#86efac;vertical-align:-1px;margin-right:6px;"></span>#86efac</td></tr>
+            <tr><td>Shell extensions</td><td>Open commands, overlay handlers, delay-load objects (no time)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fca5a5;vertical-align:-1px;margin-right:6px;"></span>#fca5a5</td></tr>
+            <tr><td>FeatureUsage</td><td>Taskbar counters (key time only)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fde047;vertical-align:-1px;margin-right:6px;"></span>#fde047</td></tr>
+            <tr><td>Compatibility Assistant</td><td>Programs the PCA saw run (key time only)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#7dd3fc;vertical-align:-1px;margin-right:6px;"></span>#7dd3fc</td></tr>
+            <tr><td>File associations</td><td>Programs used per file type (key time only)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#d9f99d;vertical-align:-1px;margin-right:6px;"></span>#d9f99d</td></tr>
+            <tr><td>ProgramsCache</td><td>The Start menu's cached program list (no time)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#e2e8f0;vertical-align:-1px;margin-right:6px;"></span>#e2e8f0</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--tx2);font-size:12.5px;margin-top:8px;">Each source table carries a different set of
+        columns; the dashboard normalises every row to one shape &mdash; target, path, item type, drive or
+        share, and the best-available time.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid rgba(251,191,36,0.35);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">A word on the timeline</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">Shell-item timing is coarser than an
+        execution artifact's. Most of the MRUs carry only <strong>one registry key-write time</strong> &mdash;
+        the moment their most-recent entry was written &mdash; plus an <strong>MRU position</strong>, which is
+        the only true record of order. <strong>Shellbags are the rich exception</strong>: each bag embeds the
+        folder's own FAT created / modified / accessed times, so shellbag rows spread across the timeline while
+        a source like RunMRU collapses onto a single day. The dashboard shows MRU order alongside time rather
+        than pretending every row has an independent timestamp.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">The two regions</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;"><strong>Left</strong> &mdash; one
+        <strong>source strip</strong> per source that has a dated item (a cell per day, source = colour;
+        sources with no time of their own are listed under <em>All items</em>); click a day for the
+        <strong>drill-down</strong>: items-by-hour (stacked by source), a by-source breakdown, the top places,
+        and a shell-item list (time &middot; source &middot; target &middot; path &middot; MRU order).
+        <strong>Right</strong> &mdash; the <strong>overview</strong>: totals, an <strong>Insights</strong> card,
+        the <strong>most-visited places</strong> and <strong>most-referenced files</strong>, and a
+        <strong>Volumes &amp; shares (device history)</strong> card.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid rgba(244,63,94,0.35);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Insights &amp; device history</h3>
+      <ul style="color:var(--tx2);font-size:14px;line-height:1.8;margin:0;padding-left:20px;">
+        <li><strong>Targets on a network share</strong> and <strong>on a removable / other volume</strong>
+          &mdash; a user reaching off the system drive is the first thing to check for exfiltration or
+          off-host staging.</li>
+        <li><strong>Shellbag FAT time &ne; registry write</strong> &mdash; the folder's own embedded time
+          landing on a different day than the bag was written can mark a bag that predates this hive, or a
+          folder time that was altered.</li>
+        <li><strong>Volumes &amp; shares</strong> &mdash; every drive letter and UNC share a shell item ever
+          pointed at, so an external drive or a NAS path browsed once still leaves its label here.</li>
+      </ul>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Click for detail</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">Click a <strong>day</strong> to fill the
+        drill-down, or an <strong>item</strong> in the list for its full profile: its target and full path,
+        source and item type, drive or share, MRU position, the user, and every timestamp the record carries.
+        For a shellbag the profile lays the <strong>embedded FAT created / modified / accessed times against
+        the registry write time</strong>, and shows the MFT reference and size. Filters: search, a
+        <strong>source</strong>, a <strong>location</strong> and a <strong>volume</strong> selector, and a
+        <strong>date dropdown</strong>.</p>
+    </div>
+  </div>
+
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe - Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI - Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+</html>

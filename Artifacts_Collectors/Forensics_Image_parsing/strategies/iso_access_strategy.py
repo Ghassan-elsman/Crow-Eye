@@ -5,6 +5,8 @@ This module implements the ISOAccessStrategy for accessing ISO optical disc
 images using pycdlib for file system access.
 """
 
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.strategies.iso_access_strategy")
 import os
 import time
 from typing import List, Optional
@@ -16,7 +18,7 @@ try:
     PYCDLIB_AVAILABLE = True
 except ImportError:
     PYCDLIB_AVAILABLE = False
-    print("Warning: pycdlib not available - ISO file system access will be limited")
+    _log.warning("Warning: pycdlib not available - ISO file system access will be limited")
 
 # Handle both relative and absolute imports
 try:
@@ -126,16 +128,20 @@ class ISOAccessStrategy(FileAccessStrategy):
     
     def _open_image(self, file_path: str) -> bool:
         if not PYCDLIB_AVAILABLE:
-            print("[ERROR] Cannot open ISO image: pycdlib is not installed")
+            _log.error("Cannot open ISO image: pycdlib is not installed")
             return False
-        
+        # The image window passes every selected file as a list (segments);
+        # an ISO is one file, and pycdlib.open() only takes a path.
+        if isinstance(file_path, (list, tuple)):
+            file_path = file_path[0] if file_path else ""
+
         try:
             self.img_info = pycdlib.PyCdlib()
             self.img_info.open(file_path)
             self.file_path = file_path
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to open ISO image: {e}")
+            _log.error(f"Failed to open ISO image: {e}")
             return False
     
     def _close_image(self):
@@ -161,7 +167,7 @@ class ISOAccessStrategy(FileAccessStrategy):
             )
             return [part_info]
         except Exception as e:
-            print(f"[ERROR] Failed to detect partitions: {e}")
+            _log.error(f"Failed to detect partitions: {e}")
             return []
     
     def get_img_info(self):

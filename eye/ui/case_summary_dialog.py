@@ -34,14 +34,18 @@ from styles import CrowEyeStyles, Colors
 
 # Crow-Eye design tokens — sourced from the shared Colors palette (styles.py) so
 # this dialog stays in lock-step with the rest of the app.
-CROW_EYE_FONT_FAMILY = "'Segoe UI', 'Inter', system-ui, sans-serif"
-CROW_EYE_BG = Colors.BG_PRIMARY          # outer window  (#0F172A)
-CROW_EYE_PANEL = Colors.BG_TABLES        # deep surfaces (#0B1220)
-CROW_EYE_PANEL_RAISED = Colors.BG_PANELS # cards / group boxes (#1E293B)
-CROW_EYE_BORDER = Colors.BORDER_SUBTLE   # (#334155)
+try:
+    from ui.site_theme import families as _families
+    CROW_EYE_FONT_FAMILY = "'%s'" % _families()[0]
+except Exception:
+    CROW_EYE_FONT_FAMILY = "'Segoe UI', 'Inter', system-ui, sans-serif"
+CROW_EYE_BG = "#0A0C10"   # site token (ui/site_theme.py)          # outer window  (#0F172A)
+CROW_EYE_PANEL = "#0A0C10"   # site token (ui/site_theme.py)        # deep surfaces (#0B1220)
+CROW_EYE_PANEL_RAISED = "#0F172A"   # site token (ui/site_theme.py) # cards / group boxes (#1E293B)
+CROW_EYE_BORDER = "#1E293B"   # site token (ui/site_theme.py)   # (#334155)
 CROW_EYE_TEXT = Colors.TEXT_PRIMARY      # (#E2E8F0)
-CROW_EYE_TEXT_DIM = Colors.TEXT_SECONDARY # (#94A3B8)
-CROW_EYE_ACCENT = Colors.ACCENT_CYAN     # (#00FFFF)
+CROW_EYE_TEXT_DIM = "#94A3B8"   # site token (ui/site_theme.py) # (#94A3B8)
+CROW_EYE_ACCENT = "#A5B4FC"   # site token (ui/site_theme.py)     # (#00FFFF)
 
 # Shared combo-box style (styles.py has no dedicated QComboBox constant) — built
 # from the Colors palette so the filter dropdowns match the app's inputs.
@@ -166,6 +170,7 @@ class CaseSummaryDialog(QDialog):
             f" letter-spacing: 1.5px;"
         )
         title.setAlignment(Qt.AlignCenter)
+        self._title_label = title
         main_layout.addWidget(title)
 
         # Subtitle
@@ -196,6 +201,9 @@ class CaseSummaryDialog(QDialog):
         self.tab_widget.setDocumentMode(True)
         # Unified app-wide tab styling (UNIFIED_TAB_STYLE + expanding tab bar).
         CrowEyeStyles.apply_tab_styles(self.tab_widget)
+        # No native base line under the document-mode tabs (it drew a white
+        # rule over the unselected ones in the site look)
+        self.tab_widget.tabBar().setDrawBase(False)
 
         # Add tabs (Charts tab removed per case-summary scope; chart blocks still
         # appear in the exported HTML report).
@@ -861,41 +869,14 @@ class CaseSummaryDialog(QDialog):
             self.queries_count_label.setText(f"Showing {shown} of {total} queries")
     
     def _apply_styling(self):
-        """Apply Crow-Eye palette + Segoe UI font globally to the dialog."""
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(CROW_EYE_BG))
-        palette.setColor(QPalette.WindowText, QColor(CROW_EYE_TEXT))
-        palette.setColor(QPalette.Base, QColor(CROW_EYE_PANEL_RAISED))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-
-        # Set a base QFont so any widget that doesn't have an explicit font in its
-        # stylesheet still picks up Segoe UI / Inter.
-        base_font = QFont("Segoe UI", 10)
-        base_font.setStyleHint(QFont.SansSerif)
-        self.setFont(base_font)
-
-        dialog_style = f"""
-            QDialog {{
-                background-color: {CROW_EYE_BG};
-                color: {CROW_EYE_TEXT};
-                font-size: 10pt;
-                font-family: {CROW_EYE_FONT_FAMILY};
-            }}
-            QWidget {{
-                background-color: {CROW_EYE_BG};
-                color: {CROW_EYE_TEXT};
-                font-family: {CROW_EYE_FONT_FAMILY};
-            }}
-            QLabel {{
-                color: {CROW_EYE_TEXT};
-                font-size: 10pt;
-                background: transparent;
-                font-family: {CROW_EYE_FONT_FAMILY};
-            }}
-        """
-        # Append the shared themed scrollbar so non-table scroll areas match the app.
-        self.setStyleSheet(dialog_style + CrowEyeStyles.SCROLLBAR_STYLE)
+        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        back into roles, the buttons into the role family."""
+        try:
+            from ui.site_theme import apply_site_theme, set_role
+            apply_site_theme(self)
+            set_role(self._title_label, "title")
+        except Exception:
+            pass
     
     def _populate_timeline(self):
         """
@@ -1246,15 +1227,7 @@ class CaseSummaryDialog(QDialog):
             QPushButton::menu-indicator {{ width: 0; }}
         """)
         menu = QMenu(btn)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background: {CROW_EYE_PANEL_RAISED};
-                border: 1px solid {CROW_EYE_BORDER};
-                color: {CROW_EYE_TEXT};
-                font-family: {CROW_EYE_FONT_FAMILY};
-            }}
-            QMenu::item:selected {{ background: {CROW_EYE_BORDER}; color: {CROW_EYE_ACCENT}; }}
-        """)
+        # The window's site menu rules style it (parented to the button)
         menu.addAction("CSV (.csv)", lambda: on_export("csv"))
         menu.addAction("Markdown (.md)", lambda: on_export("markdown"))
         btn.setMenu(menu)

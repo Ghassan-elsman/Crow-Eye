@@ -67,8 +67,64 @@ export function getBridge() {
   return bridgePromise
 }
 
+// Data getters run off Crow-Eye's GUI thread when the bridge offers callAsync
+// (visualizations/async_bridge.py): the answer comes back on asyncResult, so
+// the window and the loading overlay keep painting during a long query.
+// Anything else (dialog openers), the mock, and an older bridge stay plain
+// synchronous calls. Same block in every dashboard and react-timeline.
+let asyncSeq = 0
+const asyncPending = new Map()
+let asyncHooked = null
+
+function canCallAsync(bridge, method) {
+  return !!(bridge && bridge.callAsync && bridge.asyncResult && /^get/.test(method))
+}
+
+function callViaAsync(bridge, method, args) {
+  if (asyncHooked !== bridge) {
+    asyncHooked = bridge
+    bridge.asyncResult.connect((id, payload) => {
+      const done = asyncPending.get(id)
+      if (done) { asyncPending.delete(id); done(payload) }
+    })
+  }
+  const id = `${method}#${++asyncSeq}`
+  return new Promise((resolve) => {
+    asyncPending.set(id, resolve)
+    bridge.callAsync(method, id, JSON.stringify(args))
+  })
+}
+
+// A slot that raised answers {"__asyncError": ...}: logged, and null to the
+// caller - what the synchronous call gave when its slot raised.
+function parseAnswer(method, raw) {
+  const out = JSON.parse(raw || 'null')
+  if (out && typeof out === 'object' && out.__asyncError) {
+    console.error(`[bridge] ${method}: ${out.__asyncError}`)
+    return null
+  }
+  return out
+}
+
+/** Call a bridge slot and JSON-parse the string result. */
 export async function call(method, arg) {
   const bridge = await getBridge()
-  const raw = arg === undefined ? await bridge[method]() : await bridge[method](arg)
-  return JSON.parse(raw || 'null')
+  const args = arg === undefined ? [] : [arg]
+  const raw = canCallAsync(bridge, method)
+    ? await callViaAsync(bridge, method, args)
+    : await bridge[method](...args)
+  return parseAnswer(method, raw)
+}
+
+// The newest call per key wins. An earlier call still running when the same
+// view asks again (another day clicked, a filter typed) never settles: its
+// .then cannot overwrite the newer answer and its .finally cannot clear the
+// loading overlay the newer call is showing. Calls now return out of order -
+// they run on a thread pool - so this is needed, not cosmetic.
+const latestSeq = new Map()
+export function latest(method, arg, key = method) {
+  const n = (latestSeq.get(key) || 0) + 1
+  latestSeq.set(key, n)
+  const settle = (fn) => (value) => (latestSeq.get(key) === n ? fn(value) : new Promise(() => {}))
+  return call(method, arg).then(settle((v) => v), settle((e) => Promise.reject(e)))
 }

@@ -3,7 +3,7 @@ import { Chart } from 'react-chartjs-2'
 import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, BarController, Tooltip,
 } from 'chart.js'
-import { fmtInt, fmtBytes, fmtDuration, fmtDay, PROVIDERS, PROVIDER_LABEL } from './format.js'
+import { fmtInt, fmtCompact, fmtBytes, fmtDuration, fmtDay, PROVIDERS, PROVIDER_LABEL } from './format.js'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, BarController, Tooltip)
 
@@ -73,7 +73,7 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
         <Tile v={fmtInt(t.apps)} l="distinct apps" />
         <Tile v={fmtBytes(t.bytesSent)} l="sent" />
         <Tile v={fmtBytes(t.bytesReceived)} l="received" />
-        <Tile v={fmtInt(t.cpu)} l="CPU cycles" />
+        <Tile v={fmtCompact(t.cpu)} l="CPU cycles" title={fmtInt(t.cpu)} />
         <Tile v={fmtDuration(t.presenceSecs)} l="user presence" />
       </div>
 
@@ -157,8 +157,8 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
   )
 }
 
-function Tile({ v, l }) {
-  return <div className="ov-tile"><span>{v}</span><label>{l}</label></div>
+function Tile({ v, l, title }) {
+  return <div className="ov-tile" title={title}><span>{v}</span><label>{l}</label></div>
 }
 
 // An insight is {count, subjects, truncated}; `n` also tolerates the bare

@@ -332,6 +332,9 @@ class TestBrowserBridge(unittest.TestCase):
         from visualizations import browser_bridge as bb
         original = bb.DAY_EVENT_CAP
         bb.DAY_EVENT_CAP = 2
+        # The day detail is cached per filter; an earlier test asked for the
+        # same day under the real cap.
+        self.b.clear_cache()
         try:
             r = json.loads(self.b.getBrowserDayDetail(json.dumps({"day": "2026-03-01"})))
         finally:

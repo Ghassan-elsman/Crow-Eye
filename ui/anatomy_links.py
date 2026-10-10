@@ -52,6 +52,12 @@ ANATOMY_LINKS = {
     "USN_table": (
         "usn_anatomy", "dissection",
         "One USN record field by field, and what each reason code means"),
+    # The correlated table joins each USN record to its MFT entry through the
+    # record's file reference - the field this section dissects.
+    "Correlated_table": (
+        "usn_anatomy", "dissection",
+        "One USN record field by field - the reason codes, and the file "
+        "reference that ties each record to its MFT entry"),
 
     # --- SRUM: one tab per provider table, each its own section --------------
     "SRUM_application_usage_table": (
@@ -110,40 +116,104 @@ ANATOMY_LINKS = {
         "Driver packages as the Appraiser recorded them"),
 
     # --- registry artifacts, documented as sections -------------------------
+    # --- user activity: one section per table ------------------------------
+    # Every table the User Activity dashboard reads has its own section, so
+    # the button lands on THIS table's key, value format, timestamp and
+    # caveats - not on a page-wide overview the examiner then has to search.
     "UserAssist_table": (
-        "registry_anatomy", "userassist",
-        "What UserAssist counts, and the ROT13 that hides it from a keyword "
-        "search"),
+        "registry_anatomy", "table-userassist",
+        "UserAssist: the 72-byte record, the ROT13 names, run and focus "
+        "counts, and what it cannot see"),
     "Bam_table": (
-        "registry_anatomy", "bam-dam",
-        "BAM and DAM: per-user last-run times kept by the kernel itself"),
+        "registry_anatomy", "table-bam",
+        "BAM: the kernel's last-run time per program and SID, and why a "
+        "device path is not a drive letter"),
     "Dam_table": (
-        "registry_anatomy", "bam-dam",
-        "BAM and DAM: per-user last-run times kept by the kernel itself"),
+        "registry_anatomy", "table-dam",
+        "DAM: BAM's twin on Modern Standby devices - and why it is empty on "
+        "most desktops"),
     "MUICache_table": (
-        "registry_anatomy", "what-ran",
-        "Where MUICache sits among the execution artifacts, and what it does "
-        "not prove"),
+        "registry_anatomy", "table-muicache",
+        "MUICache: friendly names the shell read from programs it handled, "
+        "with no time of their own"),
+    "RecentApps_table": (
+        "registry_anatomy", "table-recentapps",
+        "RecentApps: early Windows 10's record of apps used and the files "
+        "they opened"),
+    "FeatureUsage_table": (
+        "registry_anatomy", "table-featureusage",
+        "FeatureUsage: taskbar counters per program, and the one key time "
+        "they share"),
+    "CompatibilityAssistant_table": (
+        "registry_anatomy", "table-compatibility-assistant",
+        "The Program Compatibility Assistant store: programs this user ran, "
+        "kept after the file is gone"),
+    "file_exts_table": (
+        "registry_anatomy", "table-file-exts",
+        "FileExts: which programs opened each file type, and the default the "
+        "user chose"),
+    "programs_cache_table": (
+        "registry_anatomy", "table-programs-cache",
+        "StartPage2 ProgramsCache: the Start menu's cached program list"),
+    "regedit_lastkey_table": (
+        "registry_anatomy", "table-regedit-lastkey",
+        "Registry Editor's last key and favourites"),
+    "RegistryBrowserHistory_table": (
+        "registry_anatomy", "table-typed-urls",
+        "TypedURLs and TypedURLsTime: addresses typed into the address bar"),
+    "RDPClientMRU_table": (
+        "registry_anatomy", "table-rdp-client-mru",
+        "Remote Desktop hosts this user connected to, and the account hint"),
+    "OfficeDocuments_table": (
+        "registry_anatomy", "table-office-mru",
+        "Office File and Place MRUs, and the Trusted Documents that record "
+        "Enable Content"),
+    "ApplicationArtifacts_table": (
+        "registry_anatomy", "table-application-mrus",
+        "What PuTTY, WinSCP, WinRAR, 7-Zip and others remember"),
+    "AppPermissions_table": (
+        "registry_anatomy", "table-app-permissions",
+        "Camera, microphone and location use per app, with start and stop "
+        "times"),
 
     "RecentDocs_table": (
-        "registry_anatomy", "user-activity",
-        "Where a user went, and the MRU order that is the only record of "
-        "sequence"),
+        "shell-items-shellbags-anatomy", "table-recentdocs",
+        "RecentDocs: per-extension MRUs, the order in MRUListEx, and the one "
+        "time each key keeps"),
     "TypedPath_table": (
-        "registry_anatomy", "user-activity",
-        "Paths typed into the Explorer bar, most recent first"),
+        "shell-items-shellbags-anatomy", "table-typedpaths",
+        "TypedPaths: paths typed into the Explorer bar, url1 the newest"),
     "OpenSaveMRU_table": (
-        "registry_anatomy", "user-activity",
-        "What a file dialog opened or saved, and which program hosted it"),
+        "shell-items-shellbags-anatomy", "table-opensavemru",
+        "OpenSavePidlMRU: files chosen in Open and Save dialogs"),
     "LastSaveMRU_table": (
-        "registry_anatomy", "user-activity",
-        "Which executable last used a file dialog, and in which folder"),
+        "shell-items-shellbags-anatomy", "table-lastsavemru",
+        "LastVisitedPidlMRU: which program used a dialog, and in which folder"),
     "RunMRU_table": (
-        "registry_anatomy", "user-activity",
-        "Commands typed into the Run box"),
+        "shell-items-shellbags-anatomy", "table-runmru",
+        "RunMRU: commands typed into the Run box, ordered by MRUList"),
     "WordWheelQuery_table": (
-        "registry_anatomy", "user-activity",
-        "Search terms typed into the Explorer search bar"),
+        "shell-items-shellbags-anatomy", "table-wordwheelquery",
+        "WordWheelQuery: terms typed into the Explorer search box"),
+    "cid_size_mru_table": (
+        "shell-items-shellbags-anatomy", "table-cidsizemru",
+        "CIDSizeMRU: programs that opened a common dialog - no path at all"),
+    "SystemConfiguration_table": (
+        "shell-items-shellbags-anatomy", "table-taskband",
+        "Taskband (one row of this table): the items pinned to the taskbar"),
+    "user_shell_folders_table": (
+        "shell-items-shellbags-anatomy", "table-user-shell-folders",
+        "User Shell Folders: where Desktop, Documents and Downloads really "
+        "point"),
+    "shell_open_command_table": (
+        "shell-items-shellbags-anatomy", "table-shell-extensions",
+        "shell\\open\\command: what runs when a file type is opened"),
+    "shell_icon_overlay_identifiers_table": (
+        "shell-items-shellbags-anatomy", "table-shell-extensions",
+        "Icon overlay handlers: DLLs Explorer loads for every folder view"),
+    "shell_service_object_delay_load_table": (
+        "shell-items-shellbags-anatomy", "table-shell-extensions",
+        "ShellServiceObjectDelayLoad: objects Explorer loads at start"),
 
     "USBDevices_table": (
         "registry_anatomy", "usb-devices",
@@ -164,9 +234,9 @@ ANATOMY_LINKS = {
         "Volumes on removable media, and how MountedDevices ties them to "
         "letters"),
     "MountPoints2_table": (
-        "registry_anatomy", "usb-devices",
-        "Which volumes this user actually opened, as opposed to which the "
-        "machine saw"),
+        "shell-items-shellbags-anatomy", "table-mountpoints2",
+        "MountPoints2 and Map Network Drive MRU: which volumes and shares "
+        "this user mounted"),
 
     "AutoStartPrograms_table": (
         "registry_anatomy", "persistence",
@@ -297,6 +367,37 @@ def url_for(attr):
         return None
     page, anchor, _tip = entry
     return BASE_URL + page + ("#" + anchor if anchor else "")
+
+
+def _bundle_roots():
+    """Where docs/anatomy can be: inside a frozen build, then beside the source."""
+    import os
+    import sys
+    roots = []
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        roots.append(base)
+    roots.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return [os.path.join(r, "docs", "anatomy", "Eye-Describe") for r in roots]
+
+
+def local_page_for(attr):
+    """(file path, anchor) of the copy bundled with the app, or None.
+
+    scripts/sync_anatomy_pages.py copies every page this map points at into
+    docs/anatomy, so a button works on a workstation with no internet - which
+    is most of the ones Crow-Eye runs on.
+    """
+    import os
+    entry = ANATOMY_LINKS.get(attr)
+    if not entry:
+        return None
+    page, anchor, _tip = entry
+    for root in _bundle_roots():
+        path = os.path.join(root, page + ".html")
+        if os.path.isfile(path):
+            return path, anchor
+    return None
 
 
 def tooltip_for(attr):

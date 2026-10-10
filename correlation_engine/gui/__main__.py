@@ -21,11 +21,13 @@ def main():
     app.setApplicationName("Correlation Engine")
     app.setOrganizationName("Crow-Eye")
     
-    # Load and apply Crow-Eye stylesheet
-    style_path = Path(__file__).parent / "crow_eye_styles.qss"
-    if style_path.exists():
-        with open(style_path, 'r') as f:
-            app.setStyleSheet(f.read())
+    # The site fonts (Barlow Semi Condensed / JetBrains Mono); the window
+    # sets the site look itself (ui/site_theme.py)
+    try:
+        from ui.app_fonts import load_app_fonts
+        load_app_fonts()
+    except Exception as e:
+        print(f"[Correlation Engine] site fonts not loaded: {e}")
     
     # Create and show main window
     window = MainWindow()

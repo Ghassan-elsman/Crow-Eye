@@ -124,7 +124,7 @@ class DatabaseManager:
             return False
 
     # Bump this when adding a column / table / index that older case DBs need.
-    CURRENT_SCHEMA_VERSION = 2
+    CURRENT_SCHEMA_VERSION = 3
 
     def _run_migrations(self, cursor) -> None:
         """Bring the on-disk schema up to CURRENT_SCHEMA_VERSION.
@@ -140,13 +140,34 @@ class DatabaseManager:
             current = row[0] if row else 0
         except Exception:
             current = 0
+        start = current
 
         # Migration 1 -> 2: Add case-insensitive index for Mapping values
         if current < 2:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_mapping_value_lower ON Mapping(LOWER(value))")
             current = 2
 
-        if current != self.CURRENT_SCHEMA_VERSION:
+        # Migration 2 -> 3: GatherHistory says which run a row belongs to, where
+        # the rule read, and what each mapping turned out to be - so a past
+        # run's statistics can be shown again (dynamic_mapping/core/run_stats).
+        if current < 3:
+            cursor.execute("PRAGMA table_info(GatherHistory)")
+            have = {row[1] for row in cursor.fetchall()}
+            for column, ddl in (("run_id", "TEXT"), ("run_kind", "TEXT"), ("category", "TEXT"),
+                                ("source_db", "TEXT"), ("source_table", "TEXT"),
+                                ("value_column", "TEXT"), ("key_column", "TEXT"),
+                                ("rows_read", "INTEGER DEFAULT 0"),
+                                ("inserted", "INTEGER DEFAULT 0"), ("merged", "INTEGER DEFAULT 0"),
+                                ("duplicate", "INTEGER DEFAULT 0"), ("rejected", "INTEGER DEFAULT 0")):
+                if column not in have:
+                    cursor.execute("ALTER TABLE GatherHistory ADD COLUMN %s %s" % (column, ddl))
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_gatherhistory_run ON GatherHistory(run_id)")
+            current = 3
+
+        # Compared with where it STARTED: comparing with `current`, which the
+        # migrations above have already advanced, never wrote the version, so
+        # every open re-ran every migration.
+        if start != self.CURRENT_SCHEMA_VERSION:
             cursor.execute(f"PRAGMA user_version = {self.CURRENT_SCHEMA_VERSION}")
     
     def close(self) -> bool:

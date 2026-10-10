@@ -60,6 +60,22 @@ These tools allow EYE to explore the case environment, query forensic databases,
 *   **Honest about scope**: the result names `artifacts_searched` and `databases_absent`, and reports `total_in_window` separately from what the cap returned — "nothing happened then" is a claim about what was searched, so the record has to show it.
 *   **Availability**: included in the constrained-model tool set. A small local model is exactly who benefits from one call rather than eleven.
 
+### 3c. `query_user_behavior` — "what did Ann do on the 3rd?"
+*   **Purpose**: Runs Crow-Eye's **User Behavior Analytics** (the 81 rules behind the UBA window — sign-ins, programs opened, files opened / created / renamed / deleted, downloads and uploads, USB, websites, persistence, services, log clearing and other anti-forensics) and answers in *behaviour*: one sentence per event with who, when, what, how sure, and the rows behind it.
+*   **When**: questions about people and activity rather than about one artifact — "what did the user do that evening", "who signed in and when", "what was downloaded, run or plugged in", "anything suspicious this week".
+*   **Cost**: the analysis runs **once per case** (seconds to a minute on a large case) on the first call and is kept; every later call — any day, any range, any user — is a query on its in-memory event store. It is rebuilt when the case changes or a database in `Target_Artifacts` is re-parsed. Eye's instance is its own: it never shares connections with the UBA window, and each call closes its thread's database connections (Eye answers on a new thread each time).
+*   **Parameters**:
+    *   `day` (`YYYY-MM-DD`), **or** `start_time` + `end_time`, **or** `around` + `window_minutes`; none = all time.
+    *   `users` — account names; also returns what happened while they were signed in, labelled `signed_in_user`.
+    *   `activities` (e.g. `logon`, `file_download`, `execution`, `anti_forensics`), `severities` (`critical` / `suspicious` / `notable` / `routine`), `rules` (UBA rule ids), `search` (free text).
+    *   `summary_only` — counts by activity, person and severity only; the first look at a long period.
+    *   `order` (`asc` default, oldest first), `limit` (default 100, at most 300).
+*   **Every event carries** `time`, `what`, `activity`, `rule`, `actor`, `actor_basis`, `signed_in_user`, `severity`, `confidence`, `caveat`, `occurrences`, and `evidence` — `database` (the file in `Target_Artifacts`), `table`, `rowids` / `rowid_range`.
+*   **Read before quoting**: `actor_basis` is how the person was attributed; `signed_in_user` is only who was signed in, never proof of who acted; `caveat` is what the artifact cannot prove. Events are interpretations — confirm a claim against its evidence rows with `query_database`.
+*   **Honest about scope**: `rules_unavailable` lists the behaviours that could not be looked for because their artifact was not parsed — their absence is not evidence of absence. `total_matching` is counted, separately from what `limit` returned.
+*   **Provenance**: the sealed record keeps the window, the filters, the rules that fired, how many rules were unavailable, and the evidence pointers of every returned event.
+*   **Availability**: included in the constrained-model tool set.
+
 ### 4. `query_correlation_results`
 *   **Purpose**: Direct interface with the **Crow-eye Correlation Engine**.
 *   **Query Types**:

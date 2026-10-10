@@ -751,7 +751,7 @@ class ShimCacheParser:
         """
         if not entries:
             print("[NOTE] No entries to save")
-            return
+            return {"records": 0, "inserted": 0, "duplicates": 0}
         
         conn = sqlite3.connect(self.database_path)
         # Configure SQLite to handle datetime objects properly
@@ -778,25 +778,34 @@ class ShimCacheParser:
         # a snapshot taken before the loop cannot see.
         known = {h for (h,) in cursor.execute(
             "SELECT entry_hash FROM shimcache_entries")}
+        # And by content. The hash includes the entry's POSITION in the cache,
+        # which is kept in most-recently-used order: when Windows adds an
+        # entry, every older one moves down a slot, gets a new hash, and was
+        # stored again on the next parse. The same program with the same
+        # timestamp and size is the same entry wherever it sits.
+        known_content = set(cursor.execute(
+            "SELECT path, last_modified, data_size FROM shimcache_entries"))
 
         for entry in entries:
+            # Format datetime consistently without timezone info and milliseconds
+            if entry.last_modified:
+                if entry.last_modified.tzinfo is not None:
+                    # Timezone-aware datetime: use format_forensic_timestamp for consistent formatting
+                    last_modified_str = format_forensic_timestamp(entry.last_modified)
+                else:
+                    # Timezone-naive datetime: convert to string and remove milliseconds
+                    last_modified_str = str(entry.last_modified).split('.')[0]
+            else:
+                last_modified_str = None
+            content = (entry.path, last_modified_str, entry.data_size)
+
             # Check for duplicates
-            if entry.entry_hash in known:
+            if entry.entry_hash in known or content in known_content:
                 duplicates += 1
                 continue
-            
+
             # Insert new entry
             try:
-                # Format datetime consistently without timezone info and milliseconds
-                if entry.last_modified:
-                    if entry.last_modified.tzinfo is not None:
-                        # Timezone-aware datetime: use format_forensic_timestamp for consistent formatting
-                        last_modified_str = format_forensic_timestamp(entry.last_modified)
-                    else:
-                        # Timezone-naive datetime: convert to string and remove milliseconds
-                        last_modified_str = str(entry.last_modified).split('.')[0]
-                else:
-                    last_modified_str = None
                 
                 cursor.execute('''
                     INSERT INTO shimcache_entries 
@@ -824,6 +833,7 @@ class ShimCacheParser:
                     entry.entry_hash
                 ))
                 known.add(entry.entry_hash)
+                known_content.add(content)
                 new_entries += 1
             except sqlite3.IntegrityError:
                 duplicates += 1
@@ -836,6 +846,7 @@ class ShimCacheParser:
         print(f"  [NOTE] New entries added: {new_entries}")
         print(f"  [SYNC] Duplicates skipped: {duplicates}")
         print(f"  [SAVE] Database: {self.database_path}")
+        return {"records": len(entries), "inserted": new_entries, "duplicates": duplicates}
     
     def print_summary(self, entries: List[ShimCacheEntry]):
         """
@@ -887,13 +898,19 @@ class ShimCacheParser:
         """
         print("[START] ShimCache Enhanced Parser Starting...")
         print("=" * 50)
-        
+
+        # A result, so Parse Status can tell "all 1,024 entries were already
+        # in the case" from "no output". It returned None, a re-parse that
+        # added nothing left the database untouched, and the run was reported
+        # as FAILED - "the parser produced no output database".
         try:
             # Get data from every control set on the live registry
             blobs = self.get_live_registry_data()
             if not blobs:
                 print("[FAIL] Failed to retrieve ShimCache data")
-                return
+                return {"success": False, "records": 0,
+                        "error": "No AppCompatCache data could be read from the registry",
+                        "output_path": self.database_path}
             
             print(f"[STATS] Retrieved {len(blobs)} distinct control set(s)")
 
@@ -913,20 +930,27 @@ class ShimCacheParser:
                     entry.format_timestamp()
                 
                 # Save to database
-                self.save_to_database(entries)
-                
+                counts = self.save_to_database(entries) or {}
+
                 # Print summary
                 self.print_summary(entries)
-                
+
                 print(f"\n[OK] Analysis complete! Check database: {self.database_path}")
-                
-            else:
-                print("[FAIL] No entries were successfully parsed")
-                
+                counts.update(success=True, output_path=self.database_path)
+                return counts
+
+            print("[FAIL] No entries were successfully parsed")
+            return {"success": True, "records": 0, "inserted": 0, "duplicates": 0,
+                    "output_path": self.database_path,
+                    "warnings": ["The AppCompatCache value held no entries"]}
+
         except Exception as e:
             print(f"[FAIL] Critical error during execution: {e}")
             import traceback
             traceback.print_exc()
+            # Reported, not swallowed: the error reaches Parse Status.
+            return {"success": False, "records": 0, "error": "%s: %s" % (type(e).__name__, e),
+                    "traceback": traceback.format_exc(), "output_path": self.database_path}
 
 def main():
     """

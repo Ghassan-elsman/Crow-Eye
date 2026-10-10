@@ -422,26 +422,38 @@ class EventIDRule(DefaultRule):
         super().__init__(
             name="EventID_to_EventDescription",
             category="EventID",
-            description="Map event IDs to event descriptions",
+            description="Map Security audit event IDs to what they mean",
             target_db_name="Log_Claw.db"
         )
 
+    # An event ID only means something together with its provider. This rule
+    # used to map a bare ID to whatever text the SystemLogs row held - an
+    # offline EventData payload, or another provider's sentence (System IDs
+    # collide across hundreds of providers). It now maps only Security audit
+    # IDs, whose meaning is fixed, to the catalogue's sentence
+    # (configs/event_descriptions.json).
     def get_query(self) -> str:
         """Generate SQL query with ATTACH statements for EventID_to_EventDescription mapping."""
         return """
-            SELECT 
+            SELECT DISTINCT
                 EventID AS value,
-                EventDescription AS key,
-                'SystemLogs' AS source
-            FROM TargetDB.SystemLogs
-            WHERE EventID IS NOT NULL AND EventDescription IS NOT NULL
+                Source AS key,
+                'SecurityLogs' AS source
+            FROM TargetDB.SecurityLogs
+            WHERE EventID IS NOT NULL AND Source IS NOT NULL
         """
 
     def extract_mappings(self, query_results: List[Tuple]) -> List[Tuple[str, str, str]]:
-        """Extract mappings from query results, filtering out NULL values."""
-        return [(str(row[0]), str(row[1]), str(row[2])) 
-                for row in query_results 
-                if row[0] and str(row[0]).strip() and row[1] and str(row[1]).strip()]
+        """(EventID, catalogue sentence, source) for Security-Auditing events."""
+        from utils.event_descriptions import describe, has_text, normalise_provider
+        out = []
+        for row in query_results:
+            eid, provider = row[0], row[1]
+            if not eid or normalise_provider(provider) != "security-auditing":
+                continue
+            if has_text(provider, eid):
+                out.append((str(eid), describe(provider, eid), str(row[2])))
+        return out
 
 
 class WellKnownSIDRule(DefaultRule):

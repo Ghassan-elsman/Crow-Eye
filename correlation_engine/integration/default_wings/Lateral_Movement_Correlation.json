@@ -226,13 +226,19 @@
       "rule_id": "lat_admin_share_drop",
       "name": "File Dropped on Admin Share",
       "semantic_value": "Admin Share File Drop",
-      "description": "MFT/USN shows file creation under an admin share path (C$, ADMIN$, IPC$)",
+      "description": "A program file created directly in C:\\Windows - where a file copied to the ADMIN$ share lands (PsExec drops PSEXESVC.exe there). The local MFT never records the share path itself.",
       "conditions": [
         {
           "feather_id": "mft_usn",
-          "field_name": "path",
+          "field_name": "usn_reason",
           "operator": "contains",
-          "value": "$"
+          "value": "FILE_CREATE"
+        },
+        {
+          "feather_id": "mft_usn",
+          "field_name": "reconstructed_path",
+          "operator": "regex",
+          "value": "(?i)^\\./Windows/[^/]+\\.(?:exe|dll|bat|cmd|ps1|vbs|sys)$"
         }
       ],
       "logic_operator": "AND",
@@ -263,9 +269,9 @@
           },
           {
             "feather_id": "mft_usn",
-            "field_name": "path",
-            "operator": "contains",
-            "value": "$"
+            "field_name": "reconstructed_path",
+            "operator": "regex",
+            "value": "(?i)^\\./Windows/[^/]+\\.(?:exe|dll|bat|cmd|ps1|vbs|sys)$"
           }
         ]
       },

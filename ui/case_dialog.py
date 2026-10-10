@@ -19,6 +19,15 @@ from pathlib import Path
 from styles import CrowEyeStyles, Colors
 
 
+
+# The option cards are plain QWidgets: their card look and hover edge live in
+# the window sheet (WA_StyledBackground on each card makes the rule paint).
+_CARD_RULES = """
+QWidget#option_card { background: #0F172A; border: 1px solid #1E293B; border-radius: 16px; }
+QWidget#option_card:hover { border-color: rgba(99, 102, 241, 0.55); background: #111A33; }
+QWidget#option_card QWidget, QWidget#option_card QLabel { background: transparent; border: none; }
+"""
+
 class CaseDialog(QtWidgets.QDialog):
     """
     Custom dialog for case management with enhanced cyberpunk styling.
@@ -33,7 +42,9 @@ class CaseDialog(QtWidgets.QDialog):
         
         self.parent = parent
         self.choice = None  # Will store user choice: 'create' or 'open'
-        
+
+        from ui.site_theme import begin_site_theme
+        begin_site_theme(self, extra=_CARD_RULES)   # before the widgets exist
         self.setup_ui()
         self.apply_styles()
         
@@ -77,13 +88,14 @@ class CaseDialog(QtWidgets.QDialog):
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
                     stop:0 transparent, 
-                    stop:0.2 #00FFFF, 
-                    stop:0.5 #00FF7F, 
-                    stop:0.8 #00FFFF, 
+                    stop:0.2 #6366F1, 
+                    stop:0.5 #22D3EE, 
+                    stop:0.8 #6366F1, 
                     stop:1 transparent);
                 border-radius: 1px;
             }
         """)
+        divider_widget.setProperty("keepStyle", True)
         return divider_widget
         
     def create_header(self):
@@ -124,7 +136,7 @@ class CaseDialog(QtWidgets.QDialog):
             "Start a new forensic investigation with a fresh case",
             "new-case-icon.svg",  # SVG icon
             "create",
-            "#00FF7F"  # Green accent
+            "#4ADE80"  # Green accent (site ok)
         )
         content_layout.addWidget(create_card)
         
@@ -134,7 +146,7 @@ class CaseDialog(QtWidgets.QDialog):
             "Continue working with an existing case or review previous findings",
             "open-case-icon.svg",  # SVG icon
             "open",
-            "#00FFFF"  # Cyan accent
+            "#22D3EE"  # Cyan accent (site info)
         )
         content_layout.addWidget(open_card)
         
@@ -154,16 +166,18 @@ class CaseDialog(QtWidgets.QDialog):
         # Add shadow effect for depth
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(15)
-        shadow.setColor(QtGui.QColor(0, 255, 255, 100))
+        shadow.setColor(QtGui.QColor(0, 0, 0, 110))
         shadow.setOffset(0, 5)
         card.setGraphicsEffect(shadow)
+        card.setAttribute(Qt.WA_StyledBackground, True)     # paint the card rule
+        card.setAttribute(Qt.WA_Hover, True)
         
         # Add hover animations
         def on_enter(event):
             card.is_hovered = True
             # Enhance shadow on hover
             shadow.setBlurRadius(25)
-            shadow.setColor(QtGui.QColor(0, 255, 255, 150))
+            shadow.setColor(QtGui.QColor(99, 102, 241, 90))
             shadow.setOffset(0, 8)
             
             # Enhance icon container on hover (keep transparent)
@@ -179,7 +193,7 @@ class CaseDialog(QtWidgets.QDialog):
             card.is_hovered = False
             # Reset shadow
             shadow.setBlurRadius(15)
-            shadow.setColor(QtGui.QColor(0, 255, 255, 100))
+            shadow.setColor(QtGui.QColor(0, 0, 0, 110))
             shadow.setOffset(0, 5)
             
             # Reset icon container (keep transparent)
@@ -268,6 +282,8 @@ class CaseDialog(QtWidgets.QDialog):
             }}
         """)
         
+        card.title_label = title_label
+        card.desc_label = desc_label
         text_layout.addWidget(title_label)
         text_layout.addWidget(desc_label)
         text_layout.addStretch()
@@ -285,8 +301,9 @@ class CaseDialog(QtWidgets.QDialog):
                 padding: 10px;
             }}
         """)
+        arrow_label.setProperty("keepStyle", True)      # the card's accent arrow
         card_layout.addWidget(arrow_label)
-        
+
         return card
         
     def create_buttons(self):
@@ -300,6 +317,7 @@ class CaseDialog(QtWidgets.QDialog):
         exit_button = QtWidgets.QPushButton("EXIT")
         exit_button.setFixedSize(120, 45)
         exit_button.clicked.connect(self.reject)
+        self.exit_button = exit_button
         exit_button.setStyleSheet("""
             QPushButton {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
@@ -327,24 +345,21 @@ class CaseDialog(QtWidgets.QDialog):
         return button_widget
         
     def apply_styles(self):
-        """Apply enhanced cyberpunk styles to all components."""
-        # Enhanced dialog style
-        self.setStyleSheet(CrowEyeStyles.CASE_DIALOG_STYLE)
-        
-        # Apply specific styles to titled components
+        """The site look (ui/site_theme.py): one sheet, roles for the labels,
+        the option cards as site cards, EXIT as the stop button."""
+        from ui.site_theme import apply_site_theme, set_role, set_variant, set_status
+        apply_site_theme(self, extra=_CARD_RULES)
         title_widget = self.findChild(QtWidgets.QLabel, "dialog_title")
         if title_widget:
-            title_widget.setStyleSheet(CrowEyeStyles.DIALOG_TITLE)
-            
+            set_role(title_widget, "title")
         desc_widget = self.findChild(QtWidgets.QLabel, "dialog_description")
         if desc_widget:
-            desc_widget.setStyleSheet(CrowEyeStyles.DIALOG_DESCRIPTION)
-        
-        # Style option cards with enhanced effects
-        for widget in self.findChildren(QtWidgets.QWidget):
-            if widget.objectName() == "option_card":
-                widget.setStyleSheet(CrowEyeStyles.OPTION_CARD_STYLE)
-            
+            set_role(desc_widget, "muted")
+        for card in self.findChildren(QtWidgets.QWidget, "option_card"):
+            set_role(card.title_label, "subtitle")
+            set_status(card.title_label, "ok" if card.accent_color == "#4ADE80" else "info")
+        set_variant(self.exit_button, "danger")
+
     def handle_card_click(self, choice_value):
         """Handle card click event with visual feedback."""
         self.choice = choice_value

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import BrowserTimeline from './BrowserTimeline.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import DaySection from './DaySection.jsx'
@@ -73,10 +73,10 @@ export default function App() {
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getBrowserHeatmaps', JSON.stringify(filterArgs))
+      latest('getBrowserHeatmaps', JSON.stringify(filterArgs))
         .then(setHeatmaps).catch((e) => { setHeatmaps({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') })
         .finally(() => setHmLoading(false))
-      call('getBrowserOverview', JSON.stringify(filterArgs))
+      latest('getBrowserOverview', JSON.stringify(filterArgs))
         .then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
         .finally(() => setOvLoading(false))
     }, 180)
@@ -97,17 +97,17 @@ export default function App() {
     if (!selectedDay) { setDayDetail(null); setDayActivity(null); return }
     setDayLoading(true)
     setLoadMsg('Loading the selected period…')
-    call('getBrowserDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs }))
+    latest('getBrowserDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs }))
       .then(setDayDetail).catch((e) => { setDayDetail(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
       .finally(() => setDayLoading(false))
-    call('getBrowserDayActivity', JSON.stringify({ day: selectedDay, topN: 30, ...filterArgs }))
+    latest('getBrowserDayActivity', JSON.stringify({ day: selectedDay, topN: 30, ...filterArgs }))
       .then(setDayActivity).catch((e) => { setDayActivity(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
   }, [selectedDay, filterArgs])
 
   useEffect(() => {
     if (!openDomain) { setDomainDetail(null); return }
     setDomainLoading(true)
-    call('getBrowserDomainDetail', JSON.stringify({ domain: openDomain }))
+    latest('getBrowserDomainDetail', JSON.stringify({ domain: openDomain }))
       .then(setDomainDetail).catch((e) => { setDomainDetail(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
       .finally(() => setDomainLoading(false))
   }, [openDomain])

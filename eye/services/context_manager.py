@@ -555,6 +555,7 @@ class ContextManager:
             "search_artifacts": f.handle_search_artifacts,
             "semantic_search_artifacts": f.handle_semantic_search_artifacts,
             "query_timeline": f.handle_query_timeline,
+            "query_user_behavior": f.handle_query_user_behavior,
             "query_correlation_results": f.handle_query_correlation_results,
             "correlate_imported_evidence": f.handle_correlate_imported_evidence,
             "list_case_files": f.handle_list_case_files,
@@ -1163,6 +1164,18 @@ class ContextManager:
             "to every value under that key and dates none of them - say "
             "\"at or before\" for those, and never rest a conclusion on one "
             "alone. They are excluded unless you pass include_bounded=true."
+            "\n\n## Questions About People — USE `query_user_behavior`\n"
+            "For what a person did (\"what did Ann do on the 3rd\", \"who signed in "
+            "that night\", \"what was downloaded, run or plugged in\", \"anything "
+            "suspicious this week\"), call `query_user_behavior` with `day` (or a "
+            "range) and, if named, `users`. It runs Crow-Eye's behaviour analysis "
+            "over every artifact and answers in events: who, when, what, how sure. "
+            "Start with summary_only=true for a long period. Read `actor_basis` "
+            "(how the person was attributed) and `caveat` on each event; "
+            "`signed_in_user` is only who was signed in, never proof of who acted. "
+            "Confirm what you quote against the event's evidence rows with "
+            "`query_database`. A behaviour listed under `rules_unavailable` could "
+            "not be looked for - do not report its absence as a finding."
         )
 
         # 2d. SEMANTIC EVIDENCE DISCOVERY (when an embedding index is available)
@@ -1587,7 +1600,7 @@ class ContextManager:
         # payload won't fit, so it must be offered exactly here.
         essential_names = [
             "query_database", "analyze_large_dataset", "search_artifacts", "get_schema",
-            "query_timeline",
+            "query_timeline", "query_user_behavior",
             "report_append_section", "report_add_data_table", "chat_add_table", "report_add_chart",
             "query_correlation_results", "list_case_files"
         ]

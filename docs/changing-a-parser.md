@@ -47,6 +47,7 @@ ImageCollectionCoordinator.collect_from_image(image, partitions, artifact_type_f
 | Parser bookkeeping | `parsed_at`, and nothing else |
 | Binary blob decoding | `Artifacts_Collectors/registry_binary_parser.py`, beside the BAM/DAM/RecentDocs/UserAssist decoders |
 | Anything autostart-shaped | `AutoStartPrograms(location, program_name, command, parsed_at)` — `location` distinguishes the source key |
+| Writing rows | `utils/dedupe_insert.py`: `insert_new()` (rows not stored yet, NULL-safe) + `ensure_identity_index()` + a `Tally` whose `as_result()` is the parser's return |
 
 Add a **new table** only when no existing one holds that shape. A new **column** on an existing table
 is preferable to a new table. Scheduled Tasks earned a table because triggers, last run and last
@@ -86,6 +87,57 @@ and the **i** button above an empty table reads it through `utils/table_sources.
   name in `_TYPE_ALIASES`.
 - **Return a real result** (dict with `success` / `records` / `errors`), or an explicit `status` when the
   parser already knows why it stopped. A bare `None` with no fresh database is recorded as **Failed**.
+- **Report what the run added**: `records` = rows read, `inserted` = new to the case, `duplicates` =
+  already there (`Tally.as_result()` builds exactly this). Without them Parse Status falls back to the
+  database's row delta. An unchanged database after a successful run is **Parsed** ("no new rows"), never
+  "no output database".
+
+### Re-parse — add only what is new
+Running a parser twice on the same machine must **add the new rows and nothing else**:
+- **Never** `DROP` or `DELETE` a table or a profile's rows to avoid duplicates. What has since rolled out
+  of the live source (old events, aged-out history) is lost from the case with them.
+- **Never** a plain `INSERT` into a table with no identity. Write through `insert_new()`, keyed on what
+  identifies the evidence (a record number, a key + its write time, or every column but `parsed_at`).
+  `parsed_at` is never part of an identity: it differs on every run.
+- Guards use `IS`, not `=`. `NULL = NULL` is never true, so a row with an empty column passes a `=`
+  guard on every run (the Recycle Bin did).
+- A guard that compares raw value names with column names never matches (Amcache: `ProgramId` vs
+  `program_id`, every row stored twice). The test is the row count after a second run, not the code.
+- Identity indexes are plain, not UNIQUE: a case parsed before already holds duplicates, and a UNIQUE
+  index cannot be built on it. Those cases keep their rows; only new ones are checked.
+- **The identity index must be selective.** Every new row looks itself up through it: an index on
+  `(source_path, store_kind)` - two values - made each insert scan a profile's whole local storage, and
+  a live Parse All sat in the browser stage for 40+ minutes. Index the columns that tell rows apart
+  (origin + key + seq; url + time), check with `EXPLAIN QUERY PLAN` that it says `SEARCH ... USING
+  INDEX` on all of them, and time a second parse of real data.
+- **A table that was empty when the run began needs no check:** take a plain INSERT for it (SRUM and
+  Browsers record `empty_at_start` per table), so a first parse costs nothing extra.
+- **A table with a UNIQUE key whose other columns change** (visit counts, last-access times, versions):
+  `INSERT ... ON CONFLICT(key) DO UPDATE SET ... WHERE col IS NOT excluded.col` - `OR IGNORE` keeps the
+  first parse's values for ever.
+- A batch retried row by row after a failure must run in a SAVEPOINT: `executemany` is not atomic, and
+  the rows before the bad one get stored twice.
+- Guarded by `correlation_engine/tests/test_reparse_adds_only_new.py`: a new writer gets a "twice -> 0
+  new" test there.
+
+### Logging — what the case log says about your parser
+Every parser runs inside `utils/parse_logging.artifact_run()`, called by `ParserInvoker.invoke_parser`
+(offline / image) and the live runner (`utils/concurrency/standalone_parsers.py`). It logs the start and
+`done: N records in Xs` under `Artifacts_Collectors.run.<artifact>` → `parsers.log`, copies what the
+parser prints into that logger, and feeds the parsing dialog's checklist.
+- **Log with `logging.getLogger(__name__)`**, never `logging.info(...)`: the root logger reaches no
+  component file. `test_parse_logging.py` fails on a root-logger call in the parser folders.
+- **A new module in `Artifacts_Collectors/`** (or `MFT and USN journal/`) is also imported by its bare
+  name: add it to `PARSER_MODULES` in `utils/logging_setup.py`, or its records miss `parsers.log`.
+- **Report the file you are on** with `run.file(path)` when the parser is handed the `ArtifactRun`, and
+  print progress bars with `\r` - the dialog shows the last one as its *Now:* line, the log skips them.
+
+### Per-user files — keep the owner's folder
+`NTUSER.DAT`, `UsrClass.dat`, LNK files and Jump Lists exist once per user under the same names. Collectors
+place them through `Artifacts_Collectors/user_artifact_paths.py` (`Users\<name>\...`), so a hive stays
+beside its own `.LOG1/.LOG2` and the folder names the owner. A new per-user artifact type goes in
+`PER_USER_TYPES` there; read the owner back with `owner_from_path()` (after a transaction-log replay,
+on `registry_transaction_log.source_path_for(path)` - the replayed copy is a temp file).
 
 ### The correlation engine
 - `correlation_engine/config/artifact_types.json` — the source of truth
@@ -113,7 +165,7 @@ reading these parser sources, and the Sentinel CI gate fails until it is regener
 
 ---
 
-## 4. Two traps that fail quietly
+## 4. Traps that fail quietly
 
 **Non-ASCII in parser `print()`.** Parsers run **in-process** under `ParserInvoker`, printing to a
 console that is `cp1252` by default on Windows. A single `✓` raises `UnicodeEncodeError` and aborts
@@ -128,6 +180,16 @@ mutate the host's stdout.
 and nothing else in the codebase creates it. Without `os.makedirs(..., exist_ok=True)` the parse dies
 on a bare sqlite `unable to open database file`.
 
+**A raw-disk read of a file must follow its data runs.** The `$MFT` is a file, and on a drive in use
+for a while it is fragmented. `MFT_Claw` and the raw-disk `$MFT` copier located record N at
+`mft_lcn * cluster + N * 1024`, which holds only inside the first fragment: one C: drive's `$MFT` was in
+17 fragments and the parse kept 205,056 of 3.3 million records. Past the first fragment the reads land
+on unrelated clusters, the `FILE` signature check fails, and the record is dropped at debug level -
+"Parsing errors: 0". The tell is a USN journal whose files are mostly "not in the MFT", and a record
+count that matches the first run's length exactly. Read through `utils/ntfs_runs.py`
+(`mft_layout`, `read_stream`). A non-resident attribute's real size is in its header at 0x30 - reading
+only resident sizes made every file over ~700 bytes read as empty.
+
 ---
 
 ## 5. Verify what reached the screen
@@ -135,6 +197,7 @@ on a bare sqlite `unable to open database file`.
 Row counts, not "it ran":
 
 - parse before and after, and diff row counts per table — existing tables keep or increase, never lose
+- **parse twice**: the second run reports 0 new (Parse Status: *already present*) and no table grows
 - the GUI tab's `rowCount()` equals `SELECT count(*)` from the table. If any of the four GUI touch
   points is missing, the tab renders empty while the database has rows, and every structural check
   still passes

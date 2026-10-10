@@ -63,6 +63,23 @@ class CollectionResult:
     artifacts: List[CollectedArtifactInfo]
 
 
+try:
+    from Artifacts_Collectors.browser_paths import (
+        BROWSER_CASE_DIR, browser_path_info, browser_path_skipped, browser_source_tag)
+except ImportError:  # run with Artifacts_Collectors itself on sys.path
+    import sys as _sys
+    _ac = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _ac not in _sys.path:
+        _sys.path.insert(0, _ac)
+    from browser_paths import (BROWSER_CASE_DIR, browser_path_info, browser_path_skipped,
+                               browser_source_tag)
+
+try:
+    from Artifacts_Collectors.user_artifact_paths import PER_USER_TYPES, UserFolderPlacer
+except ImportError:
+    from user_artifact_paths import PER_USER_TYPES, UserFolderPlacer
+
+
 class ArtifactCollector:
     """
     Core collection engine for scanning directories, detecting artifact types,
@@ -99,7 +116,18 @@ class ArtifactCollector:
         
         # Cancellation support
         self._cancelled = False
-        
+
+        # Browser trees: the "Include browser cache" toggle, the folder being
+        # imported (a Users folder above it is the analyst's, not the
+        # evidence's), and where each collected file's user folder came from.
+        self.include_browser_cache = True
+        self._browser_base = None
+        self._browser_roots = {}    # source file -> (source user folder, case user folder)
+
+        # Per-user files (hives + their logs, LNK, Jump Lists) keep their
+        # owner's folder; see user_artifact_paths.
+        self._user_placer = UserFolderPlacer(self.target_artifacts_dir)
+
         # Mapping of artifact types to their subdirectories in live_acquisition (input files)
         # Output databases go to Target_Artifacts
         self.artifact_directories = {
@@ -114,12 +142,25 @@ class ArtifactCollector:
             'SRUM': 'SRUM_Data',
             'LNK/Shortcut': 'Shortcuts',
             'ShimCache': 'ShimCache',
+            # Browser profiles keep their tree below this folder (see
+            # _browser_tree_destination) - never flattened by file name.
+            'Browser': 'Browser',
             'Unknown': 'Unknown'
         }
         
-        # Hash tracking for deduplication
-        self.collected_hashes: Dict[str, str] = {}  # hash -> file_path mapping
-        self._load_existing_hashes()
+        # Hash tracking for deduplication: hash -> file_path. Filled from the
+        # case on first use (_is_duplicate), not here - every collector,
+        # scan-only ones included, used to hash all of live_acquisition when
+        # it was created.
+        self.collected_hashes: Dict[str, str] = {}
+        self._hashes_loaded = False
+
+        # Live counts for the progress panel (found / copied / failed). The
+        # coordinator only learned them at the very end, so they read 0 for
+        # the whole run.
+        self.live_counts = {"found": 0, "collected": 0, "failed": 0}
+        # What a cancelled run had done by then (collect_from_directory).
+        self.partial_result: Optional["CollectionResult"] = None
         
         # Ensure case directory structure exists (skip if scan_only)
         if not self.scan_only:
@@ -148,12 +189,25 @@ class ArtifactCollector:
         try:
             # Scan all artifact subdirectories
             for artifact_type, subdir in self.artifact_directories.items():
+                # Browser trees are never deduplicated (identical bytes in two
+                # profiles are two pieces of evidence), so their files must not
+                # enter the registry either: a Prefetch file that happened to
+                # match a browser file's bytes was being skipped as a
+                # "duplicate". It also spares hashing thousands of cache files
+                # every time a collector is created.
+                if artifact_type == 'Browser':
+                    continue
                 artifact_dir = os.path.join(self.target_artifacts_dir, subdir)
                 if not os.path.exists(artifact_dir):
                     continue
 
                 # Scan all files in this artifact directory
                 for root, _, files in os.walk(artifact_dir):
+                    # Per-user trees are never deduplicated, so they do not
+                    # enter the registry either (see _collect_user_file).
+                    rel_root = os.path.relpath(root, artifact_dir).replace("/", "\\").lower()
+                    if rel_root.split("\\")[0] in ("users", "windows"):
+                        continue
                     for filename in files:
                         # Skip database files
                         if filename.endswith('.db'):
@@ -182,6 +236,9 @@ class ArtifactCollector:
         Returns:
             Path to existing file if duplicate, None otherwise
         """
+        if not self._hashes_loaded:
+            self._hashes_loaded = True
+            self._load_existing_hashes()
         return self.collected_hashes.get(file_hash)
 
     def _save_hash_registry(self):
@@ -190,6 +247,8 @@ class ArtifactCollector:
 
         This allows persistence of deduplication information across sessions.
         """
+        if not self._hashes_loaded:
+            return          # never read: writing it would replace it with this run's part
         try:
             import json
             hash_file = os.path.join(self.case_root, 'artifact_hashes.json')
@@ -286,16 +345,26 @@ class ArtifactCollector:
         mapping = {
             "Registry Hives": "Registry",
             "Prefetch Files": "Prefetch",
-            "Jump Lists": "JumpLists",
+            "Jump Lists": "link_jumplist",
+            "Browsers": "Browser",
             "MFT Files": "MFT",
             "USN Journal": "USN",
             "Recycle Bin": "RecycleBin",
             "AmCache": "AmCache",
-            "ShimCache": "Registry" # ShimCache comes from SYSTEM hive
+            "Event Logs": "EVTX",
+            "SRUM": "SRUM",
         }
-        
+
+        # ShimCache lives in the SYSTEM hive: the detector types a SYSTEM file
+        # found under a shimcache folder 'ShimCache' and any other one
+        # 'Registry'. The filter used to map to 'Registry' alone, so it took
+        # every hive and missed the 'ShimCache' ones.
+        if artifact_type_filter == "ShimCache":
+            return artifact_type == "ShimCache" or (
+                artifact_type == "Registry" and getattr(self, "_current_name", "").upper().startswith("SYSTEM"))
+
         target_type = mapping.get(artifact_type_filter, artifact_type_filter)
-        
+
         # Filter matches artifact type
         return artifact_type == target_type
 
@@ -318,8 +387,22 @@ class ArtifactCollector:
             dest_dir = os.path.dirname(destination_path)
             os.makedirs(dest_dir, exist_ok=True)
             
-            # Copy file with metadata preservation
-            shutil.copy2(source_path, destination_path)
+            # Copy file with metadata preservation. A USN journal collected
+            # before round 20 is a 0-byte file whose data sits in its NTFS
+            # alternate data stream ":$J" - a plain copy kept only the empty
+            # file, so the stream's bytes are what is copied.
+            source = source_path
+            try:
+                if os.name == "nt" and os.path.getsize(source_path) == 0 \
+                        and os.path.getsize(source_path + ":$J") > 0:
+                    source = source_path + ":$J"
+            except OSError:
+                pass
+            if source != source_path:
+                shutil.copyfile(source, destination_path)
+                shutil.copystat(source_path, destination_path)
+            else:
+                shutil.copy2(source_path, destination_path)
             return True
             
         except Exception as e:
@@ -470,25 +553,22 @@ class ArtifactCollector:
         try:
             # Detect artifact type
             detection_result = self.detect_artifact_type(file_path)
+            self._current_name = os.path.basename(file_path)
             
             # Apply filter
             if not self._should_collect_artifact(detection_result.artifact_type, artifact_type_filter):
                 return None
-            
+
+            # Browser files keep their folder tree (see _process_browser_file).
+            if detection_result.artifact_type == 'Browser':
+                return self._process_browser_file(file_path, detection_result)
+
             # If artifact is Unknown and we are NOT filtering, we should still collect it
             # if the user wants "All Types".
             if detection_result.artifact_type == 'Unknown' and artifact_type_filter is not None and artifact_type_filter != "All Types":
                 return None
             
-            # Special case for ShimCache - it is technically part of Registry collection (SYSTEM hive)
-            # but we want to show it as a separate parsable type.
-            if artifact_type_filter == "ShimCache" and detection_result.artifact_type != "Registry":
-                 # If user specifically wants ShimCache, we look for SYSTEM hive which is typed as Registry
-                 pass 
-            elif artifact_type_filter == "ShimCache" and "SYSTEM" not in file_path.upper():
-                 return None
-            
-            # NO VALIDATION - Just collect based on filename/extension detection
+# NO VALIDATION - Just collect based on filename/extension detection
             # All detected Windows artifacts are collected without validation
             
             # In scan-only mode, don't copy files - just detect and record
@@ -510,6 +590,13 @@ class ArtifactCollector:
                     timestamp=datetime.now()
                 )
             
+            # Per-user files keep their owner's folder and are never
+            # deduplicated: two users' identical Jump Lists are two pieces of
+            # evidence, and a hive must stay beside its own logs.
+            user_dest = self._user_destination(file_path, detection_result.artifact_type)
+            if user_dest:
+                return self._collect_user_file(file_path, user_dest, detection_result)
+
             # Collection mode - proceed with copying files
             # Calculate hash for deduplication check (if enabled)
             file_hash = ""
@@ -585,8 +672,201 @@ class ArtifactCollector:
             )
 
     
-    def collect_from_directory(self, source_dir: str, artifact_type_filter: Optional[str] = None, 
+    def _user_destination(self, source_path: str, artifact_type: str,
+                          source_key_prefix: Optional[str] = None,
+                          base: Optional[str] = None) -> Optional[str]:
+        """Case path for a per-user file, or None for every other file."""
+        normalized = self._normalize_artifact_type(artifact_type)
+        if normalized not in PER_USER_TYPES:
+            return None
+        subdir = self.artifact_directories.get(normalized)
+        if not subdir:
+            return None
+        if source_key_prefix is None:
+            source_key_prefix = "dir:%s" % os.path.abspath(self._browser_base or "")
+        if base is None:
+            base = self._browser_base
+        return self._user_placer.destination(subdir, source_path, source_key_prefix, base)
+
+    def _collect_user_file(self, file_path: str, destination_path: str, detection_result) -> CollectedArtifactInfo:
+        """Copy one per-user file to its owner's folder in the case."""
+        info = dict(source_path=file_path, artifact_type=detection_result.artifact_type,
+                    file_size=detection_result.file_size, timestamp=datetime.now())
+        same = (os.path.normcase(os.path.abspath(file_path))
+                == os.path.normcase(os.path.abspath(destination_path)))
+        if not same and not self._copy_artifact(file_path, destination_path):
+            return CollectedArtifactInfo(destination_path="", file_hash="", collection_status="failed",
+                                         error_message="Failed to copy file", **info)
+        file_hash = self._calculate_file_hash(destination_path) if self.calculate_hashes else ""
+        return CollectedArtifactInfo(destination_path=destination_path, file_hash=file_hash,
+                                     collection_status="success", error_message=None, **info)
+
+    def _browser_tree_destination(self, tag: str, rel_path: str) -> Optional[str]:
+        """``live_acquisition/Browser/<tag>/Users/<rel_path>``, or None when the
+        result would not stay inside it (a drive or ``..`` component in an
+        evidence path must never redirect a copy)."""
+        parts = [p for p in rel_path.replace("/", "\\").split("\\")
+                 if p and p not in (".", "..") and ":" not in p]
+        root = os.path.abspath(os.path.join(self.target_artifacts_dir, BROWSER_CASE_DIR))
+        dest = os.path.abspath(os.path.join(root, tag, "Users", *parts))
+        if not os.path.normcase(dest).startswith(os.path.normcase(root) + os.sep):
+            return None
+        return dest
+
+    def _process_browser_file(self, file_path: str, detection_result) -> Optional[CollectedArtifactInfo]:
+        """Copy one browser file to its place in the preserved tree.
+
+        Not hash-deduplicated: the same bytes in two profiles are two pieces of
+        evidence, and dropping one would leave a profile incomplete. Folders the
+        parser never reads (and the cache, when the toggle is off) are skipped.
+        Each source keeps its own folder (``browser_source_tag``), so an
+        existing destination file can only be this same source collected
+        before - never another machine's file with the same name.
+        """
+        where = browser_path_info(file_path, self._browser_base)
+        if not where:
+            return None
+        rel, src_root, volume_root = where
+        if browser_path_skipped(rel, self.include_browser_cache):
+            return None
+        info = dict(source_path=file_path, artifact_type='Browser',
+                    file_size=detection_result.file_size, file_hash="",
+                    error_message=None, timestamp=datetime.now())
+        if self.scan_only:
+            self._browser_roots[file_path] = (src_root, None)
+            return CollectedArtifactInfo(destination_path=None, collection_status="success", **info)
+        # A file already inside this case's Browser tree stays where it is.
+        browser_root = os.path.normcase(os.path.abspath(
+            os.path.join(self.target_artifacts_dir, BROWSER_CASE_DIR))) + os.sep
+        if os.path.normcase(os.path.abspath(file_path)).startswith(browser_root):
+            self._browser_roots[file_path] = (src_root, src_root)
+            return CollectedArtifactInfo(destination_path=file_path, collection_status="success", **info)
+        tag = browser_source_tag(volume_root)
+        destination_path = self._browser_tree_destination(tag, rel)
+        if not destination_path:
+            info["error_message"] = "Browser path would leave the case folder"
+            return CollectedArtifactInfo(destination_path="", collection_status="failed", **info)
+        user = rel.replace("/", "\\").split("\\")[0]
+        self._browser_roots[file_path] = (
+            src_root, os.path.join(self.target_artifacts_dir, BROWSER_CASE_DIR, tag, "Users", user))
+        if os.path.exists(destination_path):
+            return CollectedArtifactInfo(destination_path=destination_path,
+                                         collection_status="success", **info)
+        if not self._copy_artifact(file_path, destination_path):
+            info["error_message"] = "Failed to copy file"
+            return CollectedArtifactInfo(destination_path="", collection_status="failed", **info)
+        return CollectedArtifactInfo(destination_path=destination_path, collection_status="success", **info)
+
+    def _collapse_browser_artifacts(self, artifacts):
+        """One result per browser USER folder instead of one per file.
+
+        A profile is thousands of files (LevelDB, IndexedDB, cache). Listing each
+        in the scan index made the Parse dialog unreadable; the browser parser
+        walks the whole tree anyway, so one entry per user is what it needs.
+        """
+        out, groups = [], {}
+        for a in artifacts:
+            if a.artifact_type != 'Browser':
+                out.append(a)
+                continue
+            src_root, dst_root = self._browser_roots.get(a.source_path, (None, None))
+            key = dst_root or src_root or a.source_path
+            g = groups.setdefault(key, {"src": src_root or a.source_path, "dst": dst_root,
+                                        "size": 0, "failed": 0, "count": 0, "ts": a.timestamp})
+            g["size"] += a.file_size or 0
+            g["failed"] += 1 if a.collection_status == "failed" else 0
+            g["count"] += 1
+        for g in groups.values():
+            out.append(CollectedArtifactInfo(
+                source_path=g["src"],
+                destination_path=None if self.scan_only else g["dst"],
+                artifact_type='Browser', file_size=g["size"], file_hash="",
+                collection_status="success" if g["failed"] < g["count"] else "failed",
+                error_message=(f"{g['failed']} of {g['count']} browser file(s) could not be copied"
+                               if g["failed"] else None),
+                timestamp=g["ts"]))
+        return out
+
+    # -- chain of custody --------------------------------------------------
+    def _custody_begin(self, source_dir, artifact_type_filter, include_subdirs, specific_files):
+        """Open the run's custody record: a collection (or a scan) of evidence
+        files into this case. Never raises; None when it cannot be opened."""
+        try:
+            from utils import custody
+            return custody.begin(
+                self.case_root, "offline scan" if self.scan_only else "offline collection",
+                options={"source": source_dir, "artifact_type": artifact_type_filter or "All Types",
+                         "include_subdirectories": include_subdirs,
+                         "specific_files": len(specific_files) if specific_files else None,
+                         "hashes": self.calculate_hashes},
+                output_dir=None if self.scan_only else self.target_artifacts_dir)
+        except Exception as e:
+            print(f"[Custody] Record not started: {e}")
+            return None
+
+    @staticmethod
+    def _custody_times(rec, path):
+        if rec is None:
+            return None
+        try:
+            from utils import custody
+            return custody.file_times(path)
+        except Exception:
+            return None
+
+    def _custody_note(self, rec, info, times):
+        """One file's outcome into the record. A copied file is verified: the
+        SHA-256 of the copy against the source's (which the duplicate check
+        already took - the source is not read a second time)."""
+        if rec is None or info is None:
+            return
+        try:
+            status = info.collection_status
+            src_hash = info.file_hash or None
+            if status == "failed":
+                rec.add_failure(info.source_path, info.error_message or "not collected",
+                                method="copy", artifact_type=info.artifact_type)
+            elif status == "skipped_duplicate":
+                rec.add_source(info.source_path, method="not copied (duplicate)", times=times,
+                               source_sha256=src_hash, hash_source=src_hash is None,
+                               note=info.error_message)
+            elif self.scan_only or not info.destination_path:
+                rec.add_source(info.source_path, method="scan (read, not copied)", times=times,
+                               source_sha256=src_hash, hash_source=src_hash is None,
+                               note=info.artifact_type)
+            else:
+                rec.add_source(info.source_path, copy=info.destination_path, method="copy",
+                               times=times, source_sha256=src_hash, note=info.artifact_type)
+        except Exception as e:
+            print(f"[Custody] Entry for {getattr(info, 'source_path', '?')} not recorded: {e}")
+
+    def collect_from_directory(self, source_dir: str, artifact_type_filter: Optional[str] = None,
                                include_subdirs: bool = True, specific_files: Optional[List[str]] = None) -> CollectionResult:
+        """Collect (or scan), inside a chain-of-custody record of its own."""
+        rec = self._custody_begin(source_dir, artifact_type_filter, include_subdirs, specific_files)
+        self._custody_rec = rec
+        status = "failed"
+        try:
+            result = self._collect_from_directory(source_dir, artifact_type_filter,
+                                                  include_subdirs, specific_files)
+            status = "completed" if not result.failed else "completed with failures"
+            return result
+        except InterruptedError:
+            status = "cancelled"
+            raise
+        finally:
+            self._custody_rec = None
+            if rec is not None:
+                try:
+                    from utils import custody
+                    path = custody.end(status, rec=rec)
+                    if path:
+                        print(f"[Custody] Record written: {path}")
+                except Exception as e:
+                    print(f"[Custody] Record not written: {e}")
+
+    def _collect_from_directory(self, source_dir: str, artifact_type_filter: Optional[str] = None,
+                                include_subdirs: bool = True, specific_files: Optional[List[str]] = None) -> CollectionResult:
         """
         Collect artifacts from a directory or specific files.
         
@@ -601,7 +881,13 @@ class ArtifactCollector:
         """
         # Reset cancellation flag
         self._cancelled = False
-        
+        self.live_counts = {"found": 0, "collected": 0, "failed": 0}
+        self.partial_result = None
+
+        # Browser attribution is clamped to the folder being imported.
+        self._browser_base = os.path.abspath(source_dir) if source_dir else None
+        self._browser_roots = {}
+
         if specific_files:
             file_paths = specific_files
             print(f"[COLLECTION] Processing {len(file_paths)} specific files")
@@ -634,36 +920,50 @@ class ArtifactCollector:
         for file_path in file_paths:
             # Check for cancellation
             if self._cancelled:
+                # What was copied stays copied: keep its registry entries and
+                # hand the caller a result for it ("partial results preserved"
+                # used to be said while all of it was dropped).
+                self.partial_result = self._finish(collected_artifacts)
                 raise InterruptedError("Collection cancelled by user")
-            
+
             # Report progress
             self._report_progress(file_path, processed_count, total_files)
-            
-            # Process the artifact (with error isolation)
+
+            # Process the artifact (with error isolation). Its times are read
+            # BEFORE the copy, for the custody record.
+            rec = getattr(self, "_custody_rec", None)
+            times = self._custody_times(rec, file_path)
             artifact_info = self._process_single_artifact(file_path, artifact_type_filter)
-            
+            self._custody_note(rec, artifact_info, times)
+
             # Add to results if it was processed (not filtered out)
             if artifact_info:
                 collected_artifacts.append(artifact_info)
-            
+                self.live_counts["found"] += 1
+                if artifact_info.collection_status == "success":
+                    self.live_counts["collected"] += 1
+                elif artifact_info.collection_status == "failed":
+                    self.live_counts["failed"] += 1
+
             processed_count += 1
-        
+
         # Final progress report
         self._report_progress("Complete", total_files, total_files)
-        
+        return self._finish(collected_artifacts)
+
+    def _finish(self, collected_artifacts) -> CollectionResult:
+        """Persist the registries and total up - for a whole run or a cancelled one."""
         # Save hash registry for deduplication persistence
         self._save_hash_registry()
-        
-        # Calculate summary statistics
-        total_found = len(collected_artifacts)
-        total_collected = sum(1 for a in collected_artifacts if a.collection_status == "success")
-        failed = sum(1 for a in collected_artifacts if a.collection_status == "failed")
-        skipped_duplicates = sum(1 for a in collected_artifacts if a.collection_status == "skipped_duplicate")
-        
+        self._user_placer.save()
+
+        collected_artifacts = self._collapse_browser_artifacts(collected_artifacts)
+
+        # A skipped duplicate is neither collected nor failed.
         return CollectionResult(
-            total_found=total_found,
-            total_collected=total_collected,
-            failed=failed,
+            total_found=len(collected_artifacts),
+            total_collected=sum(1 for a in collected_artifacts if a.collection_status == "success"),
+            failed=sum(1 for a in collected_artifacts if a.collection_status == "failed"),
             artifacts=collected_artifacts
         )
     

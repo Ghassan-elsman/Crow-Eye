@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import TimelineStack from './TimelineStack.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import WindowSection from './WindowSection.jsx'
@@ -9,6 +9,7 @@ import FileDetailPanel from './FileDetailPanel.jsx'
 import InsightPanel from './InsightPanel.jsx'
 import LoadingOverlay from './LoadingOverlay.jsx'
 import HourDetailPanel from './HourDetailPanel.jsx'
+import AllRecordsSection from './AllRecordsSection.jsx'
 
 
 const INSIGHT_TITLE = {
@@ -16,12 +17,14 @@ const INSIGHT_TITLE = {
   usnGaps: 'Gaps in the USN journal',
   deletedButPresent: 'Deleted, still present in the MFT',
   ads: 'Files carrying an alternate data stream',
+  renames: 'Renames - old name to new name',
 }
 const INSIGHT_HINT = {
-  timestompCandidates: 'Either Standard-Info creation is newer than the kernel-written File-Name creation, or all four SI times are whole seconds while FN keeps sub-second precision. Both are candidates, not verdicts - open a file and read its two time sets.',
+  timestompCandidates: 'Standard-Info creation is newer than the kernel-written File-Name creation (forward-dating: File-Name is not user-settable). A candidate, not a verdict - open a file and read its two time sets.',
   usnGaps: 'Ranges of USN records that are missing from the journal. These are gaps, not files, so there is nothing to open - but a gap is where evidence would have been.',
   deletedButPresent: 'The MFT record still exists and is marked deleted, so the file name and its times survive even though the data may not.',
   ads: 'A named stream attached to a file. Ordinary for downloads (Zone.Identifier); also a classic place to park a payload.',
+  renames: 'Each rename the USN journal recorded, newest first: the RENAME_OLD_NAME record paired with the RENAME_NEW_NAME that follows it for the same file. A move to another folder says so. The MFT keeps current names only, so this is the only name history there is.',
 }
 
 export default function App() {
@@ -33,6 +36,10 @@ export default function App() {
   const [loadMsg, setLoadMsg] = useState('')
   const [terms, setTerms] = useState([])
   const [mode, setMode] = useState('or')
+  // No range until the analyst picks one: the strip covers the MFT history
+  // and the journal together, and opens on the latest six months. It used to
+  // start pinned to the journal's own dates, which on a busy machine is one
+  // day - the MFT history never appeared.
   const [range, setRange] = useState({ start: '', end: '' })
   const [draft, setDraft] = useState('')
   const [volume, setVolume] = useState('')
@@ -45,10 +52,14 @@ export default function App() {
   const [selectedBucket, setSelectedBucket] = useState(null)
   const [windowDetail, setWindowDetail] = useState(null)
   const [winLoading, setWinLoading] = useState(false)
+  const [eventsPage, setEventsPage] = useState(null)
+  const [evLoading, setEvLoading] = useState(false)
 
   const [openRec, setOpenRec] = useState(null)
   const [openInsight, setOpenInsight] = useState(null)
   const [openHour, setOpenHour] = useState(null)
+  const [hourPage, setHourPage] = useState(null)
+  const [hourLoading, setHourLoading] = useState(false)
   const [fileDetail, setFileDetail] = useState(null)
   const [fileLoading, setFileLoading] = useState(false)
 
@@ -56,10 +67,8 @@ export default function App() {
   const filterArgs = useMemo(() => ({ terms, mode, ...range, volume }), [terms, mode, range, volume])
 
   useEffect(() => {
-    call('getMftUsnBounds').then((b) => {
-      setBounds(b)
-      if (b?.usnMin) setRange({ start: b.usnMin, end: b.usnMax })
-    }).catch((e) => { setBounds({ hasData: false }); setLoadErr(String(e && e.message || e) || 'that query failed') })
+    call('getMftUsnBounds').then(setBounds)
+      .catch((e) => { setBounds({ hasData: false }); setLoadErr(String(e && e.message || e) || 'that query failed') })
   }, [])
 
   useEffect(() => {
@@ -70,15 +79,13 @@ export default function App() {
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getMftUsnTimelines', JSON.stringify(filterArgs)).then(setTimelines).catch((e) => { setTimelines({ mftHistory: [], usnEvents: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
-      call('getMftUsnOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
+      latest('getMftUsnTimelines', JSON.stringify(filterArgs)).then(setTimelines).catch((e) => { setTimelines({ rows: [], series: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
+      latest('getMftUsnOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
     }, 180)
     return () => clearTimeout(debounce.current)
   }, [filterArgs, bounds])
 
   // Open on the most recent activity: the last cell that carries anything.
-  // The strip scrolls to its recent end, so a selection from years back would
-  // leave the panel below describing a period that is not on screen.
   useEffect(() => {
     if (!timelines || selectedBucket) return
     const latest = [...(timelines.combined || [])].reverse().find(d => d.value > 0) || (timelines.combined || [])[(timelines.combined || []).length - 1]
@@ -86,17 +93,41 @@ export default function App() {
   }, [timelines])
 
   useEffect(() => {
-    if (!selectedBucket) { setWindowDetail(null); return }
+    if (!selectedBucket) { setWindowDetail(null); setEventsPage(null); return }
     setWinLoading(true)
-    setLoadMsg('Loading the selected period…')
-    call('getMftUsnWindowDetail', JSON.stringify({ bucket: selectedBucket, ...filterArgs }))
-      .then(setWindowDetail).finally(() => setWinLoading(false))
+    setEventsPage(null)
+    setLoadMsg('Loading the selected day…')
+    latest('getMftUsnWindowDetail', JSON.stringify({ bucket: selectedBucket, ...filterArgs }))
+      .then(setWindowDetail)
+      .catch((e) => { setWindowDetail(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
+      .finally(() => setWinLoading(false))
   }, [selectedBucket, filterArgs])
+
+  function goPage(page) {
+    setEvLoading(true)
+    latest('getMftUsnDayEvents', JSON.stringify({ bucket: selectedBucket, page, ...filterArgs }), 'dayEvents')
+      .then(setEventsPage)
+      .catch((e) => setLoadErr(String(e && e.message || e) || 'that query failed'))
+      .finally(() => setEvLoading(false))
+  }
+
+  // An hour bar opens that hour - its own records, paged (see HourDetailPanel).
+  function loadHour(hour, page) {
+    setHourLoading(true)
+    latest('getMftUsnDayEvents', JSON.stringify({ bucket: selectedBucket, hour, page, ...filterArgs }), 'hourEvents')
+      .then(setHourPage)
+      .catch((e) => setLoadErr(String(e && e.message || e) || 'that query failed'))
+      .finally(() => setHourLoading(false))
+  }
+  useEffect(() => {
+    if (openHour === null) { setHourPage(null); return }
+    loadHour(openHour, 0)
+  }, [openHour])
 
   useEffect(() => {
     if (openRec == null) { setFileDetail(null); return }
     setFileLoading(true)
-    call('getMftUsnFileDetail', JSON.stringify({ rec: openRec })).then(setFileDetail).finally(() => setFileLoading(false))
+    latest('getMftUsnFileDetail', JSON.stringify({ id: openRec })).then(setFileDetail).finally(() => setFileLoading(false))
   }, [openRec])
 
   function addTerm(e) {
@@ -130,7 +161,7 @@ export default function App() {
     )
   }
 
-  const activeDays = new Set((timelines.combined || []).map(c => String(c.key).slice(0, 10)))
+  const activeDays = new Set((timelines.combined || []).filter(c => c.value > 0).map(c => String(c.key).slice(0, 10)))
 
   return (
     <div className="app">
@@ -138,7 +169,7 @@ export default function App() {
         <div className="brand">
           <span className="brand-mark">MFT&middot;USN</span>
           <span className="brand-title">activity</span>
-          {bounds?.usnMin && <span className="brand-range">USN {bounds.usnMin}{bounds.usnMax !== bounds.usnMin ? ` → ${bounds.usnMax}` : ''}</span>}
+          {bounds?.usnMin && <span className="brand-range" title="The USN journal's own span; the MFT history runs further back">journal {bounds.usnMin}{bounds.usnMax !== bounds.usnMin ? ` → ${bounds.usnMax}` : ''}</span>}
         </div>
         <div className="filters inline">
           <div className="search">
@@ -160,8 +191,8 @@ export default function App() {
               {bounds.volumes.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
           )}
-          {bounds?.usnMin && (
-            <DateDropdown bounds={{ minDate: bounds.usnMin, maxDate: bounds.usnMax }} activeDays={activeDays} range={range} onChange={setRange} />
+          {bounds?.min && (
+            <DateDropdown bounds={{ minDate: bounds.min, maxDate: bounds.max }} activeDays={activeDays} range={range} onChange={setRange} />
           )}
         </div>
       </header>
@@ -176,8 +207,11 @@ export default function App() {
               onSelectBucket={(k) => { setOpenRec(null); setSelectedBucket(k) }} />
           </section>
 
-          <WindowSection bucket={selectedBucket} detail={windowDetail} loading={winLoading}
-            onOpenFile={setOpenRec} onPickHour={setOpenHour} />
+          <WindowSection bucket={selectedBucket} detail={windowDetail} events={eventsPage}
+            loading={winLoading} eventsLoading={evLoading}
+            onOpenFile={setOpenRec} onPickHour={setOpenHour} onPage={goPage} filterArgs={filterArgs} />
+
+          <AllRecordsSection filterArgs={filterArgs} onOpenFile={setOpenRec} />
         </div>
 
         {/* The file modal used to live inside WindowSection, which returns
@@ -196,7 +230,8 @@ export default function App() {
           <div className="modal-overlay" onClick={() => setOpenHour(null)}>
             <div className="modal-card" onClick={(e) => e.stopPropagation()}>
               <HourDetailPanel hour={openHour} bucket={selectedBucket} detail={windowDetail}
-                onOpenFile={(rec) => { setOpenHour(null); setOpenRec(rec) }}
+                page={hourPage} loading={hourLoading} onPage={(p) => loadHour(openHour, p)}
+                onOpenFile={(id) => { setOpenHour(null); setOpenRec(id) }}
                 onClose={() => setOpenHour(null)} />
             </div>
           </div>

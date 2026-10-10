@@ -1,0 +1,1103 @@
+{
+ "version": 1,
+ "_about": "Windows event descriptions keyed by (provider, EventID). Provider names are matched case-insensitively, with or without the 'Microsoft-Windows-' prefix; 'aliases' maps legacy event-source names (what the live parser sees) to provider names. 'about' says what a provider is, used when its ID has no entry. %1..%n are filled from the event's inserts / EventData values in order. Rules are data: edit this file, not the parsers. Used by utils/event_descriptions.py.",
+ "aliases": {
+  "Software Protection Platform Service": "Microsoft-Windows-Security-SPP",
+  "System Restore": "Microsoft-Windows-SystemRestore",
+  "Microsoft-Windows-System-Restore": "Microsoft-Windows-SystemRestore",
+  "Windows Error Reporting": "Microsoft-Windows-Windows Error Reporting",
+  "EventLog": "Microsoft-Windows-Eventlog",
+  "Ntfs": "Microsoft-Windows-Ntfs",
+  "volmgr": "Microsoft-Windows-Volmgr",
+  "Wlclntfy": "Microsoft-Windows-Winlogon",
+  "Microsoft-Windows-Winsrv": "Winsrv",
+  "Windows Search Service": "Microsoft-Windows-Search",
+  "WMI": "Microsoft-Windows-WMI"
+ },
+ "providers": {
+  "Microsoft-Windows-Security-Auditing": {
+   "about": "Windows security audit (Security log)",
+   "events": {
+    "1100": "The event logging service has shut down.",
+    "1102": "The audit log was cleared.",
+    "1104": "The security log is now full.",
+    "1105": "The event log was automatically backed up.",
+    "1108": "The event logging service encountered an error.",
+    "4608": "Windows is starting up.",
+    "4609": "Windows is shutting down.",
+    "4610": "An authentication package has been loaded by the Local Security Authority.",
+    "4611": "A trusted logon process has been registered with the Local Security Authority.",
+    "4614": "A notification package has been loaded by the Security Account Manager.",
+    "4616": "The system time was changed.",
+    "4618": "A monitored security event pattern has occurred.",
+    "4621": "The administrator recovered the system from CrashOnAuditFail.",
+    "4622": "A security package has been loaded by the Local Security Authority.",
+    "4624": "An account was successfully logged on.",
+    "4625": "An account failed to log on.",
+    "4626": "User / device claims information (logon).",
+    "4627": "Group membership information (logon).",
+    "4634": "An account was logged off.",
+    "4647": "User initiated logoff.",
+    "4648": "A logon was attempted using explicit credentials.",
+    "4649": "A replay attack was detected.",
+    "4656": "A handle to an object was requested.",
+    "4657": "A registry value was modified.",
+    "4658": "The handle to an object was closed.",
+    "4660": "An object was deleted.",
+    "4661": "A handle to an object was requested (directory service / SAM object).",
+    "4662": "An operation was performed on an object.",
+    "4663": "An attempt was made to access an object.",
+    "4664": "An attempt was made to create a hard link.",
+    "4670": "Permissions on an object were changed.",
+    "4672": "Special privileges assigned to new logon.",
+    "4673": "A privileged service was called.",
+    "4674": "An operation was attempted on a privileged object.",
+    "4675": "SIDs were filtered.",
+    "4688": "A new process has been created.",
+    "4689": "A process has exited.",
+    "4690": "An attempt was made to duplicate a handle to an object.",
+    "4691": "Indirect access to an object was requested.",
+    "4692": "Backup of data protection (DPAPI) master key was attempted.",
+    "4693": "Recovery of data protection (DPAPI) master key was attempted.",
+    "4694": "Protection of auditable protected data was attempted.",
+    "4695": "Unprotection of auditable protected data was attempted.",
+    "4696": "A primary token was assigned to a process.",
+    "4697": "A service was installed in the system.",
+    "4698": "A scheduled task was created.",
+    "4699": "A scheduled task was deleted.",
+    "4700": "A scheduled task was enabled.",
+    "4701": "A scheduled task was disabled.",
+    "4702": "A scheduled task was updated.",
+    "4703": "A user right was adjusted (token privileges enabled or disabled).",
+    "4704": "A user right was assigned.",
+    "4705": "A user right was removed.",
+    "4706": "A new trust was created to a domain.",
+    "4707": "A trust to a domain was removed.",
+    "4713": "Kerberos policy was changed.",
+    "4714": "Encrypted data recovery (EFS) policy was changed.",
+    "4715": "The audit policy (SACL) on an object was changed.",
+    "4716": "Trusted domain information was modified.",
+    "4717": "System security access was granted to an account.",
+    "4718": "System security access was removed from an account.",
+    "4719": "System audit policy was changed.",
+    "4720": "A user account was created.",
+    "4722": "A user account was enabled.",
+    "4723": "An attempt was made to change an account's password.",
+    "4724": "An attempt was made to reset an account's password.",
+    "4725": "A user account was disabled.",
+    "4726": "A user account was deleted.",
+    "4727": "A security-enabled global group was created.",
+    "4728": "A member was added to a security-enabled global group.",
+    "4729": "A member was removed from a security-enabled global group.",
+    "4730": "A security-enabled global group was deleted.",
+    "4731": "A security-enabled local group was created.",
+    "4732": "A member was added to a security-enabled local group.",
+    "4733": "A member was removed from a security-enabled local group.",
+    "4734": "A security-enabled local group was deleted.",
+    "4735": "A security-enabled local group was changed.",
+    "4737": "A security-enabled global group was changed.",
+    "4738": "A user account was changed.",
+    "4739": "Domain policy was changed.",
+    "4740": "A user account was locked out.",
+    "4741": "A computer account was created.",
+    "4742": "A computer account was changed.",
+    "4743": "A computer account was deleted.",
+    "4744": "A security-disabled local group was created.",
+    "4746": "A member was added to a security-disabled local group.",
+    "4747": "A member was removed from a security-disabled local group.",
+    "4748": "A security-disabled local group was deleted.",
+    "4749": "A security-disabled global group was created.",
+    "4754": "A security-enabled universal group was created.",
+    "4755": "A security-enabled universal group was changed.",
+    "4756": "A member was added to a security-enabled universal group.",
+    "4757": "A member was removed from a security-enabled universal group.",
+    "4758": "A security-enabled universal group was deleted.",
+    "4764": "A group's type was changed.",
+    "4765": "SID History was added to an account.",
+    "4766": "An attempt to add SID History to an account failed.",
+    "4767": "A user account was unlocked.",
+    "4768": "A Kerberos authentication ticket (TGT) was requested.",
+    "4769": "A Kerberos service ticket was requested.",
+    "4770": "A Kerberos service ticket was renewed.",
+    "4771": "Kerberos pre-authentication failed.",
+    "4772": "A Kerberos authentication ticket request failed.",
+    "4773": "A Kerberos service ticket request failed.",
+    "4774": "An account was mapped for logon.",
+    "4775": "An account could not be mapped for logon.",
+    "4776": "The computer attempted to validate the credentials for an account (NTLM).",
+    "4777": "The domain controller failed to validate the credentials for an account.",
+    "4778": "A session was reconnected to a Window Station (RDP or fast user switching).",
+    "4779": "A session was disconnected from a Window Station.",
+    "4780": "The ACL was set on accounts which are members of administrators groups.",
+    "4781": "The name of an account was changed.",
+    "4782": "The password hash of an account was accessed.",
+    "4793": "The Password Policy Checking API was called.",
+    "4794": "An attempt was made to set the Directory Services Restore Mode administrator password.",
+    "4797": "An attempt was made to query the existence of a blank password for an account.",
+    "4798": "A user's local group membership was enumerated.",
+    "4799": "A security-enabled local group membership was enumerated.",
+    "4800": "The workstation was locked.",
+    "4801": "The workstation was unlocked.",
+    "4802": "The screen saver was invoked.",
+    "4803": "The screen saver was dismissed.",
+    "4816": "RPC detected an integrity violation while decrypting an incoming message.",
+    "4817": "Auditing settings on an object were changed.",
+    "4826": "Boot Configuration Data loaded.",
+    "4864": "A namespace collision was detected.",
+    "4865": "A trusted forest information entry was added.",
+    "4866": "A trusted forest information entry was removed.",
+    "4867": "A trusted forest information entry was modified.",
+    "4902": "The Per-user audit policy table was created.",
+    "4904": "An attempt was made to register a security event source.",
+    "4905": "An attempt was made to unregister a security event source.",
+    "4906": "The CrashOnAuditFail value has changed.",
+    "4907": "Auditing settings on an object were changed.",
+    "4908": "Special Groups Logon table modified.",
+    "4911": "Resource attributes of an object were changed.",
+    "4912": "Per User Audit Policy was changed.",
+    "4946": "A change was made to the Windows Firewall exception list: a rule was added.",
+    "4947": "A change was made to the Windows Firewall exception list: a rule was modified.",
+    "4948": "A change was made to the Windows Firewall exception list: a rule was deleted.",
+    "4950": "A Windows Firewall setting was changed.",
+    "4954": "Windows Firewall Group Policy settings changed; the new settings were applied.",
+    "4956": "Windows Firewall changed the active profile.",
+    "4957": "Windows Firewall did not apply a rule.",
+    "5024": "The Windows Firewall service started successfully.",
+    "5025": "The Windows Firewall service was stopped.",
+    "5027": "The Windows Firewall service was unable to retrieve the security policy from local storage.",
+    "5028": "The Windows Firewall service was unable to parse the new security policy.",
+    "5029": "The Windows Firewall service failed to initialize the driver.",
+    "5030": "The Windows Firewall service failed to start.",
+    "5031": "The Windows Firewall service blocked an application from accepting incoming connections on the network.",
+    "5033": "The Windows Firewall driver started successfully.",
+    "5034": "The Windows Firewall driver was stopped.",
+    "5035": "The Windows Firewall driver failed to start.",
+    "5037": "The Windows Firewall driver detected a critical runtime error and terminated.",
+    "5038": "Code integrity determined that the image hash of a file is not valid.",
+    "5039": "A registry key was virtualized.",
+    "5056": "A cryptographic self test was performed.",
+    "5057": "A cryptographic primitive operation failed.",
+    "5058": "Key file operation.",
+    "5059": "Key migration operation.",
+    "5060": "Verification operation failed.",
+    "5061": "Cryptographic operation.",
+    "5062": "A kernel-mode cryptographic self test was performed.",
+    "5136": "A directory service object was modified.",
+    "5137": "A directory service object was created.",
+    "5138": "A directory service object was undeleted.",
+    "5139": "A directory service object was moved.",
+    "5140": "A network share object was accessed.",
+    "5141": "A directory service object was deleted.",
+    "5142": "A network share object was added.",
+    "5143": "A network share object was modified.",
+    "5144": "A network share object was deleted.",
+    "5145": "A network share object was checked to see whether the client can be granted the desired access.",
+    "5148": "The Windows Filtering Platform detected a DoS attack and entered a defensive mode.",
+    "5152": "The Windows Filtering Platform blocked a packet.",
+    "5153": "A more restrictive Windows Filtering Platform filter has blocked a packet.",
+    "5154": "The Windows Filtering Platform permitted an application or service to listen on a port.",
+    "5155": "The Windows Filtering Platform blocked an application or service from listening on a port.",
+    "5156": "The Windows Filtering Platform permitted a connection.",
+    "5157": "The Windows Filtering Platform blocked a connection.",
+    "5158": "The Windows Filtering Platform permitted a bind to a local port.",
+    "5159": "The Windows Filtering Platform blocked a bind to a local port.",
+    "5168": "SPN check for SMB/SMB2 failed.",
+    "5376": "Credential Manager credentials were backed up.",
+    "5377": "Credential Manager credentials were restored from a backup.",
+    "5378": "The requested credentials delegation was disallowed by policy.",
+    "5379": "Credential Manager credentials were read.",
+    "5380": "Vault Find Credential.",
+    "5381": "Vault credentials were read.",
+    "5382": "Vault credentials were read.",
+    "5632": "A request was made to authenticate to a wireless network.",
+    "5633": "A request was made to authenticate to a wired network.",
+    "5712": "A Remote Procedure Call (RPC) was attempted.",
+    "5888": "An object in the COM+ Catalog was modified.",
+    "5889": "An object was deleted from the COM+ Catalog.",
+    "5890": "An object was added to the COM+ Catalog.",
+    "6144": "Security policy in the group policy objects has been applied successfully.",
+    "6145": "One or more errors occurred while processing security policy in the group policy objects.",
+    "6281": "Code Integrity determined that the page hashes of an image file are not valid.",
+    "6416": "A new external device was recognized by the system.",
+    "6419": "A request was made to disable a device.",
+    "6420": "A device was disabled.",
+    "6421": "A request was made to enable a device.",
+    "6422": "A device was enabled.",
+    "6423": "The installation of this device is forbidden by system policy.",
+    "6424": "The installation of this device was allowed, after having previously been forbidden by policy."
+   }
+  },
+  "Microsoft-Windows-Eventlog": {
+   "about": "Windows event logging service",
+   "events": {
+    "104": "The %1 log file was cleared.",
+    "1100": "The event logging service has shut down.",
+    "1102": "The audit log was cleared.",
+    "1104": "The security log is now full.",
+    "1105": "Event log automatic backup.",
+    "1108": "The event logging service encountered an error.",
+    "6000": "The %1 log file is full.",
+    "6005": "The Event log service was started (the system started).",
+    "6006": "The Event log service was stopped (the system shut down cleanly).",
+    "6008": "The previous system shutdown was unexpected.",
+    "6009": "Operating system version information, recorded at boot.",
+    "6011": "The NetBIOS name and DNS host name of this computer changed.",
+    "6013": "The system uptime, recorded once a day."
+   }
+  },
+  "Service Control Manager": {
+   "about": "Service Control Manager (Windows services)",
+   "events": {
+    "7000": "The %1 service failed to start due to the following error: %2",
+    "7001": "The %1 service depends on the %2 service which failed to start because of the following error: %3",
+    "7009": "A timeout was reached (%1 milliseconds) while waiting for the %2 service to connect.",
+    "7011": "A timeout (%1 milliseconds) was reached while waiting for a transaction response from the %2 service.",
+    "7022": "The %1 service hung on starting.",
+    "7023": "The %1 service terminated with the following error: %2",
+    "7024": "The %1 service terminated with the following service-specific error: %2",
+    "7026": "The following boot-start or system-start driver(s) did not load: %1",
+    "7030": "The %1 service is marked as an interactive service, but the system is configured not to allow interactive services.",
+    "7031": "The %1 service terminated unexpectedly. It has done this %2 time(s).",
+    "7032": "The Service Control Manager tried to take a corrective action after the unexpected termination of the %3 service, but this action failed.",
+    "7034": "The %1 service terminated unexpectedly. It has done this %2 time(s).",
+    "7035": "The %1 service was successfully sent a %2 control.",
+    "7036": "The %1 service entered the %2 state.",
+    "7038": "The %1 service was unable to log on with the currently configured password.",
+    "7039": "A service process other than the one launched by the Service Control Manager connected when starting the %1 service.",
+    "7040": "The start type of the %1 service was changed from %2 to %3.",
+    "7041": "The %1 service was unable to log on because the account lacks the Log on as a service right.",
+    "7042": "The %1 service was successfully sent a %2 control.",
+    "7043": "The %1 service did not shut down properly after receiving a preshutdown control.",
+    "7045": "A service was installed in the system. Service name: %1. Service file: %2. Type: %3. Start type: %4. Account: %5."
+   }
+  },
+  "Microsoft-Windows-Kernel-General": {
+   "about": "Windows kernel (time, boot, registry hive housekeeping)",
+   "events": {
+    "1": "The system time was changed.",
+    "11": "TxR init phase for hive %2 (TM: %3, RM: %4) finished with result=%5 (Internal code=%6).",
+    "12": "The operating system started.",
+    "13": "The operating system is shutting down.",
+    "15": "A registry hive was reorganized (compacted) at load.",
+    "16": "The access history in a registry hive was cleared.",
+    "20": "The leap second configuration has been updated. Reason: %1 Leap seconds enabled: %2 New leap second count: %3 Old leap second count: %4.",
+    "22": "The time zone bias has changed to %1 from %2.",
+    "24": "The time zone information was refreshed.",
+    "25": "The system time was initialized to %1."
+   }
+  },
+  "Microsoft-Windows-Kernel-Power": {
+   "about": "Windows kernel power manager (sleep, shutdown, power source, Modern Standby)",
+   "events": {
+    "41": "The system rebooted without cleanly shutting down first (crash, power loss or hang).",
+    "42": "The system is entering sleep.",
+    "105": "The power source changed (AC / battery).",
+    "107": "The system resumed from sleep.",
+    "109": "The kernel power manager initiated a shutdown transition.",
+    "125": "An ACPI thermal zone was enumerated.",
+    "172": "Connectivity state in standby: %1, Reason: %2.",
+    "187": "User-mode process attempted to change the system state by calling SetSuspendState or SetSystemPowerState APIs.",
+    "506": "The system is entering Modern Standby (connected standby).",
+    "507": "The system is exiting Modern Standby (connected standby).",
+    "521": "Active battery count change.",
+    "524": "%1 Battery Trigger Met.",
+    "566": "The power session state changed (Modern Standby / sleep transition).",
+    "577": "The system has prepared for a system initiated reboot from %1.",
+    "578": "The system has detected a system initiated reboot from %1."
+   }
+  },
+  "Microsoft-Windows-Kernel-Boot": {
+   "about": "Windows boot loader and early kernel",
+   "events": {
+    "18": "Number of boot options on this system.",
+    "20": "Status of the last shutdown and the last boot.",
+    "25": "The boot menu policy.",
+    "27": "The boot type (0 = cold boot, 1 = hybrid boot / Fast Startup, 2 = resume from hibernation).",
+    "30": "The firmware reported its boot metrics.",
+    "32": "How long the boot manager waited for user input.",
+    "153": "Virtualization-based security status at boot.",
+    "238": "EFI time zone bias: %1. Daylight flags: %2. Firmware time: %3.",
+    "247": "Unable to load Pluton-Windows firmware. StatusCode: %1, Reason: %2."
+   }
+  },
+  "Microsoft-Windows-Kernel-PnP": {
+   "about": "Plug and Play (devices and drivers)",
+   "events": {
+    "219": "A driver failed to load for a device.",
+    "225": "An application vetoed (blocked) the removal or ejection of a device.",
+    "400": "A device was configured.",
+    "410": "A device was started.",
+    "420": "A device was deleted.",
+    "430": "A device requires further installation."
+   }
+  },
+  "Microsoft-Windows-Kernel-Processor-Power": {
+   "about": "Processor power management",
+   "events": {
+    "37": "The speed of a processor is being limited by system firmware.",
+    "55": "A processor's power management capabilities, recorded at boot."
+   }
+  },
+  "Microsoft-Windows-WindowsUpdateClient": {
+   "about": "Windows Update",
+   "events": {
+    "19": "Installation successful: Windows installed the update %1",
+    "20": "Installation failure: Windows failed to install the update %2 with error %1",
+    "43": "Installation started: Windows started installing the update %1",
+    "44": "Windows Update started downloading an update."
+   }
+  },
+  "DCOM": {
+   "about": "Distributed COM",
+   "events": {
+    "10005": "DCOM got an error attempting to start a service (often because the service is disabled).",
+    "10010": "A COM server did not register with DCOM within the required timeout.",
+    "10016": "A DCOM permission check failed: an account was denied local launch or activation of a COM server (CLSID / APPID in the event data). Usually benign."
+   }
+  },
+  "Microsoft-Windows-FilterManager": {
+   "about": "File system Filter Manager (minifilter drivers: antivirus, backup, encryption)",
+   "events": {
+    "1": "A file system filter failed to attach to a volume.",
+    "6": "A file system filter driver loaded and registered with Filter Manager."
+   }
+  },
+  "Microsoft-Windows-Time-Service": {
+   "about": "Windows Time service (clock synchronisation)",
+   "events": {
+    "35": "The time service is now synchronizing the system time with the time source %1.",
+    "36": "The time service has not synchronized the system time for the last %1 seconds because none of the time service providers provided a usable time stamp.",
+    "37": "The time provider NtpClient is currently receiving valid time data from %1.",
+    "129": "NtpClient was unable to set a domain peer to use as a time source.",
+    "134": "NtpClient was unable to set a manual peer to use as a time source.",
+    "137": "NtpClient succeeds in resolving manual peer %1 after a previous failure.",
+    "158": "A time provider reported that the current hardware or environment is not supported (typically the Hyper-V time provider on a physical machine)."
+   }
+  },
+  "Microsoft-Windows-Ntfs": {
+   "about": "NTFS file system",
+   "events": {
+    "55": "A corruption was discovered in the file system structure on a volume.",
+    "98": "NTFS checked a volume when it was mounted: healthy, or it needs repair (see the event data).",
+    "137": "The default transaction resource manager on a volume encountered an error.",
+    "140": "The system failed to flush data to the transaction log. Corruption may occur in VolumeId: %2, DeviceName: %4."
+   }
+  },
+  "volsnap": {
+   "about": "Volume Shadow Copy driver",
+   "events": {
+    "25": "The shadow copies of a volume were deleted because the shadow copy storage could not grow in time.",
+    "33": "The oldest shadow copy of a volume was deleted to keep shadow copy storage under its limit.",
+    "36": "The shadow copies of a volume were aborted because the shadow copy storage failed to grow."
+   }
+  },
+  "Microsoft-Windows-Dhcp-Client": {
+   "about": "DHCPv4 client",
+   "events": {
+    "50036": "The DHCPv4 client service started.",
+    "50037": "The DHCPv4 client service stopped.",
+    "50103": "DHCPv4 client registered for shutdown notification.",
+    "50104": "DHCPv4 client received shutdown notification.",
+    "50105": "DHCPv4 client ProcessDHCPRequestForever received TERMINATE_EVENT.",
+    "50106": "DHCPv4 is waiting on DHCPv6 service to stop."
+   }
+  },
+  "Microsoft-Windows-DHCPv6-Client": {
+   "about": "DHCPv6 client",
+   "events": {
+    "51046": "The DHCPv6 client service started.",
+    "51047": "The DHCPv6 client service stopped.",
+    "51057": "DHCPv6 client service stop is almost done.DHCP Context Ref count is %1."
+   }
+  },
+  "Microsoft-Windows-UserModePowerService": {
+   "about": "User-mode power service (power plans)",
+   "events": {
+    "12": "A process changed the active power plan.",
+    "22": "Reapply power settings upon completion of the provisioning engine's turn %1.",
+    "51": "Process %1 (process ID:%2) reset overlay policy scheme from %3 to %4."
+   }
+  },
+  "Microsoft-Windows-Winlogon": {
+   "about": "Windows logon process",
+   "events": {
+    "4004": "The Windows logon process has failed to terminate the currently logged on user's processes.",
+    "6000": "A Winlogon notification subscriber was unavailable to handle a notification event.",
+    "6003": "A Winlogon notification subscriber was unavailable to handle a critical notification event.",
+    "6004": "The winlogon notification subscriber <%1> failed a critical notification event.",
+    "6005": "A Winlogon notification subscriber is taking a long time to handle a notification event.",
+    "7001": "User logon notification (Customer Experience Improvement Program): a user logged on.",
+    "7002": "User logoff notification (Customer Experience Improvement Program): a user logged off."
+   }
+  },
+  "User32": {
+   "about": "Windows shutdown / restart initiation",
+   "events": {
+    "1073": "The attempt by user %2 to restart/shutdown computer %1 failed.",
+    "1074": "A process initiated a shutdown or restart of the computer (the process, user and reason are in the event data)."
+   }
+  },
+  "Winsrv": {
+   "about": "Windows subsystem server",
+   "events": {
+    "10001": "An application attempted to veto (block) the shutdown."
+   }
+  },
+  "Microsoft-Windows-Resource-Exhaustion-Detector": {
+   "about": "Resource exhaustion detector",
+   "events": {
+    "2004": "Windows successfully diagnosed a low virtual memory condition; the programs using the most memory are in the event data."
+   }
+  },
+  "Microsoft-Windows-WLAN-AutoConfig": {
+   "about": "Wireless LAN (Wi-Fi) service",
+   "events": {
+    "4000": "The WLAN AutoConfig service started.",
+    "4001": "The WLAN AutoConfig service stopped.",
+    "4003": "WLAN AutoConfig detected limited connectivity, attempting automatic recovery.",
+    "8001": "The WLAN AutoConfig service successfully connected to a wireless network.",
+    "8002": "The WLAN AutoConfig service failed to connect to a wireless network.",
+    "8003": "The WLAN AutoConfig service disconnected from a wireless network.",
+    "10001": "WLAN Extensibility Module has successfully started.",
+    "10002": "WLAN Extensibility Module has stopped.",
+    "11000": "Wireless network association started.",
+    "11001": "Wireless network association succeeded."
+   }
+  },
+  "Microsoft-Windows-Windows Error Reporting": {
+   "about": "Windows Error Reporting",
+   "events": {
+    "1001": "Windows Error Reporting recorded a fault report (crash, hang or other problem); the faulting program is in the event data."
+   }
+  },
+  "Application Error": {
+   "about": "Application crash reporting",
+   "events": {
+    "1000": "Faulting application %1 (version %2), faulting module %4 (version %5), exception code %7."
+   }
+  },
+  "Application Hang": {
+   "about": "Application hang reporting",
+   "events": {
+    "1002": "The program %1 (version %2) stopped interacting with Windows and was closed."
+   }
+  },
+  ".NET Runtime": {
+   "about": ".NET runtime",
+   "events": {
+    "1026": "A .NET application terminated because of an unhandled exception."
+   }
+  },
+  "MsiInstaller": {
+   "about": "Windows Installer (MSI)",
+   "events": {
+    "1033": "Windows Installer installed the product %1 (version %2, manufacturer %5); status %4.",
+    "1034": "Windows Installer removed the product %1 (version %2, manufacturer %5); status %4.",
+    "1035": "Windows Installer reconfigured the product %1 (version %2, manufacturer %5); status %4.",
+    "1040": "Beginning a Windows Installer transaction: %1",
+    "1042": "Ending a Windows Installer transaction: %1",
+    "11707": "Product %1: installation completed successfully.",
+    "11708": "Product %1: installation failed.",
+    "11724": "Product %1: removal completed successfully.",
+    "11728": "Product %1: configuration completed successfully."
+   }
+  },
+  "Microsoft-Windows-Security-SPP": {
+   "about": "Software Protection Platform (Windows / Office licensing)",
+   "events": {
+    "900": "The Software Protection service is starting.",
+    "902": "The Software Protection service has started.",
+    "903": "The Software Protection service has stopped.",
+    "1003": "The Software Protection service completed a licensing status check.",
+    "1004": "The Software Protection service has successfully installed the license. License Title=%1 License Id=%2.",
+    "1016": "Proof of Purchase installed successfully. ACID=%1 PKeyId=%2.",
+    "1033": "These policies are being excluded since they are only defined with override-only attribute. Policy Names=%1 App Id=%2 Sku Id=%3.",
+    "1034": "Duplicate definition of policy found. Policy name=%1 Priority=%2.",
+    "1066": "Initialization status for service objects. %1.",
+    "16384": "The Software Protection service scheduled itself to restart.",
+    "16394": "Offline downlevel migration succeeded."
+   }
+  },
+  "Microsoft-Windows-SystemRestore": {
+   "about": "System Restore",
+   "events": {
+    "8194": "A restore point was created successfully.",
+    "8216": "Creation of a restore point was skipped because a recent enough restore point already exists.",
+    "8300": "Scoping started for shadowcopy %1.",
+    "8301": "Scoping completed for shadowcopy %1.",
+    "8302": "Scoping successfully completed for shadowcopy %1.",
+    "8303": "Scoping unsuccessful for shadowcopy %1 with error %2."
+   }
+  },
+  "VSS": {
+   "about": "Volume Shadow Copy service",
+   "events": {
+    "8224": "The VSS service is shutting down due to idle timeout.",
+    "8225": "The VSS service is shutting down due to a shutdown event from the Service Control Manager.",
+    "8231": "Volume Shadow Copy Service information: Snapshot creation initiated for Snapshot Set %1."
+   }
+  },
+  "SecurityCenter": {
+   "about": "Windows Security Center",
+   "events": {
+    "1": "The Windows Security Center service started.",
+    "2": "The Windows Security Center Service has stopped.",
+    "15": "A security product's status was updated (product and state in the event data)."
+   }
+  },
+  "Microsoft-Windows-RestartManager": {
+   "about": "Restart Manager (installers closing running programs)",
+   "events": {
+    "10000": "A Restart Manager session started.",
+    "10001": "A Restart Manager session ended.",
+    "10002": "Restart Manager is shutting down an application or service.",
+    "10005": "Restart Manager: a machine restart is required.",
+    "10006": "Restart Manager: an application or service could not be shut down."
+   }
+  },
+  "ESENT": {
+   "about": "Extensible Storage Engine (the database engine behind SRUM, Windows Search, WebCache)",
+   "events": {
+    "102": "The database engine started a new instance.",
+    "103": "The database engine stopped an instance.",
+    "105": "The database engine started a new instance.",
+    "300": "The database engine is initiating recovery steps.",
+    "301": "The database engine has begun replaying a log file.",
+    "302": "The database engine has successfully completed recovery steps.",
+    "326": "The database engine attached a database.",
+    "327": "The database engine detached a database."
+   }
+  },
+  "Microsoft-Windows-Defrag": {
+   "about": "Storage optimizer (defragmentation / TRIM)",
+   "events": {
+    "258": "The storage optimizer successfully completed an optimization of a volume."
+   }
+  },
+  "Microsoft-Windows-Search": {
+   "about": "Windows Search service",
+   "events": {
+    "1003": "The Windows Search service started.",
+    "1013": "Windows Search Service stopped normally.%1.",
+    "10024": "The filter host process %2 did not respond and is being forcibly terminated. %1."
+   }
+  },
+  "Microsoft-Windows-User Profiles Service": {
+   "about": "User Profile Service",
+   "events": {
+    "1511": "Windows cannot find the local profile and is logging the user on with a temporary profile.",
+    "1515": "Windows has backed up a user's profile and will log the user on with a temporary profile.",
+    "1530": "Windows detected the registry file is still in use by other applications or services.",
+    "1531": "The User Profile Service started successfully.",
+    "1532": "The User Profile Service stopped successfully."
+   }
+  },
+  "Microsoft-Windows-WMI": {
+   "about": "Windows Management Instrumentation",
+   "events": {
+    "5615": "The WMI service started.",
+    "5617": "The WMI service subsystems initialized."
+   }
+  },
+  "Microsoft-Windows-Perflib": {
+   "about": "Performance counter library",
+   "events": {
+    "1008": "The Open procedure of a performance counter service failed."
+   }
+  },
+  "Microsoft-Windows-Volmgr": {
+   "about": "Volume manager",
+   "events": {
+    "46": "Crash dump initialization failed.",
+    "161": "Dump file creation failed."
+   }
+  },
+  "disk": {
+   "about": "Disk driver",
+   "events": {
+    "7": "A device has a bad block.",
+    "11": "The driver detected a controller error on a device.",
+    "51": "An error was detected on a device during a paging operation.",
+    "153": "An IO operation was retried."
+   }
+  },
+  "Microsoft-Windows-DNS-Client": {
+   "about": "DNS client",
+   "events": {
+    "1014": "Name resolution for a name timed out after none of the configured DNS servers responded."
+   }
+  },
+  "Microsoft-Windows-GroupPolicy": {
+   "about": "Group Policy",
+   "events": {
+    "1500": "The Group Policy settings for the computer were processed successfully.",
+    "1501": "The Group Policy settings for the user were processed successfully.",
+    "1502": "Group Policy for the computer: changes were detected and applied.",
+    "1503": "Group Policy for the user: changes were detected and applied.",
+    "1129": "Group Policy processing failed because of lack of network connectivity to a domain controller."
+   }
+  },
+  "Microsoft-Windows-TaskScheduler": {
+   "about": "Task Scheduler",
+   "events": {
+    "100": "A scheduled task started.",
+    "101": "Task Scheduler failed to start \"%1\" task for user \"%2\". Additional Data: Error Value: %3.",
+    "102": "A scheduled task completed.",
+    "103": "Task Scheduler failed to start instance \"%2\" of \"%1\" task for user \"%3\" . Additional Data: Error Value: %4.",
+    "106": "A scheduled task was registered (created).",
+    "107": "Task Scheduler launched \"%2\" instance of task \"%1\" due to a time trigger condition.",
+    "110": "A scheduled task was triggered by a user.",
+    "119": "Task Scheduler launched \"%3\" instance of task \"%1\" due to user \"%2\" logon.",
+    "129": "Task Scheduler launched a task's process.",
+    "140": "A scheduled task was updated.",
+    "141": "A scheduled task was deleted.",
+    "200": "Task Scheduler started an action of a task.",
+    "201": "Task Scheduler completed an action of a task.",
+    "322": "Task Scheduler did not launch task \"%1\" because instance \"%2\" of the same task is already running."
+   }
+  },
+  "PowerShell": {
+   "about": "Windows PowerShell (classic log)",
+   "events": {
+    "400": "The PowerShell engine started (state changed from None to Available).",
+    "403": "The PowerShell engine stopped.",
+    "600": "A PowerShell provider started.",
+    "800": "PowerShell pipeline execution details."
+   }
+  },
+  "Microsoft-Windows-PowerShell": {
+   "about": "PowerShell (operational log)",
+   "events": {
+    "4100": "PowerShell reported an error while running a command or script; the error message and the script or command are in the event data.",
+    "4103": "PowerShell module logging: a command was executed (pipeline details).",
+    "4104": "PowerShell script block logging: a script block was executed.",
+    "4105": "A PowerShell script block started.",
+    "4106": "A PowerShell script block completed.",
+    "40961": "PowerShell console is starting up.",
+    "40962": "PowerShell console is ready for user input.",
+    "53504": "Windows PowerShell has started an IPC listening thread on process: %1 in AppDomain: %2."
+   }
+  },
+  "Microsoft-Windows-TerminalServices-LocalSessionManager": {
+   "about": "Remote Desktop / local session manager",
+   "events": {
+    "21": "Remote Desktop: session logon succeeded.",
+    "22": "Remote Desktop: shell start notification received.",
+    "23": "Remote Desktop: session logoff succeeded.",
+    "24": "Remote Desktop: session has been disconnected.",
+    "25": "Remote Desktop: session reconnection succeeded.",
+    "39": "Session %1 has been disconnected by session %2.",
+    "40": "Session %1 has been disconnected, reason code %2.",
+    "41": "Begin session arbitration."
+   }
+  },
+  "Microsoft-Windows-TerminalServices-RemoteConnectionManager": {
+   "about": "Remote Desktop connection manager",
+   "events": {
+    "261": "Listener %1 received a connection.",
+    "1149": "Remote Desktop: user authentication succeeded (network connection established)."
+   }
+  },
+  "Microsoft-Windows-Windows Defender": {
+   "about": "Microsoft Defender Antivirus",
+   "events": {
+    "1000": "A Defender scan started.",
+    "1001": "A Defender scan finished.",
+    "1002": "A Defender scan was stopped before completion.",
+    "1006": "Defender detected malware or other potentially unwanted software.",
+    "1007": "Defender took action to protect the system from malware.",
+    "1008": "%1 has encountered an error when taking action on malware or other potentially unwanted software.",
+    "1009": "%1 has restored an item from quarantine. For more information please see the following: %15 Name: %11 ID: %12 Severity: %25 Category: %26 User: %8\\%9 Security intelligence Version: %27 Engine Version: %28.",
+    "1013": "Defender deleted history of malware and other potentially unwanted software.",
+    "1015": "%1 has detected a suspicious behavior. Name: %11 ID: %12 Severity: %25 Category: %26 Path Found: %16 Detection Origin: %18 Detection Type: %22 Detection Source: %5 Status: %20 User: %8\\%9 Process Name: %7 Security intell...",
+    "1116": "Defender detected malware or other potentially unwanted software.",
+    "1117": "Defender took action to protect the system from malware.",
+    "1118": "Defender attempted to act on malware, but the action failed.",
+    "1119": "Defender encountered a critical error when trying to act on malware.",
+    "1120": "%1 has deduced the hashes for a threat resource. Current Platform Version: %2 Threat resource path: %4 Hashes: %5.",
+    "1121": "Microsoft Defender Exploit Guard has blocked an operation that is not allowed by your IT administrator. For more information please contact your IT administrator.",
+    "2000": "Defender security intelligence (definitions) updated.",
+    "2001": "Defender security intelligence update failed.",
+    "2002": "%1 engine version has been updated. Current Engine Version: %3 Previous Engine Version: %4 User: %8\\%9.",
+    "2003": "%1 has encountered an error trying to update the engine. New Engine Version: %3 Previous Engine Version: %4 User: %8\\%9 Error Code: %11 Error description: %12.",
+    "3002": "%1 Real-Time Protection feature has encountered an error and failed. Feature: %3 Error Code: %5 Error description: %6 Reason: %4.",
+    "5000": "%1 Real-time Protection scanning for malware and other potentially unwanted software was enabled.",
+    "5001": "Defender real-time protection is disabled.",
+    "5004": "Defender real-time protection configuration changed.",
+    "5007": "Defender configuration changed.",
+    "5008": "%1 engine has been terminated due to an unexpected error. Failure Type: %5 Exception code: %6 Resource: %3 Engine Code: %7.",
+    "5010": "Defender scanning for malware and other potentially unwanted software is disabled.",
+    "5012": "Defender scanning for viruses is disabled.",
+    "5013": "Tamper Protection %3 a change to %1. Value: %4."
+   }
+  },
+  "Microsoft-Windows-Bits-Client": {
+   "about": "Background Intelligent Transfer Service",
+   "events": {
+    "3": "A BITS job was created.",
+    "4": "A BITS transfer job completed.",
+    "59": "BITS started a transfer.",
+    "60": "BITS stopped a transfer.",
+    "61": "BITS stopped transferring the %2 transfer job that is associated with the %4 URL. The status code is %6.",
+    "16385": "While canceling job \"%2\", BITS was unable to remove some temporary files. To recover disk space, delete the files listed below. The job ID was %1. %3."
+   }
+  },
+  "Microsoft-Windows-WMI-Activity": {
+   "about": "WMI activity",
+   "events": {
+    "5857": "A WMI provider started.",
+    "5858": "A WMI operation failed.",
+    "5859": "Namespace = %1; NotificationQuery = %2; OwnerName = %3; HostProcessID = %4; Provider= %5, queryID = %6; PossibleCause = %7.",
+    "5860": "A temporary WMI event consumer was registered.",
+    "5861": "A permanent WMI event consumer was registered (a common persistence technique)."
+   }
+  },
+  "Microsoft-Windows-Diagnostics-Performance": {
+   "about": "Boot and shutdown performance diagnostics",
+   "events": {
+    "100": "Windows boot performance was recorded.",
+    "200": "Windows shutdown performance was recorded."
+   }
+  },
+  "Microsoft-Windows-IsolatedUserMode": {
+   "about": "Virtualization-based security / Isolated User Mode (Credential Guard, LSAIso)",
+   "events": {
+    "1": "Secure trustlet %4 (trustlet id %1, process %2) started with status %3.",
+    "2": "Secure trustlet id %1 (process %2) stopped with status %3.",
+    "3": "Secure Kernel started with status %1 and flags %2.",
+    "5": "Secure trustlet %4 (trustlet id %1, process %2) started with status %3."
+   }
+  },
+  "Microsoft-Windows-HttpService": {
+   "about": "HTTP.sys (the kernel HTTP server: URL reservations and SSL bindings)",
+   "events": {
+    "111": "Create URL group %1. Status %2. Process Id %3 Executable path %4, User %5.",
+    "112": "A URL reservation was attempted for %1 (status %2) by process %3, %4, as user %5.",
+    "113": "Attempted to add URL (%2) to URL group (%1). Status: %3. Process Id %4 Executable path %5, User %6.",
+    "117": "Delete URL group %1. Status %2. Process Id %3 Executable path %4, User %5."
+   }
+  },
+  "Microsoft-Windows-Configuration-Change-Monitor": {
+   "about": "Configuration change monitor"
+  },
+  "Microsoft-Windows-DeviceAssociationService": {
+   "about": "Device association service (pairing of Bluetooth and network devices)",
+   "events": {
+    "2500": "Device Association (Pairing) Succeeded.",
+    "3503": "The Device Association Service could not discover an endpoint.",
+    "3508": "Device Association Failed - Initialize Association."
+   }
+  },
+  "Microsoft-Windows-BitLocker-Driver": {
+   "about": "BitLocker drive encryption driver",
+   "events": {
+    "24641": "An unexpected error was encountered attempting to retrieve the BitLocker volume master key during restart.",
+    "24709": "This event contains the boot-time final TPM PCR values and TCG log data.",
+    "24711": "A V2 TPM protector was used to start Windows. Binding ID: %5."
+   }
+  },
+  "Microsoft-Windows-TPM-WMI": {
+   "about": "Trusted Platform Module management (TPM-WMI)",
+   "events": {
+    "1025": "The TPM was successfully provisioned and is now ready for use.",
+    "1038": "Pre-attestation health checks confirm that the device is expected to pass attestation. Please see %1 for detailed information on what checks were made.",
+    "1040": "Pre-attestation health checks confirm a critical component has failed, and the device is not expected to pass attestation. Please see %1 for detailed information on what checks were made.",
+    "1041": "Pre-attestation health check detailed information: %1.",
+    "1282": "The TBS device identifier has been generated.",
+    "1808": "This device has updated Secure Boot CA/keys. This device signature information is included here."
+   }
+  },
+  "TPM": {
+   "about": "Trusted Platform Module driver",
+   "events": {
+    "14": "The device driver for the Trusted Platform Module (TPM) encountered a non-recoverable error in the TPM hardware, which prevents TPM services (such as data encryption) from being used.",
+    "17": "The Trusted Platform Module (TPM) hardware failed to execute a TPM command.",
+    "18": "This event triggers the Trusted Platform Module (TPM) provisioning/status check to run."
+   }
+  },
+  "Microsoft-Windows-Hyper-V-Hypervisor": {
+   "about": "Hyper-V hypervisor",
+   "events": {
+    "1": "Hypervisor successfully started.",
+    "2": "Hypervisor scheduler type is %1.",
+    "129": "Hypervisor initialized I/O remapping.",
+    "156": "Hypervisor initial page allocation NUMA policy: %1.",
+    "165": "Hypervisor configured mitigations for CVE-2019-11091, CVE-2018-12126, CVE-2018-12127, CVE-2018-12130 for virtual machines."
+   }
+  },
+  "Microsoft-Windows-Hyper-V-VmSwitch": {
+   "about": "Hyper-V virtual switch",
+   "events": {
+    "5": "Miniport NIC %2 (Friendly Name: %4) successfully enabled.",
+    "7": "Miniport NIC %2 (Friendly Name: %4) successfully initialized.",
+    "9": "Switch %2 (Friendly Name: %4) successfully initialized.",
+    "62": "Switch %2 (Friendly Name: %4) successfully deleted.",
+    "67": "Port %2 (Friendly Name: %4) successfully created on switch %6 (Friendly Name: %8).",
+    "69": "Port %2 (Friendly Name: %4) successfully deleted - switch %6 (Friendly Name: %8).",
+    "71": "Delete complete for port %2 (Friendly Name: %4).",
+    "102": "Networking driver in %2 is loaded and the protocol version is negotiated to the most recent version (Virtual machine ID %4).",
+    "232": "NIC %2 (Friendly Name: %4) successfully connected to port %6 (Friendly Name: %8) on switch %10(Friendly Name: %12).",
+    "233": "The operation '%5' succeeded on nic %2 (Friendly Name: %4), Instance Id %6.",
+    "234": "NIC %2 successfully disconnected from port %4.",
+    "264": "Internal or External Port %2 (Friendly Name: %4) successfully created on switch %6 (Friendly Name: %8).",
+    "277": "Vmswitch.sys build %1.%2.%3, debug %4, official %5, %6 %7.",
+    "291": "RSC offload modified for NIC %1 (Friendly Name: %2) Previous IPv4: %3, Current IPv4: %5, Previous IPv6: %4, Current IPv6: %6. Reason: %7.",
+    "292": "RSC offload modified for Port %1 (Friendly Name: %2) Previous: %3, Current: %4. Reason: %5."
+   }
+  },
+  "Microsoft-Windows-Wininit": {
+   "about": "Windows start-up process (wininit)",
+   "events": {
+    "12": "LSASS.exe was started as a protected process with level: %1.",
+    "14": "Credential Guard configuration.",
+    "18": "VBS Key Isolation was started and will protect VSM-isolated keys.",
+    "19": "Virtualization Based Security new timer creation status.",
+    "23": "Boot App Anti-Rollback: Initialize Completed with status: HRESULT: %1 New timer needed: %2 New timer waiting for system update completion: %3 Previous latch timer exists but disabled by registry: %4.",
+    "24": "Boot App Anti-Rollback: Timer start completed with status.",
+    "25": "Boot App Anti-Rollback: Previous timer resumed with status.",
+    "26": "Boot App Anti-Rollback: Boot.stl Enforcement completed with status."
+   }
+  },
+  "Microsoft-Windows-HAL": {
+   "about": "Hardware abstraction layer",
+   "events": {
+    "15": "The IOMMU has detected an error.",
+    "16": "IOMMU fault reporting has been initialized."
+   }
+  },
+  "Microsoft-Windows-Directory-Services-SAM": {
+   "about": "Security Account Manager (SAM) policy",
+   "events": {
+    "16962": "Remote calls to the SAM database are being restricted using the default security descriptor: %1. For more information please see http://go.microsoft.com/fwlink/?LinkId=787651.",
+    "16977": "The domain is configured with the following minimum password length-related settings.",
+    "16983": "The security account manager is now logging periodic summary events for remote clients that call legacy password change or set RPC methods."
+   }
+  },
+  "Microsoft-Windows-DriverFrameworks-UserMode": {
+   "about": "User-mode driver framework (USB and other devices)",
+   "events": {
+    "10000": "A driver package which uses user-mode driver framework version %2 is being installed on device %1.",
+    "10002": "The UMDF service %1 (CLSID %2) was upgraded. It requires framework version %3 or higher.",
+    "10100": "The driver package installation has succeeded.",
+    "10118": "UMDF reflector is unable to connect to service control manager (SCM). This is expected during boot, when SCM has not started yet. Will retry when it starts."
+   }
+  },
+  "LsaSrv": {
+   "about": "Local Security Authority",
+   "events": {
+    "6156": "Credential Guard auto enablement status.",
+    "6166": "Status of the machine credential."
+   }
+  },
+  "Win32k": {
+   "about": "Windows kernel graphics / window manager",
+   "events": {
+    "267": "Touch/Touchpad Hardware Quality Assurance verification succeeded."
+   }
+  },
+  "Wdf01000": {
+   "about": "Kernel-mode driver framework"
+  },
+  "BTHUSB": {
+   "about": "Bluetooth USB radio driver"
+  },
+  "Microsoft-Windows-AppModel-State": {
+   "about": "Store app state",
+   "events": {
+    "4": "An app-model state API call (%1) returned %2."
+   }
+  },
+  "Microsoft-Windows-AppXDeploymentServer/Operational": {
+   "about": "Store app (AppX) deployment"
+  },
+  "EventSystem": {
+   "about": "COM+ Event System (not a logon event)"
+  },
+  "VBScriptDeprecationAlert": {
+   "about": "VBScript deprecation alert"
+  },
+  "edgeupdate": {
+   "about": "Microsoft Edge updater"
+  },
+  "Edge": {
+   "about": "Microsoft Edge"
+  },
+  "Chrome": {
+   "about": "Google Chrome"
+  },
+  "brave": {
+   "about": "Brave browser updater"
+  },
+  "Brave-Browser": {
+   "about": "Brave browser"
+  },
+  "Firefox Default Browser Agent": {
+   "about": "Firefox default-browser agent"
+  },
+  "OneDriveUpdaterService": {
+   "about": "OneDrive updater"
+  },
+  "VMware NAT Service": {
+   "about": "VMware NAT service"
+  },
+  "vmauthd": {
+   "about": "VMware authorization service"
+  },
+  "vmx86": {
+   "about": "VMware virtual machine monitor driver"
+  },
+  "VMnetAdapter": {
+   "about": "VMware virtual network adapter"
+  },
+  "VMnetBridge": {
+   "about": "VMware network bridge"
+  },
+  "VMnetuserif": {
+   "about": "VMware network user interface driver"
+  },
+  "WSL": {
+   "about": "Windows Subsystem for Linux"
+  },
+  "mtkwlex": {
+   "about": "MediaTek Wi-Fi driver"
+  },
+  "MTKBTSVC": {
+   "about": "MediaTek Bluetooth service"
+  },
+  "AsusPTPDrv": {
+   "about": "ASUS touchpad driver"
+  },
+  "AFD": {
+   "events": {
+    "16003": "An unregistered TDI provider (%2) was detected."
+   }
+  },
+  "Application Popup": {
+   "events": {
+    "26": "Application popup: %1 : %2."
+   }
+  },
+  "Display": {
+   "events": {
+    "4107": "A caller specified the SDC_FORCE_MODE_ENUMERATION flag in a call to the SetDisplayConfig() API."
+   }
+  },
+  "IntcAzAudAddService": {
+   "events": {
+    "258": "%2 fail with status (%3)"
+   }
+  },
+  "Microsoft-Windows-AppLocker": {
+   "events": {
+    "8002": "%11 was allowed to run.",
+    "8003": "%11 was allowed to run but would have been prevented from running if the AppLocker policy were enforced.",
+    "8004": "%11 was prevented from running.",
+    "8005": "%11 was allowed to run.",
+    "8006": "%11 was allowed to run but would have been prevented from running if the AppLocker policy were enforced.",
+    "8007": "%11 was prevented from running.",
+    "8020": "%11 was allowed to run.",
+    "8021": "%11 was allowed to run but would have been prevented from running if the AppLocker policy were enforced.",
+    "8022": "%11 was prevented from running.",
+    "8023": "%11 was allowed to be installed.",
+    "8024": "%11 was allowed to run but would have been prevented from running if the AppLocker policy were enforced.",
+    "8025": "%11 was prevented from running."
+   }
+  },
+  "Microsoft-Windows-NDIS": {
+   "events": {
+    "10317": "Miniport %4, %1, had event %5."
+   }
+  },
+  "Microsoft-Windows-Power-Troubleshooter": {
+   "events": {
+    "1": "The system has returned from a low power state."
+   }
+  },
+  "Microsoft-Windows-RemoteDesktopServices-RdpCoreTS": {
+   "events": {
+    "98": "A TCP connection has been successfully established.",
+    "131": "The server accepted a new %1 connection from client %2."
+   }
+  },
+  "Microsoft-Windows-UserPnp": {
+   "events": {
+    "20003": "Driver Management has concluded the process to add Service %1 for Device Instance ID %3 with the following status: %6."
+   }
+  },
+  "Microsoft-Windows-WER-SystemErrorReporting": {
+   "events": {
+    "1001": "The computer has rebooted from a bugcheck. The bugcheck was: %1. A dump was saved in: %2. Report Id: %3."
+   }
+  },
+  "Microsoft-Windows-WinREAgent": {
+   "events": {
+    "4500": "Starting Windows Recovery Environment servicing.",
+    "4501": "Servicing succeeded. The Windows Recovery Environment version is now: %1."
+   }
+  },
+  "Microsoft-Windows-Windows Firewall With Advanced Security": {
+   "events": {
+    "2004": "A rule has been added to the Windows Defender Firewall exception list.",
+    "2005": "A rule has been modified in the Windows Defender Firewall exception list.",
+    "2006": "A rule has been deleted in the Windows Defender Firewall exception list.",
+    "2009": "The Windows Defender Firewall service failed to load Group Policy. Error: %1.",
+    "2033": "All rules have been deleted from the Windows Defender Firewall configuration on this computer.",
+    "2071": "A rule has been added to the Windows Defender Firewall exception list.",
+    "2097": "A rule has been added to the Windows Defender Firewall exception list."
+   }
+  },
+  "VfpExt": {
+   "events": {
+    "7036": "The %1 service entered the %2 state."
+   }
+  },
+  "winsrvext": {
+   "events": {
+    "100": "Process %1 is delaying system shutdown after %2 milliseconds.",
+    "101": "Process %1 from package %2 is delaying system shutdown after %3 milliseconds."
+   }
+  },
+  "Microsoft-Windows-Sysmon": {
+   "about": "Sysmon (System Monitor, Sysinternals)",
+   "events": {
+    "1": "Process created (Sysmon): the image, command line, parent process, user and hashes are in the event data.",
+    "2": "A process changed a file's creation time (Sysmon) - a common way to hide when a file was written.",
+    "3": "Network connection made by a process (Sysmon): source and destination address and port are in the event data.",
+    "4": "The Sysmon service state changed (started or stopped).",
+    "5": "Process terminated (Sysmon).",
+    "6": "A driver was loaded (Sysmon): its path, hashes and signature status are in the event data.",
+    "7": "An image (DLL or module) was loaded into a process (Sysmon).",
+    "8": "A process created a thread in another process (CreateRemoteThread, Sysmon) - a code-injection technique.",
+    "9": "A process read a disk or volume directly, bypassing the file system (RawAccessRead, Sysmon).",
+    "10": "A process opened another process (ProcessAccess, Sysmon): the access mask and call trace are in the event data.",
+    "11": "A file was created or overwritten (Sysmon).",
+    "12": "A registry key or value was created or deleted (Sysmon).",
+    "13": "A registry value was set (Sysmon): the key, value name and data are in the event data.",
+    "14": "A registry key or value was renamed (Sysmon).",
+    "15": "A named file stream (alternate data stream) was created; its hash is recorded (Sysmon).",
+    "16": "The Sysmon configuration was changed.",
+    "17": "A named pipe was created (Sysmon).",
+    "18": "A named pipe connection was made (Sysmon).",
+    "19": "A WMI event filter was registered (Sysmon) - part of WMI persistence.",
+    "20": "A WMI event consumer was registered (Sysmon) - part of WMI persistence.",
+    "21": "A WMI consumer was bound to a filter (Sysmon) - completes WMI persistence.",
+    "22": "A process made a DNS query (Sysmon): the name queried and the results are in the event data.",
+    "23": "A file was deleted and archived by Sysmon (FileDelete).",
+    "24": "The clipboard contents changed (Sysmon).",
+    "25": "Process image tampering detected (Sysmon) - hollowing or herpaderping.",
+    "26": "A file was deleted (Sysmon, logged without archiving).",
+    "27": "Sysmon blocked the creation of an executable file.",
+    "28": "Sysmon blocked a file shredding operation.",
+    "29": "A new executable file was detected (Sysmon).",
+    "255": "Sysmon reported an internal error."
+   }
+  }
+ },
+ "_curation": [
+  {
+   "merged_utc": "2026-10-08T07:38:42Z",
+   "entries": 160,
+   "windows_build": "10.0.26300"
+  }
+ ]
+}

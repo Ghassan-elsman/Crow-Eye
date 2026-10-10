@@ -38,20 +38,54 @@ from logging.handlers import RotatingFileHandler
 # log looks complete. `eye.log` was missing 21 modules that way. Every module in
 # a split package uses `getLogger(__name__)`; guarded by
 # correlation_engine/tests/test_case_logging.py.
+# Parser modules that are also imported from their own folder on sys.path
+# (`from Regclaw import ...`, `from MFT_Claw import ...`), where `__name__` has
+# no `Artifacts_Collectors.` in front of it. Listed so parsers.log takes them
+# either way; test_case_logging checks the list against the folders.
+PARSER_MODULES = (
+    "A_CJL_LNK_Claw", "Browser_Claw", "Prefetch_claw", "Regclaw", "SRUM_Claw",
+    "WinLog_Claw", "amcacheparser", "browser_paths", "live_hive_access",
+    "partition_analyzer", "recyclebin_claw", "registry_binary_parser",
+    "registry_extra_keys", "registry_hive_cache", "registry_hive_walk", "registry_transaction_log",
+    "security_hive", "shimcash_claw", "user_artifact_paths", "user_identity",
+    "windows_partition_detector", "offline_parsers",
+    # Artifacts_Collectors/MFT and USN journal - not importable as a package.
+    "MFT_Claw", "USN_Claw", "mft_usn_correlator",
+)
+
 _COMPONENT_FILES = [
-    ("parsers.log", ("Artifacts_Collectors", "crow_claw")),
+    # The three ways evidence comes in from outside a live parse each get their
+    # own file - they are what an investigator checks first when an import or an
+    # image "did nothing". Their records ALSO reach parsers.log (it takes every
+    # collector), so that file stays the complete parser-side record.
+    # The importer is reached under three names: its own `OfflineImporter`
+    # logger, the package path, and the top-level path the standalone launcher
+    # uses.
+    ("offline_importer.log", ("OfflineImporter", "Offline_Importer",
+                              "Artifacts_Collectors.Offline_Importer")),
+    ("crow_claw.log", ("crow_claw", "Artifacts_Collectors.crow_claw")),
+    ("image_parsing.log", ("image_parsing", "Forensics_Image_parsing",
+                           "Artifacts_Collectors.Forensics_Image_parsing")),
+    # crow_eye.parsing: the lines the parsing dialog showed (ui/Loading_dialog).
+    ("parsers.log", ("Artifacts_Collectors", "crow_claw", "crow_eye.parsing") + PARSER_MODULES),
     ("timeline.log", ("timeline",)),
     ("visualizations.log", ("visualizations",)),
     ("correlation.log", ("correlation_engine",)),
+    # The semantic phase on its own: the settings it ran with, whether the
+    # FTS5 prefilter was used, progress per chunk, what it labelled. It is the
+    # longest phase of a large run, and in correlation.log it was buried among
+    # every other engine line. Its records still reach correlation.log too.
+    ("semantic_mapping.log", ("correlation_engine.identity_semantic_phase",
+                              "correlation_engine.config.semantic_mapping",
+                              "correlation_engine.integration.semantic_mapping_integration")),
     ("eye.log", ("eye",)),
     ("uba.log", ("uba",)),
     ("dynamic_linking.log", ("dynamic_mapping",)),
-    # The GUI shell: `ui/` - the dialogs, the search stack, the table widgets.
-    # NOT the main window: `Crow Eye.py` has no logger at all, it reports
-    # through print(), and the stdout tee already files that under console.log
-    # ("Console (raw output)" in Settings). Giving the main window a logger is a
-    # separate change; claiming this file covers it would be the misleading part.
-    ("gui.log", ("ui",)),
+    # The GUI shell: `ui/` - the dialogs, the search stack, the table widgets -
+    # and the main window's phase lines (`crow_eye.main`: a parse started, the
+    # tables loaded). The rest of `Crow Eye.py` still reports through print(),
+    # which the stdout tee files under console.log ("Console (raw output)").
+    ("gui.log", ("ui", "crow_eye.main")),
     # The case-database layer: the loaders, the database manager, discovery and
     # the search engines - what every table in the GUI reads through.
     ("case_data.log", ("data",)),
@@ -62,6 +96,10 @@ _COMPONENT_FILES = [
 _FMT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _MAX_BYTES = 5 * 1024 * 1024
 _BACKUPS = 3
+# console.log is written through the stdout tee, not a logging handler, so it
+# rotates itself: past this size it becomes console.log.1 (.2, .3) and a fresh
+# file starts. Before this it grew without limit.
+_CONSOLE_MAX_BYTES = 10 * 1024 * 1024
 
 _lock = threading.RLock()
 _installed_handlers = []          # root-logger handlers we added
@@ -73,7 +111,11 @@ _app_handler = None               # the always-on app.log handler
 
 
 class _PrefixFilter(logging.Filter):
-    """Pass only records whose logger name starts with one of the prefixes."""
+    """Pass only records whose logger name IS a prefix or sits under it.
+
+    The match stops at a dot: `ui` takes `ui.settings_dialog` but not a logger
+    that merely begins with the same letters.
+    """
 
     def __init__(self, prefixes):
         super().__init__()
@@ -81,7 +123,54 @@ class _PrefixFilter(logging.Filter):
 
     def filter(self, record):
         name = record.name or ""
-        return any(name.startswith(p) for p in self._prefixes)
+        return any(name == p or name.startswith(p + ".") for p in self._prefixes)
+
+
+class _ConsoleFile:
+    """console.log, shared by the stdout and stderr tees, rotating by size."""
+
+    def __init__(self, path, max_bytes=None, backups=_BACKUPS):
+        self.path = path
+        self.max_bytes = max_bytes or _CONSOLE_MAX_BYTES
+        self.backups = backups
+        self.lock = threading.Lock()
+        self._roll_if_needed()
+        self.fh = open(path, "a", encoding="utf-8")
+
+    def _roll_if_needed(self):
+        try:
+            if os.path.getsize(self.path) < self.max_bytes:
+                return
+        except OSError:
+            return
+        for i in range(self.backups - 1, 0, -1):
+            src, dst = "%s.%d" % (self.path, i), "%s.%d" % (self.path, i + 1)
+            if os.path.exists(src):
+                try:
+                    os.replace(src, dst)
+                except OSError:
+                    pass
+        try:
+            os.replace(self.path, self.path + ".1")
+        except OSError:
+            pass
+
+    def write(self, text):
+        self.fh.write(text)
+        self.fh.flush()
+        try:
+            if self.fh.tell() >= self.max_bytes:
+                self.fh.close()
+                self._roll_if_needed()
+                self.fh = open(self.path, "a", encoding="utf-8")
+        except Exception:
+            pass
+
+    def flush(self):
+        self.fh.flush()
+
+    def close(self):
+        self.fh.close()
 
 
 class _Tee:
@@ -96,7 +185,7 @@ class _Tee:
 
     def __init__(self, original, fh, file_lock):
         self._original = original
-        self._fh = fh
+        self._fh = fh               # a _ConsoleFile (or any file-like object)
         self._lock = file_lock
 
     def write(self, text):
@@ -235,8 +324,8 @@ def configure_case_logging(case_root):
 
         # Console tee -> console.log, capturing print()-only output.
         try:
-            fh = open(os.path.join(logs_dir, "console.log"), "a", encoding="utf-8")
-            file_lock = threading.Lock()
+            fh = _ConsoleFile(os.path.join(logs_dir, "console.log"))
+            file_lock = fh.lock
             _orig_stdout, _orig_stderr = sys.stdout, sys.stderr
             _console_tee = _Tee(_orig_stdout, fh, file_lock)
             sys.stdout = _console_tee

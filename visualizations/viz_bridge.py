@@ -54,7 +54,23 @@ def _bytes(n) -> str:
     return "%.1f GB" % n
 
 
-class VizBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+from visualizations.async_bridge import cached_slot
+
+
+def _srum_db(bridge):
+    return [bridge._get_db_path(SRUM_DB)]
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class VizBridge(AsyncBridge):
     """Read-only data source for the SRUM contribution chart."""
 
     def __init__(self, case_directory: str, parent=None):
@@ -128,12 +144,19 @@ class VizBridge(QObject):
         return "(" + joiner.join(per_term) + ")", params
 
     def _range_clause(self, start: str, end: str) -> Tuple[str, list]:
+        """A range on the raw `timestamp` text, so its index is used.
+
+        `date(timestamp) >= date(?)` wrapped the column in a function and
+        hid it from idx_*_timestamp: the planner walked every row of a 457k-row
+        table for one day's top apps (8.9 s). The stored text is
+        'YYYY-MM-DD HH:MM:SS', which sorts like the time it names.
+        """
         clause, params = [], []
         if start:
-            clause.append("date(timestamp) >= date(?)")
+            clause.append("timestamp >= date(?)")
             params.append(start)
         if end:
-            clause.append("date(timestamp) <= date(?)")
+            clause.append("timestamp < date(?, '+1 day')")
             params.append(end)
         return (" AND ".join(clause), params)
 
@@ -164,7 +187,9 @@ class VizBridge(QObject):
                 continue
             row = self._query_db(
                 SRUM_DB,
-                f"SELECT COUNT(*) c, MIN(date(timestamp)) lo, MAX(date(timestamp)) hi FROM {table}")
+                # date(MIN(...)), not MIN(date(...)): the bare column lets the
+                # timestamp index answer the minimum and maximum.
+                f"SELECT COUNT(*) c, date(MIN(timestamp)) lo, date(MAX(timestamp)) hi FROM {table}")
             row = row[0] if row else {}
             providers[key] = row.get("c", 0) or 0
             lo, hi = row.get("lo"), row.get("hi")
@@ -179,6 +204,7 @@ class VizBridge(QObject):
         })
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getSrumHeatmaps", _srum_db)
     def getSrumHeatmaps(self, args_json: str) -> str:
         """Per-provider daily activity for the five heat-maps.
 
@@ -217,6 +243,7 @@ class VizBridge(QObject):
         return json.dumps({"providers": providers, "combined": combined_list})
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getSrumDayDetail", _srum_db)
     def getSrumDayDetail(self, args_json: str) -> str:
         """Drill-down for one day: hourly execution, top apps, per-provider
         counts and a presence summary. `args_json`: {day, terms[], mode}."""
@@ -387,6 +414,7 @@ class VizBridge(QObject):
         return records
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getSrumDayActivity", _srum_db)
     def getSrumDayActivity(self, args_json: str) -> str:
         """App x hour points for ONE selected day - the lower dashboard section.
 
@@ -436,6 +464,7 @@ class VizBridge(QObject):
                            "points": points, "ranges": ranges})
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getSrumOverview", _srum_db)
     def getSrumOverview(self, args_json: str) -> str:
         """Range-wide overview for the right panel: totals, top apps, per-user
         split and per-provider record counts. {totals, topApps[], byUser[],
@@ -556,6 +585,7 @@ class VizBridge(QObject):
         }
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getSrumAppDetail", _srum_db)
     def getSrumAppDetail(self, args_json: str) -> str:
         """Everything about one clicked app: per-hour series, per-user split,
         totals and a share-of-total resource radar. {app, hourly[], byUser[],

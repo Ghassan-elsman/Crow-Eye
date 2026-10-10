@@ -1,0 +1,1047 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows Prefetch File Format (.pf) — How It Works</title>
+  
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* Palette + shared card/header/code look now live in anatomy.css (single
+       source of truth). This page keeps only its byte-map + page-specific CSS. */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+    
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+    
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+ 
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* box + scroll from anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+    
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+    
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look from anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section card look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* Intro card (animated collapsible) look now lives in anatomy.css. */
+    .intro-icon-tip { display: none; }
+
+    /* Fact grid for retention caps + history */
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    /* .fact-card look + hover -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 8px; }
+    .fact-value { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.1; }
+    .fact-detail { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+
+    /* Timeline of prefetch evolution */
+    .timeline { position: relative; padding-left: 28px; margin-top: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 50%, var(--props-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 22px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+    .timeline-text code { font-family: 'Space Mono', monospace; font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+
+    /* .full-reference card look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section card look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 header look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; padding: 20px 16px; }
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How the Windows Prefetch (.pf) file format works and what it proves: structure, the eight execution timestamps, run count and referenced files, byte by byte.">
+  <meta name="keywords" content="windows prefetch, prefetch file format, .pf file, prefetch forensics, prefetch timestamps, program execution evidence">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/prefetch_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/prefetch_anatomy">
+  <meta property="og:title" content="Windows Prefetch File Format (.pf) — How It Works">
+  <meta property="og:description" content="How the Windows Prefetch (.pf) file format works and what it proves: structure, the eight execution timestamps, run count and referenced files, byte by byte.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Windows Prefetch File Format (.pf) — How It Works">
+  <meta name="twitter:description" content="How the Windows Prefetch (.pf) file format works and what it proves: structure, the eight execution timestamps, run count and referenced files, byte by byte.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "Windows Prefetch (.pf) file format and its forensic interpretation",
+      "keywords": "windows prefetch, prefetch file format, .pf file, prefetch forensics, prefetch timestamps, program execution evidence",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Windows Prefetch File Format (.pf) — How It Works",
+      "description": "How the Windows Prefetch (.pf) file format works and what it proves: structure, the eight execution timestamps, run count and referenced files, byte by byte.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "Windows Prefetch",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/prefetch_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Prefetch Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/prefetch_anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "Where are Windows Prefetch files stored?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "In C:\\Windows\\Prefetch. Each file is named after the executable followed by a hash of the path it ran from, such as NOTEPAD.EXE-D8414F97.pf, so the same binary run from two locations produces two separate .pf files."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does a Prefetch file prove a program was executed?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "It is strong evidence that the binary ran on that system, and the run count and execution timestamps say how often and when. The absence of a .pf file proves much less: prefetching can be disabled, the folder is capped and evicts the least recently used entries, and some server builds ship with it off."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How many Prefetch files does Windows keep?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Windows XP through 7 keep up to 128; Windows 8 and later keep up to 1024. When the cap is reached the least recently modified .pf file is evicted, so the folder is a rolling window of recent execution rather than a complete history."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What are the eight Prefetch timestamps?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "From Windows 8 onward a .pf file stores the last eight execution times rather than one, so a single artifact can show a pattern of runs. Earlier versions store only the most recent execution."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>Prefetch: structure, contents and evidential limits</h1>
+      <p class="header-sub">Exhaustive logical mapping of the Windows Prefetch file format &mdash; the <strong>SCCA</strong> (Windows Superfetch/Prefetch Cache file) and <strong>MAM</strong> (Microsoft compression, the <code>MAM</code> container Windows 10 wraps it in) structures, from legacy XP to compressed Windows 11 builds &mdash; and what each field proves about program execution.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#versions">Historical timeline &mdash; when Prefetch was introduced</a></li>
+        <li><a href="#retention">How many Prefetch files Windows keeps</a></li>
+        <li><a href="#naming">File path and naming convention</a></li>
+        <li><a href="#enableprefetcher">Registry control &mdash; EnablePrefetcher</a></li>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#scca-flags">Undocumented SCCA flags (0x50)</a></li>
+        <li><a href="#metrics-flags">Metrics array flags (0x14)</a></li>
+        <li><a href="#limits">What a Prefetch file supports, and what it does not</a></li>
+        <li><a href="#anti-forensics">Anti-forensic techniques</a></li>
+        <li><a href="#dashboard">Reading the Prefetch dashboard</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <!-- INTRO TOOLTIP / DEFINITION CARD (sits directly above the byte map) -->
+    <div class="intro-card collapsed">
+      <div class="intro-icon" aria-label="What is a Prefetch file?" title="What is a Prefetch file?"><i class="fas fa-info"></i></div>
+      <div class="intro-content">
+        <div class="intro-title">What is a Prefetch file?</div>
+        <div class="intro-body">
+          <strong style="color: var(--accent);">TL;DR &mdash;</strong> a performance recording the Windows <strong>Cache Manager</strong> writes to <code>C:\Windows\Prefetch\</code> after each program launch. It captures every DLL, data file, and disk block the program touched in its first ~10 seconds. For investigators, it is a tamper-resistant <strong>receipt of execution</strong>.
+          <br><br>
+          A <strong>Prefetch (.pf)</strong> file is a Windows performance-optimization artifact written by the OS <strong>Cache Manager</strong>. Whenever an executable runs, Windows records the libraries, data files, and disk blocks it accessed during the <strong>first ~10 seconds</strong> of its life, then stores that recording in <code>C:\Windows\Prefetch\</code> under the name <code>EXECUTABLE.EXE-XXXXXXXX.pf</code> (the <code>XXXXXXXX</code> is a hash of the executable's full path). On the next launch, Windows reads the recording and pre-stages the same blocks into RAM so the program starts faster.
+          <br><br>
+          For a forensic investigator the recording is close to the strongest execution evidence Windows keeps on disk: a <code>.pf</code> file exists because the kernel traced a process starting from that image path, and it carries up to eight run times, a run count, and every file the process loaded along the way &mdash; even if the binary itself has since been deleted. What it does <em>not</em> settle is who started it, or whether the run succeeded; those limits are set out in <a href="#limits">what a Prefetch file supports, and what it does not</a>.
+        </div>
+      </div>
+    </div>
+
+    <div class="version-selector" id="version-selector">
+      <div class="v-tab" onclick="setVersion('v17')">v17 (XP)</div>
+      <div class="v-tab" onclick="setVersion('v23')">v23 (Vista/7)</div>
+      <div class="v-tab" onclick="setVersion('v26')">v26 (Win 8)</div>
+      <div class="v-tab" onclick="setVersion('v30v1')">v30v1 (Win 10 Early)</div>
+      <div class="v-tab" onclick="setVersion('v30v2')">v30v2 (Win 10/11)</div>
+      <div class="v-tab active" onclick="setVersion('v31')">v31 (Win 11)</div>
+    </div>
+
+    <div class="dissection-layout">
+      <div class="map-container">
+        <div id="mam-wrapper-label" style="font-family: 'Space Mono'; font-size: 11px; color: var(--mam-color); margin-bottom: 12px; display: none;"><i class="fas fa-compress-arrows-alt"></i> XPRESS Huffman Compression Layer Active</div>
+        <span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div>
+      </div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);"><p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-search-plus"></i></p><p>Select any field in the map to reveal a deep forensic dive.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ARTIFACT NARRATIVE -->
+    <div class="narrative-section reveal">
+      <div class="narrative-title">The Evolution of Predictive Triage</div>
+      <div class="narrative-text">
+        <p>Windows Prefetch evolved from a simple binary table in XP to a complex, compressed database in Windows 11. It remains one of the most critical artifacts for proving <strong>Application Execution</strong> history, as it records exactly what files were loaded into memory during the first 10 seconds of a process's life.</p>
+        <p>Modern versions (v30+) utilize <strong>MAM compression</strong> (XPRESS Huffman), wrapping the forensic payload to save disk space. To parse these, an investigator must first strip the 8-byte MAM header and decompress the remaining payload to reveal the original SCCA structure.</p>
+      </div>
+    </div>
+
+    <!-- HOW PREFETCH WORKS -->
+    <div class="narrative-section reveal" style="border-left-color: var(--identity-color);">
+      <div class="narrative-title">How Prefetch Works &mdash; The Cache Manager's Memory</div>
+      <div class="narrative-text">
+        <p>Prefetch is not a security feature. It is a <strong>performance optimization</strong> driven by the Windows <strong>Cache Manager</strong>. Every time an executable launches, the kernel quietly traces its first ten seconds of disk I/O &mdash; every DLL imported, every configuration file opened, every data file mapped &mdash; and persists that trace to disk. On the next launch, the Cache Manager replays the trace ahead of the process, pre-paging the same blocks into RAM so the program "feels" faster.</p>
+        <p>This optimization side-effect is what makes Prefetch one of the most reliable execution-evidence artifacts on Windows. The file is written <strong>after</strong> the process runs, by the kernel, into a system-protected directory. Anti-forensic actors can delete it, but they cannot easily forge one without leaving secondary indicators &mdash; mismatched timestamps in <code>$MFT</code>, inconsistent run counts, or a missing entry under <code>HKLM\..\PrefetchParameters</code>.</p>
+        <p><strong>The lifecycle of a single .pf file:</strong></p>
+        <ol style="margin-left: 24px; margin-top: 8px;">
+          <li><strong>Process launch</strong> &mdash; the kernel attaches a trace consumer to the new process.</li>
+          <li><strong>First ~10 seconds</strong> &mdash; every disk page fault and file open is recorded into a kernel-side buffer.</li>
+          <li><strong>Flush to disk</strong> &mdash; a short delay (typically &lt; 30 s) after the trace window, the buffer is serialised into the SCCA format and written to <code>C:\Windows\Prefetch\&lt;EXE&gt;-&lt;hash&gt;.pf</code>.</li>
+          <li><strong>Subsequent launches</strong> &mdash; the existing .pf file is opened, the recorded blocks are pre-read into the standby list, the run count is incremented, the timestamp array is shifted down one slot, and the new launch time is written into slot 0.</li>
+          <li><strong>Eviction</strong> &mdash; when the per-version cap is hit (see below), the least-recently-modified .pf file is deleted to make room.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- VERSION HISTORY / TIMELINE -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="versions">Historical timeline &mdash; when Prefetch was introduced</h2>
+      <p style="color: var(--tx2); font-size: 15px; line-height: 1.7; margin-bottom: 8px;">Prefetch shipped with the original release of Windows XP and has been continuously refined for over two decades. Each major Windows generation bumped the on-disk format version, changing structure sizes and adding fields &mdash; which is why a single parser must dispatch on the 4-byte <code>Format Version</code> field at offset 0.</p>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="timeline-year">OCTOBER 2001 &middot; FORMAT v17</div>
+          <div class="timeline-event">Windows XP / Server 2003 &mdash; the original</div>
+          <div class="timeline-text">Prefetch is introduced as part of the Cache Manager subsystem. The SCCA on-disk format is small and uncompressed. A single <strong>Last Run Time</strong> is stored, run count is tracked, FileMetric structs are <strong>20 bytes</strong> with no MFT reference, and the maximum .pf retention is capped at <strong>128 files</strong>.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">JANUARY 2007 &middot; FORMAT v23</div>
+          <div class="timeline-event">Windows Vista / 7 &mdash; SuperFetch layered on top</div>
+          <div class="timeline-text"><strong>SuperFetch</strong> (the user-mode service <code>sysmain</code>) is layered above the kernel prefetcher to model usage patterns by hour-of-day. The on-disk format grows: FileMetric structs are now <strong>32 bytes</strong> with an 8-byte <strong>NTFS MFT reference</strong> per file, the volume entry expands to 104 bytes, and the file gains a much larger File Information block. Single Last Run Time is retained. Cap remains <strong>128 .pf files</strong>.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">OCTOBER 2012 &middot; FORMAT v26</div>
+          <div class="timeline-event">Windows 8 / 8.1 / Server 2012 &mdash; the 8-slot history</div>
+          <div class="timeline-text">The single Last Run Time is replaced with an <strong>8-slot FILETIME array</strong> &mdash; for the first time, investigators can see the eight most-recent execution times of a single binary. Trace chain struct grows to 12 bytes with a separate <code>loaded_block_count</code>. The retention cap is raised <strong>8&times;</strong> to <strong>1024 .pf files</strong>, dramatically extending the historical window available to forensic analysis.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">JULY 2015 &middot; FORMAT v30</div>
+          <div class="timeline-event">Windows 10 &mdash; compression arrives (MAM)</div>
+          <div class="timeline-text">.pf files are wrapped in an 8-byte <strong>MAM header</strong> and compressed with <strong>XPRESS Huffman</strong> to save disk space. A new <strong>Hash Pool</strong> string is added &mdash; for UWP / Modern Apps this holds the <strong><a href="automatic_jumplist.html#appid">AppID</a> / AUMID / package family name</strong> (e.g. <code>Microsoft.XboxGamingOverlay_8wekyb3d8bbwe</code>). FileMetric and trace structs are tightened: trace is now 8 bytes, dropping the older <code>next_array_entry_index</code> and <code>loaded_block_count</code> fields. Cap stays at <strong>1024</strong>. Two sub-variants exist (v30v1 with metrics offset 304, v30v2 with offset 296).</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">OCTOBER 2021 &middot; FORMAT v31</div>
+          <div class="timeline-event">Windows 11 &mdash; refinement, not revolution</div>
+          <div class="timeline-text">A minor format bump from v30. The layout is essentially identical to v30v2, but the version byte changes to <code>0x1F</code>. MAM/XPRESS Huffman compression remains, the 8-slot timestamp array stays, and the Hash Pool string continues to carry AUMIDs for Modern Apps. Cap remains <strong>1024 .pf files</strong> &mdash; the same effective historical window as Windows 8.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RETENTION CAPS / KEY FACTS -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="retention">How many Prefetch files Windows keeps</h2>
+      <p style="color: var(--tx2); font-size: 15px; line-height: 1.7;">When the per-version cap is reached, Windows evicts the <strong>least-recently-modified</strong> .pf file to make room for a new one. This means the contents of <code>C:\Windows\Prefetch\</code> at any moment is essentially a rolling window of the most recently executed binaries on the system.</p>
+      <div class="fact-grid">
+        <div class="fact-card">
+          <div class="fact-label">XP / 2003 &middot; v17</div>
+          <div class="fact-value">128</div>
+          <div class="fact-detail">Max .pf files retained before LRU eviction.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Vista / 7 &middot; v23</div>
+          <div class="fact-value">128</div>
+          <div class="fact-detail">Same cap; SuperFetch profile stored separately.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Win 8 / 8.1 &middot; v26</div>
+          <div class="fact-value">1024</div>
+          <div class="fact-detail">Cap raised 8&times;. Larger historical window.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Windows 10 &middot; v30</div>
+          <div class="fact-value">1024</div>
+          <div class="fact-detail">Compressed (MAM/XPRESS Huffman) on disk.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Windows 11 &middot; v31</div>
+          <div class="fact-value">1024</div>
+          <div class="fact-detail">Same cap as Win 8&plus;; format slightly refined.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Per-binary timestamps</div>
+          <div class="fact-value">1 &rarr; 8</div>
+          <div class="fact-detail">Single Last Run Time (v17/v23) became an 8-slot FILETIME array in v26&plus;.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FILE NAMING / REGISTRY CONTROL -->
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="naming">File path and naming convention</h2>
+        <div style="font-size: 15px; color: var(--tx2); line-height: 1.7;">
+          <p style="margin-bottom: 12px;"><strong style="color: var(--tx);">Location.</strong> Every .pf file lives in a single, system-protected directory:</p>
+          <div class="field-val" style="font-family: 'Space Mono', monospace; margin-bottom: 16px;">C:\Windows\Prefetch\</div>
+          <p style="margin-bottom: 12px;"><strong style="color: var(--tx);">Filename pattern.</strong></p>
+          <div class="field-val" style="font-family: 'Space Mono', monospace; margin-bottom: 16px;">&lt;EXECUTABLE_NAME&gt;-&lt;8-HEX-HASH&gt;.pf</div>
+          <p style="margin-bottom: 12px;">The 8-hex-digit suffix is a <strong>hash of the full Unicode path</strong> to the executable. Two copies of the same binary launched from different paths produce two different .pf files &mdash; an investigator can spot side-loaded or dropped duplicates this way.</p>
+          <p style="margin-bottom: 8px;"><strong style="color: var(--tx);">Common examples:</strong></p>
+          <ul style="margin-left: 20px; font-family: 'Space Mono', monospace; font-size: 13px; line-height: 1.9;">
+            <li><code style="color: var(--accent);">NOTEPAD.EXE-AF43252D.pf</code> &mdash; classic Notepad</li>
+            <li><code style="color: var(--accent);">CMD.EXE-0BD30981.pf</code> &mdash; Command Prompt</li>
+            <li><code style="color: var(--accent);">POWERSHELL.EXE-022A1437.pf</code> &mdash; PowerShell</li>
+            <li><code style="color: var(--accent);">NTOSBOOT-B00DFAAD.pf</code> &mdash; the special <strong>boot trace</strong>, regenerated on every boot</li>
+          </ul>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="enableprefetcher">Registry control &mdash; <code style="color: var(--accent); font-size: 14px;">EnablePrefetcher</code></h2>
+        <div style="font-size: 15px; color: var(--tx2); line-height: 1.7;">
+          <p style="margin-bottom: 12px;">Prefetching is governed by a single REG_DWORD value. A change here is one of the first things an investigator checks during an anti-forensics review:</p>
+          <div class="field-val" style="font-family: 'Space Mono', monospace; margin-bottom: 16px; font-size: 12px; word-break: break-all;">HKLM\SYSTEM\CurrentControlSet\Control\<br>Session Manager\Memory Management\<br>PrefetchParameters\EnablePrefetcher</div>
+          <span class="cap">Table 1</span>
+      <table class="kb-table" style="margin-top: 0;">
+            <thead><tr><th>Value</th><th>Behaviour</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono', monospace; color: var(--danger);">0</td><td><strong style="color: var(--danger);">Disabled</strong> &mdash; no .pf files written. <strong>Red flag</strong> in an IR engagement.</td></tr>
+              <tr><td style="font-family: 'Space Mono', monospace; color: var(--tx);">1</td><td>Application-launch prefetching only.</td></tr>
+              <tr><td style="font-family: 'Space Mono', monospace; color: var(--tx);">2</td><td>Boot prefetching only (<code>NTOSBOOT</code>).</td></tr>
+              <tr><td style="font-family: 'Space Mono', monospace; color: var(--props-color);">3</td><td><strong style="color: var(--props-color);">Both</strong> &mdash; the Windows default on workstation SKUs.</td></tr>
+            </tbody>
+          </table>
+          <p style="margin-top: 14px; font-size: 13px; color: var(--tx3);"><i class="fas fa-exclamation-triangle" style="color: var(--danger); margin-right: 6px;"></i> A sibling value, <code style="color: var(--accent); font-size: 13px;">EnableSuperfetch</code>, governs the Vista&plus; SuperFetch user-mode service. Modern Windows 11 disables SuperFetch automatically on SSDs &mdash; this is benign and not the same as <code>EnablePrefetcher = 0</code>.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- FULL LOGICAL DISSECTION TABLE -->
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 2</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Offset</th>
+              <th style="width: 60px;">Size</th>
+              <th style="width: 200px;">Field Name</th>
+              <th>Forensic Meaning & Value</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="scca-flags">Undocumented SCCA flags (0x50)</h2>
+        <span class="cap">Table 3</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Bit</th><th>Definition</th><th>Significance</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">Bit 0</td><td style="color: var(--tx);">IsBootFetch</td><td>Identifies if the prefetch was created during system boot (NTOSBOOT).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">Bit 1</td><td style="color: var(--tx);">Encrypted</td><td>Rarely seen; indicates the SCCA payload uses basic XOR encryption.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">Bit 2</td><td style="color: var(--tx);">AppLaunch</td><td>Standard application launch prefetch (Default).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">Bit 3</td><td style="color: var(--tx);">IsGapped</td><td>Indicates non-contiguous file read operations.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="metrics-flags">Metrics array flags (0x14)</h2>
+        <span class="cap">Table 4</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Mask</th><th>Flag Name</th><th>Forensic Result</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x01</td><td style="color: var(--tx);">IsDirectory</td><td>Entry represents a directory instead of a file.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x02</td><td style="color: var(--tx);">IsVolumePath</td><td>Path is relative to the volume root.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x04</td><td style="color: var(--tx);">PreLoad</td><td>Resource was pre-loaded by Cache Manager.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="limits">What a Prefetch file supports, and what it does not</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">Prefetch
+      is the artifact most often asked to carry a whole allegation on its own. It is strong
+      evidence of execution and weak evidence of almost everything around it:</p>
+
+      <div class="myth">
+        <h4>It proves a process started, not that it did anything</h4>
+        <p>The kernel begins tracing when the image is loaded. A program that started and failed
+        immediately &mdash; a missing DLL, a crash on launch, a denied privilege &mdash; leaves a
+        <code>.pf</code> file that looks exactly like a successful run. The run count rises either
+        way. Prefetch answers "this image was launched from this path"; whether the launch achieved
+        anything is a question for the event log, the registry or the files it touched.</p>
+      </div>
+
+      <div class="myth">
+        <h4>There is no user in a Prefetch file</h4>
+        <p>The format carries no SID, no session and no parent process. A file in
+        <code>C:\Windows\Prefetch\</code> is machine-wide: on a multi-user host it does not say
+        which account ran the program, and on any host it does not distinguish a person launching it
+        from a scheduled task, a service or another process spawning it. Attribution needs a logon
+        session or a process-creation event alongside the run time.</p>
+      </div>
+
+      <div class="myth">
+        <h4>Absence is not evidence of absence</h4>
+        <p>Windows keeps a bounded number of <code>.pf</code> files &mdash; 128 on Windows 7 and
+        1024 on Windows 8 and later &mdash; and discards the oldest. Prefetch can be disabled
+        outright through <code>EnablePrefetcher</code>, is off by default on many SSD-era server
+        builds, and never covers a process that ran from a path Windows does not trace. A missing
+        <code>.pf</code> means the artifact is not there, not that the program never ran.</p>
+      </div>
+
+      <div class="myth">
+        <h4>Eight timestamps is a window, not a history</h4>
+        <p>Windows 8 and later keep the last eight run times; Windows 7 keeps one. A program run
+        fifty times shows its most recent eight and a run count of fifty &mdash; so the count and
+        the timestamps answer different questions, and the gap between the oldest kept timestamp and
+        the file's own creation time is unaccounted activity, not idle time.</p>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75;"><strong style="color: var(--tx);">What
+      it is genuinely good for:</strong> the loaded-file list. No other artifact records what a
+      process actually reached for in its first seconds &mdash; every DLL, configuration file and
+      data file the loader touched, with its full path. That list survives the deletion of the
+      binary, names the directory the program really ran from, and routinely exposes a second stage
+      or a staging directory that nothing else on the machine points at.</p>
+    </div>
+
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="anti-forensics">Anti-forensic techniques</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">How sophisticated adversaries try to defeat Prefetch as evidence — and how an investigator catches each play:</p>
+      <span class="cap">Table 5</span>
+      <div class="responsive-table-wrap">
+      <table class="kb-table" style="font-size: 15px;">
+          <thead><tr><th>Technique</th><th>Indicator in Prefetch</th><th>Counter-detection</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Selective .pf deletion</td>
+              <td>A known-executed binary has no Prefetch entry, yet other evidence proves execution.</td>
+              <td>Cross-reference against <a href="amcache_anatomy.html#what-it-is">Amcache</a>, ShimCache, Event Log 4688/4689 and the <a href="usn_anatomy.html#dissection">USN Journal</a>, and look for <code>EnablePrefetcher</code> tampering in the registry. <a class="see-also" href="shimcache_anatomy.html#what-it-is">Explained in full: ShimCache</a></td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Prefetcher disabled via registry</td>
+              <td>Whole <code>C:\Windows\Prefetch\</code> directory is empty or sparsely populated post-incident.</td>
+              <td>Inspect <code>HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters\EnablePrefetcher</code>. <code>0</code> = disabled, <code>3</code> = default. Any recent change is a red flag.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">FILETIME timestomping</td>
+              <td>Last Run Times all zero, all identical, or set to obviously stale / future values.</td>
+              <td>Compare slot 0 against <code>$MFT</code> creation / modification times for the same binary; nation-state actors rarely sync all three artifacts.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">MAM header corruption</td>
+              <td>Crow-Eye logs <code>Error decompressing Windows 10/11 prefetch</code> and the file fails to parse.</td>
+              <td>Manually carve the SCCA payload starting at byte 8 (after the 8-byte MAM header) and attempt direct decompression with <code>dissect.util.compression.lzxpress_huffman</code>.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Run-count clipping</td>
+              <td><code>run_count = 1</code> but multiple non-zero Last Run Times exist (or vice versa).</td>
+              <td>Crow-Eye sanity-checks this in <code>save_to_sqlite()</code>; mismatched counts surface in the DB and warrant a closer look at the timestamp array.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Living-off-the-land hiding</td>
+              <td>Suspicious DLL loaded by a signed Windows binary (e.g. <code>rundll32.exe</code>, <code>regsvr32.exe</code>); the .pf filename looks benign.</td>
+              <td>Walk the <code>resources</code> column — the MFT references to loaded DLLs survive even when the binary itself is signed and trusted. Look for unusual <code>%APPDATA%</code> / <code>%TEMP%</code> DLL paths.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">External-media wiping</td>
+              <td>A volume serial number is referenced but the drive is no longer present.</td>
+              <td>The volume's creation FILETIME plus the loaded paths still survive in Prefetch. Useful for proving USB-borne tooling was present even after the device is gone.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+    function gen(l, s) { let r = []; for(let i=0; i<l; i++) r.push(((Math.sin(s + i) * 10000) & 0xFF).toString(16).padStart(2, '0').toUpperCase()); return r; }
+    
+    const sccaHeader = (v, name, hash) => [
+      { section: 'SCCA Header', name: 'Format Version', offset: 0, size: 4, type: 'header-color', val: v, forensic: '<strong>UInt32 — identifies the Windows generation that wrote this Prefetch.</strong> Crow-Eye dispatches to a version-specific parser based on this value (Prefetch_claw.py:542-549):<br><br><code>17</code> → Windows XP / Server 2003 (single timestamp, 20-byte metrics)<br><code>23</code> → Windows Vista / 7 (single timestamp, 32-byte metrics + MFT refs)<br><code>26</code> → Windows 8 / 8.1 / Server 2012 (8 timestamps appear here)<br><code>30</code> → Windows 10 / early Windows 11 (MAM-compressed; two sub-variants)<br><code>31</code> → modern Windows 11<br><br>An unrecognised value triggers <code>ValueError(\"Unknown version\")</code> and the file is logged as a parse failure.' },
+      { section: 'SCCA Header', name: 'Signature', offset: 4, size: 4, type: 'header-color', val: 'SCCA', forensic: '<strong>4-byte magic — the ASCII bytes "SCCA" (0x53 0x43 0x43 0x41).</strong> Microsoft has never officially expanded the acronym; the format is universally referred to by the four-letter signature alone (libscca, libyal, Eric Zimmerman tools all use it as the format name). Crow-Eye validates this exactly with <code>signature != cls.SIGNATURE</code> (Prefetch_claw.py:519); a mismatch aborts parsing. <strong>Carving tip:</strong> when an analyst recovers raw disk blocks, this signature at offset +4 (after any MAM header) is the carving anchor for a Prefetch file.' },
+      { section: 'SCCA Header', name: 'Unknown / Reserved', offset: 8, size: 4, type: 'reserved', forensic: '<strong>4 zero bytes — reserved by Microsoft for future flag expansion.</strong> Always <code>0x00000000</code> in well-formed Prefetch. A non-zero value here is an anomaly and a potential indicator of crafted / tampered Prefetch (red team labs sometimes use this field as a covert channel). Crow-Eye does not read this field.' },
+      { section: 'SCCA Header', name: 'File Size', offset: 12, size: 4, type: 'header-color', val: 'Parsed Size', forensic: '<strong>UInt32 — total size of the SCCA payload in bytes (after MAM decompression if applicable).</strong> Useful sanity check: if <code>file_size != len(raw_bytes)</code> the file is truncated or the MAM header reports a lie. The parser reads it as <code>file_size</code> (Prefetch_claw.py:93) but treats it as informational — actual structure traversal is driven by the pointers in File Information.' },
+      { section: 'SCCA Header', name: 'Executable Name', offset: 16, size: 60, type: 'header-color', val: name, forensic: '<strong>60-byte UTF-16LE buffer holding the binary\'s filename — up to 29 UTF-16 characters plus a null terminator.</strong> Crow-Eye decodes via <code>data[16:76].decode(\"utf-16le\", errors=\"replace\").split(\"\\x00\")[0].strip()</code> (Prefetch_claw.py:96-97). <strong>This is the filename the OS believed it executed</strong> — if it disagrees with the path hash at offset 76, or with the filename embedded in the .pf filename on disk, that\'s a strong indicator of tampering or a path-collision attack. Long-named binaries are truncated to fit 29 chars; the truncation point itself can be evidentiary.' },
+      { section: 'SCCA Header', name: 'Prefetch Hash', offset: 76, size: 4, type: 'header-color', val: hash, forensic: '<strong>UInt32 — 32-bit hash derived from the executable\'s full path.</strong> This is the value baked into the .pf filename on disk (e.g. <code>NOTEPAD.EXE-AF43252D.pf</code> where <code>AF43252D</code> is this hash). The hash algorithm varies by Windows: XP uses one variant, Vista/7 another, Win 8+ another. <strong>Cross-host pivot:</strong> the same binary launched from the same path on two different machines produces the same hash — matching this value across a fleet identifies every host that ran the same path. Crow-Eye exposes it as <code>self.header.hash</code> in uppercase hex (Prefetch_claw.py:100).' },
+      { section: 'SCCA Header', name: 'SCCA Flags', offset: 80, size: 4, type: 'header-color', forensic: '<strong>4-byte bitmask telling Windows what KIND of prefetch this is.</strong> See the "Undocumented SCCA Flags" reference box below — the bits cover boot-fetch (<code>NTOSBOOT</code>), basic XOR encryption, standard application launch, and gapped (non-contiguous) reads. Boot prefetch (bit 0) sits in <code>C:\\Windows\\Prefetch\\NTOSBOOT-*.pf</code> and is rebuilt on every boot — a missing or stale NTOSBOOT can itself be an IOC for boot-time tampering.' }
+    ];
+
+    const fileInfoBase = (off) => [
+      { section: 'File Information', name: 'Metrics Array Pointers', offset: off + 0, size: 8, type: 'fileinfo-color', forensic: '<strong>8 bytes — two UInt32 fields pointing at Section A (File Metrics).</strong><br><br><code>Offset (4B)</code> — byte offset from the start of the SCCA payload to the first FileMetric struct.<br><code>Count (4B)</code> — number of FileMetric structs in the array.<br><br>Crow-Eye reads these as <code>file_metrics_offset</code> and <code>file_metrics_count</code> (Prefetch_claw.py:573-574), then walks <code>count × metric_size</code> bytes (20B per metric in v17, 32B in v23+). <strong>Forensic value:</strong> the count records how many files the OS tracked at launch — a sudden drop in count for a binary that historically loaded hundreds of DLLs may indicate truncation or anti-forensics manipulation.' },
+      { section: 'File Information', name: 'Trace Chain Pointers', offset: off + 8, size: 8, type: 'fileinfo-color', forensic: '<strong>8 bytes — two UInt32 fields pointing at Section B (Trace Chains).</strong><br><br><code>Offset (4B)</code> — byte offset to the first TraceChain entry.<br><code>Count (4B)</code> — number of TraceChain entries (typically matches the FileMetric count: one trace per file).<br><br>Crow-Eye reads as <code>trace_chains_offset</code> / <code>trace_chains_count</code> (Prefetch_claw.py:575-576). Trace entries are 12 bytes in v17/v23/v26 and only 8 bytes in v30+. <strong>Forensic value:</strong> the trace pool holds the Cache Manager\'s record of which disk blocks each file <em>actually loaded</em> on the previous run — useful as corroborating evidence that a file was paged in, not merely referenced.' },
+      { section: 'File Information', name: 'String Pool Pointers', offset: off + 16, size: 8, type: 'fileinfo-color', forensic: '<strong>8 bytes — UInt32 offset + UInt32 SIZE (note: size in bytes, not count) for Section C (filename string heap).</strong><br><br><code>Offset (4B)</code> — byte offset to the start of the UTF-16LE string heap.<br><code>Size (4B)</code> — total byte length of the heap (strings are variable-length, so a byte size is used instead of a count).<br><br>Crow-Eye slices <code>raw_bytes[filename_strings_offset:filename_strings_offset + filename_strings_size]</code> to get the entire string pool (Prefetch_claw.py:756-757). Each FileMetric\'s <code>filename_string_offset</code> is relative to this slice — so this pointer is the anchor every path in Section A resolves against.' },
+      { section: 'File Information', name: 'Volume Info Pointers', offset: off + 24, size: 12, type: 'fileinfo-color', forensic: '<strong>12 bytes — three UInt32 fields pointing at Section D (Volume Information).</strong><br><br><code>Offset (4B)</code> — byte offset to the first volume entry.<br><code>Count (4B)</code> — number of volumes referenced. Typically 1 for system-drive-only binaries; a value &gt;1 means external / removable media was in the loop at launch time.<br><code>Size (4B)</code> — total byte length of Section D (volume entries + their string sub-blocks combined).<br><br>Crow-Eye reads these as <code>volumes_info_offset</code> / <code>volume_count</code> / <code>volumes_info_size</code> (Prefetch_claw.py:579-581). <strong>For nation-state investigators:</strong> a Count of 2+ is one of the fastest "did they use a USB?" signals available — every additional volume entry includes that drive\'s serial number and creation FILETIME.' }
+    ];
+
+    const traceStruct = (v) => {
+      if (v === 'v30v1' || v === 'v30v2' || v === 'v31') {
+        return [
+          { off: '0x00', name: 'Total Block Load Count', size: '4B' },
+          { off: '0x04', name: 'Unknown (Flags?)', size: '4B' }
+        ];
+      }
+      if (v === 'v26') {
+        return [
+          { off: '0x00', name: 'Next Array Entry Index', size: '4B' },
+          { off: '0x04', name: 'Total Block Load Count', size: '4B' },
+          { off: '0x08', name: 'Unknown', size: '2B' },
+          { off: '0x0A', name: 'Loaded Block Count', size: '2B' }
+        ];
+      }
+      return [
+        { off: '0x00', name: 'Next Array Entry Index', size: '4B' },
+        { off: '0x04', name: 'Total Block Load Count', size: '4B' },
+        { off: '0x08', name: 'Unknown (Flags?)', size: '4B' }
+      ];
+    };
+
+    const metricStruct = (v) => v === 'v17' ? [
+      { off: '0x00', name: 'Start Time', size: '4B' }, { off: '0x04', name: 'Duration', size: '4B' }, { off: '0x08', name: 'String Offset', size: '4B' }, { off: '0x0C', name: 'String Length', size: '4B' }, { off: '0x10', name: 'Flags', size: '4B' }
+    ] : [
+      { off: '0x00', name: 'Start Time', size: '4B' }, { off: '0x04', name: 'Duration', size: '4B' }, { off: '0x08', name: 'Avg Duration', size: '4B' }, { off: '0x0C', name: 'String Offset', size: '4B' }, { off: '0x10', name: 'String Length', size: '4B' }, { off: '0x14', name: 'Flags', size: '4B' }, { off: '0x18', name: 'MFT Reference', size: '8B' }
+    ];
+
+    // First 36 bytes are identical across v17/v23/v26/v30+. The trailing bytes are
+    // version-specific reserved/alignment (v17 = 40B total, v23/v26 = 104B, v30+ = 96B).
+    const volumeStruct = (v) => [
+      { off: '0x00', name: 'Device Path Offset', size: '4B' },
+      { off: '0x04', name: 'Device Path Char Count', size: '4B' },
+      { off: '0x08', name: 'Creation Time (FILETIME)', size: '8B' },
+      { off: '0x10', name: 'Serial Number (UInt32)', size: '4B' },
+      { off: '0x14', name: 'File References Offset', size: '4B' },
+      { off: '0x18', name: 'File References Size', size: '4B' },
+      { off: '0x1C', name: 'Directory Strings Offset', size: '4B' },
+      { off: '0x20', name: 'Number of Directory Strings', size: '4B' }
+    ];
+
+    const versions = {
+      v17: { mam: false, hex: ["11","00","00","00","53","43","43","41",...gen(400, 1)], fields: [
+        ...sccaHeader('17', 'CMD.EXE', '0xAF43252D'), ...fileInfoBase(84),
+        { section: 'File Information', name: 'Last Run Time', offset: 120, size: 8, type: 'times-color', forensic: '<strong>Single 64-bit FILETIME — XP/2003 only records ONE execution time</strong> (no 8-slot history). 100-nanosecond intervals since 1601-01-01 00:00:00 UTC. Read at file_info offset 36 in Prefetch_claw.py:583.' },
+        { section: 'File Information', name: 'Run Count', offset: 144, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — number of times the program has been launched.</strong> Read at file_info offset 60 (Prefetch_claw.py:586).' },
+        { section: 'Section A - Metrics', name: 'Metric Entry (v17)', offset: 200, size: 20, type: 'metrics-color', forensic: '20-byte metric object.', struct: metricStruct('v17') },
+        { section: 'Section B - Trace', name: 'Trace Entry (v17)', offset: 300, size: 12, type: 'trace-color', forensic: '12-byte trace chain entry — next_array_entry_index + total_block_load_count + 4B unknown.', struct: traceStruct('v17') },
+        { section: 'Section D - Volume Info', name: 'Volume Block (v17)', offset: 350, size: 40, type: 'volumes-color', forensic: '40-byte volume info.', struct: volumeStruct('v17') }
+      ] },
+      v23: { mam: false, hex: ["17","00","00","00","53","43","43","41",...gen(500, 2)], fields: [
+        ...sccaHeader('23', 'NOTEPAD.EXE', '0x11223344'), ...fileInfoBase(84),
+        { section: 'File Information', name: 'Last Run Time', offset: 128, size: 8, type: 'times-color', forensic: '<strong>Single 64-bit FILETIME — Vista/7 still records only ONE timestamp here</strong> (the 8-slot history was added in v26 / Win 8). FILETIME = 100-ns intervals since 1601-01-01 00:00:00 UTC. Crow-Eye reads it at file_info offset 44 (Prefetch_claw.py:609).' },
+        { section: 'File Information', name: 'Run Count', offset: 152, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — total execution count.</strong> Read at file_info offset 68 (Prefetch_claw.py:611).' },
+        { section: 'File Information', name: 'Unknown Padding', offset: 160, size: 80, type: 'reserved', forensic: 'Undocumented large padding block.' },
+        { section: 'Section A - Metrics', name: 'Metric Entry (v23)', offset: 250, size: 32, type: 'metrics-color', forensic: '32-byte Vista/7 metric.', struct: metricStruct('v23') },
+        { section: 'Section D - Volume Info', name: 'Volume Block (v23)', offset: 450, size: 104, type: 'volumes-color', forensic: '104-byte volume entry.', struct: volumeStruct('v23') }
+      ] },
+      v31: { mam: true, hex: ["4D","41","4D","04","00","0C","00","00","1F","00","00","00","53","43","43","41",...gen(1100, 5)], fields: [
+        { section: 'MAM Wrapper', name: 'MAM Signature — byte 0 \"M\" (0x4D)', offset: 0, size: 1, type: 'mam-color', val: '0x4D', forensic: '<strong>First byte of the 4-byte MAM header.</strong> Crow-Eye detects compressed Prefetch by checking <code>data[:3] == b\"MAM\"</code> (Prefetch_claw.py:426). Without this signature, the file is treated as uncompressed legacy SCCA.' },
+        { section: 'MAM Wrapper', name: 'MAM Signature — byte 1 \"A\" (0x41)', offset: 1, size: 1, type: 'mam-color', val: '0x41', forensic: '<strong>Second byte of the MAM magic.</strong> Together with bytes 0 and 2 it spells <code>MAM</code> in ASCII — the 3-byte tag Windows places at the head of files compressed with the <code>COMPRESSION_FORMAT_XPRESS_HUFF</code> wrapper used by the Memory Manager (the prevailing community interpretation; Microsoft has not officially documented the acronym).' },
+        { section: 'MAM Wrapper', name: 'MAM Signature — byte 2 \"M\" (0x4D)', offset: 2, size: 1, type: 'mam-color', val: '0x4D', forensic: '<strong>Third byte of the MAM magic.</strong> Closes out the 3-byte ASCII signature.' },
+        { section: 'MAM Wrapper', name: 'MAM Signature — byte 3 algorithm (0x04)', offset: 3, size: 1, type: 'mam-color', val: '0x04', forensic: '<strong>Compression algorithm identifier.</strong> <code>0x04</code> = XPRESS Huffman — the only algorithm observed in Prefetch in the wild. This value is passed directly to NTDLL\'s <code>RtlDecompressBufferEx(COMPRESSION_FORMAT_XPRESS_HUFF, …)</code> (Prefetch_claw.py:434). An unexpected value here (e.g. 0x03 = LZNT1) would indicate either an undocumented Windows variant or tampering.' },
+        { section: 'MAM Wrapper', name: 'Uncompressed Size', offset: 4, size: 4, type: 'mam-color', forensic: 'Expected size of the SCCA payload after decompression.' },
+        ...sccaHeader('31', 'EDGE.EXE', '0x99AA1122').map(f => ({...f, offset: f.offset+8})),
+        ...fileInfoBase(92),
+        { section: 'File Information', name: 'Total Directory Count', offset: 128, size: 4, type: 'fileinfo-color', forensic: '<strong>UInt32.</strong> Aggregate count of directory strings across all volumes — Crow-Eye exposes this as <code>self.total_directory_count</code> (Prefetch_claw.py:675). Introduced at v26 (Win 8+). Used to size the directory iteration loop in Section D when reconstructing accessed paths.' },
+        { section: 'File Information', name: 'Alignment Padding', offset: 132, size: 4, type: 'reserved', forensic: 'Four zero bytes aligning the start of the Last Run Times array to an 8-byte FILETIME boundary. Not parsed.' },
+        { section: 'File Information', name: 'Last Run Time [0] — Most Recent', offset: 136, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 0 — bytes 0x88–0x8F.</strong> 64-bit unsigned little-endian integer = number of 100-nanosecond intervals since <strong>1601-01-01 00:00:00 UTC</strong>. This slot always holds the <em>most recent</em> execution time. The parser reads it via <code>struct.unpack_from(\"&lt;Q\", ..., 44)</code> and converts with <code>_filetime_to_datetime()</code> (Prefetch_claw.py:679-683).' },
+        { section: 'File Information', name: 'Last Run Time [1]', offset: 144, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 1 — bytes 0x90–0x97.</strong> Second-most-recent execution. Same FILETIME encoding as slot 0.' },
+        { section: 'File Information', name: 'Last Run Time [2]', offset: 152, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 2 — bytes 0x98–0x9F.</strong> Third-most-recent execution.' },
+        { section: 'File Information', name: 'Last Run Time [3]', offset: 160, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 3 — bytes 0xA0–0xA7.</strong> Fourth-most-recent execution.' },
+        { section: 'File Information', name: 'Last Run Time [4]', offset: 168, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 4 — bytes 0xA8–0xAF.</strong> Fifth-most-recent execution.' },
+        { section: 'File Information', name: 'Last Run Time [5]', offset: 176, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 5 — bytes 0xB0–0xB7.</strong> Sixth-most-recent execution.' },
+        { section: 'File Information', name: 'Last Run Time [6]', offset: 184, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 6 — bytes 0xB8–0xBF.</strong> Seventh-most-recent execution.' },
+        { section: 'File Information', name: 'Last Run Time [7] — Oldest', offset: 192, size: 8, type: 'times-color', forensic: '<strong>FILETIME slot 7 — bytes 0xC0–0xC7.</strong> Oldest tracked execution. When a new run occurs, Windows shifts the array down (slot[i+1] ← slot[i]) and writes the new time to slot 0; the previous slot 7 is overwritten and lost — that is why Prefetch only preserves the last 8 executions for any given binary. <strong>Slots whose raw value is 0 are unused</strong> (parser skips them in Prefetch_claw.py:681).' },
+        { section: 'File Information', name: 'Unknown Telemetry', offset: 200, size: 8, type: 'reserved', forensic: '<strong>Eight undocumented bytes between the timestamp array and the run count.</strong> In v30 <em>variant 1</em> (file_metrics_offset == 304) this region is 16 bytes and the run count sits at file_info offset 124; in <em>variant 2</em> / v31 (shown here) it is 8 bytes and the run count sits at file_info offset 116. Crow-Eye detects the variant from the file_metrics_offset value (Prefetch_claw.py:655-662).' },
+        { section: 'File Information', name: 'Run Count', offset: 208, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — total number of times the executable has been launched.</strong> Read from <code>file_info_bytes[116]</code> in variant 2 / v31 (Prefetch_claw.py:685). Crow-Eye sanity-checks values > 1,000,000 and falls back to <code>len(last_run_times)</code> to defang corruption / anti-forensics tampering.' },
+        { section: 'File Information', name: 'Unknown/Zero', offset: 212, size: 8, type: 'reserved', forensic: 'Eight zero-padding bytes between Run Count and the Hash Pool pointers. Not parsed.' },
+        { section: 'File Information', name: 'Hash Pool Pointers', offset: 220, size: 8, type: 'fileinfo-color', forensic: '<strong>4B offset + 4B size pointing into Section E.</strong> Crow-Eye reads these as <code>hash_str_offset</code> and <code>hash_str_size</code> at file_info offset 128 (variant 2 / v31) and uses them to slice the AppID / Package string out of the SCCA payload (Prefetch_claw.py:687-692).' },
+        { section: 'File Information', name: 'Unknown Padding', offset: 228, size: 76, type: 'reserved', forensic: 'Final ~76-byte tail of the File Information block. Mostly zero alignment padding before Section A begins; not parsed.' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Unknown0', offset: 304, size: 4, type: 'reserved', forensic: '<strong>First 4 bytes of the FileMetric struct at offset 0x130.</strong> Often interpreted by external tools as a "Start Time" delta, but Crow-Eye treats it as opaque (<code>unknown0</code>, Prefetch_claw.py:207) because Microsoft has never documented the semantics. Empirically zero on cold-boot prefetch, non-zero for warm runs.', struct: metricStruct('v31') },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Unknown1', offset: 308, size: 4, type: 'reserved', forensic: '<strong>UInt32 — undocumented.</strong> Sometimes interpreted as load "Duration". Read by the parser as <code>unknown1</code> (Prefetch_claw.py:208).' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Unknown2', offset: 312, size: 4, type: 'reserved', forensic: '<strong>UInt32 — undocumented.</strong> Sometimes interpreted as "Average Duration". Read by the parser as <code>unknown2</code> (Prefetch_claw.py:209). The fact that three opaque fields lead the struct is a strong hint Microsoft once used this block for IO statistics that have since gone unused.' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Filename String Offset', offset: 316, size: 4, type: 'metrics-color', forensic: '<strong>UInt32 — pointer into Section C (Main String Pool).</strong> This is the most important field in the metric: it is the byte offset (relative to the start of Section C) at which this file\'s UTF-16LE path begins. Crow-Eye reads it as <code>filename_offset</code> and walks <code>self.raw_bytes</code> from there until <code>\\x00\\x00</code> to extract the full path (Prefetch_claw.py:210, 767-773).' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Filename String Size', offset: 320, size: 4, type: 'metrics-color', forensic: '<strong>UInt32 — length of the path string in BYTES (not characters).</strong> Since strings are UTF-16LE, divide by 2 for character count. Used as a sanity check when slicing the path out of Section C.' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — Unknown3', offset: 324, size: 4, type: 'reserved', forensic: '<strong>UInt32 — undocumented.</strong> Often interpreted as a flag field; bit 0 sometimes correlates with "IsDirectory" entries. Crow-Eye exposes it as <code>unknown3</code> (Prefetch_claw.py:212).' },
+        { section: 'Section A - Metrics', name: 'Metric [0] — MFT Reference (entry+seq)', offset: 328, size: 8, type: 'metrics-color', forensic: '<strong>8 bytes — the analyst\'s gold pivot.</strong> Encoded as a 64-bit little-endian integer where the <strong>lower 48 bits are the MFT entry number</strong> (the file\'s index in the NTFS Master File Table) and the <strong>upper 16 bits are the sequence number</strong> (incremented each time the entry is reused — prevents stale-reference confusion). Crow-Eye decodes it as <code>mft_entry = entry_seq &amp; 0xFFFFFFFFFFFF</code> and <code>sequence_number = entry_seq &gt;&gt; 48</code> (Prefetch_claw.py:133-137), printed as <code>entry-sequence</code>. This is the pivot to <code>$MFT</code>, USN Journal, and file-system timelines. For nation-state investigators: if an adversary deleted the binary on disk but Prefetch survives, this MFT reference still records which slot it occupied. <a class="see-also" href="mft_anatomy.html#record">Explained in full: the MFT record</a>' },
+        { section: 'Section A - Metrics', name: 'Metrics Data Pool', offset: 336, size: 364, type: 'metrics-color', forensic: '<strong>Contiguous array of FileMetric structs — one per file the OS touched during the first ~10 seconds of execution.</strong> Each struct is 32 bytes in v23+ (20 bytes in v17). Pool size = <code>file_metrics_count × 32</code>; the parser walks it at Prefetch_claw.py:711-721. Per-struct layout (v23+): 3 × UInt32 unknown fields, <code>filename_string_offset</code> + <code>filename_string_size</code> pointing into Section C, a 4th UInt32 unknown, and an <strong>8-byte MFT reference</strong> (lower 48 bits = entry number, upper 16 = sequence number — Prefetch_claw.py:133-137). The MFT reference is the critical pivot: it ties each file the Prefetch saw to its NTFS Master File Table record, enabling cross-correlation with $MFT, USN Journal, and file-system timelines. APT and nation-state investigators use this pool to enumerate every DLL / EXE / data file an adversary process loaded at launch.' },
+        { section: 'Section B - Trace', name: 'Trace [0] — Total Block Load Count', offset: 700, size: 4, type: 'trace-color', forensic: '<strong>UInt32 — number of disk blocks (pages) the Cache Manager believes need to be pre-loaded for the next launch of this binary.</strong> Crow-Eye reads it as <code>total_block_load_count</code> (Prefetch_claw.py:265). The count is recorded on the previous run and consumed on the next, which means it is always one launch behind reality — a property worth remembering during cold-boot investigations.', struct: traceStruct('v31') },
+        { section: 'Section B - Trace', name: 'Trace [0] — Unknown / Flags', offset: 704, size: 4, type: 'reserved', forensic: '<strong>UInt32 — undocumented.</strong> Microsoft removed the older trace fields (<code>next_array_entry_index</code>, <code>loaded_block_count</code>) when shrinking the struct from 12 bytes to 8 bytes in v30+. The remaining 4 bytes are believed to hold flags but have never been officially documented. Crow-Eye exposes the raw value as <code>unknown</code> (Prefetch_claw.py:266) without interpretation.' },
+        { section: 'Section B - Trace', name: 'Trace Data Pool', offset: 708, size: 92, type: 'trace-color', forensic: '<strong>Contiguous array of TraceChain structs (8 bytes each in v30+).</strong> Pool size = <code>trace_chains_count × 8</code>. The Cache Manager populates this pool from the <em>previous</em> launch so it can pre-stage memory pages for the next run — for the analyst, it is corroborating evidence of which file metrics actually got loaded into RAM versus merely referenced. In v17/v23 the struct is 12 bytes and carries <code>next_array_entry_index</code>; v26 adds a <code>loaded_block_count</code> (the count of blocks actually paged in). v30+ drops these fields and keeps only total load count plus an unknown.' },
+        { section: 'Section C - Filenames', name: 'Main String Pool', offset: 800, size: 128, type: 'string-color', forensic: '<strong>Heap of UTF-16LE strings, null-terminated (0x0000) and back-to-back.</strong> Total size = <code>filename_strings_size</code> from the File Information pointer. Each FileMetric in Section A points here via its <code>filename_string_offset</code>; the parser walks until it finds <code>\\x00\\x00</code> to extract the exact path (Prefetch_claw.py:766-773). Strings are full Windows paths in <code>\\\\VOLUME{guid}\\Windows\\System32\\...</code> form, later translated to a drive letter via <code>_get_readable_volume_name()</code>.' },
+        { section: 'Section C - Filenames', name: 'String Pool Padding', offset: 928, size: 22, type: 'reserved', forensic: 'Null bytes that pad the end of Section C to an alignment boundary before Section D begins. Not parsed.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Device Path Offset', offset: 950, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — byte offset (relative to Section D start) where this volume\'s UTF-16LE device path begins.</strong> Crow-Eye reads it as <code>vol_dev_offset</code> at vol_data offset 0 (Prefetch_claw.py:814) and slices the device-name string out using this pointer + the char count below.', struct: volumeStruct('v31') },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Device Path Char Count', offset: 954, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — number of UTF-16LE <em>characters</em> in the device path (not bytes).</strong> Multiply by 2 to get the byte length. Crow-Eye exposes it as <code>vol_dev_num_char</code> (Prefetch_claw.py:815) and uses it to bound the device-name decode loop.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Creation Time (FILETIME)', offset: 958, size: 8, type: 'times-color', forensic: '<strong>8 bytes — 64-bit FILETIME for the moment this volume was formatted.</strong> Same encoding as the Last Run Times (100-ns intervals since 1601-01-01 UTC). Crow-Eye reads <code>creation_time_raw</code> and converts via <code>_filetime_to_datetime()</code> (Prefetch_claw.py:817-818). <strong>Why this matters:</strong> for removable media, this is often the most reliable timestamp available — it survives even when the drive is reformatted to a different filesystem afterward.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Serial Number', offset: 966, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — volume serial number, the 8-hex-digit identifier Windows assigns at format time.</strong> Crow-Eye reads it and renders as uppercase hex (Prefetch_claw.py:820). This is what <code>vol C:</code> or <code>fsutil fsinfo volumeinfo</code> returns. For nation-state cases, serial numbers tie a prefetch back to a <em>specific physical or virtual drive</em> even if the drive letter has been remapped.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — File References Offset', offset: 970, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — offset to an array of MFT references for files accessed on THIS volume.</strong> Crow-Eye reads it as <code>file_ref_offset</code> (Prefetch_claw.py:840) and uses it to enumerate the per-volume MFT entry table — distinct from the per-file MFT references in Section A.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — File References Size', offset: 974, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — size in bytes of the file-references block this volume owns.</strong> Includes an 8-byte sub-header (version + count) followed by 8 bytes per MFT reference (Prefetch_claw.py:853-861).' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Directory Strings Offset', offset: 978, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — offset to a sequence of length-prefixed UTF-16LE directory paths accessed on this volume.</strong> Crow-Eye reads it as <code>dir_strings_offset</code> (Prefetch_claw.py:843) and walks the per-string length headers to reconstruct directory paths (Prefetch_claw.py:872-887).' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Number of Directory Strings', offset: 982, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 — count of directory strings stored for this volume.</strong> The directory iteration loop reads exactly this many entries (Prefetch_claw.py:873) before stopping. Cross-check against the <code>Total Directory Count</code> in File Information.' },
+        { section: 'Section D - Volume Info', name: 'Volume [0] — Trailing Reserved', offset: 986, size: 60, type: 'reserved', forensic: '<strong>60 bytes of trailing data — Crow-Eye does not read past byte 0x24 of a v31 volume entry.</strong> Volume entries are 96 bytes total in v30+; the first 36 bytes are the documented fields above, and the remaining 60 bytes are either unused padding or Windows-internal extensions. In v23/v26 the trailing block is 68 bytes; in v17 it is just 4 bytes (40-byte total entry).' },
+        { section: 'Section D - Volume Info', name: 'Device Path', offset: 1046, size: 32, type: 'volumes-color', forensic: 'UTF-16LE device path (e.g., \\\\DEVICE\\\\HARDDISKVOLUME1).' },
+        { section: 'Section D - Volume Info', name: 'Directory Pool', offset: 1078, size: 64, type: 'volumes-color', forensic: 'UTF-16LE directory strings used for path reconstruction.' },
+        { section: 'Section E - Hash Pool', name: 'Hash String (AppID / Package)', offset: 1142, size: 50, type: 'hash-color', forensic: '<strong>UTF-16LE string — introduced in v30+.</strong> Pointed to by the Hash Pool Pointers in File Information (<code>hash_string_offset</code> + <code>hash_string_size</code>). Crow-Eye decodes it as <code>self.hash_string</code> (Prefetch_claw.py:691-692). For modern Windows binaries this typically holds the <strong>AppID / AUMID</strong> or a Modern App package family identifier — invaluable for tying a Prefetch entry to a UWP / Microsoft Store app that has no classic exe path, or to a packaged adversary binary masquerading inside a known app family.' }
+      ] }
+    };
+
+    // Derivatives
+    versions.v26 = { ...versions.v31, mam: false, hex: ["1A", ...versions.v31.hex.slice(9)], fields: versions.v31.fields.filter(f => f.section !== 'MAM Wrapper').map(f => ({...f, offset: f.offset-8})) };
+    versions.v30v1 = { ...versions.v31, hex: [...versions.v31.hex.slice(0, 8), "1E", ...versions.v31.hex.slice(9)], fields: versions.v31.fields };
+    versions.v30v2 = { ...versions.v31, hex: [...versions.v31.hex.slice(0, 8), "1E", ...versions.v31.hex.slice(9)], fields: versions.v31.fields };
+
+    let curV = 'v31';
+
+    function setVersion(v) {
+      curV = v; document.querySelectorAll('.v-tab').forEach(t => t.classList.remove('active'));
+      const tabs = document.querySelectorAll('.v-tab'); 
+      const versionsList = ['v17','v23','v26','v30v1','v30v2','v31'];
+      const idx = versionsList.indexOf(v);
+      if(tabs[idx]) tabs[idx].classList.add('active');
+      document.getElementById('mam-wrapper-label').style.display = versions[v].mam ? 'block' : 'none';
+      render();
+    }
+
+    function render() {
+      const v = versions[curV]; const map = document.getElementById('master-map'); const table = document.getElementById('table-body');
+      map.innerHTML = ""; table.innerHTML = ""; let curS = ""; let fieldIdx = 0; let curF = null;
+      v.hex.forEach((b, i) => {
+        const f = v.fields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curS) { map.appendChild(Object.assign(document.createElement('div'), {className:'divider-row',textContent:f.section})); curS = f.section; fieldIdx = 0; }
+        if (f && f !== curF) { curF = f; fieldIdx++; }
+        const c = Object.assign(document.createElement('div'), {className:'byte-cell',textContent:b});
+        if(f) {
+           if (f.type === 'reserved') {
+              c.classList.add('reserved');
+           } else {
+              const pal = palettes[f.type] || [{bg: 'var(--bg2)', fg: 'var(--tx3)'}];
+              const color = pal[fieldIdx % pal.length];
+              c.style.backgroundColor = color.bg;
+              c.style.color = color.fg;
+           }
+        } else {
+           c.classList.add('reserved');
+        }
+        c.onclick = () => selectField(f, i); map.appendChild(c);
+      });
+      v.fields.forEach(f => {
+        const r = document.createElement('tr');
+        r.innerHTML = `<td>0x${f.offset.toString(16).toUpperCase()}</td><td>${f.size}B</td><td style="font-weight:700; color:var(--tx);">${f.name}</td><td>${f.forensic}</td>`;
+        r.onclick = () => selectField(f, f.offset); table.appendChild(r);
+      });
+      selectField(v.fields[0], 0);
+    }
+
+    function selectField(f, idx) {
+      if(!f) {
+        document.getElementById('selection-output').innerHTML = `
+          <div class="field-name">Undocumented Byte</div>
+          <div class="meta-box"><span class="meta-lbl">Global Offset</span><div class="meta-v">0x${idx.toString(16).toUpperCase()}</div></div>
+          <div class="forensic-text"><strong>Forensic Insight:</strong> This byte sits between documented structures. It is likely used for <strong>alignment padding</strong> or represents an undocumented flag reserved by Microsoft for future kernel telemetry.</div>
+        `;
+        return;
+      }
+      const v = versions[curV]; const s = f.offset, e = f.offset + f.size - 1;
+      const fieldBytes = v.hex.slice(s, e + 1);
+      document.querySelectorAll('.byte-cell').forEach((c,i) => c.classList.toggle('active', i >= s && i <= e));
+      
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      let out = `
+        <div class="field-name">${f.name}</div>
+        
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx); font-family: 'Space Mono'; font-size: 13px;">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2); font-family: 'Space Mono'; font-size: 13px;">${asciiString}</div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+          <div class="meta-box"><span class="meta-lbl">Global Offset</span><div class="meta-v" style="font-family: 'Space Mono';">0x${s.toString(16).toUpperCase()}</div></div>
+          <div class="meta-box"><span class="meta-lbl">Size</span><div class="meta-v">${f.size}B</div></div>
+        </div>
+
+        <div class="forensic-text">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+      if(f.struct) {
+        out += `<span class="panel-label" style="margin-top:20px;">Internal Entry Schema</span><div class="structure-grid">`;
+        f.struct.forEach(row => {
+          out += `<div class="struct-row"><span class="struct-off">${row.off}</span><span class="struct-name" style="color: var(--identity-color);">${row.name}</span><span class="struct-size">${row.size}</span></div>`;
+        });
+        out += `</div>`;
+      }
+      document.getElementById('selection-output').innerHTML = out;
+    }
+
+    window.onload = () => {
+      setVersion('v31');
+      initIntroTooltip();
+    };
+
+    // "What is a Prefetch file?" intro-card behaviour. The whole card IS the
+    // tooltip: starts collapsed, expands on load, minimizes after 60s, and
+    // toggles on click. Once the user clicks, auto-collapse is cancelled.
+    function initIntroTooltip() {
+      const card = document.querySelector('.intro-card');
+      const icon = document.querySelector('.intro-icon');
+      if (!card || !icon) return;
+      let autoCollapseTimer = null;
+      let userTookOver = false;
+      const expand   = () => card.classList.remove('collapsed');
+      const collapse = () => card.classList.add('collapsed');
+      setTimeout(() => {
+        expand();
+        autoCollapseTimer = setTimeout(() => { if (!userTookOver) collapse(); }, 60000);
+      }, 600);
+      const handleToggle = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        userTookOver = true;
+        if (autoCollapseTimer) { clearTimeout(autoCollapseTimer); autoCollapseTimer = null; }
+        card.classList.contains('collapsed') ? expand() : collapse();
+      };
+      icon.addEventListener('click', handleToggle);
+      card.addEventListener('click', (e) => {
+        if (!card.classList.contains('collapsed')) return;
+        if (icon.contains(e.target)) return;
+        handleToggle(e);
+      });
+    }
+  </script>
+
+  <div class="wrap">
+    <h2 id="dashboard">Reading the Prefetch dashboard</h2>
+    <p class="map-intro">The <strong>Charts</strong> button on the Prefetch table tab opens a dashboard over
+      <code style="color:var(--accent);">prefetch_data.db</code> &mdash; every program that ran, when
+      (its up-to-eight run times), how often, from where, and what it loaded. The colour language is
+      <strong>run location</strong>: where the <code>.exe</code> itself ran from &mdash; the first thing to
+      check, because malware runs from Temp / AppData, not System32.</p>
+
+    <div class="full-reference">
+      <span class="cap">Run locations</span>
+      <div class="responsive-table-wrap">
+        <table class="ref-table">
+          <thead><tr><th style="width:230px;">Location</th><th>The .exe ran from</th><th style="width:110px;">Colour</th></tr></thead>
+          <tbody>
+            <tr><td>System</td><td><code>C:\Windows\…</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:6px;"></span>blue</td></tr>
+            <tr><td>Program Files</td><td><code>C:\Program Files</code> / <code>(x86)</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:6px;"></span>green</td></tr>
+            <tr><td>User / AppData / Temp</td><td><code>\Users\…\AppData</code>, <code>\Temp</code>, <code>\Downloads</code> &mdash; the suspicious space</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fbbf24;vertical-align:-1px;margin-right:6px;"></span>amber</td></tr>
+            <tr><td>Removable / other volume</td><td>a non-C: drive, or a volume the header marks Removable / Network</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f43f5e;vertical-align:-1px;margin-right:6px;"></span>rose</td></tr>
+            <tr><td>Other</td><td>ProgramData, root, &hellip;</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:6px;"></span>purple</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--tx2);font-size:12.5px;margin-top:8px;">The exe's full path is the entry in the
+        program's <strong>resources</strong> list whose name matches the executable &mdash; that path decides
+        the colour.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">The two regions</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;"><strong>Left</strong> &mdash; five
+        <strong>run-location strips</strong> (a cell per day, location = colour) built from <em>every</em>
+        run time across all programs; click a day for the <strong>drill-down</strong>: runs-by-hour (stacked
+        by location), top programs, top directories, and an execution list (time &middot; location &middot;
+        program &middot; path &middot; run count). <strong>Right</strong> &mdash; the
+        <strong>overview</strong>: totals, an <strong>Insights</strong> card, the <strong>most-run
+        programs</strong>, a by-location breakdown, and a <strong>Volumes (execution device history)</strong>
+        card.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid rgba(244,63,94,0.35);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Insights &amp; device history</h3>
+      <ul style="color:var(--tx2);font-size:14px;line-height:1.8;margin:0;padding-left:20px;">
+        <li><strong>Ran from User / AppData / Temp</strong> and <strong>from a removable / other volume</strong>
+          &mdash; execution outside the normal program directories.</li>
+        <li><strong>Ran only once</strong> &mdash; installers and one-off tools; a rarely-run binary in an
+          odd place is worth a look.</li>
+        <li><strong>Volumes (execution device history)</strong> &mdash; every prefetch entry records the
+          volume label + serial the program ran from, so an external drive that ran a program once still
+          leaves its serial here.</li>
+      </ul>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Click for detail</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">Click a <strong>day</strong> to fill the
+        drill-down, or a <strong>program</strong> (in the executions list or the most-run list) for its full
+        profile: <strong>every run time</strong>, its run count, the exe path and volume/serial, the
+        <code>.pf</code> file's own MAC times, and the full <strong>loaded resources</strong> list &mdash;
+        with the files and DLLs loaded from <em>outside</em> System / Program Files highlighted, so a
+        side-loaded or injected module stands out. Filters: search, a <strong>location</strong> and a
+        <strong>volume</strong> selector, and a <strong>date dropdown</strong>.</p>
+    </div>
+  </div>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Prove execution with Crow-Eye</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">Crow-Eye decodes Prefetch (SCCA), including Windows 10/11 MAM-compressed files, to recover run counts, the last-eight run times, and the files each program loaded — hard evidence that a binary actually ran.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Where are Windows Prefetch files stored?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">In C:\Windows\Prefetch. Each file is named after the executable followed by a hash of the path it ran from, such as NOTEPAD.EXE-D8414F97.pf, so the same binary run from two locations produces two separate .pf files.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Does a Prefetch file prove a program was executed?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">It is strong evidence that the binary ran on that system, and the run count and execution timestamps say how often and when. The absence of a .pf file proves much less: prefetching can be disabled, the folder is capped and evicts the least recently used entries, and some server builds ship with it off.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">How many Prefetch files does Windows keep?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Windows XP through 7 keep up to 128; Windows 8 and later keep up to 1024. When the cap is reached the least recently modified .pf file is evicted, so the folder is a rolling window of recent execution rather than a complete history.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What are the eight Prefetch timestamps?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">From Windows 8 onward a .pf file stores the last eight execution times rather than one, so a single artifact can show a pattern of runs. Earlier versions store only the most recent execution.</p>
+      </div>
+    </section>
+  </div>
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+</html>

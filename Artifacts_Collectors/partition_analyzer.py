@@ -347,7 +347,7 @@ class PartitionAnalyzer:
         try:
             # Get Disk Info
             cmd = "Get-Disk | Select-Object Number, FriendlyName, Size, PartitionStyle, BootFromDisk, SerialNumber, BusType, OperationalStatus, Signature | ConvertTo-Json"
-            result = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
             
             if result.returncode != 0 or not result.stdout.strip():
                 return []
@@ -383,7 +383,7 @@ class PartitionAnalyzer:
                 # Get Partition Info from PowerShell to enrich partitions and assign them to this disk
                 try:
                     p_cmd = f"Get-Partition -DiskNumber {idx} | Select-Object PartitionNumber, DriveLetter, Type, GptType, Offset, Size, IsHidden, IsActive | ConvertTo-Json"
-                    p_res = subprocess.run(["powershell", "-Command", p_cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+                    p_res = subprocess.run(["powershell", "-Command", p_cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
                     
                     if p_res.returncode == 0 and p_res.stdout.strip():
                         try:

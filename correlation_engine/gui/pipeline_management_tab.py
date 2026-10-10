@@ -16,23 +16,40 @@ from typing import Optional, List
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTableWidget, QTableWidgetItem,
     QPushButton, QLabel, QMessageBox, QHeaderView, QGroupBox, QSplitter,
-    QTextEdit, QAbstractItemView
+    QTextEdit, QAbstractItemView, QDialogButtonBox
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QIcon
 
-# Import styles from main Crow-Eye application
-try:
-    from styles import CrowEyeStyles
-except ImportError:
-    # Fallback if styles not available
-    class CrowEyeStyles:
-        BUTTON_STYLE = ""
-        GREEN_BUTTON = ""
-        RED_BUTTON = ""
-        UNIFIED_TABLE_STYLE = ""
-        MESSAGE_BOX_STYLE = ""
-        GROUP_BOX = ""
+# The site look (ui/site_theme.py): roles and variants, no per-widget sheets
+from ui.site_theme import apply_site_theme, set_role, set_variant, STATUS_COLORS
+from PyQt5.QtGui import QColor
+
+
+def _save_cancel_box():
+    """Save / Cancel as the box's roles, with buttons made and given their
+    variant BEFORE they join the box: a button the box creates itself loses the
+    site font when it is re-polished under the app's style sheet (plain,
+    lower-case "Cancel"). Same text, same accepted / rejected signals."""
+    box = QDialogButtonBox()
+    save, cancel = QPushButton("Save"), QPushButton("Cancel")
+    set_variant(save, "primary")
+    set_variant(cancel, "ghost")
+    box.addButton(save, QDialogButtonBox.AcceptRole)
+    box.addButton(cancel, QDialogButtonBox.RejectRole)
+    save.setDefault(True)
+    return box
+
+
+def _theme_dialog(dialog, button_box):
+    """A pipeline dialog in the site look; the embedded Pipeline Builder takes
+    the engine's rules."""
+    try:
+        from .ui_styling import engine_extra
+        extra = engine_extra()
+    except Exception:
+        extra = ""
+    apply_site_theme(dialog, extra=extra)
 
 
 def _shared_configuration_manager(case_directory):
@@ -112,14 +129,7 @@ class PipelineManagementTab(QWidget):
         
         # Title
         title = QLabel("PIPELINE MANAGEMENT")
-        title.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 20px;
-                font-weight: 700;
-                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            }
-        """)
+        set_role(title, "title")
         layout.addWidget(title)
         
         # Info text
@@ -128,16 +138,7 @@ class PipelineManagementTab(QWidget):
             "Pipelines define which feathers and wings to use for correlation analysis."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("""
-            QLabel {
-                color: #94A3B8;
-                font-size: 13px;
-                font-family: 'Segoe UI', sans-serif;
-                padding: 10px;
-                background-color: #1E293B;
-                border-radius: 6px;
-            }
-        """)
+        set_role(info_label, "note")
         layout.addWidget(info_label)
         
         # Create splitter for table and details
@@ -169,14 +170,7 @@ class PipelineManagementTab(QWidget):
         
         # Section label
         label = QLabel("Available Pipelines")
-        label.setStyleSheet("""
-            QLabel {
-                color: #E2E8F0;
-                font-size: 14px;
-                font-weight: 600;
-                font-family: 'Segoe UI', sans-serif;
-            }
-        """)
+        set_role(label, "section")
         layout.addWidget(label)
         
         # Pipeline table
@@ -189,26 +183,6 @@ class PipelineManagementTab(QWidget):
         self.pipeline_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.pipeline_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        # Apply table styles
-        try:
-            CrowEyeStyles.apply_table_styles(self.pipeline_table)
-        except Exception as e:
-            pass
-        
-        self.pipeline_table.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + """
-            QTableWidget {
-                font-size: 13px;
-            }
-            QTableWidget::item {
-                padding: 10px 8px;
-                font-size: 13px;
-                color: #F8FAFC;
-            }
-            QHeaderView::section {
-                padding: 10px 8px;
-                font-size: 12px;
-            }
-        """)
         
         # Configure column widths
         header = self.pipeline_table.horizontalHeader()
@@ -231,7 +205,6 @@ class PipelineManagementTab(QWidget):
     def _create_pipeline_details_section(self) -> QWidget:
         """Create the pipeline details panel."""
         widget = QGroupBox("Pipeline Details")
-        widget.setStyleSheet(CrowEyeStyles.GROUP_BOX)
         
         layout = QVBoxLayout(widget)
         layout.setSpacing(10)
@@ -240,17 +213,6 @@ class PipelineManagementTab(QWidget):
         self.details_text = QTextEdit()
         self.details_text.setReadOnly(True)
         self.details_text.setPlaceholderText("Select a pipeline to view details...")
-        self.details_text.setStyleSheet("""
-            QTextEdit {
-                background-color: #0F172A;
-                color: #E2E8F0;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 10px;
-                font-size: 12px;
-                font-family: 'Segoe UI', sans-serif;
-            }
-        """)
         self.details_text.setMaximumHeight(200)
         
         layout.addWidget(self.details_text)
@@ -272,12 +234,7 @@ class PipelineManagementTab(QWidget):
         self.create_btn.setIcon(CrowEyeIcons.add())
         self.create_btn.setFixedHeight(45)
         self.create_btn.setMinimumWidth(180)
-        self.create_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
-            QPushButton {
-                font-size: 13px;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(self.create_btn, "primary")
         self.create_btn.clicked.connect(self.create_pipeline)
         layout.addWidget(self.create_btn)
 
@@ -286,12 +243,7 @@ class PipelineManagementTab(QWidget):
         self.edit_btn.setIcon(CrowEyeIcons.edit())
         self.edit_btn.setFixedHeight(45)
         self.edit_btn.setMinimumWidth(150)
-        self.edit_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
-            QPushButton {
-                font-size: 13px;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(self.edit_btn, "ghost")
         self.edit_btn.clicked.connect(self.edit_pipeline)
         self.edit_btn.setEnabled(False)
         layout.addWidget(self.edit_btn)
@@ -301,12 +253,7 @@ class PipelineManagementTab(QWidget):
         self.duplicate_btn.setIcon(CrowEyeIcons.copy())
         self.duplicate_btn.setFixedHeight(45)
         self.duplicate_btn.setMinimumWidth(150)
-        self.duplicate_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
-            QPushButton {
-                font-size: 13px;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(self.duplicate_btn, "ghost")
         self.duplicate_btn.clicked.connect(self.duplicate_pipeline)
         self.duplicate_btn.setEnabled(False)
         layout.addWidget(self.duplicate_btn)
@@ -316,12 +263,7 @@ class PipelineManagementTab(QWidget):
         self.set_default_btn.setIcon(CrowEyeIcons.star())
         self.set_default_btn.setFixedHeight(45)
         self.set_default_btn.setMinimumWidth(170)
-        self.set_default_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + """
-            QPushButton {
-                font-size: 13px;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(self.set_default_btn, "ghost")
         self.set_default_btn.clicked.connect(self.set_default_pipeline)
         self.set_default_btn.setEnabled(False)
         layout.addWidget(self.set_default_btn)
@@ -331,12 +273,7 @@ class PipelineManagementTab(QWidget):
         self.delete_btn.setIcon(CrowEyeIcons.delete())
         self.delete_btn.setFixedHeight(45)
         self.delete_btn.setMinimumWidth(170)
-        self.delete_btn.setStyleSheet(CrowEyeStyles.RED_BUTTON + """
-            QPushButton {
-                font-size: 13px;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(self.delete_btn, "danger")
         self.delete_btn.clicked.connect(self.delete_pipeline)
         self.delete_btn.setEnabled(False)
         layout.addWidget(self.delete_btn)
@@ -411,7 +348,7 @@ class PipelineManagementTab(QWidget):
             default_item.setIcon(CrowEyeIcons.star())
         default_item.setTextAlignment(Qt.AlignCenter)
         if is_default:
-            default_item.setForeground(Qt.yellow)
+            default_item.setForeground(QColor(STATUS_COLORS["warn"]))
             font = default_item.font()
             font.setBold(True)
             default_item.setFont(font)
@@ -452,7 +389,7 @@ class PipelineManagementTab(QWidget):
         
         # Build details text
         details = []
-        details.append(f"<h3 style='color: #00FFFF;'>{pipeline_data.get('pipeline_name', 'Unknown')}</h3>")
+        details.append(f"<h3 style='color: #22D3EE;'>{pipeline_data.get('pipeline_name', 'Unknown')}</h3>")
         details.append(f"<p><b>Description:</b> {pipeline_data.get('description', 'No description')}</p>")
         details.append(f"<p><b>Case:</b> {pipeline_data.get('case_name', 'N/A')}</p>")
         details.append(f"<p><b>Case ID:</b> {pipeline_data.get('case_id', 'N/A')}</p>")
@@ -518,19 +455,12 @@ class PipelineManagementTab(QWidget):
             layout.addWidget(builder)
             
             # Add dialog buttons
-            button_box = QDialogButtonBox(
-                QDialogButtonBox.Save | QDialogButtonBox.Cancel
-            )
+            button_box = _save_cancel_box()
             button_box.accepted.connect(lambda: self._save_pipeline(builder, dialog))
             button_box.rejected.connect(dialog.reject)
             layout.addWidget(button_box)
             
-            # Apply styling
-            dialog.setStyleSheet("""
-                QDialog {
-                    background-color: #0F172A;
-                }
-            """)
+            _theme_dialog(dialog, button_box)
             
             if dialog.exec_() == QDialog.Accepted:
                 self.load_pipelines()
@@ -588,9 +518,7 @@ class PipelineManagementTab(QWidget):
             layout.addWidget(builder)
             
             # Add dialog buttons
-            button_box = QDialogButtonBox(
-                QDialogButtonBox.Save | QDialogButtonBox.Cancel
-            )
+            button_box = _save_cancel_box()
             # original_file lets the save reconcile a rename: the filename is derived
             # from the pipeline name, so renaming would otherwise write a second file
             # and leave this one behind.
@@ -599,12 +527,7 @@ class PipelineManagementTab(QWidget):
             button_box.rejected.connect(dialog.reject)
             layout.addWidget(button_box)
 
-            # Apply styling
-            dialog.setStyleSheet("""
-                QDialog {
-                    background-color: #0F172A;
-                }
-            """)
+            _theme_dialog(dialog, button_box)
 
             if dialog.exec_() == QDialog.Accepted:
                 self.load_pipelines()
@@ -697,7 +620,9 @@ class PipelineManagementTab(QWidget):
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        apply_site_theme(msg_box)
+        set_variant(msg_box.button(QMessageBox.Yes), "danger")
+        set_variant(msg_box.button(QMessageBox.No), "ghost")
         
         if msg_box.exec_() == QMessageBox.Yes:
             try:

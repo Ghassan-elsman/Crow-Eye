@@ -231,6 +231,21 @@ class DiagnosticReport:
 
 
 
+def _writer_failed(state, last_error):
+    """Is a VSS writer really failed?
+
+    "[5] Waiting for completion" with "No error" is a writer finishing its own
+    work, not a broken one: every run reported "2 VSS writer(s) failed" (the
+    search indexer and WMI) while the snapshot was created fine. A writer is
+    failed when its state says so, or when it reports an error.
+    """
+    state = (state or "").lower()
+    last_error = (last_error or "").lower()
+    if "fail" in state:
+        return True
+    return bool(last_error) and "no error" not in last_error
+
+
 class VSSDiagnostics:
     """Comprehensive VSS diagnostic capabilities.
     
@@ -847,8 +862,9 @@ class VSSDiagnostics:
         if free_space_bytes < MIN_FREE_SPACE_BYTES:
             sufficient_for_shadow = False
             remediation_steps.append(f"Insufficient disk space: {free_space_bytes / (1024**3):.2f} GB free (need at least 0.3 GB)")
-            remediation_steps.append(f"Free up disk space on {volume} by deleting unnecessary files")
-            remediation_steps.append("Run Disk Cleanup: cleanmgr.exe")
+            remediation_steps.append("Do not free space on the machine under examination: deleted "
+                                     "files and unallocated clusters are evidence")
+            remediation_steps.append("Collect the locked files by raw disk access, which needs no shadow storage")
         
         if free_space_percent < MIN_FREE_SPACE_PERCENT:
             sufficient_for_shadow = False
@@ -859,15 +875,15 @@ class VSSDiagnostics:
         if vss_max_bytes > 0 and vss_used_bytes >= vss_max_bytes:
             sufficient_for_shadow = False
             remediation_steps.append(f"VSS shadow storage quota exceeded: {vss_used_bytes / (1024**3):.2f} GB used of {vss_max_bytes / (1024**3):.2f} GB maximum")
-            remediation_steps.append(f"Delete old shadow copies: vssadmin delete shadows /for={volume} /oldest")
-            remediation_steps.append(f"Or increase VSS quota: vssadmin resize shadowstorage /for={volume} /maxsize=10GB")
+            remediation_steps.append("Do not delete existing shadow copies to make room: they are evidence")
+            remediation_steps.append("Collect the locked files by raw disk access, which needs no shadow storage")
         
         elif vss_max_bytes > 0 and vss_allocated_bytes > 0:
             # Check if we're close to the quota (within 10%)
             usage_percent = (vss_used_bytes / vss_max_bytes * 100) if vss_max_bytes > 0 else 0
             if usage_percent > 90:
                 remediation_steps.append(f"VSS shadow storage nearly full: {usage_percent:.1f}% used")
-                remediation_steps.append(f"Consider deleting old shadow copies: vssadmin delete shadows /for={volume} /oldest")
+                remediation_steps.append("A new snapshot may push the oldest existing one (evidence) out of shadow storage")
         
         # If no issues found, add a positive message
         if sufficient_for_shadow and not remediation_steps:
@@ -1137,9 +1153,7 @@ class VSSDiagnostics:
                         state = current_writer.get('state', '').lower()
                         last_error = current_writer.get('last_error', '').lower()
                         
-                        # Failed states include anything other than "stable"
-                        # Common failed states: "Failed", "Unknown", "Waiting for completion"
-                        is_failed = ('stable' not in state) or ('no error' not in last_error and last_error != '')
+                        is_failed = _writer_failed(state, last_error)
                         
                         if is_failed:
                             failed_writers.append({
@@ -1174,7 +1188,7 @@ class VSSDiagnostics:
                 
                 state = current_writer.get('state', '').lower()
                 last_error = current_writer.get('last_error', '').lower()
-                is_failed = ('stable' not in state) or ('no error' not in last_error and last_error != '')
+                is_failed = _writer_failed(state, last_error)
                 
                 if is_failed:
                     failed_writers.append({

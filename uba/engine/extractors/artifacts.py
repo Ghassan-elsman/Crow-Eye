@@ -1018,7 +1018,7 @@ def amcache_file_presence(ctx, rules) -> List[BehaviorEvent]:
     if ctx.pool.has_table("amcache", "InventoryApplicationShortcut"):
         for rowid, target in _rows(
                 ctx, "amcache",
-                "SELECT rowid, ShortcutTargetPath FROM InventoryApplicationShortcut"):
+                "SELECT rowid, shortcut_target_path FROM InventoryApplicationShortcut"):
             add(target, rowid, "InventoryApplicationShortcut", target)
 
     if ctx.pool.has_table("registry", "MUICache"):

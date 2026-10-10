@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import LocationTimeline from './LocationTimeline.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import DaySection from './DaySection.jsx'
@@ -70,8 +70,8 @@ export default function App() {
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getPrefetchTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
-      call('getPrefetchOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
+      latest('getPrefetchTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
+      latest('getPrefetchOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
     }, 180)
     return () => clearTimeout(debounce.current)
   }, [filterArgs, bounds])
@@ -89,13 +89,13 @@ export default function App() {
     if (!selectedDay) { setDayDetail(null); return }
     setDayLoading(true)
     setLoadMsg('Loading the selected period…')
-    call('getPrefetchDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
+    latest('getPrefetchDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
   }, [selectedDay, filterArgs])
 
   useEffect(() => {
     if (!openProgram) { setProgramDetail(null); return }
     setProgramLoading(true)
-    call('getPrefetchProgramDetail', JSON.stringify({ filename: openProgram })).then(setProgramDetail).finally(() => setProgramLoading(false))
+    latest('getPrefetchProgramDetail', JSON.stringify({ filename: openProgram })).then(setProgramDetail).finally(() => setProgramLoading(false))
   }, [openProgram])
 
   function addTerm(e) {

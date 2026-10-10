@@ -116,6 +116,14 @@ def reasons():
         return [r for r, _s, _a in (_sections[t] for t in sorted(_sections))]
 
 
+def sections():
+    """[(reason, elapsed seconds)] of every running section, oldest first."""
+    with _lock:
+        _prune_locked()
+        now = time.monotonic()
+        return [(_sections[t][0], now - _sections[t][1]) for t in sorted(_sections)]
+
+
 def when_idle(key, fn):
     """Run `fn` once nothing is busy. One pending action per key - asking
     twice for the Timeline opens it once."""

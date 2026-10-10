@@ -20,36 +20,9 @@ class SearchFilterDialog(QtWidgets.QDialog):
         self.setMinimumHeight(600)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         
-        # Enhanced cyberpunk style for the dialog
-        self.setStyleSheet(CrowEyeStyles.DIALOG_STYLE + """
-            QDialog, QWidget {
-                background-color: #1a1a2e;
-            }
-            QDialog {
-                border: 1px solid #00FFFF;
-                border-radius: 5px;
-            }
-            QGroupBox {
-                background-color: #1a1a2e;
-                border: 1px solid #334155;
-                border-radius: 5px;
-                margin-top: 10px;
-                font-weight: bold;
-                color: #00FFFF;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 5px;
-                color: #00FFFF;
-            }
-            QLabel {
-                color: #e0e0e0;
-            }
-            QCheckBox {
-                color: #e0e0e0;
-            }
-        """)
+        # The site look, set before the widgets exist (ui/site_theme.py)
+        from ui.site_theme import begin_site_theme
+        begin_site_theme(self)
         
         # Store saved filter settings
         self.saved_tables = saved_tables
@@ -75,6 +48,12 @@ class SearchFilterDialog(QtWidgets.QDialog):
         
         # Load saved filter settings if available
         self.load_saved_filter()
+
+        # Roles for what the inline sheets said; Apply is the main action
+        from ui.site_theme import apply_site_theme, set_variant
+        apply_site_theme(self)
+        set_variant(self.apply_button, "primary")
+        set_variant(self.cancel_button, "ghost")
     
     def create_table_selection_group(self):
         # Group box for table selection

@@ -10,6 +10,9 @@ import os
 import sys
 import logging
 
+# Named, so its records reach parsers.log: the root logger's do not.
+logger = logging.getLogger(__name__)
+
 # Add parent directory to path for imports
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
@@ -20,7 +23,13 @@ mft_dir = os.path.join(parent_dir, 'MFT and USN journal')
 if mft_dir not in sys.path:
     sys.path.insert(0, mft_dir)
 
-def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
+# ...and this folder, for offline_MFT_USN_Correlator (the volume label and the
+# correlation both live there).
+_here = os.path.dirname(os.path.abspath(__file__))
+if _here not in sys.path:
+    sys.path.insert(0, _here)
+
+def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, correlate=True):
     """
     Run MFT analysis in offline mode.
     
@@ -42,7 +51,8 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
     
     try:
         # Import MFT parser components
-        from MFT_Claw import MFTClawConfig, MFTParser, OutputFormat, LogLevel, DatabaseManager
+        from MFT_Claw import (MFTClawConfig, MFTParser, OutputFormat, LogLevel, DatabaseManager,
+                              merge_extension_records)
         
         # Determine MFT file path
         if not mft_file_path:
@@ -82,37 +92,19 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
         os.makedirs(output_dir, exist_ok=True)
         output_db = os.path.join(output_dir, 'mft_claw_analysis.db')  # Use standard name for GUI compatibility
         
-        # Check if database already exists with data BEFORE creating parser
-        # This prevents DatabaseManager from recreating/wiping the database
-        if os.path.exists(output_db):
-            print(f"[Offline MFT] Found existing database: {output_db}")
-            try:
-                import sqlite3
-                conn = sqlite3.connect(output_db)
-                cursor = conn.cursor()
-                
-                # Check if mft_records table exists
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mft_records'")
-                if cursor.fetchone():
-                    cursor.execute("SELECT COUNT(*) FROM mft_records")
-                    count = cursor.fetchone()[0]
-                    conn.close()
-                    
-                    if count > 0:
-                        print(f"[Offline MFT] Using existing database with {count:,} records (skipping re-parse)")
-                        return {
-                            "success": True,
-                            "records": count,
-                            "output_path": output_db
-                        }
-                else:
-                    conn.close()
-                    print(f"[Offline MFT] Database exists but mft_records table not found, will recreate")
-            except Exception as e:
-                print(f"[Offline MFT] Existing database is invalid, will recreate: {e}")
-        
-        # If we get here, we need to parse the MFT file
-        print(f"[Offline MFT] No valid existing database found, will parse MFT file")
+        # The disk's own volume, not one made from the file name: Crow-Claw's
+        # copy of C:'s $MFT is stored as 'C', beside (and deduplicated
+        # against) a live parse of C:. It was 'OFFLINE', so the same disk was
+        # stored twice, and two disks' $MFT files shared 'OFFLINE'.
+        from volume_identity import resolve_volume
+        volume_label, how = resolve_volume(mft_file_path, case_path, output_db)
+        print(f"[Offline MFT] Volume: {volume_label} (from {how})")
+
+        # No "already parsed -> skip": a volume already in the database goes
+        # through the per-volume re-parse guard (utils/dedupe_insert), which
+        # adds only what is new and reports the rest as already present. A
+        # whole-volume skip hid everything a later capture of the disk added.
+        print(f"[Offline MFT] Parsing the MFT file")
         
         # Get file size to estimate record count
         file_size = os.path.getsize(mft_file_path)
@@ -128,7 +120,9 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
             output_format=OutputFormat.SQLITE,
             output_directory=output_dir,
             database_name='mft_claw_analysis.db',  # Use standard name for GUI compatibility
-            batch_size=1000,
+            # 10,000 records per insert + commit (was 1,000): the commit
+            # per batch was a tenth of the parse.
+            batch_size=10000,
             log_level=LogLevel.INFO,
             log_file=os.path.join(output_dir, 'mft_claw.log'),
             enable_console_logging=True
@@ -141,43 +135,85 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
         print(f"[Offline MFT] Parsing MFT records...")
         records_parsed = 0
         batch_records = []
-        
-        with open(mft_file_path, 'rb') as mft_file:
-            record_num = 0
+
+        # A load large next to what the tables already hold builds the
+        # secondary indexes once at the end instead of row by row.
+        db = parser.db_manager
+        try:
+            existing = db.connection.execute("SELECT MAX(rowid) FROM mft_records").fetchone()[0] or 0
+        except Exception:
+            existing = 0
+        suspended = []
+        if estimated_records >= 50000 and estimated_records * 2 >= existing:
+            suspended = db.suspend_secondary_indexes()
+
+        def _records(handle, chunk_records=4096):
+            """1024-byte records, read 4 MB at a time (one read per record before)."""
             while True:
-                raw_record = mft_file.read(record_size)
-                if len(raw_record) < record_size:
-                    break
-                
-                try:
-                    # Parse the record using parser's internal method
-                    mft_record = parser._parse_mft_record(record_num, 'OFFLINE', raw_record)
-                    if mft_record:
-                        batch_records.append(mft_record)
-                        records_parsed += 1
-                        
-                        # Process batch when full
-                        if len(batch_records) >= config.batch_size:
-                            parser._process_record_batch(batch_records)
-                            batch_records.clear()
-                            parser.db_manager.commit()
-                        
-                        # Progress reporting - less frequent for better performance
-                        if records_parsed % 10000 == 0:
-                            progress = (records_parsed / estimated_records * 100) if estimated_records > 0 else 0
-                            print(f"\r[Offline MFT] Parsed {records_parsed:,} / {estimated_records:,} records ({progress:.1f}%)", end='', flush=True)
-                
-                except Exception as e:
-                    logging.debug(f"Error parsing record {record_num}: {e}")
-                
-                record_num += 1
-        
-        # Process remaining batch
-        if batch_records:
-            parser._process_record_batch(batch_records)
-            parser.db_manager.commit()
+                chunk = handle.read(record_size * chunk_records)
+                if not chunk:
+                    return
+                for i in range(0, len(chunk) - record_size + 1, record_size):
+                    yield chunk[i:i + record_size]
+                if len(chunk) % record_size:
+                    return                     # a short tail: no whole record left
+
+        try:
+            with open(mft_file_path, 'rb') as mft_file:
+                record_num = 0
+                for raw_record in _records(mft_file):
+                    try:
+                        # Parse the record using parser's internal method
+                        mft_record = parser._parse_mft_record(record_num, volume_label, raw_record)
+                        if mft_record:
+                            batch_records.append(mft_record)
+                            records_parsed += 1
+
+                            # Process batch when full
+                            if len(batch_records) >= config.batch_size:
+                                parser._process_record_batch(batch_records)
+                                batch_records.clear()
+                                parser.db_manager.commit()
+
+                            # Progress reporting - less frequent for better performance
+                            if records_parsed % 10000 == 0:
+                                progress = (records_parsed / estimated_records * 100) if estimated_records > 0 else 0
+                                print(f"\r[Offline MFT] Parsed {records_parsed:,} / {estimated_records:,} records ({progress:.1f}%)", end='', flush=True)
+
+                    except Exception as e:
+                        logger.debug(f"Error parsing record {record_num}: {e}")
+
+                    record_num += 1
+
+            # Process remaining batch
+            if batch_records:
+                parser._process_record_batch(batch_records)
+                parser.db_manager.commit()
+        finally:
+            # Always - a failed parse too: the indexes dropped for the bulk
+            # load were left dropped when the parse raised.
+            if suspended:
+                print(f"[Offline MFT] Building indexes ({', '.join(suspended)})...")
+            try:
+                db.connection.rollback()        # nothing half-written holds the lock
+                db.restore_secondary_indexes()
+            except Exception as e:
+                print(f"[Offline MFT] Could not rebuild the indexes: {e}")
         
         print(f"\n[Offline MFT] Successfully parsed {records_parsed:,} MFT records")
+        merged = merge_extension_records(parser.db_manager.connection, volume_label,
+                                         parser.db_manager.child_start_rowid,
+                                         parser.db_manager.tally)
+        if merged:
+            print(f"[Offline MFT] Merged {merged:,} extension record(s) into their base records")
+        # What this run added vs what the database already held (a re-parse of
+        # the same $MFT adds nothing).
+        # Counted in MFT records (mft_records), not summed over the four
+        # tables - "new" was rows, five or six per record, beside a record count.
+        counts = parser.db_manager.tally.as_result(primary="mft_records")
+        print(f"[Offline MFT] MFT records: {counts['records']:,} - new: {counts['inserted']:,}, "
+              f"already in the database: {counts['duplicates']:,} "
+              f"(rows written across the MFT tables: {counts['rows']:,})")
         
         # Cleanup
         parser.cleanup()
@@ -186,7 +222,9 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
         print(f"[Offline MFT] Checking for USN database to run correlation...")
         usn_db_path = os.path.join(output_dir, 'USN_journal.db')
         
-        if os.path.exists(usn_db_path):
+        if not correlate:
+            print(f"[Offline MFT] Correlation is left to the caller (once per batch)")
+        elif os.path.exists(usn_db_path):
             print(f"[Offline MFT] USN database found - running correlation...")
             try:
                 # Import and run the offline correlator
@@ -210,6 +248,10 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None):
         return {
             "success": True,
             "records": records_parsed,
+            "inserted": counts["inserted"],
+            "duplicates": counts["duplicates"],
+            "tables": counts["tables"],
+            "volume": volume_label,
             "output_path": output_db  # Return the actual database path created
         }
         

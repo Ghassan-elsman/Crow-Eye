@@ -24,6 +24,79 @@ if TYPE_CHECKING:
 # Configure logging
 logger = logging.getLogger(__name__)
 
+try:
+    from utils import custody as _custody
+except Exception:                                   # standalone Crow-Claw
+    _custody = None
+
+# How old a shadow copy may be and still stand in for the live file.
+#
+# The strategy used to take the newest snapshot on the volume whatever its
+# age. On a machine with System Restore on, that can be weeks old - and a
+# "live" collection then returns the SYSTEM hive, the event logs or the SRUM
+# database as they were weeks ago, with nothing saying so. Older than this, a
+# snapshot is not used: a fresh one is created when that is allowed, and
+# otherwise the next method (raw disk, or the live hive export) reads the
+# current file.
+STALE_AFTER_SECONDS = 30 * 60
+
+_USED_EXISTING = set()     # existing snapshots already written to the custody record
+
+
+_SHARED_IDS = set()     # snapshots the run's collector made for every worker
+
+
+def register_shared_snapshots(ids):
+    """A pool worker: trust the snapshot(s) the collector created for this run.
+
+    They count as this run's own (fresh whatever their age - a long parse can
+    outlast the 30-minute rule), and the worker never deletes them: the
+    collector that created them does.
+    """
+    _SHARED_IDS.update(i.lower() for i in (ids or []) if i)
+
+
+def _created_ids():
+    try:
+        from .shadow_copy_manager import created_shadow_copy_ids
+        return {i.lower() for i in created_shadow_copy_ids()} | _SHARED_IDS
+    except Exception:
+        return set(_SHARED_IDS)
+
+
+def _created_utc(shadow_copy):
+    """The snapshot's creation time in UTC (vssadmin prints local time)."""
+    t = getattr(shadow_copy, "creation_time", None)
+    if t is None:
+        return None
+    try:
+        import datetime as _dt
+        return t.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def snapshot_age_seconds(shadow_copy):
+    """Seconds since the snapshot was taken, or None when unknown."""
+    t = getattr(shadow_copy, "creation_time", None)
+    if t is None:
+        return None
+    try:
+        now = datetime.now(t.tzinfo) if t.tzinfo else datetime.now()
+        return (now - t).total_seconds()
+    except (OverflowError, ValueError, TypeError):
+        return None
+
+
+def is_fresh_enough(shadow_copy):
+    """May this snapshot stand in for the live file?"""
+    if (getattr(shadow_copy, "shadow_copy_id", "") or "").lower() in _created_ids():
+        return True                      # taken by this run, moments ago
+    age = snapshot_age_seconds(shadow_copy)
+    # vssadmin prints the locale's short date, and 7/3 parsed month-first can
+    # land in the future. A future time is an unknown age, not a fresh one.
+    return age is not None and -300 <= age <= STALE_AFTER_SECONDS
+
 
 class VSSAccessStrategy(FileAccessStrategy):
     """Access files via Volume Shadow Copy Service.
@@ -271,9 +344,8 @@ class VSSAccessStrategy(FileAccessStrategy):
                     if time_str:
                         creation_time = self._parse_datetime_flexible(time_str)
                     
-                    if not creation_time:
-                        # Use current time as fallback
-                        creation_time = datetime.now()
+                    # An unparsed time stays None. It used to become "now",
+                    # which made a snapshot of unknown age look brand new.
                     
                     # Extract original volume - try multiple formats
                     original_volume = None
@@ -333,7 +405,7 @@ class VSSAccessStrategy(FileAccessStrategy):
                     shadow_copies.append(shadow_copy)
             
             # Sort by creation time (newest first)
-            shadow_copies.sort(key=lambda sc: sc.creation_time, reverse=True)
+            shadow_copies.sort(key=lambda sc: sc.creation_time or datetime.min, reverse=True)
             
             self.shadow_copies = shadow_copies
             self.vss_available = len(shadow_copies) > 0
@@ -665,19 +737,54 @@ class VSSAccessStrategy(FileAccessStrategy):
         logger.debug(f"[VSS] Shadow copy found: {shadow_copy is not None}")
         if shadow_copy:
             logger.debug(f"[VSS] Shadow copy ID: {shadow_copy.shadow_copy_id}")
-        
+
+        # A snapshot taken long before this run holds the file as it was then.
+        stale = None
+        if shadow_copy and not is_fresh_enough(shadow_copy):
+            stale, shadow_copy = shadow_copy, None
+            age = snapshot_age_seconds(stale)
+            when = _created_utc(stale) or "an unknown time"
+            logger.warning("[VSS] Newest shadow copy of %s (%s) was taken %s - too old to "
+                           "stand in for the live file", volume_letter, stale.shadow_copy_id,
+                           when if age is None else "%s (%.0f min ago)" % (when, age / 60.0))
+            if not self.allow_snapshot_creation or volume_letter in self._creation_attempted:
+                msg = ("The newest shadow copy of %s was taken %s; reading it would return "
+                       "the file as it was then, not now. Not used - the next method reads "
+                       "the current file." % (volume_letter, when))
+                if _custody is not None:
+                    _custody.warn("Shadow copy %s on %s (taken %s) was not used: older than %d "
+                                  "minutes." % (stale.shadow_copy_id, volume_letter, when,
+                                                STALE_AFTER_SECONDS // 60))
+                return AccessResult(
+                    success=False, source_path=file_path, dest_path=dest_path,
+                    strategy_used="vss", error=msg,
+                    duration_seconds=time.time() - start_time, status="failed")
+
         # If no shadow copy exists, attempt diagnostic-driven creation
         if not shadow_copy:
             logger.warning(f"[VSS] No shadow copy found for volume {volume_letter}, attempting diagnostic-driven creation...")
             creation_result = self._attempt_shadow_creation_with_diagnostics(volume_letter)
-            
+            if creation_result is None:
+                # Creation is switched off (a parse that may only read). There
+                # is nothing to fall back to here; the next method takes over.
+                return AccessResult(
+                    success=False, source_path=file_path, dest_path=dest_path,
+                    strategy_used="vss",
+                    error="No usable shadow copy of %s, and creating one is turned off"
+                          % volume_letter,
+                    duration_seconds=time.time() - start_time, status="failed")
+
             if creation_result.success:
                 # Creation succeeded - re-enumerate and get the new shadow copy
                 logger.info(f"[VSS] Shadow copy created successfully for volume {volume_letter}")
                 self._enumerated = False
                 self.enumerate_shadow_copies()
                 shadow_copy = self.get_most_recent_shadow_copy(volume)
-                
+                if shadow_copy and not is_fresh_enough(shadow_copy):
+                    # The listing's newest is not the one just made (a clock or
+                    # locale oddity): never fall back to the stale one.
+                    shadow_copy = None
+
                 if shadow_copy:
                     logger.info(f"[VSS] Using newly created shadow copy: {shadow_copy.shadow_copy_id}")
             else:
@@ -786,16 +893,26 @@ class VSSAccessStrategy(FileAccessStrategy):
             
             # Get file size after successful copy
             file_size = os.path.getsize(dest_path)
-            
+
             duration = time.time() - start_time
-            
+
+            sid = shadow_copy.shadow_copy_id
+            if (_custody is not None and sid.lower() not in _created_ids()
+                    and sid.lower() not in _USED_EXISTING):
+                _USED_EXISTING.add(sid.lower())
+                _custody.note_shadow_copy("used-existing", shadow_copy_id=sid,
+                                          volume=volume_letter,
+                                          created_utc=_created_utc(shadow_copy))
+
             return AccessResult(
                 success=True,
                 source_path=file_path,
                 dest_path=dest_path,
                 strategy_used="vss",
                 file_size=file_size,
-                vss_shadow_copy_id=shadow_copy.shadow_copy_id,
+                vss_shadow_copy_id=sid,
+                vss_shadow_copy_created=_created_utc(shadow_copy),
+                read_path=vss_path,
                 duration_seconds=duration,
                 status="success"
             )

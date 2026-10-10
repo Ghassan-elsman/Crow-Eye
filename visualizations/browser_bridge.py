@@ -95,13 +95,30 @@ PROV_BROWSER = "browser"
 PROV_PROFILE = "profile"
 
 
-class BrowserBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+from visualizations.async_bridge import cached_slot
+
+
+def _browser_db(bridge):
+    return [bridge._get_db_path(BROWSER_DB)]
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class BrowserBridge(AsyncBridge):
     """Read-only data source for the browser-forensics dashboard."""
 
     def __init__(self, case_directory: str, parent=None):
         super().__init__(parent)
         self.case_dir = case_directory or ""
         self._col_cache: Dict[str, set] = {}
+        self._exists_cache: Dict[str, bool] = {}
         logger.info(f"BrowserBridge initialized with case dir: {case_directory}")
 
     # ---- low-level db helpers (same shape as VizBridge) --------------------
@@ -137,9 +154,13 @@ class BrowserBridge(QObject):
         return []
 
     def _table_exists(self, table: str) -> bool:
-        rows = self._query_db(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
-        return len(rows) > 0
+        # Cached like _table_columns: every query of every slot asked again,
+        # one connection each (91 connections to open the dashboard).
+        if table not in self._exists_cache:
+            rows = self._query_db(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+            self._exists_cache[table] = len(rows) > 0
+        return self._exists_cache[table]
 
     def _table_columns(self, table: str) -> set:
         """Columns of `table`, cached.
@@ -184,12 +205,14 @@ class BrowserBridge(QObject):
         return "(" + joiner.join(per_term) + ")", params
 
     def _range_clause(self, tcol: str, start: str, end: str) -> Tuple[str, list]:
+        # On the raw text ('YYYY-MM-DD HH:MM:SS' sorts as time), so an index
+        # on the column is usable; date(col) hid it from the planner.
         clause, params = [], []
         if start:
-            clause.append(f"date({tcol}) >= date(?)")
+            clause.append(f"{tcol} >= date(?)")
             params.append(start)
         if end:
-            clause.append(f"date({tcol}) <= date(?)")
+            clause.append(f"{tcol} < date(?, '+1 day')")
             params.append(end)
         return (" AND ".join(clause), params)
 
@@ -323,6 +346,7 @@ class BrowserBridge(QObject):
 
     # ---- slots -------------------------------------------------------------
     @pyqtSlot(result=str)
+    @cached_slot("getBrowserBounds", _browser_db)
     def getBrowserBounds(self) -> str:
         """The date range the data covers, plus what exists to chart."""
         if not self._get_db_path(BROWSER_DB):
@@ -335,7 +359,7 @@ class BrowserBridge(QObject):
                 if not self._usable(table, tcol, ucol):
                     continue
                 rows = self._query_db(
-                    f"SELECT COUNT(*) c, MIN(date({tcol})) lo, MAX(date({tcol})) hi "
+                    f"SELECT COUNT(*) c, date(MIN({tcol})) lo, date(MAX({tcol})) hi "
                     f"FROM {table} WHERE {tcol} IS NOT NULL AND {tcol} <> ''")
                 if not rows:
                     continue
@@ -371,6 +395,7 @@ class BrowserBridge(QObject):
         return sorted(seen)
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getBrowserHeatmaps", _browser_db)
     def getBrowserHeatmaps(self, args_json: str) -> str:
         """One day-count series per activity, plus the combined series."""
         args = _loads(args_json)
@@ -400,6 +425,7 @@ class BrowserBridge(QObject):
         return json.dumps({"sources": sources, "combined": combined_rows})
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getBrowserOverview", _browser_db)
     def getBrowserOverview(self, args_json: str) -> str:
         """The four cards: domains, intent, downloads, insights."""
         args = _loads(args_json)
@@ -426,6 +452,11 @@ class BrowserBridge(QObject):
         return totals
 
     def _totals(self, args: dict) -> Dict[str, int]:
+        # The overview and its insights both ask: computed once per filter.
+        return self.cached_result("_totals", json.dumps(args, sort_keys=True),
+                                  lambda _a: self._compute_totals(args), _browser_db(self))
+
+    def _compute_totals(self, args: dict) -> Dict[str, int]:
         rows = self._activity_rows(args, grain="day")
         return {
             "events": sum(r["n"] for r in rows),
@@ -692,6 +723,7 @@ class BrowserBridge(QObject):
         }
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getBrowserDayDetail", _browser_db)
     def getBrowserDayDetail(self, args_json: str) -> str:
         """One day: the hour histogram, per-activity split, top domains, events."""
         args = _loads(args_json)
@@ -742,6 +774,7 @@ class BrowserBridge(QObject):
                            "events": events, "eventsTotal": sum(hourly)})
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getBrowserDayActivity", _browser_db)
     def getBrowserDayActivity(self, args_json: str) -> str:
         """Bubble/scatter source: domain on Y, hour on X, size = events."""
         args = _loads(args_json)
@@ -786,6 +819,7 @@ class BrowserBridge(QObject):
                            "points": points, "ranges": ranges})
 
     @pyqtSlot(str, result=str)
+    @cached_slot("getBrowserDomainDetail", _browser_db)
     def getBrowserDomainDetail(self, args_json: str) -> str:
         """Everything known about one domain, across every table.
 

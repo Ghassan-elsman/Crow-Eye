@@ -206,7 +206,7 @@
         },
         {
           "feather_id": "mft_usn",
-          "field_name": "path",
+          "field_name": "reconstructed_path",
           "operator": "wildcard",
           "value": "*"
         }

@@ -90,6 +90,7 @@ class BehaviorEngine:
                 self._label_session_user(events)
                 added = self.store.add_events(events)
                 self.stats["events_{}".format(name)] = added
+                logger.info("UBA: %s - %d event(s) from %d rule(s)", name, added or 0, len(rules))
             except Exception as e:
                 logger.exception("UBA: extractor %s failed: %s", name, e)
                 self.stats["failed_{}".format(name)] = str(e)
@@ -107,6 +108,23 @@ class BehaviorEngine:
         self.stats["total_events"] = total_events
         logger.info("UBA: analysis complete — %d events in %.1fs",
                     total_events, self.stats["elapsed_seconds"])
+        # The rest of the run's statistics (per-extractor counts, failures,
+        # skipped rows), which reached the dashboard but never the case log.
+        for key in sorted(k for k in self.stats
+                          if k not in ("elapsed_seconds", "total_events")
+                          and not k.startswith("events_")):
+            value = self.stats[key]
+            (logger.warning if key.startswith("failed_") else logger.info)(
+                "UBA: %s = %s", key, value)
+        try:
+            states = {}
+            for entry in self.coverage_report.get("rules", []):
+                states[entry.get("status") or "?"] = states.get(entry.get("status") or "?", 0) + 1
+            if states:
+                logger.info("UBA: rule coverage - %s",
+                            ", ".join("%s %d" % kv for kv in sorted(states.items())))
+        except Exception:
+            pass
         report(100, "Analysis complete")
         return self.store
 

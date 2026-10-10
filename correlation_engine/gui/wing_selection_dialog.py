@@ -11,6 +11,15 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .ui_styling import CorrelationEngineStyles
+from ui.site_theme import (begin_site_theme, apply_site_theme, set_role, set_variant,
+                           set_status, font as site_font)
+
+# The wing cards: titleless group boxes, so none of the site group box's title
+# margin; the hover keeps the old affordance in the site's indigo.
+_EXTRA = """
+QGroupBox#wingCard { margin-top: 0px; padding: 10px; }
+QGroupBox#wingCard:hover { border-color: rgba(99, 102, 241, 0.55); }
+"""
 
 
 from ..config import WingConfig
@@ -32,8 +41,10 @@ class WingSelectionDialog(QDialog):
         self.wings = wings
         self.wing_checkboxes = {} # wing_id -> QCheckBox
         self.selected_wing_ids = []
-        
+
+        begin_site_theme(self, extra=_EXTRA)
         self._init_ui()
+        apply_site_theme(self, extra=_EXTRA)
         
         # Select all by default
         self._select_all()
@@ -52,7 +63,7 @@ class WingSelectionDialog(QDialog):
         
         # Header
         header_label = QLabel("Select which Wings to execute:")
-        header_label.setFont(QFont("Segoe UI", 12, QFont.Bold))
+        header_label.setFont(site_font("ui", 16, QFont.Bold))
         layout.addWidget(header_label)
         
         # Info label
@@ -60,7 +71,7 @@ class WingSelectionDialog(QDialog):
             f"Found {len(self.wings)} Wing(s) in the Pipeline. "
             "Select the Wings you want to execute."
         )
-        info_label.setStyleSheet("color: #94A3B8; font-size: 10px;")
+        set_role(info_label, "muted")
         info_label.setWordWrap(True)
         layout.addWidget(info_label)
         
@@ -68,19 +79,11 @@ class WingSelectionDialog(QDialog):
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
         separator.setFrameShadow(QFrame.Sunken)
-        separator.setStyleSheet("background-color: #334155;")
         layout.addWidget(separator)
         
         # Wings list in scroll area
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setStyleSheet("""
-            QScrollArea {
-                border: 1px solid #334155;
-                border-radius: 4px;
-                background-color: #1E293B;
-            }
-        """)
         
         # Container widget for wings
         wings_container = QWidget()
@@ -103,44 +106,12 @@ class WingSelectionDialog(QDialog):
         
         select_all_btn = QPushButton("Select All")
         select_all_btn.clicked.connect(self._select_all)
-        select_all_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                color: #E2E8F0;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border-color: #64748B;
-            }
-            QPushButton:pressed {
-                background-color: #1E293B;
-            }
-        """)
+        set_variant(select_all_btn, "ghost")
         selection_buttons_layout.addWidget(select_all_btn)
         
         deselect_all_btn = QPushButton("Deselect All")
         deselect_all_btn.clicked.connect(self._deselect_all)
-        deselect_all_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                color: #E2E8F0;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: 600;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border-color: #64748B;
-            }
-            QPushButton:pressed {
-                background-color: #1E293B;
-            }
-        """)
+        set_variant(deselect_all_btn, "ghost")
         selection_buttons_layout.addWidget(deselect_all_btn)
         
         selection_buttons_layout.addStretch()
@@ -155,24 +126,7 @@ class WingSelectionDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
         cancel_btn.setMinimumWidth(100)
-        cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #475569;
-                color: #E2E8F0;
-                border: 1px solid #64748B;
-                border-radius: 4px;
-                padding: 10px 20px;
-                font-weight: 600;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #64748B;
-                border-color: #94A3B8;
-            }
-            QPushButton:pressed {
-                background-color: #334155;
-            }
-        """)
+        set_variant(cancel_btn, "ghost")
         buttons_layout.addWidget(cancel_btn)
         
         ok_btn = QPushButton("Execute Selected")
@@ -180,43 +134,11 @@ class WingSelectionDialog(QDialog):
         ok_btn.clicked.connect(self._on_ok_clicked)
         ok_btn.setMinimumWidth(150)
         ok_btn.setDefault(True)
-        ok_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3B82F6;
-                color: #FFFFFF;
-                border: 1px solid #2563EB;
-                border-radius: 4px;
-                padding: 10px 20px;
-                font-weight: bold;
-                font-size: 11px;
-            }
-            QPushButton:hover {
-                background-color: #2563EB;
-                border-color: #1D4ED8;
-            }
-            QPushButton:pressed {
-                background-color: #1D4ED8;
-            }
-            QPushButton:disabled {
-                background-color: #475569;
-                color: #94A3B8;
-                border-color: #334155;
-            }
-        """)
+        set_variant(ok_btn, "primary")
         buttons_layout.addWidget(ok_btn)
         
         layout.addLayout(buttons_layout)
         
-        # Apply dark theme styling
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0F172A;
-                color: #E2E8F0;
-            }
-            QLabel {
-                color: #E2E8F0;
-            }
-        """)
     
     def _create_wing_checkbox(self, wing: WingConfig) -> QWidget:
         """
@@ -229,19 +151,7 @@ class WingSelectionDialog(QDialog):
             QWidget containing the checkbox and Wing info
         """
         container = QGroupBox()
-        container.setStyleSheet("""
-            QGroupBox {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 10px;
-                margin-top: 0px;
-            }
-            QGroupBox:hover {
-                border-color: #475569;
-                background-color: #263449;
-            }
-        """)
+        container.setObjectName("wingCard")
         
         layout = QVBoxLayout(container)
         layout.setSpacing(5)
@@ -249,32 +159,7 @@ class WingSelectionDialog(QDialog):
         
         # Checkbox with Wing name
         checkbox = QCheckBox(wing.wing_name)
-        checkbox.setFont(QFont("Segoe UI", 11, QFont.Bold))
-        checkbox.setStyleSheet("""
-            QCheckBox {
-                color: #E2E8F0;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border: 2px solid #475569;
-                border-radius: 3px;
-                background-color: #1E293B;
-            }
-            QCheckBox::indicator:hover {
-                border-color: #64748B;
-                background-color: #263449;
-            }
-            QCheckBox::indicator:checked {
-                background-color: #3B82F6;
-                border-color: #2563EB;
-                image: url(none);
-            }
-            QCheckBox::indicator:checked:hover {
-                background-color: #2563EB;
-            }
-        """)
+        checkbox.setFont(site_font("ui", 15, QFont.Bold))
         
         # Store checkbox reference
         self.wing_checkboxes[wing.wing_id] = checkbox
@@ -285,11 +170,8 @@ class WingSelectionDialog(QDialog):
         if wing.description:
             desc_label = QLabel(wing.description)
             desc_label.setWordWrap(True)
-            desc_label.setStyleSheet("""
-                color: #94A3B8;
-                font-size: 10px;
-                padding-left: 26px;
-            """)
+            set_role(desc_label, "muted")
+            desc_label.setContentsMargins(26, 0, 0, 0)
             layout.addWidget(desc_label)
         
         # Wing details
@@ -299,12 +181,12 @@ class WingSelectionDialog(QDialog):
         
         # Feather count
         feather_count_label = QLabel(f"{len(wing.feathers)} Feather(s)")
-        feather_count_label.setStyleSheet("color: #64748B; font-size: 9px;")
+        set_role(feather_count_label, "muted")
         details_layout.addWidget(feather_count_label)
         
         # Time window
         time_window_label = QLabel(f"{wing.time_window_minutes} min window")
-        time_window_label.setStyleSheet("color: #64748B; font-size: 9px;")
+        set_role(time_window_label, "muted")
         details_layout.addWidget(time_window_label)
         
         # Weighted scoring indicator — icon + text in a tight QHBoxLayout
@@ -318,7 +200,8 @@ class WingSelectionDialog(QDialog):
             scoring_icon = QLabel()
             scoring_icon.setPixmap(CrowEyeIcons.chart().pixmap(12, 12))
             scoring_label = QLabel("Weighted Scoring")
-            scoring_label.setStyleSheet("color: #3B82F6; font-size: 9px; font-weight: bold;")
+            scoring_label.setFont(site_font("ui", 12, QFont.Bold))
+            set_status(scoring_label, "accent")
             scoring_row.addWidget(scoring_icon)
             scoring_row.addWidget(scoring_label)
             scoring_row.addStretch()

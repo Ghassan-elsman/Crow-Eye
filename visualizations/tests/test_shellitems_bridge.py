@@ -101,8 +101,10 @@ class TestShellItemsBridge(unittest.TestCase):
                                        "lastvisited": 1, "typedpaths": 1, "runmru": 1, "search": 1,
                                        "dialogapps": 0, "taskband": 0, "mountpoints": 0,
                                        "office": 0, "typedurls": 0, "rdp": 0, "recentapps": 0,
-                                       "appmru": 0, "regedit": 0, "muicache": 0,
-                                       "shellfolders": 0, "shellext": 0})
+                                       "appmru": 0, "regedit": 0, "userassist": 0, "bam": 0,
+                                       "dam": 0, "muicache": 0, "shellfolders": 0, "shellext": 0,
+                                       "featureusage": 0, "compat": 0, "fileexts": 0,
+                                       "programscache": 0, "apppermissions": 0})
         self.assertIn("C:", r["volumes"])
         self.assertIn("D:", r["volumes"])
         self.assertIn("\\\\NAS\\share", r["volumes"])
@@ -405,6 +407,125 @@ class TestUndatedSources(unittest.TestCase):
         self.assertEqual(json.loads(self.b.getShellItemsFocus()), {"source": "muicache"})
         other = ShellItemsBridge(self.tmp, focus_source="not-a-source")
         self.assertEqual(json.loads(other.getShellItemsFocus()), {"source": ""})
+
+
+# The registry tables that record what a user RAN or SET, as the parser
+# writes them (Regclaw / offline_RegClaw).
+EXEC_TABLES = {
+    "UserAssist": ["program_path", "run_count", "last_execution", "focus_count", "focus_time",
+                   "user_sid", "parsed_at"],
+    "BAM": ["subkey", "name", "row_data", "type", "app_name", "process_path", "sid",
+            "last_execution", "decoded", "name_kind", "name_kind_raw", "trailing_value",
+            "last_written", "time_basis", "parsed_at"],
+    "DAM": ["subkey", "name", "row_data", "type", "app_name", "process_path", "sid",
+            "last_execution", "execution_count", "decoded", "name_kind", "name_kind_raw",
+            "trailing_value", "last_written", "time_basis", "parsed_at"],
+    "FeatureUsage": ["user_name", "usage_type", "program", "count", "key_path", "last_written",
+                     "time_basis", "parsed_at"],
+    "CompatibilityAssistant": ["user_name", "program_path", "blob_size", "key_path",
+                               "last_written", "time_basis", "parsed_at"],
+    "file_exts": ["user_name", "extension", "choice_type", "progid", "key_path", "last_written",
+                  "time_basis", "parsed_at"],
+    "programs_cache": ["user_name", "value_name", "blob_size", "key_path", "last_written",
+                       "time_basis", "parsed_at"],
+    "app_permissions": ["capability", "app", "packaged", "permission", "last_used_start",
+                        "last_used_stop", "key_path", "last_written", "time_basis", "parsed_at"],
+}
+
+
+class TestRegistryExecutionSources(unittest.TestCase):
+    """UserAssist, BAM, DAM, FeatureUsage, the PCA store, FileExts and the
+    ProgramsCache had no dashboard: they are sources of this one now. The ones
+    with a time per entry are dated; the ones with only a key write time (one
+    upper bound for every entry under it) are listed undated, never piled on
+    that one day."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        con = sqlite3.connect(os.path.join(cls.tmp, "registry_data.db"))
+        for t, cols in EXEC_TABLES.items():
+            con.execute('CREATE TABLE "%s" (%s)' % (t, ", ".join(cols)))
+
+        def ins(t, **vals):
+            cols = EXEC_TABLES[t]
+            con.execute('INSERT INTO "%s" VALUES (%s)' % (t, ",".join("?" * len(cols))),
+                        _row(cols, **vals))
+
+        sid = "S-1-5-21-1-2-3-1001 (HOST\\ann)"
+        ins("UserAssist", program_path="UEME_CTLSESSION", user_sid=sid)          # counters: skipped
+        ins("UserAssist", program_path="C:\\Tools\\procexp64.exe", run_count="4",
+            focus_count="2", focus_time="65000", last_execution="2026-03-02 09:00:00", user_sid=sid)
+        ins("BAM", subkey="S-1-5-21-1-2-3-1001", name="Version", sid=sid)        # metadata: skipped
+        ins("BAM", process_path="\\Device\\HarddiskVolume3\\Windows\\System32\\cmd.exe",
+            app_name="cmd.exe", sid=sid, last_execution="2026-03-03 10:00:00",
+            last_written="2026-03-05 00:00:00")
+        ins("DAM", process_path="\\Device\\HarddiskVolume3\\x\\y.exe", sid=sid,
+            last_execution="2026-03-04 11:00:00", execution_count="3")
+        for prog in ("Brave", "Outlook", "Teams"):
+            ins("FeatureUsage", user_name="HOST\\ann", usage_type="AppSwitched", program=prog,
+                count="7", last_written="2026-03-05 00:00:00")
+        ins("CompatibilityAssistant", user_name="HOST\\ann",
+            program_path="C:\\Users\\ann\\Downloads\\setup.exe", last_written="2026-03-05 00:00:00")
+        ins("file_exts", user_name="HOST\\ann", extension=".001", choice_type="OpenWithList",
+            progid="FTK Imager.exe", last_written="2026-03-05 00:00:00")
+        ins("programs_cache", user_name="HOST\\ann", value_name="ProgramsCache", blob_size="4096")
+        ins("app_permissions", capability="webcam", app="C:#Program Files#Zoom#bin#Zoom.exe",
+            packaged=0, permission="Allow", last_used_start="2026-03-06 14:00:00",
+            last_used_stop="2026-03-06 14:45:00", last_written="2026-03-07 00:00:00")
+        con.commit(); con.close()
+        cls.b = ShellItemsBridge(cls.tmp, focus_source="bam")
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(getattr(cls, "tmp", ""), ignore_errors=True)
+
+    def _rows(self, **args):
+        args.setdefault("limit", 500)
+        return json.loads(self.b.getShellItemsAll(json.dumps(args)))["rows"]
+
+    def test_counts_skip_counters_and_metadata(self):
+        c = json.loads(self.b.getShellItemsBounds())["counts"]
+        self.assertEqual((c["userassist"], c["bam"], c["dam"], c["featureusage"], c["compat"],
+                          c["fileexts"], c["programscache"]), (1, 1, 1, 3, 1, 1, 1))
+
+    def test_executions_are_dated_by_their_own_time(self):
+        by = {r["source"]: r for r in self._rows()}
+        self.assertEqual(by["userassist"]["t"], "2026-03-02 09:00:00")
+        self.assertEqual(by["bam"]["t"], "2026-03-03 10:00:00")       # not the key's write time
+        self.assertEqual(by["bam"]["target"], "cmd.exe")
+        self.assertEqual(by["bam"]["user"], "HOST\\ann")
+        self.assertEqual(by["userassist"]["itemType"], "executed")
+
+    def test_key_time_only_sources_are_undated(self):
+        rows = [r for r in self._rows() if r["source"] in ("featureusage", "compat", "fileexts",
+                                                            "programscache")]
+        self.assertEqual(len(rows), 6)
+        self.assertTrue(all(not r["t"] for r in rows), rows)
+        detail = json.loads(self.b.getShellItemsItemDetail(json.dumps({"id": rows[0]["id"]})))
+        self.assertIn("upper bound", detail["note"])
+
+    def test_userassist_note_carries_counts(self):
+        ua = [r for r in self._rows() if r["source"] == "userassist"][0]
+        note = json.loads(self.b.getShellItemsItemDetail(json.dumps({"id": ua["id"]})))["note"]
+        self.assertIn("run 4 time(s)", note)
+        self.assertIn("65s", note)
+
+    def test_file_association_is_a_setting(self):
+        fe = [r for r in self._rows() if r["source"] == "fileexts"][0]
+        self.assertEqual((fe["target"], fe["itemType"]), (".001", "configured"))
+
+    def test_device_use_is_dated_by_its_own_start(self):
+        cam = [r for r in self._rows() if r["source"] == "apppermissions"]
+        self.assertEqual(len(cam), 1)
+        self.assertEqual(cam[0]["t"], "2026-03-06 14:00:00")          # not the key's write time
+        self.assertEqual(cam[0]["itemType"], "device access")
+        note = json.loads(self.b.getShellItemsItemDetail(json.dumps({"id": cam[0]["id"]})))["note"]
+        self.assertIn("webcam", note)
+        self.assertIn("until 2026-03-06 14:45:00", note)
+
+    def test_focus_source(self):
+        self.assertEqual(json.loads(self.b.getShellItemsFocus()), {"source": "bam"})
 
 
 class TestFrontEndKnowsEverySource(unittest.TestCase):

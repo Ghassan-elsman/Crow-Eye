@@ -106,11 +106,11 @@
       "conditions": [
         {
           "feather_id": "mft_usn",
-          "field_name": "si_created",
+          "field_name": "si_creation_time",
           "operator": "less_than",
           "value": "",
           "compare_to_feather": "mft_usn",
-          "compare_to_field": "fn_created"
+          "compare_to_field": "fn_creation_time"
         }
       ],
       "logic_operator": "AND",

@@ -17,15 +17,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
-# Import styles from main Crow-Eye application
-try:
-    from styles import CrowEyeStyles
-except ImportError:
-    # Fallback if styles not available
-    class CrowEyeStyles:
-        BUTTON_STYLE = ""
-        GREEN_BUTTON = ""
-        UNIFIED_TABLE_STYLE = ""
+# The site look (ui/site_theme.py): one sheet, set before the children exist
+from ui.site_theme import begin_site_theme, apply_site_theme, set_role, set_variant
 
 
 class PipelineSelectionDialog(QDialog):
@@ -49,8 +42,10 @@ class PipelineSelectionDialog(QDialog):
         self.case_directory = Path(case_directory)
         self.pipelines_dir = self.case_directory / "Correlation" / "pipelines"
         self.selected_pipeline_path: Optional[str] = None
-        
+
+        begin_site_theme(self)
         self._init_ui()
+        apply_site_theme(self)
         self._load_pipelines()
     
     def _init_ui(self):
@@ -65,14 +60,7 @@ class PipelineSelectionDialog(QDialog):
         
         # Title
         title = QLabel("SELECT PIPELINE TO EXECUTE")
-        title.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 18px;
-                font-weight: 700;
-                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-            }
-        """)
+        set_role(title, "title")
         layout.addWidget(title)
         
         # Info text
@@ -81,16 +69,7 @@ class PipelineSelectionDialog(QDialog):
             "Please select a pipeline to load for correlation analysis."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("""
-            QLabel {
-                color: #94A3B8;
-                font-size: 12px;
-                font-family: 'Segoe UI', sans-serif;
-                padding: 10px;
-                background-color: #1E293B;
-                border-radius: 6px;
-            }
-        """)
+        set_role(info_label, "note")
         layout.addWidget(info_label)
         
         # Pipeline table
@@ -103,26 +82,6 @@ class PipelineSelectionDialog(QDialog):
         self.pipeline_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.pipeline_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         
-        # Apply table styles
-        try:
-            CrowEyeStyles.apply_table_styles(self.pipeline_table)
-        except Exception as e:
-            pass
-        
-        self.pipeline_table.setStyleSheet(CrowEyeStyles.UNIFIED_TABLE_STYLE + """
-            QTableWidget {
-                font-size: 13px;
-            }
-            QTableWidget::item {
-                padding: 10px 8px;
-                font-size: 13px;
-                color: #F8FAFC;
-            }
-            QHeaderView::section {
-                padding: 10px 8px;
-                font-size: 12px;
-            }
-        """)
         
         # Configure column widths
         header = self.pipeline_table.horizontalHeader()
@@ -145,12 +104,7 @@ class PipelineSelectionDialog(QDialog):
         self.load_btn = QPushButton("Load Pipeline")
         self.load_btn.setFixedHeight(40)
         self.load_btn.setMinimumWidth(150)
-        self.load_btn.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + """
-            QPushButton {
-                font-size: 13px;
-                padding: 10px 20px;
-            }
-        """)
+        set_variant(self.load_btn, "primary")
         self.load_btn.clicked.connect(self.accept)
         self.load_btn.setEnabled(False)
         button_box.addButton(self.load_btn, QDialogButtonBox.AcceptRole)
@@ -158,23 +112,11 @@ class PipelineSelectionDialog(QDialog):
         cancel_btn = QPushButton("Cancel")
         cancel_btn.setFixedHeight(40)
         cancel_btn.setMinimumWidth(120)
-        cancel_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
-            QPushButton {
-                font-size: 13px;
-                padding: 10px 20px;
-            }
-        """)
+        set_variant(cancel_btn, "ghost")
         cancel_btn.clicked.connect(self.reject)
         button_box.addButton(cancel_btn, QDialogButtonBox.RejectRole)
         
         layout.addWidget(button_box)
-        
-        # Apply dialog styling
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0F172A;
-            }
-        """)
     
     def _load_pipelines(self):
         """Load all pipelines from the case directory."""

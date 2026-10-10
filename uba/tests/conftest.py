@@ -570,8 +570,8 @@ def artifacts_dir(tmp_path):
         CREATE TABLE InventoryApplicationFile (id TEXT, name TEXT,
             lower_case_long_path TEXT, publisher TEXT, version TEXT,
             link_date TEXT, parsed_at TEXT);
-        CREATE TABLE InventoryApplicationShortcut (id TEXT, ShortcutPath TEXT,
-            ShortcutTargetPath TEXT, parsed_at TEXT);
+        CREATE TABLE InventoryApplicationShortcut (id TEXT, shortcut_path TEXT,
+            shortcut_target_path TEXT, parsed_at TEXT);
         CREATE TABLE InventoryDriverBinary (id TEXT, driver_name TEXT,
             driver_signed TEXT, driver_last_write_time TEXT, parsed_at TEXT);
         CREATE TABLE InventoryDevicePnp (id TEXT, class TEXT, model TEXT, parsed_at TEXT);
@@ -587,8 +587,8 @@ def artifacts_dir(tmp_path):
              "lower_case_long_path": "c:\\windows\\system32\\svc.exe",
              "publisher": "MS", "version": "1", "link_date": "", "parsed_at": ""}],
         "InventoryApplicationShortcut": [
-            {"id": "1", "ShortcutPath": "c:\\users\\alice\\desktop\\game.lnk",
-             "ShortcutTargetPath": "c:\\games\\game.exe", "parsed_at": ""}],
+            {"id": "1", "shortcut_path": "c:\\users\\alice\\desktop\\game.lnk",
+             "shortcut_target_path": "c:\\games\\game.exe", "parsed_at": ""}],
         "InventoryDriverBinary": [
             {"id": "1", "driver_name": "nicedriver.sys", "driver_signed": "1",
              "driver_last_write_time": "2026-06-10 00:00:00", "parsed_at": ""},
@@ -827,3 +827,7 @@ def _usn_rows():
                      "parsed_at": ""})
         usn += 1
     return rows
+
+
+# Round 11 browser rules fixture (kept in its own module).
+from uba.tests._browser_rich_fixture import browser_rich_dir  # noqa: E402,F401

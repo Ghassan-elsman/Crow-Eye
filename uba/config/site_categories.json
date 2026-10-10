@@ -1,0 +1,146 @@
+{
+  "version": 1,
+  "_about": "Curated site categories for the UBA browser rules (uba/engine/site_categories.py). A host matches a category when it IS a listed domain or a subdomain of one; '*.x' entries match subdomains of x only; 'exclude' wins over everything. Deliberately short lists of the sites an examiner asks about, not a web filter: a category that matches half the internet tells an analyst nothing. Corporate collaboration (SharePoint, Teams, Google Docs editing) is NOT file sharing here - visiting it is ordinary work.",
+  "categories": {
+    "file_sharing": {
+      "label": "file-sharing",
+      "domains": [
+        "mega.nz", "mega.io", "megaupload.nz", "wetransfer.com", "we.tl", "dropbox.com",
+        "dropboxusercontent.com", "db.tt", "drive.google.com", "drive.usercontent.google.com",
+        "onedrive.live.com", "1drv.ms", "box.com", "mediafire.com", "sendspace.com", "file.io",
+        "gofile.io", "anonfiles.com", "zippyshare.com", "4shared.com", "rapidgator.net",
+        "uploaded.net", "filebin.net", "transfer.sh", "catbox.moe", "pixeldrain.com",
+        "sendgb.com", "icedrive.net", "pcloud.com", "sync.com", "tresorit.com", "filemail.com",
+        "swisstransfer.com", "files.fm", "krakenfiles.com", "bayfiles.com", "workupload.com",
+        "ufile.io", "temp.sh", "filetransfer.io", "jumpshare.com", "send.vis.ee", "dbree.me",
+        "uploadhaven.com", "turbobit.net", "nitroflare.com", "1fichier.com", "terabox.com",
+        "smash.app", "fromsmash.com", "tusfiles.com", "oshi.at", "bashupload.com",
+        "limewire.com", "filedropper.com", "dosya.tc", "qiwi.gg", "buzzheavier.com"
+      ],
+      "exclude": ["sharepoint.com", "docs.google.com", "sheets.google.com"]
+    },
+    "paste": {
+      "label": "paste",
+      "domains": [
+        "pastebin.com", "paste.ee", "ghostbin.com", "ghostbin.co", "hastebin.com", "rentry.co",
+        "rentry.org", "controlc.com", "justpaste.it", "privatebin.net", "paste.mozilla.org",
+        "dpaste.org", "dpaste.com", "pastes.io", "paste.rs", "termbin.com", "ix.io", "0bin.net",
+        "pastebin.pl", "pastelink.net", "gist.github.com", "gist.githubusercontent.com",
+        "paste.gg", "paste.centos.org", "pastecode.io", "pastie.io", "notes.io",
+        "telegra.ph", "write.as"
+      ],
+      "exclude": []
+    },
+    "anonymiser": {
+      "label": "anonymiser",
+      "domains": [
+        "*.onion", "torproject.org", "tails.net", "tails.boum.org", "proxysite.com",
+        "croxyproxy.com", "croxyproxy.rocks", "kproxy.com", "4everproxy.com", "proxyium.com",
+        "hidester.com", "hide.me", "hidemyass.com", "blockaway.net", "proxyscrape.com",
+        "temp-mail.org", "10minutemail.com", "guerrillamail.com", "mailinator.com",
+        "tempmail.plus", "yopmail.com", "maildrop.cc", "throwawaymail.com", "emailondeck.com",
+        "getnada.com", "dropmail.me", "moakt.com", "sharklasers.com", "mail.tm",
+        "tempmail.dev", "tempail.com", "fakemail.net", "burnermail.io", "33mail.com",
+        "i2p.net", "geti2p.net"
+      ],
+      "exclude": []
+    },
+    "crypto": {
+      "label": "cryptocurrency",
+      "domains": [
+        "binance.com", "coinbase.com", "kraken.com", "bybit.com", "okx.com", "kucoin.com",
+        "bitfinex.com", "bitstamp.net", "gemini.com", "crypto.com", "htx.com", "huobi.com",
+        "gate.io", "mexc.com", "bitget.com", "blockchain.com", "metamask.io", "phantom.app",
+        "trustwallet.com", "exodus.com", "ledger.com", "trezor.io", "app.uniswap.org",
+        "pancakeswap.finance", "etherscan.io", "bscscan.com", "tronscan.org", "blockchair.com",
+        "mempool.space", "blockstream.info", "paxful.com", "changenow.io", "changelly.com",
+        "simpleswap.io", "fixedfloat.com", "ff.io", "sideshift.ai", "tornado.cash",
+        "tornadocash.eth.limo", "wasabiwallet.io", "electrum.org", "getmonero.org",
+        "localmonero.co", "bisq.network", "hodlhodl.com", "atomicwallet.io", "rabby.io",
+        "keplr.app", "tronlink.org", "roninchain.com"
+      ],
+      "exclude": []
+    },
+    "remote_access": {
+      "label": "remote-access",
+      "domains": [
+        "anydesk.com", "teamviewer.com", "remotedesktop.google.com", "logmein.com",
+        "gotomypc.com", "splashtop.com", "rustdesk.com", "parsec.app", "screenconnect.com",
+        "connectwise.com", "beyondtrust.com", "assist.zoho.com", "supremocontrol.com",
+        "ammyy.com", "ultraviewer.net", "getscreen.me", "dwservice.net", "remoteutilities.com",
+        "meshcentral.com", "atera.com", "netsupportsoftware.com", "action1.com",
+        "ngrok.com", "ngrok.io", "ngrok-free.app", "ngrok.app", "ngrok-free.dev",
+        "localtunnel.me", "loca.lt", "trycloudflare.com", "serveo.net", "localhost.run",
+        "lhr.life", "pinggy.io", "pinggy.link", "playit.gg", "localxpose.io", "telebit.cloud",
+        "tailscale.com", "zerotier.com", "devtunnels.ms"
+      ],
+      "exclude": []
+    },
+    "ai_chat": {
+      "label": "AI chat",
+      "domains": [
+        "chatgpt.com", "chat.openai.com", "claude.ai", "gemini.google.com", "bard.google.com",
+        "copilot.microsoft.com", "perplexity.ai", "poe.com", "chat.deepseek.com",
+        "character.ai", "you.com", "chat.mistral.ai", "grok.com", "meta.ai", "pi.ai",
+        "chat.qwen.ai", "kimi.com", "huggingface.co/chat"
+      ],
+      "exclude": []
+    },
+    "hacking_tools": {
+      "label": "hacking-resource",
+      "domains": [
+        "exploit-db.com", "metasploit.com", "kali.org", "gtfobins.github.io",
+        "lolbas-project.github.io", "hacktricks.xyz", "book.hacktricks.xyz", "revshells.com",
+        "shodan.io", "censys.io", "packetstormsecurity.com", "0day.today", "ired.team",
+        "pentestmonkey.net", "crackstation.net", "hashes.com", "onlinehashcrack.com",
+        "cobaltstrike.com", "breachforums.st", "breachforums.is", "cracked.io", "nulled.to",
+        "hackforums.net", "exploit.in", "xss.is", "intelx.io", "dehashed.com",
+        "haveibeenpwned.com", "weleakinfo.to", "snusbase.com", "leakcheck.io",
+        "malware-traffic-analysis.net", "vx-underground.org", "bazaar.abuse.ch"
+      ],
+      "exclude": []
+    }
+  },
+  "search_engines": [
+    {"host": "google.", "params": ["q"], "path": "/search", "name": "Google"},
+    {"host": "bing.com", "params": ["q"], "path": "/search", "name": "Bing"},
+    {"host": "duckduckgo.com", "params": ["q"], "name": "DuckDuckGo"},
+    {"host": "search.yahoo.com", "params": ["p"], "name": "Yahoo"},
+    {"host": "yandex.", "params": ["text"], "name": "Yandex"},
+    {"host": "baidu.com", "params": ["wd", "word"], "name": "Baidu"},
+    {"host": "search.brave.com", "params": ["q"], "name": "Brave Search"},
+    {"host": "ecosia.org", "params": ["q"], "name": "Ecosia"},
+    {"host": "startpage.com", "params": ["query", "q"], "name": "Startpage"},
+    {"host": "qwant.com", "params": ["q"], "name": "Qwant"},
+    {"host": "ask.com", "params": ["q"], "name": "Ask"},
+    {"host": "search.aol.com", "params": ["q"], "name": "AOL"},
+    {"host": "youtube.com", "params": ["search_query"], "path": "/results", "name": "YouTube"},
+    {"host": "perplexity.ai", "params": ["q"], "path": "/search", "name": "Perplexity"},
+    {"host": "github.com", "params": ["q"], "path": "/search", "name": "GitHub"}
+  ],
+  "electron_apps": {
+    "discord": "Discord", "slack": "Slack", "teams": "Microsoft Teams",
+    "microsoft teams": "Microsoft Teams", "signal": "Signal", "whatsapp": "WhatsApp",
+    "telegram": "Telegram", "element": "Element", "skype": "Skype", "zoom": "Zoom",
+    "mattermost": "Mattermost", "rocket.chat": "Rocket.Chat", "wire": "Wire"
+  },
+  "wallet_extensions": {
+    "nkbihfbeogaeaoehlefnkodbefgpgknn": "MetaMask",
+    "ejbalbakoplchlghecdalmeeeajnimhm": "MetaMask (Edge)",
+    "bfnaelmomeimhlpmgjnjophhpkkoljpa": "Phantom",
+    "hnfanknocfeofbddgcijnmhnfnkdnaad": "Coinbase Wallet",
+    "egjidjbpglichdcondbcbdnbeeppgdph": "Trust Wallet",
+    "fhbohimaelbohpjbbldcngcnapndodjp": "Binance Wallet",
+    "aholpfdialjgjfhomihkjbmgjidlcdno": "Exodus Web3 Wallet",
+    "fnjhmkhhmkbjkkabndcnnogagogbneec": "Ronin Wallet",
+    "ibnejdfjmmkpcnlpebklmnkoeoihofec": "TronLink",
+    "dmkamcknogkgcdfhhbddcghachkejeap": "Keplr",
+    "acmacodkjbdgmoleebolmdjonilkdbch": "Rabby Wallet",
+    "mcohilncbfahbmgdjkbpemcciiolgcge": "OKX Wallet",
+    "opcgpfmipidbgpenhmajoajpbobppdil": "Sui Wallet",
+    "ppbibelpcjmhbdihakflkdcoccbgbkpo": "UniSat Wallet",
+    "nphplpgoakhhjchkkhmiggakijnkhfnd": "Ton Wallet"
+  },
+  "wallet_name_words": ["metamask", "phantom", "coinbase wallet", "trust wallet", "binance wallet",
+                        "exodus", "ronin", "tronlink", "keplr", "rabby", "okx wallet", "crypto wallet"]
+}

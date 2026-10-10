@@ -60,33 +60,15 @@ def _icon_for_severity(severity: str, widget: QWidget) -> QIcon:
         return CrowEyeIcons.warning()
     return CrowEyeIcons.info()
 
-# Pull from the canonical Crow-Eye design system so the Issues tab
-# inherits the same palette + tree styling as every other widget.
-# Fallback shim mirrors the pattern used in pipeline_management_tab.py.
-try:
-    from styles import Colors, CrowEyeStyles
-except ImportError:
-    class Colors:
-        BG_PANELS = "#1E293B"
-        TEXT_PRIMARY = "#E2E8F0"
-        TEXT_SECONDARY = "#94A3B8"
-        ACCENT_CYAN = "#00FFFF"
-        WARNING = "#F59E0B"
-        ERROR = "#EF4444"
-        BORDER_SUBTLE = "#334155"
+# The site look (ui/site_theme.py): the panel, tree and button come from the
+# window sheet; severity colours are the site's meaning colours, so the tree
+# matches status colours everywhere else in the engine.
+from ui.site_theme import STATUS_COLORS, set_status, set_variant
 
-    class CrowEyeStyles:
-        UNIFIED_TREE_STYLE = ""
-        GROUP_BOX = ""
-        BUTTON_STYLE = ""
-
-
-# Severity color cues sourced from the design system so the tree
-# matches status colors elsewhere in the app.
-_COLOR_ERROR = QColor(Colors.ERROR)
-_COLOR_WARNING = QColor(Colors.WARNING)
-_COLOR_INFO = QColor(Colors.TEXT_SECONDARY)
-_COLOR_HEADER = QColor(Colors.TEXT_PRIMARY)
+_COLOR_ERROR = QColor(STATUS_COLORS["bad"])
+_COLOR_WARNING = QColor(STATUS_COLORS["warn"])
+_COLOR_INFO = QColor(STATUS_COLORS["neutral"])
+_COLOR_HEADER = QColor("#E2E8F0")
 
 
 class IssuesTab(QWidget):
@@ -116,7 +98,6 @@ class IssuesTab(QWidget):
         outer.setSpacing(8)
 
         container = QGroupBox("Pipeline Issues")
-        container.setStyleSheet(CrowEyeStyles.GROUP_BOX)
         outer.addWidget(container, 1)
 
         layout = QVBoxLayout(container)
@@ -130,14 +111,12 @@ class IssuesTab(QWidget):
         header_row.setSpacing(8)
 
         self._summary_label = QLabel("No issues — pipeline ran cleanly.")
-        self._summary_label.setStyleSheet(
-            f"color: {Colors.TEXT_SECONDARY}; font-size: 10pt;"
-        )
+        set_status(self._summary_label, "neutral")
         header_row.addWidget(self._summary_label, 1)
 
         self._copy_button = QPushButton("Copy")
         self._copy_button.setToolTip("Copy all issues to clipboard as plain text")
-        self._copy_button.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        set_variant(self._copy_button, "ghost")
         self._copy_button.setMaximumWidth(120)
         self._copy_button.clicked.connect(self._copy_to_clipboard)
         # Disabled by default; populate() flips it on when there's anything
@@ -150,9 +129,7 @@ class IssuesTab(QWidget):
         self._tree.setHeaderLabels(["Issue", "Detail"])
         self._tree.setColumnWidth(0, 280)
         self._tree.setAlternatingRowColors(True)
-        # Inherit the unified tree styling so selection/hover/grid match
-        # every other tree in the app.
-        self._tree.setStyleSheet(CrowEyeStyles.UNIFIED_TREE_STYLE)
+        # The tree takes the window's site sheet, like every other tree.
         layout.addWidget(self._tree, 1)
 
     def _copy_to_clipboard(self):
@@ -209,17 +186,13 @@ class IssuesTab(QWidget):
         self._total_count = total
         if total == 0:
             self._summary_label.setText("No issues — pipeline ran cleanly.")
-            self._summary_label.setStyleSheet(
-                f"color: {Colors.TEXT_SECONDARY}; font-size: 10pt;"
-            )
+            set_status(self._summary_label, "neutral")
         else:
             self._summary_label.setText(
                 f"{total} issue(s) across {sum(1 for _, e in groups if e)} category(ies). "
                 "Expand each group for details."
             )
-            self._summary_label.setStyleSheet(
-                f"color: {Colors.WARNING}; font-size: 10pt;"
-            )
+            set_status(self._summary_label, "warn")
         return total
 
     @staticmethod

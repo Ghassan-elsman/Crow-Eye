@@ -214,5 +214,13 @@ class BaseCorrelationEngine(ABC):
         """
         Parse timestamp from various formats using ResilientTimestampParser.
         """
-        from .timestamp_parser import ResilientTimestampParser
-        return ResilientTimestampParser.parse_timestamp(value)
+        # parse_timestamp is an INSTANCE method returning a result object.
+        # Called on the class, `value` became `self` and every call raised
+        # AttributeError - swallowed by the callers, so the Identity engine's
+        # time filter never filtered anything.
+        parser = getattr(self, '_ts_parser', None)
+        if parser is None:
+            from .timestamp_parser import ResilientTimestampParser
+            parser = self._ts_parser = ResilientTimestampParser()
+        result = parser.parse_timestamp(value)
+        return result.datetime_value if getattr(result, 'success', False) else None

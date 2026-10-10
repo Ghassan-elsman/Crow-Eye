@@ -8,8 +8,8 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.14.0%20pre--release-brightgreen.svg)
-![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.7.0-8a2be2.svg)
+![Version](https://img.shields.io/badge/version-0.14.1-brightgreen.svg)
+![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.8.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 [![Discord](https://img.shields.io/badge/Discord-Crow--Eye-7289da?logo=discord)](https://discord.gg/2vag2Udf)
@@ -55,7 +55,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.14.0 (pre-release; latest stable 0.13.0) · **Correlation Engine:** 1.7.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.14.1 · **Correlation Engine:** 1.8.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 
@@ -89,10 +89,10 @@ Crow-Eye is built as an integrated loop — each stage feeds the next, from raw 
 | **[Offline Importer](#-analysis-modes)** | SCAN → COLLECT → PARSE artifacts from any collected folder into the case. | ② Ingest |
 | **[Artifact Parsers](#-supported-artifacts)** | Registry, execution, file-system, user-activity, event-log and browser parsers — live and offline. | ② Ingest |
 | **[Parse Status & Case Logs](#️-architecture)** | One outcome per artifact on every parse, a *Why empty?* answer for every empty table, and per-component logs for each case. | ③ Case |
-| **[Chart Dashboards](#-chart-dashboards)** | Six dashboards (SRUM, MFT/USN, LNK & Jump Lists, Prefetch, Shell Items, Browser), each opened from its own table. | ④ Analyse |
+| **[Chart Dashboards](#-chart-dashboards)** | Six dashboards (SRUM, MFT/USN, LNK & Jump Lists, Prefetch, User Activity, Browser), each opened from its own table. | ④ Analyse |
 | **[Database Search](#-search--export)** | Full-text search across every database in the case, imported evidence included. | ④ Analyse |
 | **[Interactive Timeline](#️-interactive-timeline-visualization)** | Identity-threaded timeline (Heat Map / Week / Day), read straight from the case databases. | ④ Analyse |
-| **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story — 65 behaviours. | ④ Analyse |
+| **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story — 81 behaviours. | ④ Analyse |
 | **[Dynamic Linking](#-dynamic-linking)** | Non-destructive overlay that turns SIDs, MACs and hashes into names inline. | ④ Analyse |
 | **[Correlation Engine](#-correlation-engine)** | Dual-engine (Identity + Time-Window) reconstruction via Feathers · Wings · Engines · Pipelines. | ④ Analyse |
 | **[Eye — AI Assistant](#️-eye--the-forensics-ai-assistant)** | GEP-governed investigation assistant with the sealed **Narrative Map** case memory. | ⑤ AI |
@@ -125,6 +125,7 @@ flowchart TB
     REPLAY["DIRTY-HIVE REPLAY<br/>logs applied to a copy"]
     CASE[("③ CASE DATABASES<br/>Target_Artifacts/<br/>Imported_Evidence/")]
     PSTAT[("PARSE STATUS<br/>one outcome per artifact")]
+    CUST[("CHAIN OF CUSTODY<br/>run records · case ledger")]
 
     subgraph ANA["④ ANALYSIS · read-only"]
         TAB["ARTIFACT TABLES<br/>Anatomy · Why empty?"]
@@ -155,6 +156,7 @@ flowchart TB
     PARSERS -. "every hive" .-> REPLAY
     PARSERS == "parsed artifacts" ==> CASE
     PARSERS -. "status" .-> PSTAT
+    I0 & I1 & I2 & I3 & I4 -. "custody" .-> CUST
     I4 -- "verbatim or<br/>converted" --> CASE
 
     CASE ==> TAB & VIZ & SRCH & CE & DL & TL & UBA
@@ -162,6 +164,7 @@ flowchart TB
     DL --> INTEL
 
     RES -. "on demand" .-> EYE
+    UBA -. "query_user_behavior" .-> EYE
     KB --> EYE
     EYE <== "verdict · narrative" ==> NM
     EYE -- "every tool call" --> COMP
@@ -180,7 +183,7 @@ flowchart TB
     class S1,S2,S3,S4 src
     class I0,I1,I2,I3,I4,REPLAY ing
     class PARSERS hub
-    class CASE,PSTAT,RES,INTEL store
+    class CASE,PSTAT,CUST,RES,INTEL store
     class TAB,VIZ,SRCH,TL,UBA,CE,DL ana
     class KB,NM,COMP ai
     class EYE eye
@@ -202,6 +205,7 @@ flowchart TB
 |---|---|
 | ① → ② | **Five independent doors into a case.** Parse a live system directly, acquire it with Crow-Claw, read a forensic image without mounting it, bring a Velociraptor / KAPE / EDR folder through the Offline Importer, or import third-party CSV / JSON / SQLite with Import Evidence. Crow-Eye's own collector is never required. |
 | ② | **The parsers read evidence, never write to it.** Registry hives are read as files from a working copy with their transaction logs replayed, so a dirty hive is seen in the state Windows had not finished writing, and free space is carved for deleted keys. SRUM is soft-recovered from its ESE logs the same way. Browsers are read from copies that keep their `-wal` files, and stored secrets are kept but never decrypted. |
+| ② | **Every run leaves a chain of custody, and every case keeps a ledger.** Crow-Claw, live Parse All, each single-artifact parse, Offline Importer collections and scans, offline parses and image parsing each write `logs/custody_<run>.json` with a `.sha256` beside it. A record holds who ran it, where and when (UTC), the time zone and decoding-library versions, and every source file: its times read before the copy, how it was read (in place, copied, shadow copy, raw volume, `NtSaveKeyEx` hive export), and the SHA-256 of the source and of the copy. It also holds each artifact's outcome, the SHA-256 of every database the run wrote, and every change made to the target: processes, services, and shadow copies created, used, deleted or evicted by Windows. Shadow copies Crow-Eye creates are deleted when the run ends, by the ID `Create()` returned. Temporary work goes under the case, not the target's `%TEMP%`. **`logs/custody_ledger.jsonl`** records everything done to the case: opened, runs started and ended (with each record's hash), exports, evidence imports, settings changes, and correlation and Dynamic Linking database rewrites (hash before and after). It is a hash chain, so an edited, removed or moved line, a rewritten or deleted record, and a ledger cut short all show. **Case → Chain of Custody…** opens a record: every source with its verdict, the artifacts, the outputs, the footprint, the shadow copies, and the case ledger with its chain check. |
 | ② → ③ | Everything converges on **the case**. Parsed artifacts land in `Target_Artifacts/`; imported evidence lands in `Imported_Evidence/` and is auto-discovered by every reader. |
 | ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses write one outcome per artifact to `logs/parse_status.json` — parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, failed or not run. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, a **Why empty?** button explains every empty table, and each case keeps per-component logs browsable in Settings → Logs. |
 | ③ → ④ | **Nothing reads half-written data.** While a parse or load runs, the readers in stage ④ and the Eye are held — each offers *Open when ready* — so no view opens against tables still being filled. |
@@ -269,7 +273,7 @@ flowchart TB
 
 | Door | Module | What it does | Writes |
 |---|---|---|---|
-| **Live parse** | `Crow Eye.py` → `utils/concurrency/standalone_parsers.py` | Parses this machine in place. Needs administrator rights. Runs the parsers in a process pool (up to four workers), then MFT → USN → their correlation in sequence. | `Target_Artifacts/*.db` |
+| **Live parse** | `Crow Eye.py` → `utils/concurrency/standalone_parsers.py` | Parses this machine in place. Needs administrator rights. Runs the parsers in a process pool (up to four workers), with MFT and USN in a process of their own beside it; their correlation runs once both finish. The `$MFT` is read through its own data runs, so a fragmented MFT is read whole (one examined C: drive was in 17 fragments; the first held 205,056 of 3.3 million records). | `Target_Artifacts/*.db` |
 | **Crow-Claw** | `Artifacts_Collectors/crow_claw/` | Live acquisition: copies registry hives with their `.LOG1`/`.LOG2`, NTUSER.DAT and UsrClass.dat, Prefetch, AmCache, LNK and Jump Lists, `$MFT`, the USN journal, Recycle Bin, event logs, SRUM, ShimCache, browsers and partition information. Standard copy always; Volume Shadow Copy and raw-disk access when elevated. | One folder per artifact type, and `collection_manifest.json` with MD5 and SHA-256 of every file |
 | **Image parsing** | `Artifacts_Collectors/Forensics_Image_parsing/` | Reads E01/Ex01, VHDX/VHD, VMDK, ISO and raw (`dd`/`img`/`001`, multi-part sets included) through `dissect.target` — nothing is mounted. Reuses the Offline Importer's collector and coordinator, then parses in `image` mode. | `Target_Artifacts/*.db` |
 | **Offline Importer** | `Artifacts_Collectors/Offline_Importer/` | **SCAN** detects artifact types by name and extension into `.artifact_scan_index.json`; **COLLECT** copies what was found into `live_acquisition/` with a SHA-256 of each file; **PARSE** hands each artifact to `ParserInvoker`, which calls the matching `offline_parsers/offline_*.py`. Works on any Velociraptor, KAPE or EDR collection. | `Target_Artifacts/*.db` |
@@ -290,7 +294,7 @@ flowchart TB
 | $MFT | `MFT_Claw.py` | `offline_MFTClaw.py` | `mft_claw_analysis.db` | mft_records, mft_standard_info, mft_file_names, mft_data_attributes |
 | USN journal | `USN_Claw.py` | `offline_USNClaw.py` | `USN_journal.db` | journal_events, deleted_entries |
 | MFT ↔ USN | `mft_usn_correlator.py` | `offline_MFT_USN_Correlator.py` | `mft_usn_correlated_analysis.db` | mft_usn_correlated, filename_changes |
-| Browsers | `Browser_Claw.py` | — (live only in this release) | `browser_analysis.db` | 37 tables — history, downloads, cookies, Gecko history … |
+| Browsers | `Browser_Claw.py` | `offline_BrowserClaw.py` | `browser_analysis.db` | 37 tables — history, downloads, cookies, Gecko history … |
 
 **Two repairs happen before a parser reads anything, and neither touches the evidence:**
 
@@ -327,7 +331,7 @@ flowchart TB
     VIZ["CHART DASHBOARDS<br/>visualizations/<br/>dialog + bridge + React"]
     SRCH["DATABASE SEARCH<br/>Ctrl+Shift+F"]
     TL["TIMELINE<br/>timeline/ · artifact_map.py"]
-    UBA["USER BEHAVIOR ANALYTICS<br/>uba/ · 65 rules · Ctrl+Shift+B"]
+    UBA["USER BEHAVIOR ANALYTICS<br/>uba/ · 81 rules · Ctrl+Shift+B"]
     DL["DYNAMIC LINKING<br/>dynamic_mapping/ · 22 rules"]
     CE["CORRELATION ENGINE<br/>correlation_engine/"]
 
@@ -353,11 +357,11 @@ None of these requires another. Each opens the case databases **read-only**, and
 
 | Reader | Module | What it does |
 |---|---|---|
-| **Chart dashboards** | `visualizations/` | Six dashboards — SRUM, MFT/USN, LNK & Jump Lists, Prefetch, Shell Items, Browser — opened by the **Charts** button on their own tables. Each is a Qt dialog hosting a React page; a `QWebChannel` bridge serves the page its data from the case databases. |
+| **Chart dashboards** | `visualizations/` | Six dashboards — SRUM, MFT/USN, LNK & Jump Lists, Prefetch, User Activity (Shell Items & Registry), Browser — opened by the **Charts** button on their own tables. Each is a Qt dialog hosting a React page; a `QWebChannel` bridge serves the page its data from the case databases. |
 | **Database Search** | `ui/database_search_dialog.py` → `data/unified_search_engine.py` | Searches every database it discovers in the case, imported evidence included. Case-sensitive, exact and regular-expression modes, and an optional time filter on each table's detected timestamp columns. |
 | **Timeline** | `timeline/` | Heat map (per day), week and lane views. `data/artifact_map.py` is the one map of what it plots: 18 artifact types and their time columns. Registry key write times are bounded (*no later than*) and drawn hollow, so they cannot pass for an exact event time. Applies its own lightweight grouping — no correlation run needed. |
-| **User Behavior Analytics** | `uba/` | Replays the case through 65 declarative rules in `uba/config/behavior_rules.json` (38 routine, 24 notable, 2 suspicious, 1 critical) into a plain-English activity story. Sign-in sessions are built from Security events 4624/4634/4647, paired by LogonId. Every statement opens its backing record. |
-| **Dynamic Linking** | `dynamic_mapping/` | 22 rules gather identity mappings — SID → user, MAC → network, hash → file name, USB serial → device, volume GUID → volume name and more — into `Crow_Intelligence.db` by `ATTACH`ing each case database read-only. The artifact tables then show the resolved name beside the raw value through a per-row lookup on the attached database. It changes how a record *reads*, never the record. |
+| **User Behavior Analytics** | `uba/` | Replays the case through 81 declarative rules in `uba/config/behavior_rules.json` (44 routine, 33 notable, 3 suspicious, 1 critical) into a plain-English activity story. Sign-in sessions are built from Security events 4624/4634/4647, paired by LogonId. Every statement opens its backing record. |
+| **Dynamic Linking** | `dynamic_mapping/` | 22 rules gather identity mappings — SID → user, MAC → network, hash → file name, USB serial → device, volume GUID → volume name and more — into `Crow_Intelligence.db` by `ATTACH`ing each case database read-only. The artifact tables then show the resolved name beside the raw value through a per-row lookup on the attached database. It changes how a record *reads*, never the record. After each run a statistics window (and `dynamic_linking.log`) shows what every rule read and added, from which database and table, and how many rows of each artifact table now carry a linked name. |
 | **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Identity or Time-Window engine, and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
 
 #### ⑤ AI layer — how a question travels
@@ -454,6 +458,17 @@ The main interface opens, you create a case, and all analysis output is organize
 
 > 🖥️ **Cross-platform note:** on **Linux**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
 
+**On Linux** (tested on Debian 12 with the system Python), install the venv module and Qt's system libraries once, then start Crow-Eye the same way. It creates `crow_eye_venv/` and installs everything else into it:
+
+```bash
+sudo apt install python3-venv libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
+    libxcb-image0 libxcb-render-util0 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
+    libasound2 libpango-1.0-0 libpangoft2-1.0-0
+python3 "Crow Eye.py"
+```
+
+`requirements.txt` lists the same packages for a manual or container install. On a machine with no GPU (a VM without passthrough, a container), web views switch to software rendering on their own.
+
 ## 📂 Supported Artifacts
 
 Crow-Eye parses a broad set of Windows execution, file-system, and user-activity artifacts, both from a **live** system and from **offline** sources (collected folders or forensic images).
@@ -472,7 +487,7 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 | ShellBags | ✅ | ✅ | Folder access history and navigation |
 | MRU & RecentDocs / Typed Paths | ✅ | ✅ | Open/Save history, recent files, typed locations |
 | Browser / Website history (registry: TypedURLs) | ✅ | ✅ | Addresses typed into the browser |
-| Browsers — Chromium family, Firefox family, Electron apps (37 tables) | ✅ | — | History, downloads, cookies, cache, sessions, extensions, local storage; stored secrets kept but never decrypted |
+| Browsers — Chromium family, Firefox family, Electron apps (37 tables) | ✅ | ✅ | History, downloads, cookies, cache, sessions, extensions, local storage; stored secrets kept but never decrypted |
 | Event Logs (System / Security / Application) | ✅ | ✅ | Logons, process creation (4688), account & service changes, log clearing |
 | MFT | ✅ | ✅ | File metadata, deleted files, timestamps (NTFS, Win 7/10/11) |
 | USN Journal | ✅ | ✅ | File create/modify/delete/rename with full name history |
@@ -498,7 +513,7 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 - **Prefetch** — parses `C:\Windows\Prefetch`, extracting execution history and forensic metadata (including per-run timestamps).
 - **Event Logs** — automatic parsing of System/Security/Application logs into a database for comprehensive analysis.
 - **Registry depth (0.13.0)** — the parser reads the hive **file** as well as the live registry, so it reaches what `winreg` denies even to an administrator (every device `Properties` subkey, and with it USB connect times), walks the hive's allocator to recover deleted keys and values, and reads class names and key security descriptors. Nineteen keys that held real data and were read by nothing are now parsed — including Explorer's **StartupApproved**, which says whether each autostart entry is actually allowed to launch.
-- **Browsers (0.14.0)** — `Browser_Claw` reads every Chromium-family browser (Chrome, Edge, Brave, Opera, Vivaldi and others, plus any it finds by profile layout), the Firefox family (Firefox, LibreWolf, Waterfox, Pale Moon, SeaMonkey, Tor Browser) and Electron apps (Slack, Discord, Teams, Signal and others) into `browser_analysis.db`. SQLite stores are read from a copy that keeps their `-wal` and `-journal` files, so rows not yet checkpointed are still seen. Passwords, cookie values and card data are stored as found and **never decrypted**. Live systems only for now.
+- **Browsers (0.14.0)** — `Browser_Claw` reads every Chromium-family browser (Chrome, Edge, Brave, Opera, Vivaldi and others, plus any it finds by profile layout), the Firefox family (Firefox, LibreWolf, Waterfox, Pale Moon, SeaMonkey, Tor Browser) and Electron apps (Slack, Discord, Teams, Signal and others) into `browser_analysis.db`. SQLite stores are read from a copy that keeps their `-wal` and `-journal` files, so rows not yet checkpointed are still seen. Passwords, cookie values and card data are stored as found and **never decrypted**. Live systems, collected folders and forensic images all produce the same tables: each profile's folder tree is collected intact, the owner is the `Users\<name>` folder it came from, and the SID is read from the evidence's own SOFTWARE hive (when the case holds a single source, so a hive can only belong to it). An **Include browser cache** option (on by default) leaves out the HTTP and Service Worker caches, which are most of a profile's size.
 - **ShellBags** — reveals folder access history and user navigation patterns.
 - **Recycle Bin** — parses `$RECYCLE.BIN` to recover deleted file names, original paths, deletion times, and sizes (live systems and disk images).
 - **MFT** — parses the Master File Table for file metadata, attributes, timestamps, and deleted-file information (NTFS, Windows 7/10/11).
@@ -517,14 +532,16 @@ Crow-Claw is Crow-Eye's specialized acquisition engine for collecting and preser
 ### 🔍 Offline Analysis (Offline Importer)
 Analyze artifacts collected from any source without a live connection to the target — three clear operations:
 
-- **SCAN (discovery)** — walk the source and index every supported artifact by **filename and extension pattern** (fast, read-only; no file contents are read and no magic-byte checking is performed at this stage). Nothing is moved.
-- **COLLECT (acquisition)** — physically copy the identified files into the case's `live_acquisition` folder, organized by type.
-- **PARSE (granular)** — review identified items per type (AMCACHE, EVTX, PREFETCH, …) and parse selected files (or all) into the forensic database.
+- **Source** — a folder (subfolders included by default) or individual files picked with *Select Files*; the type filter narrows either (Registry Hives, Prefetch, Jump Lists, Event Logs, MFT, USN Journal, Recycle Bin, AmCache, ShimCache, SRUM, Browsers).
+- **SCAN (discovery)** — walk the source and index every supported artifact by **filename and extension pattern** into the case's scan index. Nothing in the source is moved or written. Types are recognised by name, not by magic bytes; with *Calculate SHA-256* on (the default) each file is read once to hash it.
+- **COLLECT (acquisition)** — copy the identified files into the case's `live_acquisition` folder: one folder per type (`Registry_Hives`, `Prefetch`, `C_AJL_Lnk`, `EVTX_Logs`, `SRUM_Data`, `MFT_USN`, …). Per-user hives, LNK files and Jump Lists keep their owner's `Users\<name>\` folder, a hive keeps its `.LOG` files beside it, and browser profiles keep their folder tree. A file already in the case (same SHA-256) is listed as *already in the case*, not as a failure. *Collect Artifacts* after a SCAN copies the scanned files exactly as a direct COLLECT would. Files that fail are named and the run says "completed with N error(s)"; *Cancel* keeps everything copied so far, indexed and ready to parse.
+- **PARSE (granular)** — review identified items per type (AMCACHE, EVTX, PREFETCH, …) and parse selected files (or all) into the forensic database. Types are parsed one after another, in the same order as a live run; the loading screen then fills the tables and the Parse Status report says what each artifact did.
+- **Parse automatically after collection** (*Settings → Parsing*, on by default) — a COLLECT is followed straight away by a parse of exactly the files it brought in, through the same parse as the button; a SCAN still stops at a ready *Parse Artifacts* button. The same setting lets the main window's *Parse Offline Artifacts* scan and parse a case's never-scanned acquisition without asking, and sets the default of Image Parsing's *Parse automatically after extraction*. Turned off, every one of them stops with the Parse button ready, so what was collected can be reviewed first.
 
 | | 🔍 SCAN | 📦 COLLECT |
 |---|---|---|
 | **Action** | Discovery — identifies artifacts at their original location | Acquisition — copies & preserves artifacts in the case folder |
-| **I/O impact** | Read-only; no files moved | Read + write; physically duplicates artifacts |
+| **I/O impact** | Read-only on the source (files are read to hash them when hashing is on); nothing moved | Read + write; physically duplicates artifacts |
 | **Organization** | Updates `.artifact_scan_index.json` metadata | Organizes files into type-specific folders |
 | **Use case** | Fast triage to see if the source has relevant data | Full forensic preservation for long-term analysis |
 
@@ -559,7 +576,7 @@ Correlate events across artifacts on a unified temporal grid, with **Heat Map**,
 The Timeline reads the case's parsed artifact databases **directly** and is **independent of the [Correlation Engine](#-correlation-engine)** — you do not need to build feathers, author wings, or run a pipeline to use it. It applies its own lightweight temporal grouping (exact-timestamp and time-window correlation, grouping by application, path, or user) to relate events on the grid. Evidence brought in through [Import Evidence](#-import-evidence-third-party-data) also appears on the timeline as the `imported` artifact type, with working time-window filtering and time bounds.
 
 ### 📊 Chart Dashboards
-Six dashboards, each opened by the **Charts** button above an artifact table — **SRUM**, **MFT / USN**, **LNK & Jump Lists**, **Prefetch**, **Shell Items** and **Browser**. Every one draws a day-by-day heat strip (one cell is always one day, so a quiet stretch shows as one), six months at a time with a whole-range overview to jump through years of activity; drills from a day to an hour to an item; and ends at the item's **full source record**. Insights carry the records behind their counts, so "7 files ran from Temp" opens those seven files. The Shell Items dashboard covers twenty registry tables — Shellbags, the MRUs, MUICache, User Shell Folders, shell extensions — and opens filtered to the table it was launched from.
+Six dashboards, each opened by the **Charts** button above an artifact table — **SRUM**, **MFT / USN**, **LNK & Jump Lists**, **Prefetch**, **User Activity** and **Browser**. Every one draws a day-by-day heat strip (one cell is always one day, so a quiet stretch shows as one), six months at a time with a whole-range overview to jump through years of activity; drills from a day to an hour to an item; and ends at the item's **full source record**. Insights carry the records behind their counts, so "7 files ran from Temp" opens those seven files. The User Activity dashboard (Shell Items & Registry) covers twenty-seven registry tables — Shellbags, the MRUs, MUICache, User Shell Folders, shell extensions, and what the user ran: UserAssist, BAM, DAM, FeatureUsage, the Compatibility Assistant, file associations and the ProgramsCache — and opens filtered to the table it was launched from. The MFT / USN dashboard puts both sources on one strip: files created and modified from the MFT (counted as files, not rows) and one row per USN reason flag, each in its own colour; every count is taken over all the case's records, and journal-only events keep their names and folders, rebuilt from the journal when the folder is gone from the MFT. Renames read as *old name → new name* (with the folder when the file moved) — in the day's list, in a file's history and as an insight — and every list pages through all its records, down to an *all records* list across every day. A search accepts a path as Windows writes it (`C:\Users\…`).
 
 ### 🔎 Search & Export
 Full-text search across the case database, plus export to **CSV** (spreadsheets), **JSON** (integration with other tools), and **Detailed HTML reports** (full dossiers consolidating every artifact tied to a search term).
@@ -573,7 +590,7 @@ Translate raw technical identifiers — SIDs, MAC addresses, hashes — into hum
 
 **User Behavior Analytics (UBA)** reads the parsed artifact databases in your case's `Target_Artifacts/` folder (strictly **read-only**) and replays them through a declarative rule set to produce a clear, chronological **Activity Story**. Open it from the **"User Behavior"** toolbar button or with **`Ctrl+Shift+B`** (a case must be loaded).
 
-- 🧩 **65 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
+- 🧩 **81 declarative behavior detections** (`uba/config/behavior_rules.json`) — tunable without code — each classified by severity: **routine · notable · suspicious · critical**.
 - 🕵️ **Detects behavior that matters**: sign-in / sign-out / unlock, program launch · execution · install, file open / delete / inferred copy, USB device connection, network-share access, persistence & autostart, explicit-credential use (`runas`), account & group changes, service changes, **system-clock tampering** (suspicious), and **event-log clearing** (critical).
 - 🗺️ **Three views** — an **Activity Story** feed, an **Activity Map** heatmap (day × hour), and a **"What we can see"** honesty report that labels each detection *Working / Limited / No data / By design* for this case.
 - 🔗 **Every activity is evidence-backed.** Click any item to open the exact backing record (`database : table : rowid`) — nothing is asserted without a source.
@@ -581,7 +598,7 @@ Translate raw technical identifiers — SIDs, MAC addresses, hashes — into hum
 
 ### Detection Coverage
 
-The 65 detections span four severity classes and the full breadth of the parsed artifact set:
+The 81 detections span four severity classes and the full breadth of the parsed artifact set:
 
 | Category | Detections include |
 |---|---|
@@ -589,12 +606,13 @@ The 65 detections span four severity classes and the full breadth of the parsed 
 | **Execution** | Programs opened (UserAssist), programs run (Prefetch, expanded to per-run events), process creation (4688), program presence (ShimCache / AmCache / MUICache), application installs, application crashes (from Application Event Log 1001 records) |
 | **File activity** | File open / create / delete / copy / rename — renames show the **full name history** (`old → … → current`) reconstructed from the USN Journal, with soft-delete (`$R`/`$I`) resolution |
 | **Navigation** | Folder browsing (ShellBags), recent documents, typed locations, website visits |
+| **Browser** | Daily browsing and **web searches** (search-engine pages and what was typed into the address bar); visits to **curated site categories** — file-sharing, paste, anonymiser (Tor / `.onion`, web proxies, throwaway e-mail), cryptocurrency, remote-access & tunnels, AI chat, hacking resources (`uba/config/site_categories.json`, data not code); **inferred uploads** (a form submitted to a file-sharing or paste site); downloads graded once each — flagged, risky source (public raw IP, plain http, risky site; never `127.0.0.1`), program / script / installer (double extensions called out) — and downloads the browser opened; chat apps (Discord, Slack, Teams, Signal…); crypto-wallet extensions; tabs open at the last exit; media playback; extensions, saved logins by site category, sync, history gaps. Tokens, wallet vaults, typed form text, autofill values and saved usernames are **never read** |
 | **Devices & network** | USB device connect, device presence, network shares, network connections, per-application data transferred (SRUM) |
 | **Persistence & system** | Autostart persistence (Run keys + services, escalated when the target runs from a user-writable path), service and driver installs, service state changes, system start/shutdown, **clock changes**, **event-log clearing** |
 
 **Filters:** free-text search · user/actor (including "Unattributed" and a signed-in-session toggle) · behavior class (user / application / system) · severity · application (searchable multi-select across 200+ programs) · datetime range with quick presets (all time / first day / last day / last hour of activity).
 
-**Data sources:** Security, System and Application Event Logs · USN Journal · MFT · UserAssist · BAM · Prefetch · ShimCache · AmCache · MUICache · ShellBags · LNK / JumpLists · Recycle Bin · SRUM (application, network, connectivity) · registry hives.
+**Data sources:** Security, System and Application Event Logs · USN Journal · MFT · UserAssist · BAM · Prefetch · ShimCache · AmCache · MUICache · ShellBags · LNK / JumpLists · Recycle Bin · SRUM (application, network, connectivity) · registry hives · browser databases (Chromium, Firefox, Electron apps).
 
 ### Forensic Guarantees
 
@@ -927,6 +945,8 @@ In **CLI-agent mode**, Crow-Eye drives an **existing AI terminal/command-line ag
 4. **You get a dual output** — a direct chat answer *and* a new block in the Living Report.
 5. **Approve gated actions** — exports and other critical steps wait for your sign-off.
 
+**Setting it up.** The first time Eye opens, a short setup (also *Settings → Eye AI → Change backend*) walks through the connection type, the provider, its endpoint or executable or API key, and the model — with *Detect* and *Common models* to pick one — then tests the connection before anything is saved. An API key is written to the OS credential store only after the test passes; reopened, the setup is pre-filled and says when a key is already stored. *Settings → Eye AI* shows the connection with a *Test connection* button.
+
 You can change models at runtime with the `switch_model` tool. Switching is **restricted to the same backend**, so evidence is never silently sent to a different provider than the one you chose.
 
 ### Tracing the LLM Thinking Process
@@ -961,6 +981,7 @@ Eye is **tool-driven**: the model never touches evidence directly. It emits tool
 | `semantic_search_artifacts` | Semantic search across parsed artifacts. |
 | `get_schema` | Inspect table schemas. |
 | `query_timeline` | One chronological sweep across every database in the case — what happened, and when. |
+| `query_user_behavior` | Runs User Behavior Analytics once per case, then answers for any day, range or user — who did what, when, how sure, with the evidence rows. |
 | `query_correlation_results` | Query the Correlation Engine's output by time / identity. |
 | `read_imported_evidence` | Read third-party evidence imported into the case verbatim (reports, email, browser-tool output). |
 | `correlate_imported_evidence` | Correlate third-party evidence imported into the case against native artifacts. |

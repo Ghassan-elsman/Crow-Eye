@@ -23,7 +23,23 @@ from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5 import QtCore, QtGui
 
 from dynamic_mapping.core.intelligence_engine import IntelligenceEngine
+from dynamic_mapping.core.run_stats import LinkRun, RuleResult, log_rule
 from styles import CrowEyeStyles, Colors
+try:
+    from ui import site_theme as _site
+except Exception:                                   # pragma: no cover
+    _site = None
+
+
+def _cascade_sheet():
+    """The database > table > column picker: an input-like button, mono and
+    mixed-case (it shows table and column names, never uppercased)."""
+    if _site is None:
+        return ""
+    return ("QPushButton { background-color: #0A0C10; color: #E2E8F0; border: 1px solid #1E293B;"
+            " border-radius: 10px; padding: 8px 12px; text-align: left; font-family: '%s';"
+            " font-size: 12px; font-weight: 400; }"
+            " QPushButton:hover { border: 1px solid #6366F1; }" % _site.families()[1])
 from ui.Loading_dialog import LoadingDialog
 
 logger = logging.getLogger(__name__)
@@ -37,22 +53,8 @@ class CascadingSelectButton(QPushButton):
     def __init__(self, placeholder="Select Source...", parent=None):
         super().__init__(placeholder, parent)
         self.placeholder = placeholder
-        self.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {Colors.BG_TABLES};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 5px;
-                padding: 8px;
-                text-align: left;
-                font-family: 'Consolas';
-                font-size: 11px;
-            }}
-            QPushButton:hover {{
-                border: 1px solid {Colors.ACCENT_CYAN};
-                background-color: rgba(0, 255, 255, 0.05);
-            }}
-        """)
+        self.setStyleSheet(_cascade_sheet())
+        self.setProperty("keepStyle", True)         # mixed-case names, its own input look
         self.setCursor(Qt.PointingHandCursor)
         
         self.selected_db = None
@@ -73,16 +75,6 @@ class CascadingSelectButton(QPushButton):
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet(f"""
-            QMenu {{
-                background-color: {Colors.BG_PANELS};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            QMenu::item:selected {{
-                background-color: {Colors.ACCENT_BLUE};
-            }}
-        """)
 
         for db_name, tables in self.db_schema.items():
             db_menu = menu.addMenu(db_name)
@@ -138,7 +130,11 @@ class DynamicLinkingWindow(QDialog):
         except Exception:
             pass
         
-        self.setStyleSheet(CrowEyeStyles.DYNAMIC_LINKING_WINDOW_STYLE)
+        # The site look, set before the widgets exist (ui/site_theme.py)
+        if _site is not None:
+            _site.begin_site_theme(self)
+        else:
+            self.setStyleSheet(CrowEyeStyles.DYNAMIC_LINKING_WINDOW_STYLE)
         
         self.db_schema_cache = {}
         
@@ -147,7 +143,28 @@ class DynamicLinkingWindow(QDialog):
             logger.error("Failed to initialize intelligence database.")
             
         self._init_ui()
+        self._apply_site_look()
         self._load_schema_and_data()
+
+    def _apply_site_look(self):
+        """Roles for what the inline sheets said; the buttons in the role family:
+        Run is the main action, Delete the destructive one, the rest everyday."""
+        if _site is None:
+            return
+        for w in (self.rules_display, self.ingest_log):
+            w.setStyleSheet(_site.log_view_sheet())
+            _site.keep_style(w)
+        for frame in (self.gathering_box, self.ingestion_box, self.mapping_box):
+            frame.setStyleSheet("")
+            _site.set_card(frame)
+        _site.apply_site_theme(self)
+        _site.set_role(self._title_label, "title")
+        for lab in self._section_titles:
+            _site.set_role(lab, "section")
+        _site.set_variant(self._run_btn, "primary")
+        _site.set_variant(self._del_btn, "danger")
+        for b in self._ghost_btns:
+            _site.set_variant(b, "ghost")
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -158,6 +175,9 @@ class DynamicLinkingWindow(QDialog):
         header = QHBoxLayout()
         title = QLabel("DYNAMIC LINKING INTELLIGENCE")
         title.setStyleSheet(f"font-size: 22px; font-weight: 900; color: {Colors.ACCENT_CYAN}; letter-spacing: 3px;")
+        self._title_label = title
+        self._section_titles = []
+        self._ghost_btns = []
         header.addWidget(title)
         header.addStretch()
         self.stats_label = QLabel("Total Mappings: 0")
@@ -201,6 +221,7 @@ class DynamicLinkingWindow(QDialog):
         run_btn.setFixedWidth(280)
         run_btn.setFixedHeight(50)
         run_btn.setStyleSheet(CrowEyeStyles.SUCCESS_BUTTON)
+        self._run_btn = run_btn
         run_btn.clicked.connect(self._run_final_linking)
         footer.addSpacing(30)
         footer.addWidget(run_btn)
@@ -219,6 +240,7 @@ class DynamicLinkingWindow(QDialog):
         layout.setSpacing(15)
 
         title = QLabel("1. INTELLIGENCE GATHERING")
+        self._section_titles.append(title)
         title.setStyleSheet(f"font-weight: 800; color: {Colors.ACCENT_CYAN}; font-size: 15px; border: none;")
         layout.addWidget(title)
 
@@ -274,7 +296,9 @@ class DynamicLinkingWindow(QDialog):
         self.gather_btn = QPushButton("LINK GATHERING")
         self.gather_btn.setStyleSheet(CrowEyeStyles.DYNAMIC_LINK_BUTTON)
         self.gather_btn.setFixedHeight(40)
-        self.gather_btn.clicked.connect(self._run_link_gathering)
+        # Not connected directly: clicked(bool) handed False to show_stats, so
+        # a LINK GATHERING click never showed its statistics.
+        self.gather_btn.clicked.connect(lambda _checked=False: self._run_link_gathering())
         btn_row.addWidget(self.gather_btn)
 
         layout.addLayout(btn_row)
@@ -292,6 +316,7 @@ class DynamicLinkingWindow(QDialog):
         layout = QVBoxLayout(frame)
 
         title = QLabel("2. BULK IOC INGESTION")
+        self._section_titles.append(title)
         title.setStyleSheet(f"font-weight: 800; color: {Colors.ACCENT_CYAN}; font-size: 15px;")
         layout.addWidget(title)
 
@@ -310,6 +335,7 @@ class DynamicLinkingWindow(QDialog):
 
         browse_btn = QPushButton("BROWSE FILES")
         browse_btn.setStyleSheet(CrowEyeStyles.ORANGE_BUTTON)
+        self._ghost_btns.append(browse_btn)
         browse_btn.clicked.connect(self._browse_ioc)
         browse_row.addWidget(browse_btn)
         layout.addLayout(browse_row)
@@ -327,6 +353,7 @@ class DynamicLinkingWindow(QDialog):
         layout = QVBoxLayout(frame)
 
         title = QLabel("3. LIVE INTELLIGENCE REGISTRY")
+        self._section_titles.append(title)
         title.setStyleSheet(f"font-weight: 800; color: {Colors.ACCENT_CYAN}; font-size: 15px;")
         layout.addWidget(title)
 
@@ -339,6 +366,7 @@ class DynamicLinkingWindow(QDialog):
         
         refresh_btn = QPushButton("REFRESH")
         refresh_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        self._ghost_btns.append(refresh_btn)
         refresh_btn.clicked.connect(self._load_mappings_into_table)
         search_row.addWidget(refresh_btn)
         layout.addLayout(search_row)
@@ -356,13 +384,23 @@ class DynamicLinkingWindow(QDialog):
         act_row = QHBoxLayout()
         del_btn = QPushButton("DELETE SELECTION")
         del_btn.setStyleSheet(CrowEyeStyles.RED_BUTTON)
+        self._del_btn = del_btn
         del_btn.clicked.connect(self._delete_mappings)
         act_row.addWidget(del_btn)
 
         export_btn = QPushButton("EXPORT CASE INTEL")
         export_btn.setStyleSheet(CrowEyeStyles.EXPORT_BUTTON)
+        self._ghost_btns.append(export_btn)
         export_btn.clicked.connect(self._export_case_intel)
         act_row.addWidget(export_btn)
+
+        stats_btn = QPushButton("STATISTICS OF LAST RUN")
+        stats_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        self._ghost_btns.append(stats_btn)
+        stats_btn.setToolTip("What the last Link Gathering linked, rule by rule, and where "
+                             "each link came from.")
+        stats_btn.clicked.connect(self._show_last_run_stats)
+        act_row.addWidget(stats_btn)
         layout.addLayout(act_row)
 
         return frame
@@ -407,8 +445,31 @@ class DynamicLinkingWindow(QDialog):
         # 3. Initial Table Load
         self._load_mappings_into_table()
 
-    def _run_link_gathering(self):
-        """Execute intelligence gathering with a properly-managed loading dialog."""
+    def _show_last_run_stats(self):
+        """Reopen the statistics of the latest run, rebuilt from GatherHistory."""
+        run = getattr(self, "link_run", None) or self.engine.load_run()
+        if run is None:
+            QMessageBox.information(self, "Dynamic Linking Statistics",
+                                    "No Link Gathering has been run in this case yet.")
+            return
+        self._show_stats(run)
+
+    def _show_stats(self, run):
+        try:
+            from dynamic_mapping.gui.link_stats_dialog import LinkStatsDialog
+            LinkStatsDialog(run, case_directory=self.case_directory, parent=self).exec_()
+        except Exception as e:
+            logging.getLogger(__name__).error("Statistics dialog failed: %s", e, exc_info=True)
+
+    def _run_link_gathering(self, show_stats=True, kind="gather"):
+        """Execute intelligence gathering with a properly-managed loading dialog.
+
+        Every rule's result goes into one LinkRun (run_stats): the statistics
+        dialog shown at the end, the GatherHistory rows and dynamic_linking.log
+        all come from it. ``show_stats`` is False when Run Dynamic Linking
+        gathers on its way: the main window shows the statistics once the
+        tables are linked, with the per-table counts added.
+        """
         from ui.Loading_dialog import LoadingDialog
         from dynamic_mapping.rules.default_rules import DEFAULT_RULES
         from PyQt5.QtWidgets import QApplication
@@ -434,6 +495,17 @@ class DynamicLinkingWindow(QDialog):
             )
 
         loading = LoadingDialog("Gathering Intelligence", self)
+        run = LinkRun(kind=kind)
+        self.link_run = run
+        # Crow_Intelligence.db's SHA-256 before and after this run, in the
+        # case's custody ledger.
+        try:
+            from utils import custody as _custody
+            _db_change = _custody.database_change(
+                getattr(self.engine, "intelligence_db_path", None), "dynamic linking", kind=kind)
+            _db_change.__enter__()
+        except Exception:
+            _db_change = None
 
         # Build steps dynamically to ensure the progress bar updates accurately for each rule
         steps = ["Initializing Engine..."]
@@ -489,11 +561,10 @@ class DynamicLinkingWindow(QDialog):
             # custom_rules=False: run only this default rule. Custom rules are run
             # ONCE after the loop (below) instead of being re-executed on every
             # default-rule iteration.
-            res = self.engine.gather_intelligence([rule_name], custom_rules=False)
+            res = self.engine.gather_intelligence([rule_name], custom_rules=False, run=run)
             found_for_rule = sum(res.values())
             total_found += found_for_rule
-            if found_for_rule > 0:
-                loading.add_log_message(f"[Success] Found {found_for_rule} mappings for {rule_name}")
+            self._report_rule(loading, run.rules[-1] if run.rules else None)
             QApplication.processEvents()
 
         # Custom rules: execute exactly once, after all default rules.
@@ -503,23 +574,40 @@ class DynamicLinkingWindow(QDialog):
             
             loading.add_log_message("Running custom rules...")
             QApplication.processEvents()
-            custom_res = self.engine.gather_intelligence([], custom_rules=True)
+            before = len(run.rules)
+            custom_res = self.engine.gather_intelligence([], custom_rules=True, run=run)
             custom_found = sum(custom_res.values())
             total_found += custom_found
-            if custom_found > 0:
-                loading.add_log_message(f"[Success] Found {custom_found} mappings from custom rules")
+            for result in run.rules[before:]:
+                self._report_rule(loading, result)
+            if len(run.rules) == before:
+                loading.add_log_message("No custom rules are defined.")
             QApplication.processEvents()
 
         # 2. Manual Rule
         if has_manual and not loading.is_cancelled():
             loading.update_step(step_idx, "Extracting manual relationship data...")
             step_idx += 1
-            manual_count = self._process_manual_rule(loading)
+            manual_count = self._process_manual_rule(loading, run)
             total_found += manual_count
 
-        # Completion summary
-        loading.add_log_message(f"[Intelligence] Total unique mappings found: {total_found}")
-        loading.show_completion(f"SUCCESS: {total_found} forensic relationships integrated.")
+        # Completion summary: what was ADDED, not every mapping seen again.
+        run.cancelled = cancelled or loading.is_cancelled()
+        self.engine.finish_run(run)
+        t = run.totals()
+        if _db_change is not None:
+            try:
+                _db_change.fields.update(new_links=t.get("new_links"), cancelled=run.cancelled,
+                                         rules_failed=t.get("rules_failed"))
+                _db_change.__exit__(None, None, None)
+            except Exception:
+                pass
+        loading.add_log_message(
+            f"[Intelligence] {t['new_links']} new link(s): {t['inserted']} new value(s), "
+            f"{t['merged']} merged; {t['duplicate']} already known; "
+            f"{t['rules_skipped']} rule(s) skipped, {t['rules_failed']} failed")
+        loading.show_completion(f"{t['new_links']} NEW LINK(S) - {run.mappings_total} IN THE DATABASE",
+                                ok=not t["rules_failed"] and not run.cancelled)
         QApplication.processEvents()
 
         # Auto-close after 2 seconds using exec_() so the QTimer can fire.
@@ -532,10 +620,27 @@ class DynamicLinkingWindow(QDialog):
         self.ingest_log.setPlainText(
             f"SYSTEM SCAN COMPLETE\n---------------------\nFound {total_found} forensic relationships."
         )
-        print(f"[IntelligenceEngine] Scan complete. Found {total_found} relationships.")
+        logging.getLogger(__name__).info("Link Gathering finished: %d new link(s)", total_found)
         self._load_mappings_into_table()
+        if show_stats:
+            self._show_stats(run)
 
-    def _process_manual_rule(self, loading) -> int:
+    @staticmethod
+    def _report_rule(loading, result):
+        """One honest line per rule in the loading dialog."""
+        if result is None:
+            return
+        if result.status == "skipped":
+            loading.add_log_message(f"[Skipped] {result.rule}: {result.reason}")
+        elif result.status == "failed":
+            loading.add_log_message(f"[Error] {result.rule}: {result.reason}")
+        else:
+            loading.add_log_message(
+                f"[Success] {result.rule}: {result.rows_read} row(s) from "
+                f"{result.source_table or 'built-in list'} - {result.inserted} new, "
+                f"{result.merged} merged, {result.duplicate} already known")
+
+    def _process_manual_rule(self, loading, run=None) -> int:
         """Extract data for manual relationship definition."""
         val_db = self.value_selector.selected_db
         val_table = self.value_selector.selected_table
@@ -547,7 +652,12 @@ class DynamicLinkingWindow(QDialog):
         
         artifacts_dir = self.engine._find_artifacts_directory()
         if not artifacts_dir: return 0
-        
+
+        result = RuleResult("Manual relationship", "manual", category="Manual",
+                            source_db=val_db or "", source_table=val_table or "",
+                            value_column=val_col or "", key_column=key_col or "")
+        if run is not None:
+            run.add(result)
         count = 0
         try:
             if val_db == key_db and val_table == key_table:
@@ -560,19 +670,28 @@ class DynamicLinkingWindow(QDialog):
                 cursor.execute(f'SELECT "{val_col}", "{key_col}" FROM "{val_table}"')
                 rows = cursor.fetchall()
                 
+                result.rows_read = len(rows)
                 for row in rows:
                     if loading.is_cancelled(): break
                     v = row[val_col]
                     k = row[key_col]
-                    if v and k:
-                        if self.engine.add_mapping(str(v), str(k), "Manual Selection"):
-                            count += 1
+                    outcome = self.engine.upsert_mapping(str(v or ""), str(k or ""), "Manual Selection")
+                    result.count(outcome)
+                    if outcome in ("inserted", "merged"):
+                        count += 1
                 conn.close()
             else:
+                result.status = "skipped"
+                result.reason = "value and name columns are in different tables"
                 loading.add_log_message("[Warning] Cross-table manual linking not yet supported. Please select columns from the same table.")
         except Exception as e:
+            result.status, result.reason = "failed", str(e)
             loading.add_log_message(f"[Error] Manual linking failed: {str(e)}")
-            
+        log_rule(result)
+        if run is not None:
+            # Into GatherHistory like every other rule, so the run rebuilt
+            # later (Statistics button, Run Dynamic Linking) still has it.
+            self.engine._log_gather_history(result, run)
         return count
 
     def _run_final_linking(self):
@@ -580,9 +699,12 @@ class DynamicLinkingWindow(QDialog):
         mappings = self.engine.get_all_mappings()
 
         if not mappings:
-            print("[IntelligenceEngine] No existing mappings found. Starting automated discovery...")
-            # _run_link_gathering manages its own loading dialog end-to-end.
-            self._run_link_gathering()
+            logging.getLogger(__name__).info(
+                "No mappings in this case yet: gathering before linking")
+            # _run_link_gathering manages its own loading dialog end-to-end. Its
+            # statistics are shown by the main window, after the tables are
+            # linked, with the per-table counts (self.link_run).
+            self._run_link_gathering(show_stats=False, kind="link")
         else:
             # Mappings already exist — show a brief refresh confirmation.
             from ui.Loading_dialog import LoadingDialog

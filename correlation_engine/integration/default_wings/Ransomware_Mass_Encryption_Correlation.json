@@ -66,7 +66,7 @@
       "description": "100+ USN DATA_OVERWRITE / RENAME entries within 5 minutes — characteristic of ransomware encrypting files in bulk.",
       "rule_type": "threshold",
       "threshold": {
-        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME|DATA_TRUNCATION" },
+        "condition": { "feather_id": "mft_usn", "field_name": "usn_reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME|DATA_TRUNCATION" },
         "min_count": 100,
         "within_minutes": 5
       },
@@ -99,7 +99,7 @@
       "description": "A mass file-write burst together with recovery-inhibition tooling — a high-confidence ransomware pattern.",
       "rule_type": "threshold",
       "threshold": {
-        "condition": { "feather_id": "mft_usn", "field_name": "reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME" },
+        "condition": { "feather_id": "mft_usn", "field_name": "usn_reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME" },
         "min_count": 50,
         "within_minutes": 10
       },

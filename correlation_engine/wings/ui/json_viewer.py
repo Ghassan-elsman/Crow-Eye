@@ -13,6 +13,12 @@ from PyQt5.QtGui import QFont, QClipboard
 
 from correlation_engine.wings.core.wing_model import Wing
 
+# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
 
 class JsonViewerDialog(QDialog):
     """Dialog for viewing Wing JSON output"""
@@ -20,6 +26,8 @@ class JsonViewerDialog(QDialog):
     def __init__(self, wing: Wing, parent=None):
         super().__init__(parent)
         self.wing = wing
+        if _site is not None:
+            _site.begin_site_theme(self)        # before the children exist
         self.init_ui()
     
     def init_ui(self):
@@ -31,7 +39,8 @@ class JsonViewerDialog(QDialog):
         
         # Header
         header_label = QLabel("Generated Wing JSON")
-        header_label.setStyleSheet("font-size: 14px; font-weight: bold; color: #00d9ff;")
+        if _site is not None:
+            _site.set_role(header_label, "section")
         layout.addWidget(header_label)
         
         info_label = QLabel(
@@ -39,12 +48,19 @@ class JsonViewerDialog(QDialog):
             "It contains all the configuration needed to run this Wing."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #666; margin-bottom: 10px;")
+        info_label.setContentsMargins(0, 0, 0, 10)
+        if _site is not None:
+            _site.set_role(info_label, "muted")
         layout.addWidget(info_label)
         
         # JSON text area
         self.json_text = QTextEdit()
-        self.json_text.setFont(QFont("Consolas", 10))
+        if _site is not None:
+            # A mono well, as the loading dialog's log view.
+            self.json_text.setStyleSheet(_site.log_view_sheet())
+            _site.keep_style(self.json_text)
+        else:
+            self.json_text.setFont(QFont("Consolas", 10))
         self.json_text.setReadOnly(True)
         
         # Generate and display JSON
@@ -74,38 +90,17 @@ class JsonViewerDialog(QDialog):
         # Close button
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
+        if _site is not None:
+            _site.set_variant(copy_btn, "ghost")
+            _site.set_variant(save_btn, "primary")
+            _site.set_variant(close_btn, "ghost")
         button_layout.addWidget(close_btn)
         
         layout.addLayout(button_layout)
         
-        # Apply styles
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0B1220;
-                color: #FFFFFF;
-            }
-            QTextEdit {
-                background-color: #1a1f2e;
-                color: #FFFFFF;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                padding: 8px;
-            }
-            QPushButton {
-                background-color: #3B82F6;
-                color: #FFFFFF;
-                border: none;
-                border-radius: 4px;
-                padding: 8px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2563EB;
-            }
-            QPushButton:pressed {
-                background-color: #1D4ED8;
-            }
-        """)
+        # The site look (the sheet was set before the children)
+        if _site is not None:
+            _site.apply_site_theme(self)
     
     def copy_to_clipboard(self):
         """Copy JSON to clipboard"""

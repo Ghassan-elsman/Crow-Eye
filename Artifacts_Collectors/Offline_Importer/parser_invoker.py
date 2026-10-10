@@ -32,6 +32,33 @@ class ParserResult:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     execution_time: float = 0.0  # seconds
+    # Which ScannedArtifact this result is for. Results come back grouped by
+    # type in the canonical order, not in the order the artifacts were given,
+    # so pairing them by position marked the wrong files as parsed.
+    artifact_id: Optional[str] = None
+    # No parser for this file (Unknown): neither a success nor a failure.
+    skipped: bool = False
+
+
+def pair_results(artifacts, results):
+    """[(artifact, result)] matched by artifact_id; skipped results left out.
+
+    Results without ids (an older invoker) fall back to their position.
+    """
+    by_id = {}
+    for r in results or []:
+        rid = getattr(r, "artifact_id", None)
+        if rid:
+            by_id.setdefault(rid, r)
+    if not by_id:
+        return [(a, r) for a, r in zip(artifacts, results or [])
+                if not getattr(r, "skipped", False)]
+    out = []
+    for a in artifacts:
+        r = by_id.get(getattr(a, "artifact_id", None))
+        if r is not None and not getattr(r, "skipped", False):
+            out.append((a, r))
+    return out
 
 
 class ParserInvoker:
@@ -47,26 +74,47 @@ class ParserInvoker:
         self.case_root = Path(case_root)
         self.input_dir = self.case_root / 'live_acquisition'
         self.target_artifacts_dir = self.case_root / 'Target_Artifacts'
+        # "Include browser cache": parse the HTTP / Service Worker / Gecko
+        # caches of collected browser profiles (set by the dialogs).
+        self.include_browser_cache = True
         # 'offline' or 'image' - only labels the parse-status record; callers
         # driving a forensic image set it (ImageParsingDialog).
         self.mode = 'offline'
+        # Set by the image window so ONE Parse Status Report covers the whole
+        # session: problems found before parsing (BitLocker, wrong partition,
+        # ...), artifacts found in the image but not extracted
+        # {collector type: [reason, ...]}, and what was read (image, partitions).
+        self.session_issues = []
+        self.collection_failures = {}
+        self.run_source = {}
+        # The artifact types the investigator chose to extract (collector type
+        # names), or None for all: the rest are "not selected", not "not on
+        # this evidence".
+        self.extraction_scope = None
+        # Optional callable(event dict) for the parsing dialog's checklist:
+        # start / file / now / records / warning / line / done per parser
+        # (utils.parse_logging.ArtifactRun.emit).
+        self.artifact_progress = None
 
     def _record_parse_status(self, results: List[ParserResult], artifacts: List,
-                             started: float) -> None:
+                             started: float, cancelled: bool = False,
+                             crashed: Optional[BaseException] = None) -> None:
         """One parse-status outcome per artifact type in this batch.
 
         Results arrive one per FILE (directory parsers fan the type result out
         across its files), so they are folded back per type: any success with
         failures is PARTIAL, all failures classify by their error text. Types
         the scan index never found are recorded as SOURCE_NOT_FOUND so their
-        empty tables explain themselves; Browser has no offline parser yet and
-        is recorded as NOT_RUN rather than left silently absent.
+        empty tables explain themselves.
         Best-effort: a status record must never fail a parse.
         """
         try:
-            from utils.parse_status import (ARTIFACT_ORDER, ParseStatus, ParserResultLike,
-                                            artifact_db_records, canonical_artifact,
-                                            classify_result, probe_sources, record_outcomes)
+            from utils.parse_status import (ARTIFACT_ORDER, NOT_A_FAILURE, ArtifactOutcome,
+                                            ParseStatus, ParserResultLike, artifact_db_records,
+                                            artifact_db_rowcount,
+                                            artifact_label, canonical_artifact, classify_error_text,
+                                            classify_result, make_issue, prefetch_failed_files,
+                                            probe_sources, record_outcomes, version_problems)
         except Exception as e:
             logger.warning(f"Parse status unavailable: {e}")
             return
@@ -108,32 +156,136 @@ class ParserInvoker:
                     records_parsed=sum(r.records_parsed for r in type_results),
                     errors=errors, warnings=warnings,
                     status=ParseStatus.PARTIAL if ok and bad else None)
-                probe = probe_sources(artifact, self.mode,
+                probe = probe_sources(artifact, self.mode, case_root=case_root,
                                       scanned_paths=paths_by_type.get(type_name, []))
                 details = []
                 if bad and ok:
                     details.append("%d of %d input file(s) failed" % (len(bad), len(type_results)))
+                # Prefetch skips files it cannot read (unknown version, bad
+                # signature) one by one and still reports success - the list
+                # it leaves is the only record of them.
+                skipped = prefetch_failed_files(case_root, since=started) if artifact == "prefetch" else []
+                details.extend(skipped)
+                db_count = artifact_db_records(case_root, artifact, since=started)
+                if skipped and not db_count and not folded.records_parsed and not errors:
+                    folded.errors = ["%d prefetch file(s) use a version or format the parser "
+                                     "does not support, or are corrupt" % len(skipped)]
+                    folded.status = ParseStatus.UNSUPPORTED_FORMAT
+                rows_before = (getattr(self, "_rows_before", None) or {}).get(artifact)
                 outcome = classify_result(
                     artifact, folded, probe=probe, mode=self.mode,
-                    db_records=artifact_db_records(case_root, artifact, since=started),
-                    details=details)
+                    db_records=db_count, details=details, rows_before=rows_before,
+                    rows_after=artifact_db_rowcount(case_root, artifact) if rows_before is not None else None)
                 if outcome.status == ParseStatus.PARTIAL and not outcome.message:
                     outcome.message = errors[0] if errors else "Some input files failed."
                 outcomes.append(outcome)
 
             done = {o.artifact for o in outcomes}
+
+            # Found in the image but never extracted: that is a failure, not
+            # "not on this evidence" - the scan index only holds what copied.
+            failures = {}
+            for type_name, reasons in (self.collection_failures or {}).items():
+                art = canonical_artifact(type_name)
+                if art:
+                    failures.setdefault(art, []).extend(r for r in reasons if r)
+
+            # Selected for this run but never reached: cancelled, or the run stopped.
+            selected = {canonical_artifact(t) for t in paths_by_type} - {None}
+            for artifact in sorted(selected - done, key=lambda a: ARTIFACT_ORDER.index(a)
+                                   if a in ARTIFACT_ORDER else 99):
+                why = ("Cancelled before this artifact was parsed." if cancelled else
+                       "Parsing stopped before this artifact: %s: %s" % (type(crashed).__name__, crashed)
+                       if crashed else "Not parsed in this run.")
+                outcomes.append(ArtifactOutcome(artifact, self.mode, ParseStatus.NOT_RUN, 0, why))
+                done.add(artifact)
+
+            for artifact, reasons in failures.items():
+                if artifact in done:
+                    for o in outcomes:
+                        if o.artifact == artifact:
+                            o.details.append("%d file(s) found in the evidence could not be "
+                                             "extracted - first reason: %s" % (len(reasons), reasons[0]))
+                    continue
+                status = classify_error_text(reasons[0])
+                if status in NOT_A_FAILURE:
+                    status = ParseStatus.FAILED
+                outcomes.append(ArtifactOutcome(
+                    artifact, self.mode, status, 0,
+                    "Found in the evidence but could not be extracted: %s" % reasons[0],
+                    details=["Not extracted: %s" % r for r in reasons[1:10]]))
+                done.add(artifact)
+
+            # The MFT-USN correlation runs inside the MFT / USN parsers.
+            if "mft_usn_correlation" not in done and ({"mft", "usn"} & done):
+                if {"mft", "usn"} <= done:
+                    corr = artifact_db_records(case_root, "mft_usn_correlation", since=started)
+                    outcomes.append(classify_result("mft_usn_correlation", None, probe={},
+                                                    mode=self.mode, db_records=corr))
+                else:
+                    have = "the $MFT" if "mft" in done else "the USN journal"
+                    outcomes.append(ArtifactOutcome(
+                        "mft_usn_correlation", self.mode, ParseStatus.NOT_RUN, 0,
+                        "The correlation needs both the $MFT and the USN journal; only %s "
+                        "was parsed in this run." % have))
+                done.add("mft_usn_correlation")
+
+            scope = None
+            if self.extraction_scope:
+                scope = {canonical_artifact(t) for t in self.extraction_scope} - {None}
             for artifact in ARTIFACT_ORDER:
                 if artifact in done or artifact == 'mft_usn_correlation':
                     continue
-                if artifact == 'browser':
-                    probe = probe_sources('browser', self.mode)
-                    outcomes.append(classify_result('browser', None, probe=probe, mode=self.mode))
-                elif artifact not in indexed:
-                    probe = probe_sources(artifact, self.mode, scanned_paths=[])
+                if scope is not None and artifact not in scope:
+                    outcomes.append(ArtifactOutcome(
+                        artifact, self.mode, ParseStatus.NOT_RUN, 0,
+                        "Not selected for extraction in this run."))
+                    continue
+                if artifact not in indexed:
+                    probe = probe_sources(artifact, self.mode, case_root=case_root, scanned_paths=[])
                     outcomes.append(classify_result(artifact, None, probe=probe, mode=self.mode))
-            record_outcomes(case_root, outcomes, self.mode, show=True)
+
+            issues = list(self.session_issues or [])
+            if crashed is not None:
+                issues.append(make_issue("parsing_failed", "%s: %s" % (type(crashed).__name__, crashed)))
+            issues.extend(self._foreign_log_issues())
+            unsupported = [o for o in outcomes if o.status == ParseStatus.UNSUPPORTED_FORMAT]
+            for o in unsupported:
+                texts = version_problems([o.message] + list(o.details)) or [o.message]
+                issues.append(make_issue("unsupported_artifact_version", texts[0],
+                                         artifact=artifact_label(o.artifact)))
+            record_outcomes(case_root, outcomes, self.mode, show=True, issues=issues,
+                            source=self.run_source or None)
+            self._last_outcomes = outcomes
         except Exception as e:
             logger.warning(f"Could not record parse status: {e}", exc_info=True)
+    @staticmethod
+    def _foreign_log_issues():
+        """One issue per hive whose own-named log belonged to another hive.
+
+        Old flat cases are left out: their logs were renamed by the
+        collector, matched by content, and a mismatch there is expected.
+        """
+        try:
+            from utils.parse_status import make_issue
+            try:
+                from Artifacts_Collectors import registry_transaction_log as rtl
+            except ImportError:
+                import registry_transaction_log as rtl
+        except ImportError:
+            return []
+        issues = []
+        for res in rtl.recovery_results():
+            if res.flat_layout or not res.foreign_logs:
+                continue
+            path, why = res.foreign_logs[0]
+            issue = make_issue("foreign_transaction_log",
+                               "%s: %s (%s)" % (res.hive_path, os.path.basename(path), why),
+                               hive=res.hive_path)
+            if issue is not None:
+                issues.append(issue)
+        return issues
+
     def _validate_path_in_case(self, path: str) -> tuple[bool, str]:
         """
         Validate that path is within case directory.
@@ -509,6 +661,32 @@ class ParserInvoker:
         return detected_hives
     
     def invoke_parser(self, artifact_type: str, **kwargs) -> ParserResult:
+        """Run one parser inside utils.parse_logging.artifact_run.
+
+        The frame logs the start and the result under
+        Artifacts_Collectors.run.<artifact>, copies what the parser prints into
+        that logger (most parsers only print), and feeds the parsing dialog's
+        checklist through ``self.artifact_progress``.
+        """
+        try:
+            from utils.parse_logging import artifact_run
+            from utils.parse_status import artifact_label, canonical_artifact
+        except Exception:
+            return self._invoke_parser(artifact_type, **kwargs)
+        key = canonical_artifact(artifact_type) or str(artifact_type).lower()
+        source = kwargs.get('artifact_path') or kwargs.get('artifact_dir') or str(self.input_dir)
+        with artifact_run(key, artifact_label(key), source=source, mode=self.mode,
+                          progress=self.artifact_progress) as run:
+            result = self._invoke_parser(artifact_type, **kwargs)
+            run.set_records(getattr(result, 'records_parsed', None))
+            for warning in (getattr(result, 'warnings', None) or [])[:20]:
+                run.warn(str(warning))
+            if result is not None and not getattr(result, 'success', True):
+                errors = getattr(result, 'errors', None) or []
+                run.logger.error("parser reported failure: %s", "; ".join(str(e) for e in errors[:3]))
+            return result
+
+    def _invoke_parser(self, artifact_type: str, **kwargs) -> ParserResult:
         """
         Invoke appropriate parser for artifact type with path validation.
         
@@ -601,6 +779,9 @@ class ParserInvoker:
             elif artifact_type == 'SRUM':
                 logger.info(f"[PARSER ROUTING] → Invoking SRUM parser")
                 return self._invoke_srum_parser(start_time, **kwargs)
+            elif artifact_type == 'Browser':
+                logger.info(f"[PARSER ROUTING] → Invoking Browser parser")
+                return self._invoke_browser_parser(start_time, **kwargs)
             else:
                 logger.error(f"[PARSER ROUTING] → Unknown artifact type: {artifact_type}")
                 return ParserResult(
@@ -811,7 +992,9 @@ class ParserInvoker:
             
             result = run_offline_acjl(
                 case_path=self.case_root,
-                direct_parse=False
+                direct_parse=False,
+                # the batch's own folder, else the importer's / Crow-Claw's name
+                folder=self._input_folder(kwargs, 'C_AJL_Lnk', 'link_jumplist'),
                 # Removed: registry_hive_paths parameter (parser doesn't accept it)
             )
             
@@ -821,10 +1004,20 @@ class ParserInvoker:
                 result = {'success': False, 'records': 0, 'error': f'Parser returned invalid format: {type(result).__name__}'}
             
             output_path = os.path.join(self.target_artifacts_dir, 'LnkDB.db')
-            
+
+            # Files were given and the parser found none where it looked: that
+            # is not a success (it said "1185/1185 success" having read the
+            # wrong folder). Zero NEW records on a re-parse is still a success.
+            success = result.get('success', True)
+            if success and kwargs.get('file_count') and result.get('files') == 0:
+                success = False
+                result['error'] = result.get('error') or (
+                    "No LNK / Jump List file found in %s (%d file(s) were imported)"
+                    % (result.get('folder'), kwargs.get('file_count')))
+
             # Create initial ParserResult
             parser_result = ParserResult(
-                success=result.get('success', True),
+                success=success,
                 artifact_type='link_jumplist',
                 records_parsed=result.get('records', 0),
                 output_path=output_path,
@@ -909,6 +1102,45 @@ class ParserInvoker:
             
             return ParserResult(success=False, artifact_type='RecycleBin', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
 
+    def _invoke_browser_parser(self, start_time: float, **kwargs) -> ParserResult:
+        """Invoke the browser parser using offline_BrowserClaw.
+
+        One call parses every collected browser tree in the case
+        (live_acquisition/Browser/<source>/Users/...), whichever scan-index
+        entry triggered it.
+        """
+        try:
+            from Artifacts_Collectors.offline_parsers.offline_BrowserClaw import run_offline_browser
+
+            result = run_offline_browser(
+                case_path=str(self.case_root),
+                artifact_dir=kwargs.get('artifact_dir'),
+                include_cache=self.include_browser_cache,
+            )
+            if not isinstance(result, dict):
+                result = {'success': False, 'records': 0,
+                          'error': f'Parser returned invalid format: {type(result).__name__}'}
+
+            return ParserResult(
+                success=result.get('success', False),
+                artifact_type='Browser',
+                records_parsed=result.get('records', 0),
+                output_path=result.get('output_path') or os.path.join(self.target_artifacts_dir, 'browser_analysis.db'),
+                errors=[result.get('error')] if result.get('error') else [],
+                warnings=list(result.get('warnings') or [])[:20],
+                execution_time=time.time() - start_time
+            )
+        except Exception as e:
+            import traceback
+            error_type = type(e).__name__
+            artifact_path = kwargs.get('artifact_path', 'unknown')
+            logger.error(f"Browser parser failed - Type: {error_type}, Path: {artifact_path}")
+            logger.error(f"Error message: {e}")
+            logger.error(f"Stack trace:\n{traceback.format_exc()}")
+            sanitized_error = self._sanitize_dependency_error(str(e), error_type, str(artifact_path))
+            return ParserResult(success=False, artifact_type='Browser', records_parsed=0, output_path="",
+                                errors=[sanitized_error], execution_time=time.time() - start_time)
+
     def _invoke_shimcache_parser(self, start_time: float, **kwargs) -> ParserResult:
         """Invoke ShimCache parser using offline_ShimCacheClaw."""
         try:
@@ -957,10 +1189,13 @@ class ParserInvoker:
             
             result = run_offline_mft(
                 case_path=self.case_root,
-                mft_file_path=mft_file_path
+                mft_file_path=mft_file_path,
+                correlate=False,          # once per batch, after MFT and USN (below)
             )
-            
-            output_path = os.path.join(self.target_artifacts_dir, 'MFT_USN', 'MFT_data.db')
+
+            # Where it actually wrote: MFT_USN/MFT_data.db is a path nothing creates.
+            output_path = result.get('output_path') or os.path.join(
+                self.target_artifacts_dir, 'mft_claw_analysis.db')
             
             return ParserResult(
                 success=result.get('success', False),
@@ -1001,10 +1236,12 @@ class ParserInvoker:
             
             result = run_offline_usn(
                 case_path=self.case_root,
-                usn_file_path=usn_file_path
+                usn_file_path=usn_file_path,
+                correlate=False,          # once per batch (below)
             )
-            
-            output_path = os.path.join(self.target_artifacts_dir, 'MFT_USN', 'USN_journal.db')
+
+            output_path = result.get('output_path') or os.path.join(
+                self.target_artifacts_dir, 'USN_journal.db')
             
             return ParserResult(
                 success=result.get('success', False),
@@ -1035,16 +1272,27 @@ class ParserInvoker:
             
             return ParserResult(success=False, artifact_type='USN', records_parsed=0, output_path="", errors=[sanitized_error], execution_time=time.time() - start_time)
 
+    def _input_folder(self, kwargs, *names):
+        """Where a directory parser's files are: the batch's own folder (the
+        common root of the files being parsed), then each known folder name
+        under live_acquisition - the Offline Importer's and Crow-Claw's."""
+        for candidate in [kwargs.get('artifact_root'), kwargs.get('artifact_dir')] + \
+                [os.path.join(self.input_dir, n) for n in names]:
+            if candidate and os.path.isdir(candidate):
+                return str(candidate)
+        return None
+
     def _invoke_evtx_parser(self, start_time: float, **kwargs) -> ParserResult:
         """Invoke EVTX (Windows Event Log) parser using offline_WinLog_Claw."""
         try:
             from Artifacts_Collectors.offline_parsers.offline_WinLog_Claw import main as run_offline_winlog
             
-            # EVTX parser expects evtx_dir and case_path
-            evtx_dir = os.path.join(self.input_dir, 'EVTX_Logs')
-            
-            # Check if EVTX_Logs directory exists
-            if not os.path.exists(evtx_dir):
+            # EVTX parser expects evtx_dir and case_path. Crow-Claw writes
+            # live_acquisition\EVTX; the importer's own name is EVTX_Logs.
+            evtx_dir = self._input_folder(kwargs, 'EVTX_Logs', 'EVTX')
+
+            # Check if the event logs directory exists
+            if not evtx_dir:
                 return ParserResult(
                     success=False,
                     artifact_type='EVTX',
@@ -1104,11 +1352,21 @@ class ParserInvoker:
         try:
             from Artifacts_Collectors.offline_parsers.offline_SRUM_Claw import main as run_offline_srum
             
-            # SRUM parser expects srudb_path and case_path
-            srudb_path = os.path.join(self.input_dir, 'SRUM_Data', 'SRUDB.dat')
-            
+            # SRUM parser expects srudb_path and case_path. Crow-Claw writes
+            # live_acquisition\SRUM\SRUDB.dat; the importer's name is SRUM_Data.
+            srudb_path = None
+            given = kwargs.get('artifact_path')
+            if given and os.path.basename(str(given)).lower() == 'srudb.dat' and os.path.isfile(given):
+                srudb_path = str(given)
+            for folder in (kwargs.get('artifact_root'), kwargs.get('artifact_dir'),
+                           os.path.join(self.input_dir, 'SRUM_Data'), os.path.join(self.input_dir, 'SRUM')):
+                if srudb_path:
+                    break
+                if folder and os.path.isfile(os.path.join(folder, 'SRUDB.dat')):
+                    srudb_path = os.path.join(folder, 'SRUDB.dat')
+
             # Check if SRUDB.dat exists
-            if not os.path.exists(srudb_path):
+            if not srudb_path:
                 return ParserResult(
                     success=False,
                     artifact_type='SRUM',
@@ -1252,6 +1510,114 @@ class ParserInvoker:
                              cancellation_check: Optional[Callable] = None,
                              error_log_path: Optional[str] = None,
                              heartbeat_callback: Optional[Callable] = None) -> List[ParserResult]:
+        """Parse a batch; whatever happens, record one parse-status run for it.
+
+        A crash part-way used to leave no record at all, so the report never
+        said which artifacts had been parsed and which never ran.
+        """
+        import time as _time
+        self._batch_results = []
+        self._batch_cancelled = False
+        started = _time.time()
+        rec = self._custody_begin(artifacts)
+        # Each artifact's database total before the batch: with the total
+        # after, the report says what this parse added and what was already
+        # in the case.
+        self._rows_before = {}
+        try:
+            from utils.parse_status import artifact_db_rowcount, canonical_artifact
+            for a in artifacts or []:
+                canon = canonical_artifact(getattr(a, "artifact_type", "") or "")
+                if canon and canon not in self._rows_before:
+                    self._rows_before[canon] = artifact_db_rowcount(str(self.case_root), canon) or 0
+        except Exception as e:
+            logger.debug("row counts before the batch not taken: %s", e)
+        status = "failed"
+        try:
+            results = self._parse_artifacts_batch(artifacts, progress_callback, cancellation_check,
+                                                  error_log_path, heartbeat_callback)
+            status = "cancelled" if self._batch_cancelled else "completed"
+            return results
+        except Exception as exc:
+            logger.error("Batch parsing stopped: %s", exc, exc_info=True)
+            self._record_parse_status(self._batch_results, artifacts, started, crashed=exc)
+            if rec is not None:
+                rec.add_failure("batch", "%s: %s" % (type(exc).__name__, exc), method="parse")
+            raise
+        finally:
+            self._custody_end(rec, status, started)
+
+    # -- chain of custody --------------------------------------------------
+    def _custody_begin(self, artifacts):
+        """The offline parse's own custody record: every input file (size,
+        times, SHA-256) recorded BEFORE it is read. Never raises."""
+        try:
+            from utils import custody
+            rec = custody.begin(str(self.case_root), "offline parse",
+                                options={"artifacts": len(artifacts or [])},
+                                output_dir=str(self.target_artifacts_dir))
+        except Exception as e:
+            logger.warning("Custody record not started: %s", e)
+            return None
+        for a in artifacts or []:
+            path = getattr(a, "current_path", None) or getattr(a, "original_path", None)
+            if not path:
+                continue
+            try:
+                times = custody.file_times(path)
+                big = (times.get("size") or 0) > 512 * 1024 ** 2
+                known = getattr(a, "file_hash", None) or None
+                rec.add_source(path, method="in-place read", times=times,
+                               source_sha256=known, hash_source=not big and not known,
+                               note="; ".join(x for x in (
+                                   getattr(a, "artifact_type", None),
+                                   "not hashed: larger than 512 MB" if big and not known else None,
+                                   ("from %s" % a.original_path)
+                                   if getattr(a, "original_path", None) not in (None, path) else None)
+                                   if x))
+            except Exception as e:
+                rec.add_failure(path, "not recorded: %s" % e, method="inventory")
+        return rec
+
+    def _custody_end(self, rec, status, started):
+        if rec is None:
+            return
+        try:
+            for r in self._batch_results or []:
+                if not getattr(r, "success", False) and not getattr(r, "skipped", False):
+                    rec.add_failure(r.artifact_type, "; ".join(r.errors or [])[:2000] or "failed",
+                                    method="parse", artifact_id=getattr(r, "artifact_id", None))
+            # Each artifact's outcome with what it added and what was already
+            # in the case.
+            for o in getattr(self, "_last_outcomes", None) or []:
+                item = {"artifact": o.artifact, "status": o.status, "records": o.records,
+                        "inserted": o.inserted, "duplicates": o.duplicates,
+                        "rows_before": o.rows_before, "rows_after": o.rows_after,
+                        "message": o.message, "error": o.error,
+                        "indexes_created": list(getattr(o, "indexes_created", None) or []) or None}
+                with rec._lock:
+                    rec.data.setdefault("artifacts", []).append(
+                        {k: v for k, v in item.items() if v not in (None, "")})
+            rec.record_outputs(since=started)
+        except Exception as e:
+            rec.warn("Outputs not recorded: %s" % e)
+        try:
+            from utils import custody
+            custody.end(status, rec=rec)
+        except Exception as e:
+            logger.warning("Custody record not written: %s", e)
+
+    @staticmethod
+    def _tag(result, artifact):
+        """Stamp a result with the artifact it belongs to (see pair_results)."""
+        result.artifact_id = getattr(artifact, "artifact_id", None)
+        return result
+
+    def _parse_artifacts_batch(self, artifacts: List,
+                               progress_callback: Optional[Callable] = None,
+                               cancellation_check: Optional[Callable] = None,
+                               error_log_path: Optional[str] = None,
+                               heartbeat_callback: Optional[Callable] = None) -> List[ParserResult]:
         """
         Parse multiple artifacts with progress tracking.
 
@@ -1266,7 +1632,7 @@ class ParserInvoker:
         Returns:
             List of ParserResult objects for each artifact (may be partial if cancelled)
         """
-        results = []
+        results = self._batch_results      # the same list, so a crash still sees it
         total = len(artifacts)
 
         # Track last heartbeat time for emitting heartbeat signals
@@ -1294,6 +1660,7 @@ class ParserInvoker:
             'AmCache',
             'RecycleBin',
             'SRUM',
+            'Browser',
             'MFT',
             'USN'
         ]
@@ -1316,8 +1683,13 @@ class ParserInvoker:
         # Process each artifact type in the specified order
         processed_count = 0
         for artifact_type in ordered_types:
-            # Skip unknown artifact types silently - they are files we collected but have no parser for
+            # Unknown: files collected that no parser reads - said so, per file,
+            # as skipped (not failed), instead of vanishing from the results.
             if artifact_type == 'Unknown':
+                for artifact in artifacts_by_type[artifact_type]:
+                    results.append(self._tag(ParserResult(
+                        success=False, artifact_type='Unknown', records_parsed=0, output_path="",
+                        warnings=["No parser for this file type"], skipped=True), artifact))
                 processed_count += len(artifacts_by_type[artifact_type])
                 continue
 
@@ -1325,6 +1697,7 @@ class ParserInvoker:
             
             # Check for cancellation
             if cancellation_check and cancellation_check():
+                self._batch_cancelled = True
                 logger.info(f"Parsing cancelled after {processed_count} artifacts")
                 # Emit heartbeat during cancellation to keep animation smooth
                 emit_heartbeat_if_needed()
@@ -1334,13 +1707,21 @@ class ParserInvoker:
             
             # Determine if this is a directory-based parser (scans entire directory)
             # or file-based parser (processes individual files)
-            is_directory_parser = artifact_type in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin']
+            is_directory_parser = artifact_type in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin', 'Browser',
+                                                    'AmCache']
             
             if is_directory_parser:
                 # For directory-based parsers, call once with the directory containing the files
                 # Use the directory from the first artifact's current_path
                 first_artifact = type_artifacts[0]
                 artifact_dir = os.path.dirname(first_artifact.current_path)
+                # The folder that holds ALL this type's files (per-user files
+                # sit in Users\<name>\ subfolders): what a parser should read
+                try:
+                    artifact_root = os.path.commonpath(
+                        [os.path.dirname(a.current_path) for a in type_artifacts])
+                except ValueError:
+                    artifact_root = artifact_dir
                 
                 # Call progress callback
                 if progress_callback:
@@ -1354,7 +1735,9 @@ class ParserInvoker:
                     result = self.invoke_parser(
                         artifact_type=artifact_type,
                         artifact_path=first_artifact.current_path,  # Pass first file path
-                        artifact_dir=artifact_dir  # Pass directory for scanning
+                        artifact_dir=artifact_dir,  # Pass directory for scanning
+                        artifact_root=artifact_root,
+                        file_count=len(type_artifacts),
                     )
                     
                     # Emit heartbeat after parsing completes
@@ -1375,7 +1758,7 @@ class ParserInvoker:
                             warnings=result.warnings.copy() if file_success else [],
                             execution_time=result.execution_time / len(type_artifacts)
                         )
-                        results.append(artifact_result)
+                        results.append(self._tag(artifact_result, artifact))
                         processed_count += 1
                     
                     success_files = sum(file_results)
@@ -1416,7 +1799,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                     
                     # Explicit continuation: Log and continue to next artifact type
@@ -1445,7 +1828,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                     
                     # Explicit continuation: Log and continue to next artifact type
@@ -1474,7 +1857,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                     
                     # Explicit continuation: Log and continue to next artifact type
@@ -1502,7 +1885,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                     
                     # Explicit continuation: Log and continue to next artifact type
@@ -1513,6 +1896,7 @@ class ParserInvoker:
                 for artifact in type_artifacts:
                     # Check for cancellation
                     if cancellation_check and cancellation_check():
+                        self._batch_cancelled = True
                         logger.info(f"Parsing cancelled after {processed_count} artifacts")
                         # Emit heartbeat during cancellation
                         emit_heartbeat_if_needed()
@@ -1535,7 +1919,7 @@ class ParserInvoker:
                         # Emit heartbeat after parsing
                         emit_heartbeat_if_needed()
                         
-                        results.append(result)
+                        results.append(self._tag(result, artifact))
                         processed_count += 1
                         
                         # Log result
@@ -1574,7 +1958,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                         
                         # Explicit continuation: Log and continue to next artifact
@@ -1602,7 +1986,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                         
                         # Explicit continuation: Log and continue to next artifact
@@ -1630,7 +2014,7 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                         
                         # Explicit continuation: Log and continue to next artifact
@@ -1657,19 +2041,46 @@ class ParserInvoker:
                             warnings=[],
                             execution_time=0.0
                         )
-                        results.append(error_result)
+                        results.append(self._tag(error_result, artifact))
                         processed_count += 1
                         
                         # Explicit continuation: Log and continue to next artifact
                         logger.info(f"Batch execution continuing after unexpected error for {artifact.current_path}. Processed {processed_count}/{total} artifacts so far.")
                         continue  # Explicitly continue to next artifact
 
+        # MFT <-> USN correlation: once, after both. Each runner used to start
+        # its own when it found the other's database - twice a batch, the first
+        # time (MFT parses before USN) against the previous run's journal.
+        # Both, in THIS run: with only the $MFT parsed (the journal failed or
+        # was not collected) it ran anyway - 25 minutes against the previous
+        # parse's journal.
+        parsed_now = {r.artifact_type for r in results if r.success}
+        if {"MFT", "USN"} <= parsed_now \
+                and not getattr(self, "_batch_cancelled", False):
+            if progress_callback:
+                progress_callback(len(results), total, "MFT / USN correlation", "MFT")
+            try:
+                from Artifacts_Collectors.offline_parsers.offline_MFT_USN_Correlator import \
+                    run_offline_correlation
+                corr = run_offline_correlation(self.case_root, force=True)
+                if corr.get("success"):
+                    logger.info("MFT/USN correlation: %s record(s)", corr.get("records"))
+                else:
+                    logger.warning("MFT/USN correlation not run: %s", corr.get("error"))
+                    for r in results:
+                        if r.success and r.artifact_type in ("MFT", "USN"):
+                            r.warnings.append("MFT/USN correlation not run: %s" % corr.get("error"))
+                            break
+            except Exception as exc:
+                logger.error("MFT/USN correlation failed: %s", exc, exc_info=True)
+
         # Final progress callback
         if progress_callback:
             progress_callback(len(results), total, "Complete", "")
 
         # Per-artifact outcome for the Parse Status report / empty-table i buttons.
-        self._record_parse_status(results, artifacts, batch_started)
+        self._record_parse_status(results, artifacts, batch_started,
+                                  cancelled=getattr(self, "_batch_cancelled", False))
 
         return results
 

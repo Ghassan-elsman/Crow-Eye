@@ -74,4 +74,15 @@ EXTRACTORS = {
     "browser_extensions": _browser.browser_extensions,
     "browser_stored_secrets": _browser.browser_stored_secrets,
     "browser_history_gap": _browser.browser_history_gap,
+    # Round 11 - curated site categories (uba/config/site_categories.json).
+    # browser_site_visits serves seven rules, one per category; the downloads
+    # extractor above now serves five (flagged / risky / executable / plain,
+    # plus opened).
+    "browser_web_search": _browser.browser_web_search,
+    "browser_site_visits": _browser.browser_site_visits,
+    "browser_upload_inferred": _browser.browser_upload_inferred,
+    "browser_comm_apps": _browser.browser_comm_apps,
+    "browser_crypto_wallet": _browser.browser_crypto_wallet,
+    "browser_open_tabs": _browser.browser_open_tabs,
+    "browser_media_playback": _browser.browser_media_playback,
 }

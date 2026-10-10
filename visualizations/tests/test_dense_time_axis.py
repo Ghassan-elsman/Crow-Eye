@@ -172,7 +172,9 @@ class NothingChoosesAGranularityAnyMore(unittest.TestCase):
 
     def test_the_mftusn_window_slot_matches_one_day(self):
         body = _slot_body(_src("mftusn_bridge.py"), "getMftUsnWindowDetail")
-        self.assertIn("date(usn_timestamp)=?", body)
+        # One day, as a range the index can use (date(col)=? hid the column
+        # from every index): from the day to the next day, exclusive.
+        self.assertIn("usn_timestamp >= ? AND usn_timestamp < date(?, '+1 day')", body)
         self.assertNotIn("substr(usn_timestamp,1,13)", body)   # the hour branch
         self.assertNotIn("_bucket_end", body)
 

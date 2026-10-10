@@ -151,6 +151,26 @@ search and date picker stay usable while a filter change runs.
 
 Each of these looks like success, or like a different problem entirely.
 
+**A slot that runs on the GUI thread freezes the whole window, overlay included.** A QWebChannel
+slot runs where its QObject lives. Every dashboard did its SQL there, so the window went "Not
+Responding" and the loading overlay stopped mid-animation (a timeline day click: 70 s). A bridge
+derives from `visualizations/async_bridge.AsyncBridge`; the page's `call()` sends **data getters**
+(named `get*`) through `callAsync` and gets the answer on `asyncResult`, on a thread pool. So:
+- name every data slot `get*`, and **never** name a slot that creates a widget (`openEventDetailDialog`)
+  `get*` - it would run off the GUI thread;
+- answers now arrive out of order: an effect that reloads on a click or a filter uses `latest()`
+  (bridge.js), so an older answer cannot overwrite the newer view or clear its overlay;
+- `@cached_slot(name, db_paths)` under `@pyqtSlot` keeps an answer until a filter or a database
+  mtime changes; shared caches are touched under `self._cache_lock`;
+- one SQLite connection per call, as before (connections are thread-bound).
+Guarded by `visualizations/tests/test_async_bridge.py`.
+
+**A function around the column hides its index.** `date(timestamp) >= date(?)` and
+`MIN(date(col))` make SQLite read every row: one SRUM day took 8.9 s on 457k rows. Times are stored as
+`YYYY-MM-DD HH:MM:SS`, which sorts as time, so compare the raw text (`timestamp >= date(?) AND
+timestamp < date(?, '+1 day')`) and take `date(MIN(col))`. Check with `EXPLAIN QUERY PLAN`: it must say
+`SEARCH ... USING INDEX`, not `SCAN`.
+
 **A capped column flexbox crushes its rows instead of scrolling.** `.res-list` is
 `display: flex; flex-direction: column; max-height: 300px`. Its rows are flex children, so they
 shrink to fit — and a row whose own `overflow` is hidden (set for the ellipsis) has an automatic

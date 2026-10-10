@@ -14,6 +14,20 @@ from typing import List, Optional
 import os
 import glob
 
+try:
+    from Artifacts_Collectors.browser_paths import BROWSER_SKIP_DIRS, BROWSER_CACHE_DIRS, browser_dir_skipped, browser_root_excluded  # noqa: F401
+except ImportError:  # run with Artifacts_Collectors itself on sys.path
+    import sys as _sys
+    _ac = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    if _ac not in _sys.path:
+        _sys.path.insert(0, _ac)
+    from browser_paths import BROWSER_SKIP_DIRS, BROWSER_CACHE_DIRS, browser_dir_skipped, browser_root_excluded  # noqa: F401
+
+try:
+    from Artifacts_Collectors.user_artifact_paths import PER_USER_TYPES, UserFolderPlacer  # noqa: F401
+except ImportError:
+    from user_artifact_paths import PER_USER_TYPES, UserFolderPlacer  # noqa: F401
+
 
 class ArtifactType(Enum):
     """Enumeration of all collectible forensic artifact types."""
@@ -28,6 +42,7 @@ class ArtifactType(Enum):
     SRUM_DATABASE = "SRUM"
     SHIMCACHE = "ShimCache"
     PARTITION_INFO = "PartitionInfo"
+    BROWSER = "Browser"
 
 
 @dataclass
@@ -53,6 +68,13 @@ class Artifact:
     estimated_size: int = 0
     custom_paths: List[str] = field(default_factory=list)
     enabled: bool = True
+    # Keep each collected file at its path relative to the volume root instead
+    # of flattening it into one folder per type. Browser profiles need this:
+    # every profile has its own "History", and the user / browser / profile a
+    # file belongs to is encoded only in where it sits.
+    preserve_tree: bool = False
+    # Collected only when the caller asks for caches (the browser cache toggle).
+    cache_paths: List[str] = field(default_factory=list)
 
     def get_all_paths(self) -> List[str]:
         """Return all paths (default + custom) for this artifact."""
@@ -387,6 +409,56 @@ def create_shimcache_artifact() -> Artifact:
     )
 
 
+def create_browser_artifact() -> Artifact:
+    """Create Web Browsers artifact configuration (Chromium, Gecko, Electron).
+
+    Paths are the browser ROOT folders, copied with their tree preserved
+    (``preserve_tree``) so the parser can still tell users and profiles apart.
+    Patterns are generic on purpose - any Chromium ``User Data`` root, any Gecko
+    vendor root, any Electron app storage - so a browser the parser labels by
+    folder name is collected without being listed here.
+    """
+    u = r"{PARTITION}\Users\*\AppData"
+    electron_stores = ("Local Storage", "Session Storage", "IndexedDB", "Service Worker",
+                       "Local Extension Settings", "Sync Extension Settings",
+                       "Managed Extension Settings")
+    electron = []
+    for base in ("Roaming", "Local"):
+        for depth in (r"*", r"*\*"):
+            for store in electron_stores:
+                electron.append(u + "\\" + base + "\\" + depth + "\\" + store)
+    return Artifact(
+        name="Web Browsers",
+        artifact_type=ArtifactType.BROWSER,
+        default_paths=[
+            # Chromium family: every "User Data" root (Chrome, Edge, Brave, Vivaldi,
+            # Yandex, CEF hosts ...), plus Opera, whose profile IS the vendor folder.
+            u + r"\Local\*\User Data",
+            u + r"\Local\*\*\User Data",
+            u + r"\Roaming\*\User Data",
+            u + r"\Roaming\Opera Software\*",
+            # Gecko family: the vendor roots hold profiles.ini and Profiles\.
+            u + r"\Roaming\Mozilla",
+            u + r"\Roaming\librewolf",
+            u + r"\Roaming\LibreWolf",
+            u + r"\Roaming\Waterfox",
+            u + r"\Roaming\Moonchild Productions",
+        ] + electron,
+        cache_paths=[
+            # Firefox keeps its HTTP cache under AppData\Local at the mirror path.
+            u + r"\Local\Mozilla\Firefox\Profiles",
+            u + r"\Local\librewolf\Profiles",
+            u + r"\Local\LibreWolf\Profiles",
+            u + r"\Local\Waterfox\Profiles",
+            u + r"\Local\Moonchild Productions\Pale Moon\Profiles",
+        ],
+        description="Web browser and Electron app profiles (history, downloads, cookies, sessions, storage, extensions, cache) for Chromium, Firefox-family browsers and Electron apps",
+        required_admin=False,
+        estimated_size=500_000_000,  # ~500 MB per user with cache (varies widely)
+        preserve_tree=True,
+    )
+
+
 def create_partition_info_artifact() -> Artifact:
     """Create Partition Information artifact configuration."""
     return Artifact(
@@ -414,6 +486,9 @@ DEFAULT_ARTIFACTS: List[Artifact] = [
     create_recycle_bin_artifact(),
     create_mft_artifact(),
     create_usn_journal_artifact(),
+    # Last: the largest and least bounded artifact (every user's profiles,
+    # caches included) must not fill the drive before $MFT and $UsnJrnl.
+    create_browser_artifact(),
 ]
 
 

@@ -1,0 +1,2297 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows Registry Forensics: Which Keys Answer Which Question</title>
+  
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+    
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+    
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+ 
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+    
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+    
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* Intro definition card shown above the byte map */
+    /* Intro definition card - the entire card IS the tooltip. */
+    @keyframes intro-icon-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.55); }
+      50%      { box-shadow: 0 0 0 9px rgba(59, 130, 246, 0); }
+    }
+    .intro-card { position: relative; background: linear-gradient(135deg, var(--bg1) 0%, var(--bg2) 100%); border: 1px solid var(--border2); border-radius: 18px; padding: 22px 26px; margin-bottom: 28px; display: flex; gap: 18px; align-items: flex-start; box-shadow: 0 6px 24px rgba(0,0,0,0.35); overflow: hidden; max-width: 1400px; max-height: 800px; transform: scale(1); transition: max-width 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), max-height 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), padding 0.5s cubic-bezier(0.4, 0.0, 0.2, 1), gap 0.5s cubic-bezier(0.4, 0.0, 0.2, 1), border-radius 0.45s ease, transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.45s ease; }
+    .intro-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 100%); border-radius: 18px 0 0 18px; transition: opacity 0.35s; }
+    .intro-card.collapsed { max-width: 66px; max-height: 66px; padding: 16px; gap: 0; border-radius: 999px; cursor: pointer; box-shadow: 0 4px 18px rgba(59, 130, 246, 0.35); }
+    .intro-card.collapsed::before { opacity: 0; }
+    .intro-icon { flex-shrink: 0; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-dim); border: 1px solid var(--accent); display: flex; align-items: center; justify-content: center; color: var(--accent); font-size: 15px; cursor: pointer; transition: background 0.25s, color 0.25s, transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), border-radius 0.4s; }
+    .intro-icon:hover { background: var(--accent); color: #fff; transform: scale(1.12); }
+    .intro-card.collapsed .intro-icon { background: var(--accent); color: #fff; border-radius: 999px; animation: intro-icon-pulse 2.2s ease-in-out infinite; }
+    .intro-card.collapsed .intro-icon:hover { transform: scale(1.18); animation: none; }
+    .intro-content { flex: 1 1 0; min-width: 0; max-width: 1400px; max-height: 800px; overflow: hidden; transition: max-width 0.55s cubic-bezier(0.4, 0.0, 0.2, 1), max-height 0.55s cubic-bezier(0.4, 0.0, 0.2, 1); }
+    .intro-card.collapsed .intro-content { max-width: 0; max-height: 0; pointer-events: none; }
+    .intro-icon-tip { display: none; }
+    .intro-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 20px; font-weight: 800; color: var(--tx); margin-bottom: 6px; white-space: nowrap; opacity: 1; transform: translateY(0) scale(1) rotate(0deg); transform-origin: left center; transition: opacity 0.28s ease, transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1); }
+    .intro-card.collapsed .intro-title { opacity: 0; transform: translateY(-50px) scale(0.2) rotate(-8deg); }
+    .intro-body { font-size: 14.5px; color: var(--tx2); line-height: 1.65; opacity: 1; transform: translateY(0) scale(1); transition: opacity 0.3s ease 0.06s, transform 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) 0.06s; }
+    .intro-card.collapsed .intro-body { opacity: 0; transform: translateY(60px) scale(0.85); }
+    .intro-body strong { color: var(--tx); }
+    .intro-body code { font-family: 'Space Mono', monospace; font-size: 13px; background: var(--bg); padding: 2px 6px; border-radius: 4px; color: var(--accent); border: 1px solid var(--border); }
+
+    /* Fact grid for retention caps + history */
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    /* .fact-card look -> anatomy.css */
+    /* .fact-card:hover look -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 8px; }
+    .fact-value { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.1; }
+    .fact-detail { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+
+    /* Timeline of format evolution */
+    .timeline { position: relative; padding-left: 28px; margin-top: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 50%, var(--props-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 22px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+    .timeline-text code { font-family: 'Space Mono', monospace; font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="The forensic artifacts inside the Windows registry, organised by the question they answer: execution, persistence, devices, user activity, machine identity, and the.">
+  <meta name="keywords" content="windows registry forensics, userassist rot13, bam dam registry, run keys persistence, usb registry forensics, mrulistex, shellbags, registry artifacts, asep autostart">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/registry_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/registry_anatomy">
+  <meta property="og:title" content="Windows Registry Forensics: Which Keys Answer Which Question">
+  <meta property="og:description" content="The forensic artifacts inside the Windows registry, organised by the question they answer: execution, persistence, devices, user activity, machine identity, and the.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Windows Registry Forensics: Which Keys Answer Which Question">
+  <meta name="twitter:description" content="The forensic artifacts inside the Windows registry, organised by the question they answer: execution, persistence, devices, user activity, machine identity, and the.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "Windows Registry Forensics: Which Keys Answer Which Question",
+      "keywords": "windows registry forensics, userassist rot13, bam dam registry, run keys persistence, usb registry forensics, mrulistex, shellbags, registry artifacts, asep autostart",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Windows Registry Forensics: Which Keys Answer Which Question",
+      "description": "How the Windows registry's forensic artifacts work and what they prove: the keys that answer execution, persistence, device history, user activity and machine identity, what each one encodes, and the conclusions that do not follow from them.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "inLanguage": "en",
+      "dateModified": "2026-08-21",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/registry_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Registry Artifacts Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/registry_anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Which registry keys matter most in an investigation?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "It depends on the question. For execution: UserAssist, BAM, DAM, MUICache and AppCompatCache. For persistence: the Run keys and the twenty-eight other autostart extensibility points, plus services and scheduled tasks. For devices: Enum\\USB, USBSTOR and MountPoints2. For user activity: Shellbags, RecentDocs and the MRU keys. Reaching for a key before knowing the question is how examinations get long and inconclusive."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Why is UserAssist encoded with ROT13?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Nobody outside Microsoft knows, and it is not encryption by any reading - ROT13 is a Caesar cipher a child can undo. The working theory is that it was meant to stop casual browsing of the key in regedit, not to protect anything. It has the side effect that a keyword search of a raw hive for a program name will not find its UserAssist entry."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Does a Run key entry mean the program ran?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. It means the program is CONFIGURED to run at logon or boot. Whether it ever did is a different artifact's job. This is the most common conflation in registry forensics: persistence is an intention, execution is an event, and the registry records them in different places."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between BAM, DAM and UserAssist?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "BAM and DAM are kernel-level: the Background and Desktop Activity Moderators record the last execution time of a binary per user SID, including services and background processes. UserAssist is Explorer-level and counts only things a user launched through the shell, with a run count and a focus time. A program launched from a command line appears in BAM and not in UserAssist."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can these keys be deleted to hide activity?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes, and they are. But deleting a registry key does not erase it: the cell is marked free and the name, timestamp and values survive until something reuses the space. Crow-Eye carves those and marks them as recovered, so a cleaned Run key frequently still reads out of unallocated space."
+      }
+    }
+  ]
+}
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>Registry forensics: structure, contents and evidential limits</h1>
+      <p class="header-sub">Several hundred unrelated artifacts share one container. This is what is written in them, organised by what an examiner is trying to find out, with the encodings that need dissecting and the conclusions that do not follow.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#not-one-artifact">The registry is not one artifact</a></li>
+        <li><a href="#six-things">One container, and the six unrelated things inside it</a></li>
+        <li><a href="#what-ran">Question 1: what ran on this machine?</a></li>
+        <li><a href="#persistence">Question 2: what will run again?</a></li>
+        <li><a href="#usb-devices">Question 3: what was plugged into it?</a></li>
+        <li><a href="#user-activity">Question 4: where did the user go?</a></li>
+        <li><a href="#user-activity-tables">Every user-activity table, one by one</a></li>
+        <li><a href="#machine-and-network">Question 5: what was this machine, and what was it connected to?</a></li>
+        <li><a href="#limits">What the registry supports, and what it does not</a></li>
+        <li><a href="#how-crow-eye-reads-it">What Crow-Eye does with all of this</a></li>
+        <li><a href="#versions">How the registry's artifacts changed across Windows</a></li>
+        <li><a href="#reference">Reference</a></li>
+        <li><a href="#anti-forensics">Anti-forensic handling, and what survives it</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+<!-- PROVENANCE -->
+    <section>
+      <div class="provenance" style="border-left:3px solid var(--accent,#3b82f6);padding:14px 18px;margin:18px 0;background:rgba(59,130,246,0.06);border-radius:0 8px 8px 0">
+        <p style="margin:0"><strong>Where these figures come from.</strong> Every value, count and byte map on this page was measured from a live Windows 11 system - <strong>the reference system</strong> - with its hives captured through a Volume Shadow Copy. Names, paths and hashes are replaced by placeholders of the same length; every offset, size and count is real.</p>
+      </div>
+    </section>
+
+
+
+    <style>
+      /* Hex panels. Same palette as the byte maps, monospaced so the columns
+         line up, and horizontally scrollable rather than wrapping - a wrapped
+         hex dump is unreadable and a page that scrolls sideways is worse. */
+      .hexpanel { background: var(--bg2, #0b1220); border: 1px solid #1e2a3a;
+                  border-radius: 8px; padding: 14px 16px; margin: 18px 0;
+                  overflow-x: auto; }
+      .hexcap { font-family: 'Space Mono', monospace; font-size: 11px;
+                letter-spacing: .12em; text-transform: uppercase;
+                color: #64748b; margin-bottom: 10px; }
+      .hexrow { font-family: 'Space Mono', monospace; font-size: 12.5px;
+                white-space: nowrap; line-height: 1.7; }
+      .hexoff { color: #475569; margin-right: 14px; }
+      .hexbytes { color: #34d399; margin-right: 14px; }
+      .hexascii { color: #94a3b8; }
+      .factgrid { display: grid; grid-template-columns: repeat(auto-fit,
+                  minmax(200px, 1fr)); gap: 14px; margin: 20px 0; }
+      .factcard { background: var(--bg2, #0b1220); border: 1px solid #1e2a3a;
+                  border-radius: 8px; padding: 16px; }
+      .factcard .n { font-family: 'Space Mono', monospace; font-size: 22px;
+                     color: #34d399; display: block; }
+      .factcard .l { font-size: 12px; color: #94a3b8; margin-top: 6px;
+                     display: block; }
+      .myth { border-left: 3px solid #f87171; padding: 14px 18px; margin: 18px 0;
+              background: rgba(248,113,113,0.06); border-radius: 0 8px 8px 0; }
+      .myth h4 { color: #f87171; margin: 0 0 8px; font-size: 15px; }
+    </style>
+
+    <section>
+      <h2 id="not-one-artifact">The registry is not one artifact</h2>
+      <p>People say "check the registry" the way they say "check the disk". It is not a thing to
+      check; it is a place several hundred unrelated artifacts happen to live, written by different
+      parts of Windows, for different reasons, with different lifetimes and no shared convention
+      about anything.</p>
+
+      <p>This page is about what is written in there and what it means. The
+      <a href="registry-internals.html#base-block">registry internals guide</a> covers the container:
+      how a hive file is laid out, how a key and a value are stored, what a transaction log is, and
+      how deleted keys are recovered. Everything below assumes that and moves on to the evidence.</p>
+
+      <p>The organising idea here is the question, not the key. An examiner does not wake up wanting
+      to read <code>HKLM\SYSTEM\CurrentControlSet\Services</code>; they want to know what ran,
+      what persists, what was plugged in, where somebody went. The keys follow from that.</p>
+
+      <p>The maps that follow are interactive. Click any byte, or any row of the table beside it, to
+      read the field that byte belongs to and what it decodes to; the tabs above each map switch
+      between the structures, and the map redraws for whichever one is selected.</p>
+    </section>
+
+<!-- BYTEMAP:START - generated by scratchpad/inject_bytemaps.py -->
+    <section>
+      <h2 id="six-things">One container, and the six unrelated things inside it</h2>
+      <p>The first tab is the container itself. A hive is a file in a format of its own, and it announces that in its first four bytes: <code>regf</code>. Everything a hive holds - keys, values, security descriptors, the free space a deleted key is carved back out of - sits after a 4096-byte header called the <strong>base block</strong>, which says which version the format is, where the root key begins, how much of the file is in use, and whether the file was closed cleanly or was still being written when it was captured. <code>SYSTEM</code>, <code>SOFTWARE</code>, <code>NTUSER.DAT</code> and <code>Amcache.hve</code> are all the same format; only their contents differ.</p>
+
+      <p>The other six tabs are those contents, and they share the container and nothing else. A UserAssist counter, a BAM timestamp, a scheduled task's run history, an MRU (most-recently-used) ordering, a disk signature and a device property are six unrelated structures that happen to be stored in the same place. That is the single most important thing to understand about registry forensics, and it is why there is no such thing as a registry parser - only a parser for each thing in it.</p>
+
+      <p style="color:var(--tx3,#7d8590);font-size:13px">
+        Structure is real and measured. Names, paths and hashes are replaced
+        with a placeholder of the same length, so every offset still adds up
+        and nothing here identifies the machine it came from. The base block
+        is read from <code>%SystemRoot%\System32\config\DRIVERS</code> - a
+        real hive file rather than an <code>NtSaveKeyEx</code> export, because
+        an export is written fresh and its sequence numbers agree for that
+        reason rather than because the hive was closed cleanly.
+      </p>
+
+      <div class="version-selector" id="bm-tabs" role="tablist"></div>
+
+      <div class="dissection-layout">
+        <div class="map-container">
+          <span class="cap">Figure 1</span>
+      <div class="unified-map" id="bm-map"></div>
+        </div>
+        <div class="dynamic-side">
+          <span class="panel-label">Live Byte Selection</span>
+          <div id="bm-panel"></div>
+        </div>
+      </div>
+
+      <h3>Full dissection reference</h3>
+      <p>The same fields as a table. Both are drawn from one definition, so
+         the map and the table cannot disagree with each other.</p>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>What it is</th></tr></thead>
+          <tbody id="bm-table"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <script src="bytemap.js"></script>
+    <script>
+      /* Measured by scratchpad/gen_bytemap_data.py, described by
+         scratchpad/fields_*.py. Do not hand-edit - regenerate. */
+      window.BYTEMAP_DATA = {
+"regf": {
+"label": "Base block  184B",
+"hex": [
+"72",
+"65",
+"67",
+"66",
+"D2",
+"20",
+"00",
+"00",
+"D2",
+"20",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"01",
+"00",
+"00",
+"00",
+"05",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"01",
+"00",
+"00",
+"00",
+"20",
+"00",
+"00",
+"00",
+"00",
+"80",
+"99",
+"00",
+"01",
+"00",
+"00",
+"00",
+"74",
+"00",
+"65",
+"00",
+"6D",
+"00",
+"52",
+"00",
+"6F",
+"00",
+"6F",
+"00",
+"74",
+"00",
+"5C",
+"00",
+"53",
+"00",
+"79",
+"00",
+"73",
+"00",
+"74",
+"00",
+"65",
+"00",
+"6D",
+"00",
+"33",
+"00",
+"32",
+"00",
+"5C",
+"00",
+"63",
+"00",
+"6F",
+"00",
+"6E",
+"00",
+"66",
+"00",
+"69",
+"00",
+"67",
+"00",
+"5C",
+"00",
+"44",
+"00",
+"52",
+"00",
+"49",
+"00",
+"56",
+"00",
+"45",
+"00",
+"52",
+"00",
+"53",
+"00",
+"00",
+"00",
+"A3",
+"38",
+"D8",
+"2A",
+"EA",
+"EF",
+"EE",
+"11",
+"A5",
+"4D",
+"00",
+"0D",
+"3A",
+"94",
+"EA",
+"A1",
+"A3",
+"38",
+"D8",
+"2A",
+"EA",
+"EF",
+"EE",
+"11",
+"A5",
+"4D",
+"00",
+"0D",
+"3A",
+"94",
+"EA",
+"A1",
+"00",
+"00",
+"00",
+"00",
+"A4",
+"38",
+"D8",
+"2A",
+"EA",
+"EF",
+"EE",
+"11",
+"A5",
+"4D",
+"00",
+"0D",
+"3A",
+"94",
+"EA",
+"A1",
+"72",
+"6D",
+"74",
+"6D",
+"DE",
+"CA",
+"A1",
+"B0",
+"81",
+"37",
+"DD",
+"01",
+"4F",
+"66",
+"52",
+"67",
+"01",
+"00",
+"00",
+"00"
+],
+"fields": [
+{
+"section": "Base block",
+"name": "Signature  \"regf\"",
+"offset": 0,
+"size": 4,
+"type": "header",
+"val": "regf",
+"forensic": "<strong>The four bytes every hive begins with, and the reason a hive needs no file extension to be recognised.</strong> A reader that does not check them parses whatever it was handed: a truncated download, half a file carved out of free space, or a hive of a version it cannot walk. <code>SYSTEM</code>, <code>SOFTWARE</code>, <code>NTUSER.DAT</code>, <code>UsrClass.dat</code> and <code>Amcache.hve</code> all start here - one format, many payloads, which is why the six value encodings on the other tabs share a container and nothing else. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#base-block\">Explained in full: the base block</a>"
+},
+{
+"section": "Base block",
+"name": "Primary sequence",
+"offset": 4,
+"size": 4,
+"type": "count",
+"val": "8402",
+"forensic": "<strong>The primary sequence number, incremented BEFORE a write begins.</strong> It is the half that moves first, so a hive captured mid-flush has this one already ahead of its partner below. On this hive it reads 8402, which is a count of flushes rather than of edits."
+},
+{
+"section": "Base block",
+"name": "Secondary sequence",
+"offset": 8,
+"size": 4,
+"type": "count",
+"val": "8402  -  clean",
+"forensic": "<strong>The secondary sequence number, incremented AFTER the write completes.</strong> Equal to the primary means the last write finished and the file on disk is complete; behind it means the write did not finish, and the missing changes are sitting in the <code>.LOG1</code> / <code>.LOG2</code> beside the hive rather than in the hive. <strong>A hive copied from a running machine is routinely dirty</strong>, and reading it as found reports a registry that is quietly stale. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#sequence\">Explained in full: the two sequence numbers</a>"
+},
+{
+"section": "Base block",
+"name": "Last written  (FILETIME)",
+"offset": 12,
+"size": 8,
+"type": "time",
+"val": "zero on this hive",
+"forensic": "<strong>A last-written FILETIME that Windows largely does not write.</strong> The field is in the format and it is almost always empty: of the 13 hives readable as files on the reference system, <strong>11 leave it zero</strong> and only two set it. Nothing should be placed on a timeline from this field without first checking that it is non-zero, and a tool that renders it unconditionally will print 1601-01-01 for most of the registry."
+},
+{
+"section": "Base block",
+"name": "Major version",
+"offset": 20,
+"size": 4,
+"type": "count",
+"val": "1",
+"forensic": "<strong>Major version.</strong> Every hive on every supported Windows reads 1. Taken with the minor version below it identifies the layout of the cells, not of this header."
+},
+{
+"section": "Base block",
+"name": "Minor version",
+"offset": 24,
+"size": 4,
+"type": "count",
+"val": "5",
+"forensic": "<strong>Minor version, and the one that matters.</strong> Version 1.5 is Windows XP onward and is what a modern parser expects. Versions 1.3 and lower place subkey lists differently, so a reader that ignores this field does not fail on an older hive - it walks the wrong structure and reports what it finds there."
+},
+{
+"section": "Base block",
+"name": "File type",
+"offset": 28,
+"size": 4,
+"type": "flags",
+"val": "0  -  a primary hive",
+"forensic": "<strong>What kind of hive file this is, and the only correct way to tell a hive from its transaction log.</strong> 0 is a primary hive; the <code>.LOG1</code> and <code>.LOG2</code> files beside it are <strong>also</strong> <code>regf</code> files and are told apart only here - on the reference system <code>DRIVERS.LOG1</code> and <code>DRIVERS.LOG2</code> both carry the <code>regf</code> signature and both read <strong>6</strong> in this field. Anything that collects <code>*.LOG*</code> by extension and anything that identifies hives by signature alone will disagree about what it has. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#logs\">Explained in full: the transaction logs</a>"
+},
+{
+"section": "Base block",
+"name": "File format",
+"offset": 32,
+"size": 4,
+"type": "flags",
+"val": "1  -  direct memory load",
+"forensic": "<strong>File format.</strong> 1 means the hive bins are laid out so the kernel can map the file and use it in place. It has been 1 on every hive this has been measured against, and a value that is not 1 is a reason to stop rather than to continue."
+},
+{
+"section": "Base block",
+"name": "Root cell offset",
+"offset": 36,
+"size": 4,
+"type": "flags",
+"val": "0x20",
+"forensic": "<strong>Where the root key lives, and the offset convention the whole file uses.</strong> It reads 0x20, which is not a position in the file: every cell offset in a hive is relative to the END of the base block, so the root key actually begins at 4096 + 0x20 = <strong>0x1020</strong>. That constant is <code>PRIMARY_BASE_BLOCK_LEN</code> in <code>registry_hive_walk.py</code>. An offset used raw lands 4 KB early, inside this header, and finds structure-shaped bytes there. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#bins-cells\">Explained in full: hive bins and cells</a>"
+},
+{
+"section": "Base block",
+"name": "Hive bins data size",
+"offset": 40,
+"size": 4,
+"type": "size",
+"val": "10,059,776 bytes",
+"forensic": "<strong>How much of the file is actually in use.</strong> The hive bins begin after this header and run for this many bytes. On this hive the sum is exact: 4096 + 10,059,776 = <strong>10,063,872</strong>, which is the file's size on disk to the byte. A file longer than that has something after the last bin; a file shorter than that is truncated, and a parser that trusts this field over the real length walks off the end."
+},
+{
+"section": "Base block",
+"name": "Clustering factor",
+"offset": 44,
+"size": 4,
+"type": "count",
+"val": "1",
+"forensic": "<strong>Clustering factor.</strong> The allocation granularity of the bins, in units of 512 bytes. It is 1 on every hive measured here, which is why bins are 4096-byte aligned in practice."
+},
+{
+"section": "Base block",
+"name": "File name  (UTF-16)",
+"offset": 48,
+"size": 64,
+"type": "name",
+"val": "temRoot\\System32\\config\\DRIVERS",
+"forensic": "<strong>Not a path, and not a name: the LAST 31 characters of the hive's NT path.</strong> This hive's full path is <code>\\SystemRoot\\System32\\config\\DRIVERS</code>, 35 characters, and the field holds the final 31 of them - the beginning is simply gone. The field is 64 bytes of UTF-16, so 31 characters is the most it can hold. Read as a path it is wrong, and it is wrong in a way that looks right: it still contains separators and still ends in the real file name, so it reads as a relative path that never existed."
+},
+{
+"section": "Base block",
+"name": "RmId  (GUID)",
+"offset": 112,
+"size": 16,
+"type": "name",
+"val": "GUID",
+"forensic": "<strong>RmId - the resource manager GUID.</strong> One of three GUIDs that tie a hive to its transaction logs. They are how a log is matched to the hive it belongs to, which matters when several hives and their logs are collected into one folder and the file names no longer say what came from where."
+},
+{
+"section": "Base block",
+"name": "LogId  (GUID)",
+"offset": 128,
+"size": 16,
+"type": "name",
+"val": "GUID",
+"forensic": "<strong>LogId.</strong> The second of the three. On this hive it is <strong>identical to RmId above</strong>, which is the normal case and not a sign of anything."
+},
+{
+"section": "Base block",
+"name": "Flags",
+"offset": 144,
+"size": 4,
+"type": "flags",
+"val": "0x0",
+"forensic": "<strong>Flags.</strong> Bit 0 marks a hive that takes part in a KTM transaction. It reads 0 here."
+},
+{
+"section": "Base block",
+"name": "TmId  (GUID)",
+"offset": 148,
+"size": 16,
+"type": "name",
+"val": "GUID",
+"forensic": "<strong>TmId - the transaction manager GUID.</strong> The third, and the one that differs from the other two on this hive."
+},
+{
+"section": "Base block",
+"name": "GUID signature  \"rmtm\"",
+"offset": 164,
+"size": 4,
+"type": "header",
+"val": "rmtm",
+"forensic": "<strong>A second signature, four ASCII bytes <code>rmtm</code>, sitting after the three GUIDs it belongs to.</strong> It marks the GUID block as meaningful rather than as leftover space, and it is the reason a reader can tell an unused GUID field from one that was never written."
+},
+{
+"section": "Base block",
+"name": "Last reorganized  (FILETIME)",
+"offset": 168,
+"size": 8,
+"type": "time",
+"val": "2026-08-29 06:43:24 UTC",
+"forensic": "<strong>When the hive was last reorganised, and unlike the last-written field above this one is populated.</strong> Reorganisation is a compaction: Windows rewrites the hive to reclaim freed cells. It bounds carving - <strong>deleted keys and values that existed before this moment may simply no longer be in the file</strong>, so a carve that comes back thin against a recent reorganisation time is evidence of housekeeping rather than of a quiet machine. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#carving\">Explained in full: carving deleted keys and values</a>"
+},
+{
+"section": "Base block",
+"name": "Offline marker  \"OfRg\"",
+"offset": 176,
+"size": 4,
+"type": "header",
+"val": "OfRg",
+"forensic": "<strong>Four ASCII bytes in a region normally described as reserved and empty.</strong> It is the offline registry library's marker, and on the reference system it is not the exception: <strong>13 of the 14 hives readable as files carry it</strong>, and the only one that does not is <code>Amcache.hve</code>. Worth stating rather than skipping, because &ldquo;this span is always zero&rdquo; is the kind of assumption a parser encodes as a skip and never checks again."
+},
+{
+"section": "Base block",
+"name": "Offline marker value",
+"offset": 180,
+"size": 4,
+"type": "count",
+"val": "1",
+"forensic": "<strong>The value that follows the <code>OfRg</code> marker.</strong> It reads 1 on every hive here that carries the marker. Everything after it, 0xB8 to 0x1FB, is genuinely zero on this hive, and the XOR checksum of the first 508 bytes sits at 0x1FC just past it. <a class=\"see-also\" href=\"/Eye-Describe/registry-internals#base-block\">Explained in full: the checksum, and why it bites</a>"
+}
+]
+},
+"userassist": {
+"label": "UserAssist  72B",
+"hex": [
+"1A",
+"00",
+"00",
+"00",
+"01",
+"00",
+"00",
+"00",
+"05",
+"00",
+"00",
+"00",
+"3E",
+"80",
+"03",
+"00",
+"9F",
+"D3",
+"49",
+"3E",
+"04",
+"E5",
+"31",
+"3E",
+"0F",
+"11",
+"00",
+"3E",
+"1E",
+"17",
+"D8",
+"3D",
+"DC",
+"91",
+"33",
+"3D",
+"99",
+"F3",
+"E5",
+"3C",
+"F1",
+"43",
+"E5",
+"3D",
+"2B",
+"2C",
+"09",
+"3E",
+"8F",
+"33",
+"E6",
+"3D",
+"FF",
+"18",
+"9E",
+"3D",
+"05",
+"00",
+"00",
+"00",
+"C0",
+"08",
+"D9",
+"02",
+"75",
+"2F",
+"DD",
+"01",
+"00",
+"00",
+"00",
+"00"
+],
+"fields": [
+{
+"section": "UserAssist entry",
+"name": "Version",
+"offset": 0,
+"size": 4,
+"type": "header",
+"val": "26",
+"forensic": "<strong>UInt32 - and on the reference system it reads 26, which is not a number any reference describes.</strong> The documented values are 3, the 16-byte Windows XP and Vista record, and 5, the 72-byte record Windows 7 introduced. This Windows 11 build writes <strong>26</strong> on 315 of its 317 entries.<br><br>The layout is unchanged: measured across all 315 of them, the counters at <code>0x04</code>, <code>0x08</code> and <code>0x0C</code> hold sane values and the FILETIME is at <code>0x3C</code>, exactly as the version 5 record does. <strong>A parser that switches on this field and refuses anything it does not recognise returns nothing on Windows 11</strong> while a parser that assumes the version 5 layout is right. The two remaining entries read 4,294,967,295 - all bits set - and are unused slots rather than records."
+},
+{
+"section": "UserAssist entry",
+"name": "Run count",
+"offset": 4,
+"size": 4,
+"type": "count",
+"val": "1 raw  ->  1 reported",
+"forensic": "<strong>UInt32 - how many times the program was launched from Explorer.</strong> Only from the shell: something started from a command line, a scheduled task or a service never appears in UserAssist at all, which is why an absence here is close to worthless as evidence.<br><br>Older Windows seeded this counter at 5, so a program run once read 6, and Crow-Eye still subtracts that bias for records that carry it (<code>max(0, raw - 5) if raw > 5</code>). On this build the seed is gone - the raw value here is <strong>1</strong> and the case reports <strong>1</strong>. Both behaviours exist in the wild, which is exactly why the adjustment is conditional rather than unconditional."
+},
+{
+"section": "UserAssist entry",
+"name": "Focus count",
+"offset": 8,
+"size": 4,
+"type": "count",
+"val": "5",
+"forensic": "<strong>UInt32 - how many times the window was brought to the foreground.</strong> Distinct from the run count: a program launched once and clicked back to twenty times has a run count of one and a focus count of twenty. That gap is the closest thing the registry keeps to a measure of how much a person actually used something, as opposed to how often it started."
+},
+{
+"section": "UserAssist entry",
+"name": "Focus time  (ms)",
+"offset": 12,
+"size": 4,
+"type": "time",
+"val": "229,438 ms  (about 3.8 minutes)",
+"forensic": "<strong>UInt32 milliseconds of foreground time, and the unit is the trap.</strong> Stored as milliseconds; displayed by several tools as seconds without conversion, which divides every session by a thousand and makes hours of use look like seconds. Crow-Eye keeps it in milliseconds in the database and converts only for display - a formatted string in a numeric column stops sorting as a number."
+},
+{
+"section": "UserAssist entry",
+"name": "Unused",
+"offset": 16,
+"size": 44,
+"type": "reserved",
+"forensic": "<strong>Forty-four bytes that are almost always 0xFF.</strong> They are widely described as ten IEEE floats plus padding; nothing reliable has been published about them and no parser reads them. Shown rather than hidden because a record where this region is NOT all-ones is unusual, and unusual is what merits attention."
+},
+{
+"section": "UserAssist entry",
+"name": "Last executed  (FILETIME)",
+"offset": 60,
+"size": 8,
+"type": "time",
+"val": "2026-08-19 00:52:29 UTC",
+"forensic": "<strong>64-bit FILETIME at offset 0x3C - not 0x10, which is where the version 3 record kept it.</strong> UTC, 100-nanosecond intervals since 1601. Crow-Eye reads it at <code>registry_binary_parser.py:1111</code>. Carrying the version 3 offset forward into a version 5 record lands in the middle of the 0xFF block and returns a date somewhere around the year 30828 - the kind of wrong that at least announces itself, unlike most of the others on this page."
+},
+{
+"section": "UserAssist entry",
+"name": "Trailing",
+"offset": 68,
+"size": 4,
+"type": "reserved",
+"forensic": "<strong>Four bytes closing the record.</strong> Not read by any parser."
+}
+]
+},
+"bam": {
+"label": "BAM / DAM  24B",
+"hex": [
+"1A",
+"A2",
+"D5",
+"1F",
+"7B",
+"2F",
+"DD",
+"01",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"02",
+"00",
+"00",
+"00"
+],
+"fields": [
+{
+"section": "BAM entry",
+"name": "Last execution  (FILETIME)",
+"offset": 0,
+"size": 8,
+"type": "time",
+"val": "2026-08-19 01:36:15 UTC",
+"forensic": "<strong>A 64-bit FILETIME, and that is the entire artifact.</strong> The value NAME is the full path of the executable; the value DATA is these eight bytes. Background Activity Moderator is a power-management service, not a logging one - it throttles background processes and keeps this timestamp to know when each was last active. The forensic use is a side effect, which is exactly why it is reliable: nothing about it was designed to be evidence, so nothing about it was designed to be tampered with."
+},
+{
+"section": "BAM entry",
+"name": "Unknown",
+"offset": 8,
+"size": 16,
+"type": "reserved",
+"forensic": "<strong>Sixteen undocumented bytes, usually zero.</strong> No public parser reads them. <strong>The reason BAM matters is its lifetime:</strong> the key is cleared on a schedule and holds roughly a week, so a hit here is recent by construction - and an absence proves nothing at all about anything older than that window."
+}
+]
+},
+"dynamicinfo": {
+"label": "TaskCache DynamicInfo  36B",
+"hex": [
+"03",
+"00",
+"00",
+"00",
+"00",
+"46",
+"F2",
+"71",
+"C3",
+"96",
+"DC",
+"01",
+"AC",
+"CF",
+"04",
+"82",
+"C5",
+"96",
+"DC",
+"01",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"CC",
+"08",
+"BC",
+"82",
+"C5",
+"96",
+"DC",
+"01"
+],
+"fields": [
+{
+"section": "DynamicInfo",
+"name": "Version",
+"offset": 0,
+"size": 4,
+"type": "header",
+"val": "3",
+"forensic": "<strong>UInt32 format version.</strong> Windows 10 writes 3; earlier builds wrote 1 and had a shorter record. <code>DynamicInfo</code> is the run history of a scheduled task, kept in the registry rather than in the task's XML file, so a task whose XML has been deleted can still have its history here."
+},
+{
+"section": "DynamicInfo",
+"name": "Created  (FILETIME)",
+"offset": 4,
+"size": 8,
+"type": "time",
+"val": "2026-02-05 17:18:28 UTC",
+"forensic": "<strong>When the task was registered.</strong> For a persistence investigation this is often the single most useful timestamp on the machine: it dates the moment the mechanism was installed, which is usually within seconds of the intrusion that installed it."
+},
+{
+"section": "DynamicInfo",
+"name": "Last run  (FILETIME)",
+"offset": 12,
+"size": 8,
+"type": "time",
+"val": "2026-02-05 17:33:14 UTC",
+"forensic": "<strong>The last time the task actually started.</strong> Unlike ShimCache this really is execution evidence - the Task Scheduler writes it after launching the task. A creation time far in the past with a last-run time from this morning describes a dormant mechanism that recently woke up."
+},
+{
+"section": "DynamicInfo",
+"name": "Last result",
+"offset": 20,
+"size": 4,
+"type": "count",
+"val": "0x00000000",
+"forensic": "<strong>The task's last exit code.</strong> Zero is success. A non-zero code with a recent last-run time is a persistence mechanism that is trying and failing, which is noisier and easier to catch than one that works."
+},
+{
+"section": "DynamicInfo",
+"name": "Undocumented",
+"offset": 24,
+"size": 4,
+"type": "reserved",
+"forensic": "<strong>Bytes no public parser reads.</strong> Shown rather than skipped, because a record is only understood once every byte in it is accounted for."
+},
+{
+"section": "DynamicInfo",
+"name": "Last successful run  (FILETIME)",
+"offset": 28,
+"size": 8,
+"type": "time",
+"val": "2026-02-05 17:33:16 UTC",
+"forensic": "<strong>The last run that returned success, which can be older than the last run.</strong> The gap between the two brackets exactly when the task started failing."
+}
+]
+},
+"mrulistex": {
+"label": "MRUListEx  88B",
+"hex": [
+"05",
+"00",
+"00",
+"00",
+"12",
+"00",
+"00",
+"00",
+"02",
+"00",
+"00",
+"00",
+"01",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"00",
+"14",
+"00",
+"00",
+"00",
+"13",
+"00",
+"00",
+"00",
+"07",
+"00",
+"00",
+"00",
+"0E",
+"00",
+"00",
+"00",
+"11",
+"00",
+"00",
+"00",
+"0D",
+"00",
+"00",
+"00",
+"09",
+"00",
+"00",
+"00",
+"03",
+"00",
+"00",
+"00",
+"06",
+"00",
+"00",
+"00",
+"10",
+"00",
+"00",
+"00",
+"0F",
+"00",
+"00",
+"00",
+"0C",
+"00",
+"00",
+"00",
+"0B",
+"00",
+"00",
+"00",
+"04",
+"00",
+"00",
+"00",
+"0A",
+"00",
+"00",
+"00",
+"08",
+"00",
+"00",
+"00",
+"FF",
+"FF",
+"FF",
+"FF"
+],
+"fields": [
+{
+"section": "MRUListEx order",
+"name": "Position 0",
+"offset": 0,
+"size": 4,
+"type": "count",
+"val": "value named \"5\"",
+"forensic": "<strong>UInt32 - the name of the value that sits in position 0, most recent first.</strong> This is the field that makes MRU keys evidence rather than a list. The values themselves are named <code>0</code>, <code>1</code>, <code>2</code> and so on in <em>allocation</em> order - the order they were first created - and enumerating a key returns them in that order or in whatever order the hive happens to store them. <strong>Only this array records what was used most recently.</strong> Read without it, the key yields the right set of items in an order that means nothing, which still looks like a timeline."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 1",
+"offset": 4,
+"size": 4,
+"type": "count",
+"val": "value named \"18\"",
+"forensic": "<strong>Position 1 in most-recently-used order.</strong> Holds the name of value <code>18</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 2",
+"offset": 8,
+"size": 4,
+"type": "count",
+"val": "value named \"2\"",
+"forensic": "<strong>Position 2 in most-recently-used order.</strong> Holds the name of value <code>2</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 3",
+"offset": 12,
+"size": 4,
+"type": "count",
+"val": "value named \"1\"",
+"forensic": "<strong>Position 3 in most-recently-used order.</strong> Holds the name of value <code>1</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 4",
+"offset": 16,
+"size": 4,
+"type": "count",
+"val": "value named \"0\"",
+"forensic": "<strong>Position 4 in most-recently-used order.</strong> Holds the name of value <code>0</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 5",
+"offset": 20,
+"size": 4,
+"type": "count",
+"val": "value named \"20\"",
+"forensic": "<strong>Position 5 in most-recently-used order.</strong> Holds the name of value <code>20</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 6",
+"offset": 24,
+"size": 4,
+"type": "count",
+"val": "value named \"19\"",
+"forensic": "<strong>Position 6 in most-recently-used order.</strong> Holds the name of value <code>19</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 7",
+"offset": 28,
+"size": 4,
+"type": "count",
+"val": "value named \"7\"",
+"forensic": "<strong>Position 7 in most-recently-used order.</strong> Holds the name of value <code>7</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 8",
+"offset": 32,
+"size": 4,
+"type": "count",
+"val": "value named \"14\"",
+"forensic": "<strong>Position 8 in most-recently-used order.</strong> Holds the name of value <code>14</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 9",
+"offset": 36,
+"size": 4,
+"type": "count",
+"val": "value named \"17\"",
+"forensic": "<strong>Position 9 in most-recently-used order.</strong> Holds the name of value <code>17</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 10",
+"offset": 40,
+"size": 4,
+"type": "count",
+"val": "value named \"13\"",
+"forensic": "<strong>Position 10 in most-recently-used order.</strong> Holds the name of value <code>13</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 11",
+"offset": 44,
+"size": 4,
+"type": "count",
+"val": "value named \"9\"",
+"forensic": "<strong>Position 11 in most-recently-used order.</strong> Holds the name of value <code>9</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 12",
+"offset": 48,
+"size": 4,
+"type": "count",
+"val": "value named \"3\"",
+"forensic": "<strong>Position 12 in most-recently-used order.</strong> Holds the name of value <code>3</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 13",
+"offset": 52,
+"size": 4,
+"type": "count",
+"val": "value named \"6\"",
+"forensic": "<strong>Position 13 in most-recently-used order.</strong> Holds the name of value <code>6</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 14",
+"offset": 56,
+"size": 4,
+"type": "count",
+"val": "value named \"16\"",
+"forensic": "<strong>Position 14 in most-recently-used order.</strong> Holds the name of value <code>16</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 15",
+"offset": 60,
+"size": 4,
+"type": "count",
+"val": "value named \"15\"",
+"forensic": "<strong>Position 15 in most-recently-used order.</strong> Holds the name of value <code>15</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 16",
+"offset": 64,
+"size": 4,
+"type": "count",
+"val": "value named \"12\"",
+"forensic": "<strong>Position 16 in most-recently-used order.</strong> Holds the name of value <code>12</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 17",
+"offset": 68,
+"size": 4,
+"type": "count",
+"val": "value named \"11\"",
+"forensic": "<strong>Position 17 in most-recently-used order.</strong> Holds the name of value <code>11</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 18",
+"offset": 72,
+"size": 4,
+"type": "count",
+"val": "value named \"4\"",
+"forensic": "<strong>Position 18 in most-recently-used order.</strong> Holds the name of value <code>4</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 19",
+"offset": 76,
+"size": 4,
+"type": "count",
+"val": "value named \"10\"",
+"forensic": "<strong>Position 19 in most-recently-used order.</strong> Holds the name of value <code>10</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Position 20",
+"offset": 80,
+"size": 4,
+"type": "count",
+"val": "value named \"8\"",
+"forensic": "<strong>Position 20 in most-recently-used order.</strong> Holds the name of value <code>8</code>. Crow-Eye decodes the array with <code>parse_mru_list_ex()</code>."
+},
+{
+"section": "MRUListEx order",
+"name": "Terminator  0xFFFFFFFF",
+"offset": 84,
+"size": 4,
+"type": "header",
+"val": "0xFFFFFFFF",
+"forensic": "<strong>The end of the list.</strong> There is no count field anywhere - the array runs until it hits this sentinel, so a reader that trusts the value's byte length instead will read one entry past the end and report a most-recently-used item that does not exist."
+}
+]
+},
+"mounteddev": {
+"label": "MountedDevices  12B",
+"hex": [
+"DB",
+"75",
+"1A",
+"DA",
+"00",
+"00",
+"10",
+"00",
+"00",
+"00",
+"00",
+"00"
+],
+"fields": [
+{
+"section": "Mounted device",
+"name": "Disk signature",
+"offset": 0,
+"size": 4,
+"type": "header",
+"val": "0xDA1A75DB",
+"forensic": "<strong>The four-byte MBR disk signature, written at offset 0x1B8 of the disk's first sector.</strong> It identifies the physical disk, not the partition and not the volume. <strong>This is how a drive is tied to a machine:</strong> the same signature appearing in <code>MountedDevices</code> on two computers means the same physical disk was attached to both, which is a stronger statement than a matching volume label or serial."
+},
+{
+"section": "Mounted device",
+"name": "Partition offset",
+"offset": 4,
+"size": 8,
+"type": "size",
+"val": "1,048,576 bytes",
+"forensic": "<strong>UInt64 - the byte offset of the partition's start on that disk.</strong> Signature plus offset identifies one partition uniquely. A 12-byte value like this one describes a local disk partition; a longer value holds a UTF-16 device path instead and usually belongs to removable media, which is why a parser has to branch on the length rather than assume a layout."
+}
+]
+},
+"devprop": {
+"label": "DEVPROP_TYPE_FILETIME  8B",
+"hex": [
+"D9",
+"00",
+"96",
+"BE",
+"70",
+"2E",
+"DD",
+"01"
+],
+"fields": [
+{
+"section": "Device property",
+"name": "FILETIME  (property 0064)",
+"offset": 0,
+"size": 8,
+"type": "time",
+"val": "2026-08-17 17:49:25 UTC",
+"forensic": "<strong>Eight bytes under <code>{83da6326-97a6-4088-9453-a1923f573b29}</code>, and the value type is not one of the twelve <code>REG_*</code> constants.</strong> It is <code>0x00000010</code>, a <code>DEVPROP_TYPE_FILETIME</code>. Plug and Play stores its property types in the same field as the documented registry types, so a reader with twelve cases and no default silently discards every one of them - and on a normal Windows install that is thousands of values, all of them device history.<br><br>The four numbered properties are <code>0064</code> first install, <code>0065</code> install, <code>0066</code> <strong>last arrival</strong>, <code>0067</code> <strong>last removal</strong>. This one is <code>0064</code>: first install.<br><br><strong>0066 and 0067 are routinely swapped</strong>, which reports the moment a USB device was unplugged as the moment it was plugged in. The structural tell is that a device still connected has <em>no</em> <code>0067</code> at all."
+}
+]
+}
+};
+      ByteMap.mount({
+        mapEl:   document.getElementById('bm-map'),
+        panelEl: document.getElementById('bm-panel'),
+        tableEl: document.getElementById('bm-table'),
+        tabsEl:  document.getElementById('bm-tabs'),
+        variants: window.BYTEMAP_DATA
+      });
+    </script>
+<!-- BYTEMAP:END -->
+
+    <section>
+      <h2 id="what-ran">Question 1: what ran on this machine?</h2>
+      <p>Four artifacts answer this, badly on their own and well together. None is a log; all four
+      are side effects of features that exist for other reasons.</p>
+
+      <span class="cap">Table 2</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Artifact</th><th>Written by</th><th>Records</th><th>Blind to</th></tr></thead>
+        <tbody>
+          <tr><td>UserAssist</td><td>Explorer</td><td>run count, focus time, last run, per user</td><td>anything not launched through the shell</td></tr>
+          <tr><td>BAM / DAM</td><td>kernel activity moderators</td><td>last execution time per binary, per SID</td><td>history: it keeps one time, not a series</td></tr>
+          <tr><td>MUICache</td><td>Explorer</td><td>friendly names of binaries the shell displayed</td><td>timing entirely: there is no timestamp</td></tr>
+          <tr><td>AppCompatCache</td><td>compatibility engine</td><td>path and file mtime, in examined order</td><td>whether the file ran at all</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3 id="userassist">UserAssist, and the ROT13 that fools keyword searches</h3>
+      <p>Under <code>Explorer\UserAssist</code> sit 9 GUID subkeys, each with a
+      <code>Count</code> key whose value names are program paths <strong>encoded with ROT13</strong>.
+      Not encrypted - rotated thirteen places, the cipher that ships as a party trick.</p>
+
+      <p>It matters for one practical reason: <strong>a raw keyword search of a hive for a program
+      name will not find its UserAssist entry.</strong> An examiner grepping an image for
+      <code>evil.exe</code> gets nothing from this key while the evidence sits right there under a
+      name that reads as nonsense. On the reference system a sample entry is 15 characters encoded,
+      and its record is 1,612 bytes.</p>
+
+      <div class="myth">
+        <h4>The focus time is milliseconds, and the run count does not start at one</h4>
+        <p>The record carries a run count and a focus duration in milliseconds. On Windows 7 and
+        later the count is used directly; on XP it was offset by five, so early tooling subtracted
+        five and later tooling did not, and both are still in circulation. A run count of 1 that
+        should read 6, or 6 that should read 1, changes what a report says.</p>
+      </div>
+
+      <h3 id="bam-dam">BAM and DAM: the kernel's own record</h3>
+      <p>The Background Activity Moderator throttles what background programs may do, and to do that
+      it keeps the last execution time of each binary, per user SID, under
+      <code>Services\bam\State\UserSettings</code>. The reference system has 8 SIDs there and
+      each value is a 24-byte record whose first eight bytes are a FILETIME.</p>
+
+      <p>It is the closest thing the registry has to an execution log, and its weakness is that it
+      keeps <strong>one</strong> timestamp per binary. A program run a hundred times leaves the same
+      single record as one run once. It is also cleared on a schedule, so it is a recent window
+      rather than a history.</p>
+
+<!-- KEYS:ran:START -->
+      <h3>Every key Crow-Eye reads for this question <span style="color:var(--tx3,#7d8590);font-weight:400">(12)</span></h3>
+      <p>The full list, so the page can answer "is this key covered?" rather than leaving it open. A key shown as <code>{ControlSet}</code> is read as <code>CurrentControlSet</code> on a live machine and as the control set <code>Select</code> names in an offline hive.</p>
+      <span class="cap">Table 3</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td><code>Classes\Local Settings\Software\Microsoft\Windows\Shell\MuiCache</code></td><td>SOFTWARE</td><td>Friendly names Explorer cached for executables it has displayed. A path here means the binary existed and was shown, not that it ran.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store</code></td><td>NTUSER.DAT</td><td>The Program Compatibility Assistant store: full paths of programs this user started, kept after the file itself is deleted. One key write time covers every entry. <a class="see-also" href="registry_anatomy.html#table-compatibility-assistant">Explained in full: Compatibility Assistant</a></td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\EMDMgmt</code></td><td>SOFTWARE</td><td>ReadyBoost's record of volumes it has evaluated, which incidentally names removable drives and their labels.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Image File Execution Options</code></td><td>SOFTWARE</td><td>Per-executable debugger settings. A Debugger value here silently substitutes one program for another, which is both a debugging feature and a well-worn persistence and bypass technique.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage</code></td><td>SOFTWARE</td><td>Per-application counters Explorer keeps for taskbar and Start usage - how often a window was focused or a button clicked.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\UserAssist</code></td><td>SOFTWARE</td><td>Per-user counters for programs launched from Explorer, keyed by a ROT13 path. Shell launches only - nothing started from a console appears.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Search\RecentApps</code></td><td>SOFTWARE</td><td>Applications Search has seen used recently, with a launch count.</td></tr>
+            <tr><td><code>Microsoft\Windows\ShellNoRoam\MUICache</code></td><td>SOFTWARE</td><td>The pre-Windows-7 location of the same cache.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\AppCompatCache</code></td><td>SYSTEM</td><td>ShimCache. One value holding a serialised database of every binary the compatibility engine examined. Not proof of execution, and written at shutdown. <a class="see-also" href="shimcache_anatomy.html#what-it-is">Explained in full: ShimCache</a></td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\Memory Management\PrefetchParameters</code></td><td>SYSTEM</td><td>Whether Prefetch is enabled. Zero here explains an empty Prefetch directory that would otherwise look like anti-forensics. <a class="see-also" href="prefetch_anatomy.html#retention">Explained in full: Prefetch</a></td></tr>
+            <tr><td><code>{ControlSet}\Services\bam\State\UserSettings</code></td><td>SYSTEM</td><td>BAM: the last time each program ran, per account SID, written by the kernel's Background Activity Moderator on Windows 10 1709 and later. <a class="see-also" href="registry_anatomy.html#table-bam">Explained in full: BAM</a></td></tr>
+            <tr><td><code>{ControlSet}\Services\dam\UserSettings</code></td><td>SYSTEM</td><td>DAM: the Desktop Activity Moderator's per-SID last-run times, populated on Modern Standby devices and empty on most desktops. <a class="see-also" href="registry_anatomy.html#table-dam">Explained in full: DAM</a></td></tr>
+          </tbody>
+        </table>
+      </div>
+<!-- KEYS:ran:END -->
+    </section>
+
+    <section>
+      <h2 id="persistence">Question 2: what will run again?</h2>
+      <p>Persistence is the registry's specialty, and it is much larger than the two keys everyone
+      knows. Crow-Eye reads twenty-eight autostart extensibility points beyond Run and RunOnce:
+      Winlogon's Shell and Userinit, Image File Execution Options, AppInit and AppCert DLLs, Active
+      Setup, LSA packages, Boot Execute, per-user CLSID shadowing, Command Processor AutoRun,
+      Drivers32, shell service objects, Browser Helper Objects, SharedTaskScheduler, shell icon
+      overlays, credential providers, netsh helper DLLs, AMSI providers, security providers, print
+      monitors and processors, network providers, WMI autorecover MOFs, and the per-user Load and
+      Run values.</p>
+
+      <div class="myth">
+        <h4>Persistence is not execution</h4>
+        <p>A Run key entry says a program is configured to start. It does not say it ever has.
+        The two get reported as one thing constantly, and the difference is the difference between
+        "an attacker installed this" and "this attacker's code ran on this date". Answer it with
+        BAM, Prefetch or an event log, not with the Run key.</p>
+      </div>
+
+      <p>Crow-Eye names these tables for the artifact, never for the technique that abuses them:
+      <code>shell_open_command</code>, not "uac_bypass"; <code>clsid_inprocserver32</code>, not "com
+      hijack". A verdict in a table name becomes a verdict on screen, and the analyst stops being
+      the one who judges.</p>
+
+<!-- KEYS:persist:START -->
+      <h3>Every key Crow-Eye reads for this question <span style="color:var(--tx3,#7d8590);font-weight:400">(49)</span></h3>
+      <p>The full list, so the page can answer "is this key covered?" rather than leaving it open. A key shown as <code>{ControlSet}</code> is read as <code>CurrentControlSet</code> on a live machine and as the control set <code>Select</code> names in an offline hive.</p>
+      <span class="cap">Table 4</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td><code>Classes</code></td><td>SOFTWARE</td><td>File associations and COM registration - what opens what.</td></tr>
+            <tr><td><code>Classes\CLSID</code></td><td>SOFTWARE</td><td>The COM class registry. The target of a hijack is usually a CLSID whose server has been pointed somewhere new.</td></tr>
+            <tr><td><code>Classes\CLSID\{clsid}\InprocServer32</code></td><td>SOFTWARE</td><td>The DLL a COM class loads. Ask for the DEFAULT value by name: ThreadingModel usually enumerates first and is not a path.</td></tr>
+            <tr><td><code>Classes\Wow6432Node\CLSID</code></td><td>SOFTWARE</td><td>The 32-bit COM classes. On disk this is Classes\Wow6432Node\CLSID - the WOW6432Node\Classes form is a live-only redirection alias that no hive file contains.</td></tr>
+            <tr><td><code>Microsoft\AMSI\Providers</code></td><td>SOFTWARE</td><td>Antimalware Scan Interface providers. A provider removed here blinds script scanning.</td></tr>
+            <tr><td><code>Microsoft\Active Setup\Installed Components</code></td><td>SOFTWARE</td><td>Runs once per user at first logon. Persistence that waits for a user who has not logged in yet.</td></tr>
+            <tr><td><code>Microsoft\Command Processor</code></td><td>SOFTWARE</td><td>AutoRun - a command executed every time cmd.exe starts.</td></tr>
+            <tr><td><code>Microsoft\Netsh</code></td><td>SOFTWARE</td><td>Netsh helper DLLs, loaded whenever netsh runs.</td></tr>
+            <tr><td><code>Microsoft\WBEM\CIMOM</code></td><td>SOFTWARE</td><td>WMI settings, including the autorecover MOF list - a persistence location that survives a WMI repository rebuild.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Drivers32</code></td><td>SOFTWARE</td><td>Multimedia driver DLLs loaded by the system, and an old autostart.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Print\Printers</code></td><td>SOFTWARE</td><td>Installed printers and their drivers.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Schedule\TaskCache</code></td><td>SOFTWARE</td><td>Scheduled tasks as the scheduler sees them, including the run history a task's XML file does not carry.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Windows</code></td><td>SOFTWARE</td><td>AppInit_DLLs and LoadAppInit_DLLs - a DLL injected into most processes.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\Winlogon</code></td><td>SOFTWARE</td><td>Userinit, Shell and Notify. Anything appended here runs at logon with the user's rights and is a long-standing hijack point.</td></tr>
+            <tr><td><code>Microsoft\Windows Script Host\Settings</code></td><td>SOFTWARE</td><td>Whether Windows Script Host is enabled, which decides if a .vbs or .js payload can run at all.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\App Paths</code></td><td>SOFTWARE</td><td>How a bare command name resolves to an executable. Change an entry and typing the name runs something else, with no path to give it away. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Authentication</code></td><td>SOFTWARE</td><td>Credential providers, which load into the logon UI.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Authentication\Credential Provider Filters</code></td><td>SOFTWARE</td><td>Filters that hide or allow credential providers on the logon screen. A filter DLL loads into LogonUI like a provider does.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Authentication\Credential Providers</code></td><td>SOFTWARE</td><td>Credential provider CLSIDs. Each backing DLL loads into LogonUI and sees what is typed at the logon screen, so an unfamiliar one is a credential-theft lead.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects</code></td><td>SOFTWARE</td><td>Browser Helper Objects: COM DLLs Internet Explorer and Explorer load at start. Resolved through the CLSID to the DLL on disk.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\FileExts</code></td><td>SOFTWARE</td><td>Per-extension handler choices. Change the handler for a common file type and opening an ordinary document runs something else.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\SharedTaskScheduler</code></td><td>SOFTWARE</td><td>Another Explorer-loaded COM list, and another autostart.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\ShellIconOverlayIdentifiers</code></td><td>SOFTWARE</td><td>Icon overlay handlers: DLLs Explorer loads into every folder view to draw sync and status badges. <a class="see-also" href="shell-items-shellbags-anatomy.html#table-shell-extensions">Explained in full: shell extensions</a></td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\StartupApproved</code></td><td>SOFTWARE, per-user</td><td>Whether each autostart entry is actually allowed to launch, and when it was switched off. A Run value is a request; this is the answer. Without it every Run value reads as live persistence - on the system behind this page six of ten were disabled, two of them since February. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders</code></td><td>SOFTWARE</td><td>Where Windows believes the user's Startup folder is. Repoint it and the Startup folder somebody inspects is not the one that runs.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Policies\Explorer\Run</code></td><td>SOFTWARE</td><td>A policy-backed autostart location, less watched than the ordinary one.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Run</code></td><td>SOFTWARE, per-user</td><td>The classic autostart key. Every value runs at logon.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\RunOnce</code></td><td>SOFTWARE, per-user</td><td>Runs once at the next logon and is then deleted, which is why an entry still present is worth reading closely.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\RunServices</code></td><td>SOFTWARE</td><td>A legacy autostart location that still executes.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\RunServicesOnce</code></td><td>SOFTWARE</td><td>The run-once form of the same legacy location.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\SharedDLLs</code></td><td>SOFTWARE</td><td>Reference counts Windows keeps for shared libraries. Mostly inventory, and occasionally the only surviving record that a DLL was ever installed. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\ShellServiceObjectDelayLoad</code></td><td>SOFTWARE</td><td>COM objects Explorer loads at startup, by CLSID.</td></tr>
+            <tr><td><code>Policies\Explorer\Run</code></td><td>SOFTWARE</td><td>The same policy autostart, reached through the Policies hive path.</td></tr>
+            <tr><td><code>WOW6432Node\Classes\CLSID</code></td><td>SOFTWARE</td><td>The redirected 32-bit COM view as the live API presents it.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Active Setup\Installed Components</code></td><td>SOFTWARE</td><td>The 32-bit view of Active Setup on a 64-bit machine.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows NT\CurrentVersion\Drivers32</code></td><td>SOFTWARE</td><td>The 32-bit view of Drivers32: multimedia driver DLLs a 32-bit process loads through winmm.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows NT\CurrentVersion\Windows</code></td><td>SOFTWARE</td><td>The 32-bit AppInit location.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows\CurrentVersion\Explorer\Browser Helper Objects</code></td><td>SOFTWARE</td><td>The 32-bit view of Browser Helper Objects, loaded by 32-bit Internet Explorer.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Lsa</code></td><td>SYSTEM</td><td>LSA configuration - authentication packages, notification packages, and the four class-name keys that hold the machine's boot key.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Print\Environments</code></td><td>SYSTEM</td><td>Print processors and drivers, another spooler-loaded DLL location.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Print\Monitors</code></td><td>SYSTEM</td><td>Print monitor DLLs, loaded by the spooler as SYSTEM.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Print\Printers</code></td><td>SYSTEM</td><td>The system view of the same printers.</td></tr>
+            <tr><td><code>{ControlSet}\Control\SafeBoot</code></td><td>SYSTEM</td><td>Services and drivers that still start in Safe Mode - the boot people use to clean a machine, which is exactly why persistence is placed here. </td></tr>
+            <tr><td><code>{ControlSet}\Control\SecurityProviders</code></td><td>SYSTEM</td><td>Security packages loaded by LSA.</td></tr>
+            <tr><td><code>{ControlSet}\Control\SecurityProviders\WDigest</code></td><td>SYSTEM</td><td>UseLogonCredential. Set to 1, plaintext credentials return to memory - a single DWORD with a large consequence.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager</code></td><td>SYSTEM</td><td>BootExecute and PendingFileRenameOperations - what runs before Windows starts, and what is moved or deleted at the next boot.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\AppCertDlls</code></td><td>SYSTEM</td><td>DLLs loaded into every process that calls CreateProcess. Rarely populated legitimately, so anything here is worth explaining.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Windows</code></td><td>SYSTEM</td><td>System-wide Windows settings, including error-mode behaviour.</td></tr>
+            <tr><td><code>{ControlSet}\Services</code></td><td>SYSTEM</td><td>Every service and driver on the machine. The start type decides whether it runs at boot, and the image path says what runs.</td></tr>
+          </tbody>
+        </table>
+      </div>
+<!-- KEYS:persist:END -->
+    </section>
+
+    <section>
+      <h2 id="usb-devices">Question 3: what was plugged into it?</h2>
+      <p>USB history is spread across several keys that each hold a piece, and the piece most people
+      want - <em>when</em> - is in the least accessible of them.</p>
+
+      <span class="cap">Table 5</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Key</th><th>Holds</th></tr></thead>
+        <tbody>
+          <tr><td>Enum\USB</td><td>every USB device by vendor and product, one subkey per physical unit</td></tr>
+          <tr><td>Enum\USBSTOR</td><td>mass storage specifically, keyed by serial number</td></tr>
+          <tr><td>MountPoints2</td><td>per user: which volumes that user mounted, which ties a device to a person</td></tr>
+          <tr><td>MountedDevices</td><td>drive letter assignments, which ties a device to a letter in other artifacts</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <p>The timestamps live under each device's <code>Properties</code> subkey, in
+      <code>{83da6326-97a6-4088-9453-a1923f573b29}</code>, as four numbered values:
+      <strong>0064</strong> install, <strong>0065</strong> first install, <strong>0066</strong> last
+      arrival, <strong>0067</strong> last removal. They are <code>DEVPROP_TYPE_FILETIME</code>, which
+      is not one of the twelve documented registry types, so a reader that only knows the twelve
+      refuses them.</p>
+
+      <div class="myth">
+        <h4>0066 is the connection, 0067 is the disconnection</h4>
+        <p>Getting these the wrong way round reports the moment a device was unplugged as the moment
+        it was attached. The tell is structural: a device still connected has no 0067 at all, so a
+        "last connected" column that is empty for currently-attached devices has them swapped.</p>
+      </div>
+
+      <div class="myth">
+        <h4>These keys deny even an administrator</h4>
+        <p>The <code>Properties</code> subkeys are ACL'd such that an elevated administrator reading
+        through the registry API is refused. Measured on a live machine: an API walk of
+        <code>Enum\USB</code> reaches 110 keys where reading the same hive as a file reaches 868.
+        A live tool that does not read the hive file reports no USB timestamps at all, and reports
+        it as an absence of evidence.</p>
+      </div>
+
+<!-- KEYS:devices:START -->
+      <h3>Every key Crow-Eye reads for this question <span style="color:var(--tx3,#7d8590);font-weight:400">(14)</span></h3>
+      <p>The full list, so the page can answer "is this key covered?" rather than leaving it open. A key shown as <code>{ControlSet}</code> is read as <code>CurrentControlSet</code> on a live machine and as the control set <code>Select</code> names in an offline hive.</p>
+      <span class="cap">Table 6</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td><code>Microsoft\Windows Portable Devices\Devices</code></td><td>SOFTWARE</td><td>Friendly names and volume labels for portable devices, which is often the only human-readable name a device left behind.</td></tr>
+            <tr><td><code>Microsoft\Windows Search\VolumeInfoCache</code></td><td>SOFTWARE</td><td>Volume labels and serials the search indexer has recorded.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\MountPoints2</code></td><td>SOFTWARE</td><td>Volumes this user has mounted, including network shares and removable drives, keyed by volume GUID.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\VolumeInfoCache</code></td><td>SOFTWARE</td><td>Explorer's own cache of volume labels, including drives long removed.</td></tr>
+            <tr><td><code>MountedDevices</code></td><td>SYSTEM</td><td>Drive letters and volume GUIDs mapped to the disk signature and partition offset behind them. This is what ties a physical disk to a machine.</td></tr>
+            <tr><td><code>{ControlSet}\Control\DeviceClasses</code></td><td>SYSTEM</td><td>Devices grouped by interface class, with the arrival records that pair with the Enum keys.</td></tr>
+            <tr><td><code>{ControlSet}\Control\FileSystem</code></td><td>SYSTEM</td><td>Filesystem behaviour, including whether last-access times are updated - which decides whether an access timestamp means anything at all.</td></tr>
+            <tr><td><code>{ControlSet}\Enum\SCSI</code></td><td>SYSTEM</td><td>SCSI-enumerated devices, which is how some external enclosures appear.</td></tr>
+            <tr><td><code>{ControlSet}\Enum\SWD\WPDBUSENUM</code></td><td>SYSTEM</td><td>Portable devices - phones and cameras - as the WPD bus enumerates them.</td></tr>
+            <tr><td><code>{ControlSet}\Enum\USB</code></td><td>SYSTEM</td><td>Every USB device the machine has enumerated, by vendor and product.</td></tr>
+            <tr><td><code>{ControlSet}\Enum\USBSTOR</code></td><td>SYSTEM</td><td>USB mass storage specifically - the key that answers 'what drive was plugged in'.</td></tr>
+            <tr><td><code>{ControlSet}\Enum\USB\{device_id}\{instance_id}\Properties</code></td><td>SYSTEM</td><td>The per-device property store holding the connection timestamps. Its ACL denies even an elevated administrator through the API, so these values are readable only from the hive as a file.</td></tr>
+            <tr><td><code>{ControlSet}\Services\BTHPORT\Parameters\Devices</code></td><td>SYSTEM</td><td>Bluetooth devices that have been paired, with their addresses and names.</td></tr>
+            <tr><td><code>{ControlSet}\Services\usbstor</code></td><td>SYSTEM</td><td>The USB storage driver's start type. Set to 4 it is disabled, which is both a hardening measure and a way to explain missing device history.</td></tr>
+          </tbody>
+        </table>
+      </div>
+<!-- KEYS:devices:END -->
+    </section>
+
+    <section>
+      <h2 id="user-activity">Question 4: where did the user go?</h2>
+      <p>Explorer remembers, and the remembering is per user and per hive. Shellbags get
+      <a href="shell-items-shellbags-anatomy.html">a page of their own</a>; the rest are MRU lists.</p>
+
+      <p style="color:var(--tx2);">All of these &mdash; Shellbags, RecentDocs, the dialog MRUs, TypedPaths,
+      RunMRU and the search history, together with what the user ran (UserAssist, BAM, DAM, FeatureUsage, the
+      Compatibility Assistant) and the rest of the user-activity keys &mdash; are read together by the
+      <strong>Charts</strong> button on each of their table tabs, which opens one
+      <a href="shell-items-shellbags-anatomy.html#dashboard">User Activity dashboard</a>: every source on
+      one timeline, most-visited places, the volumes and shares each pointed at, and per-item detail. Each table is
+      <a href="#user-activity-tables">explained one by one below</a>.</p>
+
+      <p>An MRU key holds numbered values and one ordering value. In older keys that is
+      <code>MRUList</code>, a string of letters: on the reference system the RunMRU key holds
+      2 entries ordered <code>ba</code>. Newer keys use
+      <code>MRUListEx</code>, four-byte indices terminated by <code>0xFFFFFFFF</code>.</p>
+
+      <div class="myth">
+        <h4>The value names are allocation order, not use order</h4>
+        <p>Reading an MRU key's values in numeric order and reporting that as history is wrong, and
+        it is wrong in a way that looks right: the entries are correct and their order is not. The
+        ordering value is the only thing that says what was used most recently, and a parser that
+        ignores it silently reorders the user's activity.</p>
+      </div>
+
+      <p>RecentDocs, OpenSaveMRU, LastVisitedMRU, TypedPaths, WordWheelQuery and the RDP client's
+      history are all this shape. Several store shell items rather than strings, which is the same
+      structure a Shellbag and a shortcut use.</p>
+
+      <p>That is where they stop being alike. One holds a shell item list to a file, one holds an
+      application name and then a folder, one holds an application name and a window size with no
+      path in it at all, and two hold nothing but a string - so a row from one supports a sentence
+      a row from another does not.
+      <a class="see-also" href="shell-items-shellbags-anatomy.html#mru-family">Explained in full: the MRU family</a></p>
+
+<!-- KEYS:user:START -->
+      <h3>Every key Crow-Eye reads for this question <span style="color:var(--tx3,#7d8590);font-weight:400">(34)</span></h3>
+      <p>The full list, so the page can answer "is this key covered?" rather than leaving it open. A key shown as <code>{ControlSet}</code> is read as <code>CurrentControlSet</code> on a live machine and as the control set <code>Select</code> names in an offline hive.</p>
+      <span class="cap">Table 7</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td><code>7-Zip\Compression</code></td><td>SOFTWARE</td><td>7-Zip's recent archive and extraction paths.</td></tr>
+            <tr><td><code>Classes\Local Settings\Software\Microsoft\Windows\ShellNoRoam\BagMRU</code></td><td>UsrClass.dat</td><td>The pre-Windows-7 Shellbag tree inside UsrClass.dat. Rarely populated on a modern machine, which is exactly why a bag that does land here is worth noticing. <a class="see-also" href="shell-items-shellbags-anatomy.html#shellbag-keys">All four Shellbag trees</a></td></tr>
+            <tr><td><code>Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU</code></td><td>UsrClass.dat</td><td>Shellbags. Every folder opened in Explorer, including folders on drives removed years ago. <a class="see-also" href="shell-items-shellbags-anatomy.html#shellbag-keys">All four Shellbag trees</a></td></tr>
+            <tr><td><code>FileZilla Client</code></td><td>SOFTWARE</td><td>FileZilla configuration and site history.</td></tr>
+            <tr><td><code>Martin Prikryl\WinSCP 2\Sessions</code></td><td>SOFTWARE</td><td>Saved WinSCP sessions, including hostnames and usernames.</td></tr>
+            <tr><td><code>Microsoft\Internet Explorer\TypedURLs</code></td><td>SOFTWARE</td><td>URLs typed into the address bar. Still written by parts of Windows long after anyone stopped using the browser.</td></tr>
+            <tr><td><code>Microsoft\Internet Explorer\TypedURLsTime</code></td><td>SOFTWARE</td><td>The timestamps for those typed URLs, in a separate key.</td></tr>
+            <tr><td><code>Microsoft\Office</code></td><td>SOFTWARE</td><td>Office settings and recent-file lists.</td></tr>
+            <tr><td><code>Microsoft\Terminal Server Client</code></td><td>SOFTWARE</td><td>Remote desktop connections this user made, and to which hosts.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Applets\Regedit</code></td><td>NTUSER.DAT</td><td>Registry Editor's LastKey (the key open when it was closed) and its Favorites. Someone browsing the registry by hand leaves this behind. <a class="see-also" href="registry_anatomy.html#table-regedit-lastkey">Explained in full: Regedit last key</a></td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore</code></td><td>SOFTWARE</td><td>Which applications hold consent for a capability - microphone, camera, location - and when each last used it. The registry's own record of surveillance-capable access. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer</code></td><td>SOFTWARE</td><td>The Explorer root, parent of most per-user activity keys.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\Advanced</code></td><td>NTUSER.DAT</td><td>What this user chose to see in Explorer: Hidden, HideFileExt and ShowSuperHidden. ShowSuperHidden=1 is off by default and means protected OS files were made visible.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\CIDSizeMRU</code></td><td>NTUSER.DAT</td><td>Programs that opened an Open or Save dialog, newest first, with no path - the executable name only. <a class="see-also" href="shell-items-shellbags-anatomy.html#table-cidsizemru">Explained in full: CIDSizeMRU</a></td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\LastVisitedPidlMRU</code></td><td>SOFTWARE</td><td>The folder each application last used in a file dialog, which links a program to a location.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\ComDlg32\OpenSavePidlMRU</code></td><td>SOFTWARE</td><td>Files chosen in an Open or Save dialog, as shell item lists.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\Map Network Drive MRU</code></td><td>SOFTWARE</td><td>Network drives the user mapped by hand.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\RecentDocs</code></td><td>SOFTWARE</td><td>Files opened recently, grouped by extension, ordered by MRUListEx.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\RunMRU</code></td><td>SOFTWARE</td><td>What was typed into the Run dialog, in use order.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\Shell Folders</code></td><td>per-user</td><td>Where the shell resolves each known folder to. The resolved half of User Shell Folders, which holds the unexpanded form. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\StartPage2</code></td><td>NTUSER.DAT</td><td>ProgramsCache: the Start menu's cached list of program shortcuts, one binary blob of shell items. <a class="see-also" href="registry_anatomy.html#table-programs-cache">Explained in full: ProgramsCache</a></td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\Taskband</code></td><td>per-user</td><td>Items pinned to the taskbar, as a shell item list. Deliberate arrangement rather than incidental use. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\TypedPaths</code></td><td>SOFTWARE</td><td>Paths typed into the Explorer address bar - deliberate navigation, not clicking.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Explorer\WordWheelQuery</code></td><td>SOFTWARE</td><td>Terms typed into Explorer's search box.</td></tr>
+            <tr><td><code>Microsoft\Windows\ShellNoRoam\BagMRU</code></td><td>NTUSER.DAT</td><td>The local-only Shellbag tree from the same era. A collection that takes only NTUSER.DAT gets these and misses the modern ones entirely. <a class="see-also" href="shell-items-shellbags-anatomy.html#shellbag-keys">All four Shellbag trees</a></td></tr>
+            <tr><td><code>Microsoft\Windows\Shell\BagMRU</code></td><td>NTUSER.DAT</td><td>The roaming Shellbag tree, used before Windows 7 moved them to UsrClass.dat. <a class="see-also" href="shell-items-shellbags-anatomy.html#shellbag-keys">All four Shellbag trees</a></td></tr>
+            <tr><td><code>RealVNC</code></td><td>SOFTWARE</td><td>VNC server configuration, including whether it accepts connections.</td></tr>
+            <tr><td><code>SimonTatham\PuTTY\Sessions</code></td><td>SOFTWARE</td><td>Saved PuTTY sessions - hosts, users and ports somebody configured.</td></tr>
+            <tr><td><code>SimonTatham\PuTTY\SshHostKeys</code></td><td>SOFTWARE</td><td>SSH host keys PuTTY has accepted, which is a record of hosts actually connected to rather than merely configured.</td></tr>
+            <tr><td><code>Sysinternals</code></td><td>SOFTWARE</td><td>EULA-accepted keys for Sysinternals tools. Their presence dates the first run of a tool that is often brought onto a machine deliberately.</td></tr>
+            <tr><td><code>TeamViewer</code></td><td>SOFTWARE</td><td>TeamViewer configuration and connection history.</td></tr>
+            <tr><td><code>Trusted Documents\TrustRecords</code></td><td>SECURITY</td><td>Office documents the user chose to enable content in - a record of somebody clicking through a macro warning.</td></tr>
+            <tr><td><code>WinRAR\ArcHistory</code></td><td>SOFTWARE</td><td>Archives opened in WinRAR.</td></tr>
+            <tr><td><code>WinRAR\DialogEditHistory\ExtrPath</code></td><td>SOFTWARE</td><td>Paths archives were extracted to - where the contents of an archive actually landed.</td></tr>
+          </tbody>
+        </table>
+      </div>
+<!-- KEYS:user:END -->
+    </section>
+
+<!-- TABLES:START - hand-maintained, one section per Crow-Eye table -->
+    <section>
+      <h2 id="user-activity-tables">Every user-activity table, one by one</h2>
+      <p>Each table below is one tab in Crow-Eye, and each has an <strong>Anatomy</strong> button that opens its own
+      section here. Its <strong>Charts</strong> button opens the
+      <a href="shell-items-shellbags-anatomy.html#dashboard">User Activity dashboard</a>, where it shares one
+      timeline with Shellbags, the MRUs and every other source below. The shell-item tables (RecentDocs, the dialog
+      MRUs, TypedPaths, RunMRU, search, MountPoints2) are explained
+      <a href="shell-items-shellbags-anatomy.html#every-table">on the Shell Items page</a>.</p>
+      <h3 id="table-userassist">UserAssist</h3>
+      <p>Programs and shortcuts this user launched through Explorer, with how often and for how long they had focus. The value names are ROT13-encoded paths (<a href="#userassist">why, and what that breaks</a>).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\UserAssist\{GUID}\Count</code>; <code>{CEBFF5CD-...}</code> holds executables, <code>{F4E57C4B-...}</code> shortcuts</td></tr>
+            <tr><td>Value data (Windows 7+)</td><td>A 72-byte record: run count at offset 4, focus count at 8, focus time in milliseconds at 12, last execution FILETIME at 60 (<a href="#bm-tabs">byte map above</a>)</td></tr>
+            <tr><td>Names</td><td>A path may start with a known-folder GUID instead of a drive (<code>{6D809377-...}</code> is Program Files); <code>UEME_CTL...</code> values are UserAssist's own counters, not programs</td></tr>
+            <tr><td>Timestamp</td><td>Per entry: the last execution time</td></tr>
+            <tr><td>Proves</td><td>This user launched it through the shell, the count and the last time</td></tr>
+            <tr><td>Does not prove</td><td>Execution from a command line or a service, which UserAssist never sees</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>UserAssist</strong>: decoded path, run count, focus count, focus time, last execution, user</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>UserAssist</em>, dated by last execution; the counters are left out</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-bam">BAM, the background activity moderator</h3>
+      <p>The kernel's record of the last time each program ran, per user SID (<a href="#bam-dam">how BAM works</a>).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>SYSTEM\{ControlSet}\Services\bam\State\UserSettings\&lt;SID&gt;</code> (Windows 10 1709 and later; earlier builds used <code>Services\bam\UserSettings</code>)</td></tr>
+            <tr><td>Values</td><td>Name: a device path (<code>\Device\HarddiskVolume3\...</code>) or a Store app ID. Data: 24 bytes, a FILETIME first. <code>Version</code> and <code>SequenceNumber</code> are bookkeeping, not programs</td></tr>
+            <tr><td>Timestamp</td><td>Per entry: the last execution</td></tr>
+            <tr><td>Proves</td><td>That binary ran under that SID, most recently at that time - including programs never launched from Explorer</td></tr>
+            <tr><td>Does not prove</td><td>Earlier runs: one time per binary, and entries are pruned after a short window</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>BAM</strong>: process path, app name, SID (resolved to a user), last execution</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>BAM</em>, dated by last execution</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="myth">
+        <h4>A device path is not a drive letter</h4>
+        <p><code>\Device\HarddiskVolume3</code> is the third volume the kernel numbered at boot, not <code>C:</code>. Map it through the partition layout before writing a drive letter in a report.</p>
+      </div>
+
+      <h3 id="table-dam">DAM, the desktop activity moderator</h3>
+      <p>The same record as BAM, kept by the Desktop Activity Moderator. It exists only on devices that support Modern Standby (connected standby), so on most desktops the table is empty - and that is not a gap.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>SYSTEM\{ControlSet}\Services\dam\State\UserSettings\&lt;SID&gt;</code></td></tr>
+            <tr><td>Values</td><td>Same format as BAM: a FILETIME first; some builds also keep an execution count</td></tr>
+            <tr><td>Timestamp</td><td>Per entry: the last execution</td></tr>
+            <tr><td>Proves</td><td>That binary ran under that SID on a Modern Standby device</td></tr>
+            <tr><td>Does not prove</td><td>Anything on a machine without Modern Standby, where Windows never writes it</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>DAM</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>DAM</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-muicache">MUICache</h3>
+      <p>Friendly names Explorer read from executables' version resources - which happens when the shell displays or launches them.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>UsrClass.dat\Local Settings\Software\Microsoft\Windows\Shell\MuiCache</code> (Vista and later)</td></tr>
+            <tr><td>Values</td><td>Name: <code>&lt;path&gt;.FriendlyAppName</code> or <code>.ApplicationCompany</code>. Data: the text</td></tr>
+            <tr><td>Timestamp</td><td>None per entry</td></tr>
+            <tr><td>Proves</td><td>The shell handled that executable for this user, usually because it was launched</td></tr>
+            <tr><td>Does not prove</td><td>When, or how often</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>MUICache</strong>: path, application name, company</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>MUICache</em>, undated: listed under All items</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-recentapps">RecentApps</h3>
+      <p>Windows 10's early record of recently used apps and the files each opened (builds 1507 to 1607; later builds dropped it).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Search\RecentApps\{GUID}</code>, with <code>RecentItems</code> subkeys</td></tr>
+            <tr><td>Values</td><td><code>AppId</code>, <code>AppPath</code>, <code>LaunchCount</code>, <code>LastAccessedTime</code> (FILETIME)</td></tr>
+            <tr><td>Timestamp</td><td>Per app: the last access</td></tr>
+            <tr><td>Proves</td><td>The app was used, how often, and when last</td></tr>
+            <tr><td>Does not prove</td><td>Anything on builds that never wrote the key</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>RecentApps</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>RecentApps</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-featureusage">FeatureUsage (taskbar)</h3>
+      <p>Per-program counters kept by the taskbar (Windows 10 1903 and later).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FeatureUsage</code>, subkeys <code>AppSwitched</code> (switched to from the taskbar), <code>AppLaunch</code> (launched from a pin), <code>ShowJumpView</code> (jump list opened), <code>AppBadgeUpdated</code>, <code>TrayButtonClicked</code></td></tr>
+            <tr><td>Values</td><td>Name: a program path or AppUserModelID. Data: a DWORD count</td></tr>
+            <tr><td>Timestamp</td><td>Only each subkey's last-write time - one upper bound shared by every counter in it</td></tr>
+            <tr><td>Proves</td><td>The user interacted with that program through the taskbar, that many times</td></tr>
+            <tr><td>Does not prove</td><td>When any one interaction happened</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>FeatureUsage</strong>: usage type, program, count, key upper bound</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>FeatureUsage</em>, undated: plotting every counter on the subkey's day would be a false spike</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-compatibility-assistant">The compatibility assistant store (PCA)</h3>
+      <p>Programs the Program Compatibility Assistant watched because the user ran them - installers and downloaded tools especially.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows NT\CurrentVersion\AppCompatFlags\Compatibility Assistant\Store</code></td></tr>
+            <tr><td>Values</td><td>Name: the full path of the program. Data: a binary record (Crow-Eye keeps its size)</td></tr>
+            <tr><td>Timestamp</td><td>Only the key's last-write time</td></tr>
+            <tr><td>Proves</td><td>This user ran that executable - the path survives after the file is deleted</td></tr>
+            <tr><td>Does not prove</td><td>When; on Windows 11 22H2 and later PCA also keeps text logs in <code>C:\Windows\appcompat\pca</code></td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>CompatibilityAssistant</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Compatibility Assistant</em>, undated</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-file-exts">File associations (FileExts)</h3>
+      <p>Which programs the user opened each file type with, and which one they chose as the default.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\&lt;.ext&gt;</code> with <code>OpenWithList</code> (an MRU of programs), <code>OpenWithProgids</code> and <code>UserChoice</code> (the default)</td></tr>
+            <tr><td>Timestamp</td><td>Each subkey's last-write time</td></tr>
+            <tr><td>Proves</td><td>This user opened that type with that program at least once, or set it as the default</td></tr>
+            <tr><td>Does not prove</td><td>Which file</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>file_exts</strong>: extension, list type, program or ProgID</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>File associations</em>, undated</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="myth">
+        <h4>An unusual program in OpenWithList is worth a look</h4>
+        <p><code>.001</code> opened with FTK Imager, or <code>.ps1</code> with Notepad, says what the user did with a file type even when the file itself is gone.</p>
+      </div>
+
+      <h3 id="table-programs-cache">ProgramsCache (Start menu)</h3>
+      <p>The Start menu's cached list of programs, stored as shell items.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Explorer\StartPage2</code>, value <code>ProgramsCache</code></td></tr>
+            <tr><td>Values</td><td>One binary value: a list of shell items. Crow-Eye records its presence and size, not its decoded entries</td></tr>
+            <tr><td>Timestamp</td><td>None per entry</td></tr>
+            <tr><td>Proves</td><td>The value exists for this user; decoded, it lists programs the Start menu offered</td></tr>
+            <tr><td>Does not prove</td><td>Execution</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>programs_cache</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>ProgramsCache</em>, undated</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-regedit-lastkey">Registry Editor: last key and favourites</h3>
+      <p>Where Registry Editor was looking when it was last closed, and the keys saved as favourites.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Key</td><td><code>NTUSER\Software\Microsoft\Windows\CurrentVersion\Applets\Regedit</code>: value <code>LastKey</code>, subkey <code>Favorites</code></td></tr>
+            <tr><td>Timestamp</td><td>The key's last-write time, close to when Registry Editor was last closed</td></tr>
+            <tr><td>Proves</td><td>Registry Editor was used by this user - a <code>LastKey</code> on a Run key or a service is worth a look</td></tr>
+            <tr><td>Does not prove</td><td>What was changed</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>regedit_lastkey</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Regedit last key</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-typed-urls">TypedURLs</h3>
+      <p>Addresses typed into the Internet Explorer (and Explorer) address bar.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Keys</td><td><code>NTUSER\Software\Microsoft\Internet Explorer\TypedURLs</code> (<code>url1</code> ... <code>url25</code>, <code>url1</code> newest) and <code>TypedURLsTime</code> (a FILETIME per <code>urlN</code>, Windows 8 and later)</td></tr>
+            <tr><td>Timestamp</td><td>Per entry when <code>TypedURLsTime</code> exists; otherwise only the key's write time</td></tr>
+            <tr><td>Proves</td><td>The user typed that address</td></tr>
+            <tr><td>Does not prove</td><td>Browsing in other browsers - see the browser page</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>BrowserHistory</strong> (the registry tab of that name)</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>TypedURLs</em>, dated by TypedURLsTime when present</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p><a class="see-also" href="browser-forensics.html">Explained in full: browser forensics</a></p>
+
+      <h3 id="table-rdp-client-mru">Remote desktop client history</h3>
+      <p>Hosts this user connected to with Remote Desktop.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Keys</td><td><code>NTUSER\Software\Microsoft\Terminal Server Client\Default</code> (<code>MRU0</code> ... <code>MRU9</code>) and <code>\Servers\&lt;host&gt;</code> with <code>UsernameHint</code></td></tr>
+            <tr><td>Timestamp</td><td>Each key's last-write time</td></tr>
+            <tr><td>Proves</td><td>An outbound Remote Desktop connection was attempted to that host, and with which account name</td></tr>
+            <tr><td>Does not prove</td><td>That it succeeded - check the target's logon events (4624 type 10)</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>RDPClientMRU</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>RDPClientMRU</em>; every row counts as network activity</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-office-mru">Office recent files and trusted documents</h3>
+      <p>Documents opened in Word, Excel and PowerPoint, and the documents the user let run active content.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Keys</td><td><code>NTUSER\Software\Microsoft\Office\&lt;version&gt;\&lt;app&gt;\File MRU</code> and <code>Place MRU</code> (Microsoft 365 adds <code>User MRU\&lt;id&gt;\...</code>); <code>...\Security\Trusted Documents\TrustRecords</code></td></tr>
+            <tr><td>Values</td><td>MRU items look like <code>[F00000000][T01D...][O00000000]*C:\path</code>; the <code>T</code> field is a FILETIME in hex - the last open. TrustRecords: value name = document path</td></tr>
+            <tr><td>Timestamp</td><td>Per MRU entry (the <code>T</code> field); TrustRecords carry a FILETIME in their data</td></tr>
+            <tr><td>Proves</td><td>The document was opened in Office; a trust record means the user clicked <em>Enable Editing</em> or <em>Enable Content</em> (a trailing <code>FF FF FF 7F</code> is widely documented as macros enabled)</td></tr>
+            <tr><td>Does not prove</td><td>What the document contained</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>OfficeDocuments</strong> (TrustRecords included)</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Office MRU</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-application-mrus">Application MRUs (PuTTY, WinSCP, WinRAR, 7-Zip, ...)</h3>
+      <p>What third-party tools remember, read from their own keys.</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>PuTTY</td><td><code>Software\SimonTatham\PuTTY\Sessions</code> (saved sessions) and <code>SshHostKeys</code> (every SSH host this user accepted a key for)</td></tr>
+            <tr><td>WinSCP</td><td><code>Software\Martin Prikryl\WinSCP 2\Sessions</code>: saved file-transfer sessions</td></tr>
+            <tr><td>WinRAR</td><td><code>Software\WinRAR\ArcHistory</code> (archives opened) and <code>DialogEditHistory\ExtrPath</code> (extraction folders)</td></tr>
+            <tr><td>7-Zip</td><td><code>Software\7-Zip\Compression</code>: archive history</td></tr>
+            <tr><td>Sysinternals</td><td><code>Software\Sysinternals\&lt;tool&gt;</code> <code>EulaAccepted</code>: the tool ran at least once for this user</td></tr>
+            <tr><td>TeamViewer, FileZilla, RealVNC</td><td>Configuration keys - presence means the tool was installed or used by this user</td></tr>
+            <tr><td>Timestamp</td><td>Each key's last-write time</td></tr>
+            <tr><td>Proves</td><td>Remote access, file transfer or archiving tools were used, and where they pointed</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>ApplicationArtifacts</strong></td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>App MRUs</em></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="table-app-permissions">Camera, microphone and location use (ConsentStore)</h3>
+      <p>When each app last used the camera, microphone or location, with a start and a stop time (Windows 10 1903 and later).</p>
+      <div class="responsive-table-wrap">
+        <table class="kb-table">
+          <thead><tr><th style="width:170px;">Field</th><th>Detail</th></tr></thead>
+          <tbody>
+            <tr><td>Keys</td><td><code>SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\&lt;capability&gt;</code> and the same path in NTUSER; Store apps by package name, desktop programs under <code>NonPackaged</code> with <code>#</code> in place of <code>\</code></td></tr>
+            <tr><td>Values</td><td><code>LastUsedTimeStart</code>, <code>LastUsedTimeStop</code> (FILETIMEs), <code>Value</code> (Allow / Deny)</td></tr>
+            <tr><td>Timestamp</td><td>Per app: the start and stop of its last use</td></tr>
+            <tr><td>Proves</td><td>That program had the camera, microphone or location in use between those two times</td></tr>
+            <tr><td>Does not prove</td><td>What was recorded, or earlier uses</td></tr>
+            <tr><td>In Crow-Eye</td><td>Table <strong>app_permissions</strong>: capability, app, permission, last used start and stop</td></tr>
+            <tr><td>On the User Activity dashboard</td><td>Source <em>Camera / mic / location</em>, dated by last-use start</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+<!-- TABLES:END -->
+
+    <section>
+      <h2 id="machine-and-network">Question 5: what was this machine, and what was it connected to?</h2>
+      <p>Identity and network answer the questions that come up when an image arrives with no
+      context: whose machine is this, what was it called, what network was it on, when was it
+      installed.</p>
+
+      <span class="cap">Table 8</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+        <thead><tr><th>Key</th><th>Answers</th></tr></thead>
+        <tbody>
+          <tr><td>ComputerName</td><td>the machine name, and note there are two: the active one and the one pending a reboot</td></tr>
+          <tr><td>MachineGuid</td><td>a stable identifier that survives renames</td></tr>
+          <tr><td>NetworkList\Profiles</td><td>every network joined, with first and last connection, and the gateway's MAC</td></tr>
+          <tr><td>ProfileList</td><td>SID to profile path, which is how any per-user artifact gets a name attached</td></tr>
+          <tr><td>TimeZoneInformation</td><td>the offset every local timestamp on the machine was written in</td></tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="myth">
+        <h4>The gateway MAC in NetworkList places a machine physically</h4>
+        <p>Each network profile records the default gateway's MAC address. That identifies a
+        specific piece of hardware, so a laptop's profile list is a record of which physical
+        networks it was carried to and when it first and last saw each. It is one of the few
+        registry artifacts that speaks to location.</p>
+      </div>
+
+      <div class="myth">
+        <h4>SIDs resolve against the evidence, not against the examining machine</h4>
+        <p>The registry stores SIDs, not names. Resolving them with the API on the examiner's
+        workstation returns that workstation's accounts, and a local SID that happens to collide
+        gets a confident wrong name attached. The mapping has to come from the image's own SAM and
+        ProfileList.</p>
+      </div>
+
+<!-- KEYS:machine:START -->
+      <h3>Every key Crow-Eye reads for this question <span style="color:var(--tx3,#7d8590);font-weight:400">(53)</span></h3>
+      <p>The full list, so the page can answer "is this key covered?" rather than leaving it open. A key shown as <code>{ControlSet}</code> is read as <code>CurrentControlSet</code> on a live machine and as the control set <code>Select</code> names in an offline hive.</p>
+      <span class="cap">Table 9</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead><tr><th>Key</th><th>Hive</th><th>What it is for</th></tr></thead>
+          <tbody>
+            <tr><td><code>Microsoft\Cryptography</code></td><td>SOFTWARE</td><td>MachineGuid, which identifies this installation across rebuilds of almost everything else.</td></tr>
+            <tr><td><code>Microsoft\Windows Defender\Exclusions</code></td><td>SOFTWARE</td><td>Paths, extensions and processes Defender ignores. An exclusion added by an intruder is a quiet way to make a payload invisible.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion</code></td><td>SOFTWARE</td><td>The Windows build, edition, install date and registered owner.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\NetworkCards</code></td><td>SOFTWARE</td><td>The adapter inventory by installation index. Names cards that no longer have an interface, which is how a removed adapter leaves a trace. </td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\NetworkList\Profiles</code></td><td>SOFTWARE</td><td>Networks the evidence machine has joined, with first and last connection times.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\Managed</code></td><td>SOFTWARE</td><td>Domain networks, identified by their gateway MAC - which places a machine on a physical network rather than merely naming one.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\NetworkList\Signatures\Unmanaged</code></td><td>SOFTWARE</td><td>The same signatures for non-domain networks - home and public Wi-Fi.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\ProfileList</code></td><td>SOFTWARE</td><td>Every user profile by SID, with its path. This is what turns a SID in another artifact into a person.</td></tr>
+            <tr><td><code>Microsoft\Windows NT\CurrentVersion\SystemRestore</code></td><td>SOFTWARE</td><td>Whether restore points are being created, and therefore whether earlier hive copies exist to compare against.</td></tr>
+            <tr><td><code>Microsoft\Windows Search\Gather</code></td><td>SOFTWARE</td><td>What the search indexer is scoped to crawl, and therefore which files could appear in its database at all. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion</code></td><td>SOFTWARE</td><td>Per-user Windows settings, parent of the Run and Explorer keys.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Group Policy\History</code></td><td>SOFTWARE</td><td>Group policy objects that have been applied, and when - which says what domain the evidence machine answered to.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Internet Settings</code></td><td>SOFTWARE</td><td>Proxy configuration, which decides where a machine's traffic went.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Internet Settings\ZoneMap</code></td><td>per-user</td><td>Hosts, protocols and ranges assigned to a security zone. A host moved into Trusted Sites runs content every other zone would block. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Policies\Attachments</code></td><td>per-user</td><td>Attachment handling, including SaveZoneInformation. Suppressed, downloaded files lose their Mark of the Web and stop warning anyone. </td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Policies\System</code></td><td>SOFTWARE</td><td>UAC configuration, including the consent prompt behaviour that a bypass depends on.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\Uninstall</code></td><td>SOFTWARE</td><td>Installed software, with publisher, version and install date.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\WINEVT\Channels</code></td><td>SOFTWARE</td><td>Every event log channel, whether it is enabled and where its file lives. A disabled channel explains a silence that would otherwise look like nothing happened.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\WindowsUpdate</code></td><td>SOFTWARE</td><td>Update client state, including when it last checked and installed.</td></tr>
+            <tr><td><code>Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update</code></td><td>SOFTWARE</td><td>Automatic update policy - whether patches were being applied at all.</td></tr>
+            <tr><td><code>Policies\Microsoft\Windows Defender</code></td><td>SOFTWARE</td><td>Defender policy, including whether it has been disabled outright.</td></tr>
+            <tr><td><code>Policies\Microsoft\Windows Defender\Exclusions</code></td><td>SOFTWARE</td><td>The policy-enforced form of the same exclusions.</td></tr>
+            <tr><td><code>Policies\Microsoft\Windows Defender\Real-Time Protection</code></td><td>SOFTWARE</td><td>Real-time protection settings - the switch that turns off live scanning.</td></tr>
+            <tr><td><code>Policies\Microsoft\Windows\PowerShell\ModuleLogging</code></td><td>SOFTWARE</td><td>Whether PowerShell module activity is logged.</td></tr>
+            <tr><td><code>Policies\Microsoft\Windows\PowerShell\ScriptBlockLogging</code></td><td>SOFTWARE</td><td>Whether PowerShell records the script blocks it executes. Off, a whole class of evidence was never created.</td></tr>
+            <tr><td><code>Select</code></td><td>SYSTEM</td><td>Which ControlSet is current. An offline hive has no CurrentControlSet, so this value is what resolves it.</td></tr>
+            <tr><td><code>Setup</code></td><td>SYSTEM</td><td>Setup and upgrade history, which dates the build the machine came from.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows</code></td><td>SOFTWARE</td><td>The 32-bit view of per-user Windows settings.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows NT</code></td><td>SOFTWARE</td><td>The 32-bit view of the system settings tree.</td></tr>
+            <tr><td><code>WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall</code></td><td>SOFTWARE</td><td>The 32-bit software inventory on a 64-bit machine.</td></tr>
+            <tr><td><code>{ControlSet}\Control\BackupRestore\FilesNotToSnapshot</code></td><td>SYSTEM</td><td>Files excluded from shadow copies. An addition here removes something from every future snapshot.</td></tr>
+            <tr><td><code>{ControlSet}\Control\ComputerName\ActiveComputerName</code></td><td>SYSTEM</td><td>The name in force now. The two differ after a rename that has not rebooted, and the difference is itself a finding.</td></tr>
+            <tr><td><code>{ControlSet}\Control\ComputerName\ComputerName</code></td><td>SYSTEM</td><td>The machine name as it will be after the next reboot.</td></tr>
+            <tr><td><code>{ControlSet}\Control\CrashControl</code></td><td>SYSTEM</td><td>Crash dump settings, and whether a dump would exist to collect.</td></tr>
+            <tr><td><code>{ControlSet}\Control\DeviceGuard</code></td><td>SYSTEM</td><td>Virtualisation-based security and Credential Guard. Whether LSASS was protected decides whether credential theft was even possible. </td></tr>
+            <tr><td><code>{ControlSet}\Control\Network</code></td><td>SYSTEM</td><td>Network adapters and their bindings.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Network\{4d36e972-e325-11ce-bfc1-08002be10318}</code></td><td>SYSTEM</td><td>The network adapter class: each adapter GUID with the connection name shown in ncpa.cpl, so a Tcpip interface GUID elsewhere in the case can be named.</td></tr>
+            <tr><td><code>{ControlSet}\Control\NetworkProvider\Order</code></td><td>SYSTEM</td><td>The order network providers are consulted in.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Nls\Language</code></td><td>SYSTEM</td><td>The system locale and the language Windows was installed in - an attribution signal that survives almost everything else. </td></tr>
+            <tr><td><code>{ControlSet}\Control\ProductOptions</code></td><td>SYSTEM</td><td>Product type - whether this is a workstation, a server or a domain controller.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\Environment</code></td><td>SYSTEM</td><td>System-wide environment variables, including PATH - which decides which binary a bare command resolves to.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\Memory Management</code></td><td>SYSTEM</td><td>Paging behaviour, including whether the page file is cleared at shutdown.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Session Manager\Power</code></td><td>SYSTEM</td><td>Power and fast startup. HiberbootEnabled decides whether a shutdown was a real one, and therefore whether ShimCache was flushed at all. </td></tr>
+            <tr><td><code>{ControlSet}\Control\Terminal Server</code></td><td>SYSTEM</td><td>Whether remote desktop is enabled at all.</td></tr>
+            <tr><td><code>{ControlSet}\Control\Terminal Server\WinStations\RDP-Tcp</code></td><td>SYSTEM</td><td>The RDP listener - its port, and whether network level authentication is required.</td></tr>
+            <tr><td><code>{ControlSet}\Control\TimeZoneInformation</code></td><td>SYSTEM</td><td>The machine's timezone and bias. Needed to read every local timestamp the evidence contains, including the DOS times inside shell items.</td></tr>
+            <tr><td><code>{ControlSet}\Control\hivelist</code></td><td>SYSTEM</td><td>Where every loaded hive lives on disk - the map an image parser uses to find the files it has not been handed.</td></tr>
+            <tr><td><code>{ControlSet}\Services\Dnscache\Parameters</code></td><td>SYSTEM</td><td>DNS client settings, including whether the resolver cache is running - which decides whether a lookup left any local trace to find.</td></tr>
+            <tr><td><code>{ControlSet}\Services\EventLog</code></td><td>SYSTEM</td><td>Event log service configuration and per-log retention.</td></tr>
+            <tr><td><code>{ControlSet}\Services\LanmanServer\Shares</code></td><td>SYSTEM</td><td>Shares the evidence machine offers, and the paths behind them.</td></tr>
+            <tr><td><code>{ControlSet}\Services\SharedAccess\Parameters</code></td><td>SYSTEM</td><td>Firewall rules and internet connection sharing configuration.</td></tr>
+            <tr><td><code>{ControlSet}\Services\SharedAccess\Parameters\FirewallPolicy\FirewallRules</code></td><td>SYSTEM</td><td>Every Windows Firewall rule as a pipe-delimited string: direction, action, program, ports. A rule allowing inbound traffic to an unusual program is a lead.</td></tr>
+            <tr><td><code>{ControlSet}\Services\Tcpip\Parameters\Interfaces</code></td><td>SYSTEM</td><td>Per-interface IP configuration, including DHCP leases and the server that issued them.</td></tr>
+          </tbody>
+        </table>
+      </div>
+<!-- KEYS:machine:END -->
+    </section>
+
+    <section>
+      <h2 id="limits">What the registry supports, and what it does not</h2>
+      <p>The five questions above each carry their own warning where it belongs, in the artifact it
+      applies to. Four limits are not about any one key &mdash; they are properties of the registry
+      itself, and they apply to every finding on this page.</p>
+
+      <div class="myth">
+        <h4>A write time belongs to the key, not to any value under it</h4>
+        <p>The registry timestamps keys. It does not timestamp values. A key holding forty values
+        has one last-write time, and any one of those forty writes could have set it &mdash; as
+        could a write that only changed a value already present, or a subkey being created. So a
+        key time is an <strong>upper bound</strong> on everything beneath it, shared by all of it.
+        Reporting "this value was written at 14:02" is a claim the registry cannot support unless
+        the key holds exactly one value.</p>
+      </div>
+
+      <div class="myth">
+        <h4>Presence is configuration, not execution</h4>
+        <p>This is the error the whole of
+        <a href="#persistence">Question&nbsp;2</a> is written against, and it generalises. A Run
+        key entry, a service, a scheduled-task registration and a COM registration all say the same
+        thing: the machine was <em>told</em> to do something. None of them says it happened. The
+        proof of execution is somewhere else &mdash; Prefetch, an event log, an AmCache entry with a
+        real run time beside it.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A hive on disk and a hive in memory are not the same hive</h4>
+        <p>Windows does not write every change straight into the hive file. Changes land in the
+        transaction logs (<code>.LOG1</code>, <code>.LOG2</code>) and are merged later, so a hive
+        file copied from a running machine can be missing the most recent writes &mdash; including
+        the ones an intruder made minutes ago. Reading the live registry through the API sees the
+        merged view; copying the file may not. When the two disagree, the logs are the difference,
+        and they are part of the evidence rather than a nuisance.</p>
+      </div>
+
+      <div class="myth">
+        <h4>Deleted does not mean gone, and present does not mean current</h4>
+        <p>A deleted key or value is unlinked, not erased: its cell is marked free and its contents
+        survive until that space is reused, which is why a recovered value can be read long after it
+        was removed. The same property runs the other way. A key that exists may be a leftover from
+        software uninstalled years ago, written once and never touched since &mdash; the registry
+        keeps what nobody cleaned up, and says nothing about whether it still matters.</p>
+      </div>
+
+      <p><strong>What it is genuinely good for:</strong> answering <em>which</em> question. No
+      other artifact on a Windows machine spans execution, persistence, device history, user
+      navigation and machine identity in one container, with the same acquisition and the same
+      parser. The five questions above are the shape of that strength: the registry is rarely the
+      only evidence for a finding, and it is very often the first place the finding is visible.</p>
+    </section>
+
+    <section>
+      <h2 id="how-crow-eye-reads-it">What Crow-Eye does with all of this</h2>
+      <p>Seventy-odd tables, one per artifact, named for what they hold. Both acquisition routes -
+      the live registry through the API, and the hive files through a shadow copy, raw disk or a
+      backup-privileged export - produce the same tables, so a case has the same shape either way.
+      Where an artifact needs a decoder rather than a read, that decoder is shared: the same code
+      reads a shell item whether it came from a Shellbag, a Jump List or a shortcut. <a class="see-also" href="automatic_jumplist.html#destlist">Explained in full: Jump Lists</a></p>
+
+      <p>Deleted keys and values are carved from the hive's freed cells and marked
+      <code>(deleted)</code> in a column of their own, with the key path reconstructed where the
+      parent chain survives and left empty where it does not. And every hive's transaction logs are
+      replayed before parsing, because a hive read from a running machine is mid-transaction by
+      default and its most recent changes are in the log rather than the file.</p>
+
+      <p>The <a href="registry-internals.html#logs">registry internals guide</a> is the
+      companion to this page: it explains the file this evidence sits in, and why several of the
+      behaviours above are structural rather than optional.</p>
+    </section>
+
+<!-- DEPTH:START - generated by scratchpad/add_page_depth.py -->
+    <section>
+      <h2 id="versions">How the registry's artifacts changed across Windows</h2>
+      <p>Each row below records a change that alters what a reader may conclude, not only how the bytes are arranged. A parser written against one Windows release returns nothing against another, and does so without raising an error.</p>
+      <span class="cap">Table 10</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Windows</th><th>What changed</th><th>What it means for a reader</th></tr></thead><tbody><tr><td>3.1</td><td><code>REG.DAT</code> - one file, file associations only</td><td>The registry begins as a replacement for <code>WIN.INI</code>.</td></tr><tr><td>95 and NT</td><td>The hive format this page describes, split into several files</td><td><code>SYSTEM</code>, <code>SOFTWARE</code>, <code>NTUSER.DAT</code>. The container has not fundamentally changed since.</td></tr><tr><td>Vista</td><td>Transaction logs become mandatory; <code>UsrClass.dat</code> takes over Shellbags</td><td>A hive on disk may be missing its most recent changes until the logs are replayed.</td></tr><tr><td>8</td><td><code>BAM</code> and <code>DAM</code> arrive</td><td>The kernel starts keeping its own per-executable timestamps, which is the most reliable execution artifact in the registry.</td></tr><tr><td>10 and 11</td><td><code>AppCompatCache</code> loses its execution flag; AmCache moves to the <code>Inventory*</code> schema</td><td>Two of the three registry execution artifacts change meaning. The literature mostly did not.</td></tr></tbody></table></div>
+    </section>
+    <section>
+      <h2 id="reference">Reference</h2>
+      <h3 id="value-types">Value types, including the ones Microsoft did not document</h3>
+      <span class="cap">Table 11</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Type</th><th>Name</th><th>What it holds</th></tr></thead><tbody><tr><td><code>1</code></td><td>REG_SZ</td><td>A string. Most of the registry.</td></tr><tr><td><code>3</code></td><td>REG_BINARY</td><td>Bytes with no declared meaning - every map above is one of these.</td></tr><tr><td><code>4</code></td><td>REG_DWORD</td><td>32-bit integer, usually stored inline in the record.</td></tr><tr><td><code>7</code></td><td>REG_MULTI_SZ</td><td>Null-separated strings, double null at the end.</td></tr><tr><td><code>11</code></td><td>REG_QWORD</td><td>64-bit integer.</td></tr><tr><td><code>0xFFFF0010</code></td><td>DEVPROP_TYPE_FILETIME</td><td><strong>Not one of the twelve.</strong> Eight bytes, and it is where USB connection times live.</td></tr><tr><td><code>0xFFFF0012</code></td><td>DEVPROP_TYPE_STRING</td><td>UTF-16 text under a device key.</td></tr><tr><td><code>0xFFFF000D</code></td><td>DEVPROP_TYPE_GUID</td><td>Sixteen bytes.</td></tr></tbody></table></div>
+      <h3 id="key-index">Which key answers which question</h3>
+      <span class="cap">Table 12</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Question</th><th>Key</th><th>Caveat</th></tr></thead><tbody><tr><td>What ran, from the shell</td><td><code>UserAssist</code></td><td>Explorer launches only. Nothing from a console or a service.</td></tr><tr><td>What ran, per the kernel</td><td><code>bam\State\UserSettings</code></td><td>Roughly one week of history, then cleared.</td></tr><tr><td>What was examined</td><td><code>AppCompatCache</code></td><td><strong>Not execution.</strong> Written at shutdown.</td></tr><tr><td>What is installed</td><td>AmCache <code>Inventory*</code></td><td>Presence, not execution. <a class="see-also" href="amcache_anatomy.html#what-it-is">Explained in full: AmCache</a></td></tr><tr><td>What persists</td><td><code>Run</code>, <code>RunOnce</code>, services, <code>TaskCache</code></td><td>Persistence is not execution - it says what is scheduled, not what happened.</td></tr><tr><td>What was plugged in</td><td><code>Enum\USBSTOR</code>, <code>MountedDevices</code></td><td>Connection times live in <code>Properties</code>, which denies even an elevated administrator through the API.</td></tr><tr><td>Where the user went</td><td><code>Shellbags</code>, <code>RecentDocs</code>, MRU keys</td><td><code>MRUListEx</code> is the only thing recording order.</td></tr></tbody></table></div>
+    </section>
+    <section>
+      <h2 id="anti-forensics">Anti-forensic handling, and what survives it</h2>
+      <p>The preceding sections describe what intact keys support. This section describes the registry after an attempt to remove or evade it, which is the condition in which it is frequently encountered. <strong>In most rows the attempt leaves a trace of its own.</strong></p>
+      <span class="cap">Table 13</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table"><thead><tr><th>Technique</th><th>What is done</th><th>What survives</th></tr></thead><tbody><tr><td>Deleting a key</td><td>The key is unlinked from its parent.</td><td><strong>The cell is freed, not erased.</strong> Name, timestamp and values usually survive until something allocates over them - which is what carving recovers.</td></tr><tr><td>Clearing UserAssist</td><td>The <code>Count</code> subkeys are emptied.</td><td>An account with a login history and an empty UserAssist is an anomaly. BAM and Prefetch are unaffected and answer the same question.</td></tr><tr><td>Renaming rather than deleting</td><td>A persistence value is renamed to look legitimate.</td><td>The key's last-written timestamp still moves. A <code>Run</code> key whose write time is far from the software's install date is worth explaining.</td></tr><tr><td>Loosening permissions</td><td>A persistence key's ACL is changed so a non-administrator can write it.</td><td>The key stops sharing its siblings' security descriptor and gets its own. <strong>Visible structurally without reading a single ACL</strong> - see <a href="registry-internals.html#security">the internals guide</a>.</td></tr><tr><td>Operating in a live-only window</td><td>Everything is done in volatile keys.</td><td>Volatile keys are never written to a file, so an offline image cannot contain them. This is one of the few things a live parse sees and an image genuinely does not.</td></tr></tbody></table></div>
+    </section>
+<!-- DEPTH:END -->
+
+  </div>
+
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe - Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI - Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+</html>

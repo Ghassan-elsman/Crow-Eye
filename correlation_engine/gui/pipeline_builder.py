@@ -16,7 +16,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from .crow_eye_icons import CrowEyeIcons
 from PyQt5.QtGui import QIcon
-from .ui_styling import CorrelationEngineStyles
+from ui.site_theme import set_variant, set_status, font as site_font
+from PyQt5.QtGui import QFont
 
 
 from ..config import PipelineConfig, FeatherConfig, WingConfig
@@ -286,7 +287,8 @@ class PipelineBuilderWidget(QWidget):
         
         # Output directory label
         output_label = QLabel("Output Directory:")
-        output_label.setStyleSheet("font-weight: bold; color: #00FFFF;")
+        output_label.setFont(site_font("ui", 13, QFont.Bold))
+        set_status(output_label, "info")
         top_layout.addWidget(output_label)
         
         # Output directory input
@@ -300,6 +302,7 @@ class PipelineBuilderWidget(QWidget):
         # Browse button
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse_output_dir)
+        set_variant(browse_btn, "ghost")
         top_layout.addWidget(browse_btn)
         
         return top_widget
@@ -311,7 +314,8 @@ class PipelineBuilderWidget(QWidget):
         
         # Case name display (read-only, auto-populated)
         self.case_name_display = QLabel("Not set")
-        self.case_name_display.setStyleSheet("color: #00FFFF; font-weight: bold;")
+        self.case_name_display.setFont(site_font("ui", 13, QFont.Bold))
+        set_status(self.case_name_display, "info")
         layout.addRow("Case:", self.case_name_display)
         
         # Pipeline name
@@ -361,7 +365,7 @@ class PipelineBuilderWidget(QWidget):
             
             if not is_unique:
                 apply_status_to_label(self.name_validation_label, "WARN", f"{error_msg}")
-                self.name_validation_label.setStyleSheet("color: #FF9800;")
+                set_status(self.name_validation_label, "warn")
             else:
                 self.name_validation_label.setText("")
         else:
@@ -389,6 +393,7 @@ class PipelineBuilderWidget(QWidget):
         self.add_feather_btn = QPushButton("Add Feather")
         self.add_feather_btn.setIcon(CrowEyeIcons.feather())
         self.add_feather_btn.clicked.connect(self._add_feather)
+        set_variant(self.add_feather_btn, "primary")
         buttons_layout.addWidget(self.add_feather_btn)
         
         self.create_feather_btn = QPushButton("Create Feather")
@@ -399,6 +404,7 @@ class PipelineBuilderWidget(QWidget):
         self.remove_feather_btn = QPushButton("Remove")
         self.remove_feather_btn.clicked.connect(self._remove_feather)
         self.remove_feather_btn.setEnabled(False)
+        set_variant(self.remove_feather_btn, "danger")
         buttons_layout.addWidget(self.remove_feather_btn)
         
         layout.addLayout(buttons_layout)
@@ -429,6 +435,7 @@ class PipelineBuilderWidget(QWidget):
         self.add_wing_btn = QPushButton("Add Wing")
         self.add_wing_btn.setIcon(CrowEyeIcons.wing())
         self.add_wing_btn.clicked.connect(self._add_wing)
+        set_variant(self.add_wing_btn, "primary")
         buttons_layout.addWidget(self.add_wing_btn)
         
         self.create_wing_btn = QPushButton("Create Wing")
@@ -439,6 +446,7 @@ class PipelineBuilderWidget(QWidget):
         self.remove_wing_btn = QPushButton("Remove")
         self.remove_wing_btn.clicked.connect(self._remove_wing)
         self.remove_wing_btn.setEnabled(False)
+        set_variant(self.remove_wing_btn, "danger")
         buttons_layout.addWidget(self.remove_wing_btn)
         
         layout.addLayout(buttons_layout)
@@ -636,10 +644,10 @@ class PipelineBuilderWidget(QWidget):
             # layout (escaped <br> instead of \n for richtext rendering).
             body = "Validation failed:<br>" + "<br>".join(f"&bull; {e}" for e in errors)
             apply_status_to_label(self.validation_label, "ERROR", body)
-            self.validation_label.setStyleSheet("color: #F44336;")
+            set_status(self.validation_label, "bad")
         else:
             apply_status_to_label(self.validation_label, "OK", "Pipeline configuration is valid")
-            self.validation_label.setStyleSheet("color: #4CAF50;")
+            set_status(self.validation_label, "ok")
         
         return (len(errors) == 0, errors)
     
@@ -1820,18 +1828,35 @@ class PipelineBuilderWidget(QWidget):
     def show_notification(self, message: str):
         """Show a brief notification"""
         # This would ideally show a toast notification
-        # For now, just update validation label briefly
-        original_text = self.validation_label.text()
-        original_style = self.validation_label.styleSheet()
-        
-        self.validation_label.setText(message)
-        self.validation_label.setStyleSheet("color: #10B981; font-weight: bold;")
-        
+        # For now, just update validation label briefly.
+        #
+        # The state to come back to is what the label showed BEFORE any notice:
+        # a second notice within 3 s used to capture the first notice as the
+        # "original" and restore to it. And the restore only happens while the
+        # label still shows this notice - a validation in between wins.
+        label = self.validation_label
+        pending = getattr(self, "_notice", None)
+        if pending and label.text() == pending[0]:
+            original_text, original_status = pending[1], pending[2]
+        else:
+            original_text, original_status = label.text(), label.property("status")
+        self._notice = (message, original_text, original_status)
+
+        label.setText(message)
+        set_status(label, "ok")
+
+        def _restore(msg=message):
+            try:
+                if label.text() != msg:
+                    return
+                label.setText(original_text)
+                set_status(label, original_status)
+                self._notice = None
+            except RuntimeError:                    # the builder was closed
+                pass
+
         # Reset after 3 seconds
-        QTimer.singleShot(3000, lambda: (
-            self.validation_label.setText(original_text),
-            self.validation_label.setStyleSheet(original_style)
-        ))
+        QTimer.singleShot(3000, _restore)
     
     def clear(self):
         """Clear all inputs"""
@@ -1845,7 +1870,7 @@ class PipelineBuilderWidget(QWidget):
         self.feathers_list.clear()
         self.wings_list.clear()
         self.validation_label.setText("No pipeline loaded")
-        self.validation_label.setStyleSheet("")
+        set_status(self.validation_label, None)
         
         # Clear semantic configuration
         self.semantic_rules_list.clear()

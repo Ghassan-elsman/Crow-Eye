@@ -5,11 +5,81 @@ except ImportError:
 import sqlite3
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add the parent directory to sys.path to import utils
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.time_utils import ensure_utc, format_timestamp, format_forensic_timestamp, get_current_forensic_timestamp
+from utils.dedupe_insert import Tally, ensure_identity_index, insert_new
+
+# Column order of each table's rows, RecordNumber last. The event record
+# number (EventRecordID) is what tells two events apart: without it, the
+# Security log held 34,694 rows of which only 11,787 were distinct by content
+# - real, separate events that look identical - and a re-parse could not tell
+# a new event from one already stored.
+EVENT_TABLE_COLUMNS = {
+    "SystemLogs": ["EventID", "Source", "EventType", "Category", "EventTimestampUTC",
+                   "ComputerName", "User", "Keywords", "EventDescription", "RecordNumber"],
+    "ApplicationLogs": ["EventID", "Source", "EventType", "Category", "EventTimestampUTC",
+                        "ComputerName", "User", "Keywords", "EventDescription", "RecordNumber"],
+    "SecurityLogs": ["EventID", "Source", "EventType", "Category", "EventTimestampUTC",
+                     "ComputerName", "User", "Keywords", "TaskCategory", "EventDescription",
+                     "RecordNumber"],
+}
+# Identity of an event: its record number, time and provider (a cleared log
+# restarts its numbering, so the number alone is not enough).
+EVENT_IDENTITY = ["RecordNumber", "EventTimestampUTC", "Source", "EventID"]
+
+
+def prepare_event_tables(conn):
+    """Keep what earlier runs stored, and get the tables ready for this one.
+
+    The tables used to be DROPPED on every parse: an event that had since
+    rolled out of the live log was gone from the case as well. Now an older
+    case gains the RecordNumber column, the identity is indexed, and a re-parse
+    adds only events not stored yet. Returns {table: True when it holds rows
+    from before RecordNumber existed}.
+    """
+    legacy = {}
+    for table in ("SystemLogs", "ApplicationLogs", "SecurityLogs"):
+        cols = {r[1] for r in conn.execute('PRAGMA table_info("%s")' % table)}
+        if "RecordNumber" not in cols:
+            conn.execute('ALTER TABLE "%s" ADD COLUMN RecordNumber INTEGER' % table)
+        ensure_identity_index(conn, table, ["RecordNumber", "EventTimestampUTC"])
+        legacy[table] = conn.execute(
+            'SELECT 1 FROM "%s" WHERE RecordNumber IS NULL LIMIT 1' % table).fetchone() is not None
+    conn.commit()
+    return legacy
+
+
+def insert_event_rows(conn, table, rows, tally, legacy=False):
+    """Insert the events not stored yet; returns the number inserted.
+
+    ``legacy``: the table holds rows from before RecordNumber was recorded.
+    Such a row cannot be matched by number, so an event is also skipped when a
+    numberless row with the same time, provider, ID and text exists - the
+    first re-parse of an older case does not store its events a second time.
+    """
+    cols = EVENT_TABLE_COLUMNS[table]
+    if not rows:
+        return 0
+    if not legacy:
+        return insert_new(conn, table, cols, rows, EVENT_IDENTITY, tally)
+    content = ["EventTimestampUTC", "Source", "EventID", "Keywords", "EventDescription"]
+    idx = {c: cols.index(c) for c in cols}
+    sql = ('INSERT INTO "%s" (%s) SELECT %s WHERE NOT EXISTS (SELECT 1 FROM "%s" WHERE %s) '
+           'AND NOT EXISTS (SELECT 1 FROM "%s" WHERE RecordNumber IS NULL AND %s)'
+           % (table, ", ".join(cols), ", ".join("?" * len(cols)), table,
+              " AND ".join("%s IS ?" % c for c in EVENT_IDENTITY), table,
+              " AND ".join("%s IS ?" % c for c in content)))
+    params = [tuple(r) + tuple(r[idx[c]] for c in EVENT_IDENTITY) + tuple(r[idx[c]] for c in content)
+              for r in rows]
+    before = conn.total_changes
+    conn.executemany(sql, params)
+    inserted = conn.total_changes - before
+    if tally is not None:
+        tally.add(table, len(rows), inserted)
+    return inserted
 
 # Create the database and tables
 def create_database(case_path=None):
@@ -17,14 +87,15 @@ def create_database(case_path=None):
     if case_path:
         # If a case path is provided, use it for the database
         artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
-        if os.path.exists(artifacts_dir):
-            db_path = os.path.join(artifacts_dir, 'Log_Claw.db')
+        # Created, not merely checked: in a new case whose first parse was
+        # this one, Target_Artifacts did not exist yet and the database
+        # went to the current working folder instead of the case.
+        os.makedirs(artifacts_dir, exist_ok=True)
+        db_path = os.path.join(artifacts_dir, 'Log_Claw.db')
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    
-    cursor.execute('DROP TABLE IF EXISTS SystemLogs')
-    cursor.execute('DROP TABLE IF EXISTS ApplicationLogs')
-    cursor.execute('DROP TABLE IF EXISTS SecurityLogs')
+
+    # Never dropped (see prepare_event_tables): earlier runs' events stay.
     # Create tables for System, Application, and Security logs with UTC timestamps
     cursor.execute('''CREATE TABLE IF NOT EXISTS SystemLogs (
                         EventID INTEGER,
@@ -35,7 +106,8 @@ def create_database(case_path=None):
                         ComputerName TEXT,
                         User TEXT,
                         Keywords TEXT,
-                        EventDescription TEXT
+                        EventDescription TEXT,
+                        RecordNumber INTEGER
                       )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS ApplicationLogs (
                         EventID INTEGER,
@@ -46,7 +118,8 @@ def create_database(case_path=None):
                         ComputerName TEXT,
                         User TEXT,
                         Keywords TEXT,
-                        EventDescription TEXT
+                        EventDescription TEXT,
+                        RecordNumber INTEGER
                       )''')
     cursor.execute('''CREATE TABLE IF NOT EXISTS SecurityLogs (
                         EventID INTEGER,
@@ -58,7 +131,8 @@ def create_database(case_path=None):
                         User TEXT,
                         Keywords TEXT,
                         TaskCategory TEXT,
-                        EventDescription TEXT
+                        EventDescription TEXT,
+                        RecordNumber INTEGER
                       )''')
     conn.commit()
     return conn, cursor, db_path
@@ -85,106 +159,61 @@ def get_event_category(category):
     }
     return category_dict.get(category, "Other")
 
-# Map event IDs to descriptions
-def get_event_description(event_id):
-    event_description_dict = {
-       # Security Event IDs
-        4624: "An account was successfully logged on.", 
-        4625: "An account failed to log on.", 
-        4634: "An account was logged off.", 
-        4648: "A logon was attempted using explicit credentials.", 
-        4656: "A handle to an object was requested.", 
-        4663: "An attempt was made to access an object.", 
-        4670: "Special privileges assigned to new logon.", 
-        4672: "Special privileges assigned to new logon.", 
-        4688: "A new process has been created.", 
-        4697: "A service was installed in the system.", 
-        4700: "A scheduled task was enabled.", 
-        4701: "A scheduled task was disabled.", 
-        4702: "A scheduled task was updated.", 
-        4719: "System audit policy was changed.", 
-        4720: "A user account was created.", 
-        4722: "A user account was enabled.", 
-        4725: "A user account was disabled.", 
-        4726: "A user account was deleted.", 
-        4738: "A user account was changed.", 
-        4740: "A user account was locked out.", 
-        4768: "A Kerberos authentication ticket (TGT) was requested.", 
-        4769: "A Kerberos service ticket was requested.", 
-        4771: "Kerberos pre-authentication failed.", 
-        4776: "The domain controller attempted to validate the credentials for an account.", 
-        4798: "A user's local group membership was enumerated.", 
-        4799: "A security-enabled local group membership was enumerated.", 
-        4800: "The workstation was locked.", 
-        4801: "The workstation was unlocked.", 
-        5038: "Code integrity determined that the image hash of a file is not valid.", 
-        5140: "A network share object was accessed" ,
-       # Application Event IDs
-        1000: "Application error.",
-        1001: "Application hang.",
-        1002: "Application crash.",
-        1004: "Application error caused by an unhandled exception.",
-        1005: "Windows Installer reconfiguration.",
-        1006: "Windows Installer error.",
-        1008: "Performance issues detected in the application.",
-        1010: "Application started.",
-        1011: "Application stopped.",
-        1013: "Application shut down unexpectedly.",
-        1014: "Application encountered a network error.",
-        1020: "Application encountered a database error.",
-        1022: "Application configuration changed.",
-        1025: "Application license expired.",
-        1026: "Application memory leak detected.",
-        1030: "Application update failed.",
-        1031: "Application update succeeded.",
-        1032: "Application patched successfully.",
-        1033: "Application performance monitoring started.",
-        1034: "Application performance monitoring stopped.",
-        1040: "Application encountered a system error.",
-        1041: "Application encountered a security violation.",
-        1042: "Application encountered a hardware failure.",
-        1043: "Application encountered an I/O error.",
-        1044: "Application encountered a configuration error.",
-       # System Event IDs
-        6005: "The event log service was started.",
-        6006: "The event log service was stopped.",
-        6008: "The previous system shutdown was unexpected.",
-        6009: "Operating system version information.",
-        6013: "The system uptime.",
-        7000: "The service did not start due to a logon failure.",
-        7001: "The service started successfully.",
-        7009: "Timeout waiting for a service to start.",
-        7011: "A timeout (30000 milliseconds) was reached while waiting for a service to connect.",
-        7016: "The service has reported an invalid current state.",
-        7022: "The service hung on starting.",
-        7023: "The service terminated with the following error.",
-        7024: "The service terminated with service-specific error.",
-        7026: "The following boot-start or system-start driver(s) failed to load.",
-        7031: "The service terminated unexpectedly.",
-        7034: "The service terminated unexpectedly.",
-        7035: "The service control manager successfully sent a start control.",
-        7036: "The service entered the stopped state.",
-        7040: "The start type of the service was changed.",
-        7045: "A service was installed in the system.",
-        7027: "The service did not respond to the start or control request in a timely fashion.",
-        7032: "The Service Control Manager did not handle the specific error code.",
-        7038: "The Account used for the service is invalid.",
-        7042: "A service was marked for deletion.",
-        7043: "The service did not shut down properly after receiving a pre-shutdown control."
-        
-    }
-    return event_description_dict.get(event_id, "Description not available")
+# What an event means: the shared (provider, EventID) catalogue in
+# configs/event_descriptions.json, the same one the offline parser uses. The
+# ID-only dictionary that used to be here put wrong words on real rows
+# (EventSystem 4625 read "An account failed to log on").
+def get_event_description(event_id, source=None, inserts=None):
+    from utils.event_descriptions import describe
+    return describe(source, event_id, inserts)
+
+
+def _event_time_utc(event):
+    """The event's time in UTC, or None.
+
+    pywin32's TimeGenerated is the machine's LOCAL time with no tzinfo; it was
+    labelled UTC unconverted, so every live event was off by the local UTC
+    offset (04:25 local recorded as 04:25 UTC, true time 01:25 UTC).
+    """
+    tg = event.TimeGenerated
+    try:
+        if getattr(tg, "tzinfo", None) is not None:
+            dt = datetime(tg.year, tg.month, tg.day, tg.hour, tg.minute, tg.second,
+                          tzinfo=tg.tzinfo).astimezone(timezone.utc)
+        else:
+            # A naive datetime's astimezone() applies the local rules for THAT
+            # date, daylight saving included.
+            dt = datetime(tg.year, tg.month, tg.day, tg.hour, tg.minute,
+                          tg.second).astimezone(timezone.utc)
+        return format_forensic_timestamp(dt)
+    except Exception as exc:
+        print(f"[WARNING] Event time not converted ({tg!r}): {exc}")
+        return None
+
+
+def _event_sid(event):
+    """The SID the event was logged under ('S-1-5-18'), or 'N/A'."""
+    sid = getattr(event, "Sid", None)
+    if sid is None:
+        return "N/A"
+    text = str(sid)
+    return text[len("PySID:"):] if text.startswith("PySID:") else text
 
 # Read event logs and insert into the database
-def read_event_logs(log_type, cursor):
+def read_event_logs(log_type, conn, tally=None, legacy=None):
+    """Read one live log; store the events the case does not hold yet."""
     server = 'localhost'
     log_handle = win32evtlog.OpenEventLog(server, log_type)
     flags = win32evtlog.EVENTLOG_BACKWARDS_READ | win32evtlog.EVENTLOG_SEQUENTIAL_READ
-    
+    table = {"Security": "SecurityLogs", "Application": "ApplicationLogs"}.get(log_type, "SystemLogs")
+    tally = tally if tally is not None else Tally()
+    legacy = legacy or {}
+
     while True:
         events = win32evtlog.ReadEventLog(log_handle, flags, 0)
         if not events:
             break
+        rows = []
 
         for event in events:
             try:
@@ -193,100 +222,64 @@ def read_event_logs(log_type, cursor):
                 event_type = get_event_type(event.EventType)
                 category = get_event_category(event.EventCategory)
                 
-                # Get the original time string
-                original_time = event.TimeGenerated.Format()
-                
-                # Convert to datetime and ensure it's in UTC
-                try:
-                    # Try multiple possible formats
-                    formats_to_try = [
-                        "%a %b %d %H:%M:%S %Y",  # 'Fri Sep  5 17:10:02 2025'
-                        "%Y-%m-%d %H:%M:%S",     # '2023-01-01 12:00:00'
-                        "%Y/%m/%d %H:%M:%S",     # '2023/01/01 12:00:00'
-                        "%d/%m/%Y %H:%M:%S"      # '01/01/2023 12:00:00'
-                    ]
-                    
-                    dt = None
-                    for fmt in formats_to_try:
-                        try:
-                            dt = datetime.strptime(original_time.strip(), fmt)
-                            break
-                        except ValueError:
-                            continue
-                    
-                    if dt is None:
-                        raise ValueError(f"Time format not recognized: {original_time}")
-                        
-                    # Convert to UTC and format as DD/MM/YYYY HH:MM:SS
-                    utc_dt = ensure_utc(dt)
-                    utc_time = format_forensic_timestamp(utc_dt)
-                    
-                except Exception as e:
-                    # If conversion fails, use current UTC time and log the error
-                    print(f"Error converting time '{original_time}': {str(e)}")
-                    utc_time = get_current_forensic_timestamp()
-                
+                # True UTC (see _event_time_utc). A time that cannot be
+                # converted stays empty: it used to become the parse time,
+                # a fabricated timestamp that looked real.
+                utc_time = _event_time_utc(event)
+
                 computer = event.ComputerName
-                user = "N/A"
-                keywords = "N/A"
-                event_description = get_event_description(event_id)
-                
+                inserts = list(event.StringInserts or [])
+                keywords = ",".join(str(i) for i in inserts) if inserts else "N/A"
+                event_description = get_event_description(event_id, source, inserts)
+                # The account the event was logged under. Insert 1 was used
+                # for every log, which is SubjectUserName for most Security
+                # events but an arbitrary value ('5', '0') everywhere else.
+                user = _event_sid(event)
+
                 if log_type == 'Security':
-                    if event.StringInserts:
-                        user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
-                        keywords = ",".join(event.StringInserts)
+                    if len(inserts) > 1 and inserts[1] and inserts[1] != "-":
+                        user = inserts[1]          # SubjectUserName
                     task_category = event.EventCategory
-
-                    cursor.execute('''INSERT INTO SecurityLogs 
-                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
-                                     ComputerName, User, Keywords, TaskCategory, EventDescription)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                                 (event_id, source, event_type, category, utc_time,
-                                  computer, user, keywords, task_category, event_description))
-                
-                elif log_type == 'Application':
-                    if event.StringInserts:
-                        user = event.StringInserts[1] if len(event.StringInserts) > 1 else "N/A"
-                        keywords = ",".join(event.StringInserts)
-
-                    cursor.execute('''INSERT INTO ApplicationLogs 
-                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
-                                     ComputerName, User, Keywords, EventDescription)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                                 (event_id, source, event_type, category, utc_time,
-                                  computer, user, keywords, event_description))
-                
-                else:  # System logs
-                    cursor.execute('''INSERT INTO SystemLogs 
-                                    (EventID, Source, EventType, Category, EventTimestampUTC, 
-                                     ComputerName, User, Keywords, EventDescription)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-                                 (event_id, source, event_type, category, utc_time,
-                                  computer, user, keywords, event_description))
+                    rows.append((event_id, source, event_type, category, utc_time,
+                                 computer, user, keywords, task_category, event_description,
+                                 event.RecordNumber))
+                else:  # System and Application logs
+                    rows.append((event_id, source, event_type, category, utc_time,
+                                 computer, user, keywords, event_description,
+                                 event.RecordNumber))
                                  
             except Exception as e:
                 print(f"Error processing event: {str(e)}")
                 continue
-    
+        insert_event_rows(conn, table, rows, tally, legacy.get(table, False))
+
     win32evtlog.CloseEventLog(log_handle)
+    return tally
 
 # Main function to create database and read logs
 def main(case_path=None):
     conn, cursor, db_path = create_database(case_path)
-    
+    tally = Tally()          # first: it lists the identity indexes created below
+    legacy = prepare_event_tables(conn)
+
     print("Reading System Logs...")
-    read_event_logs('System', cursor)
-    
+    read_event_logs('System', conn, tally, legacy)
+
     print("\nReading Application Logs...")
-    read_event_logs('Application', cursor)
-    
+    read_event_logs('Application', conn, tally, legacy)
+
     print("\nReading Security Logs...")
-    read_event_logs('Security', cursor)
+    read_event_logs('Security', conn, tally, legacy)
 
     conn.commit()
     conn.close()
-    
+
+    tot = tally.totals()
+    print("Events read: %d - new: %d, already in the database: %d"
+          % (tot["parsed"], tot["inserted"], tot["duplicates"]))
     print(f"\033[92m\nParsing logs has been completed by Crow Eye\nDatabase saved to: {db_path}\033[0m")
+    # Counts for Parse Status and the custody record (it returned nothing).
+    return tally.as_result(success=True, output_path=db_path)
 
 if __name__ == "__main__":
     main()

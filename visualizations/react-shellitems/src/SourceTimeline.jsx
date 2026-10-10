@@ -22,7 +22,7 @@ const level = (v, max) => {
  * on the row reads it, and the rows are memoised away from the tooltip's state.
  * With a handler per cell, moving the mouse re-rendered all 32,000.
  */
-export default function SourceTimeline({ timeline, selectedDay, onSelectDay }) {
+export default function SourceTimeline({ timeline, selectedDay, onSelectDay, focus = '' }) {
   const [tip, setTip] = useState(null)
   const stripRef = useRef(null)
   const combined = timeline?.combined || []
@@ -38,14 +38,14 @@ export default function SourceTimeline({ timeline, selectedDay, onSelectDay }) {
 
   const dayAt = (e) => e.target && e.target.dataset ? e.target.dataset.day : null
 
-  // Sixteen sources, most of them empty on any one machine: only the ones
-  // with something in this range get a row (all of them if none do, so the
-  // strip keeps its shape). Every source still has its count, and the reason
-  // an empty one is empty, in the overview.
-  const shown = useMemo(() => {
-    const live = SOURCES.filter(src => (sources[src.key]?.max || 0) > 0)
-    return live.length ? live : SOURCES
-  }, [sources])
+  // Twenty-six sources, most of them empty on any one machine: only the ones
+  // with something in this range get a row. Every source still has its
+  // count, and the reason an empty one is empty, in the overview. When none
+  // has a dated item (an undated source is selected - FeatureUsage, the
+  // Compatibility Assistant, MUICache...), the strip says so instead of
+  // drawing twenty-six empty rows above the list those items are in.
+  const shown = useMemo(
+    () => SOURCES.filter(src => (sources[src.key]?.max || 0) > 0), [sources])
 
   const rows = useMemo(() => shown.map(src => {
     const row = sources[src.key] || { days: [], max: 0 }
@@ -54,7 +54,8 @@ export default function SourceTimeline({ timeline, selectedDay, onSelectDay }) {
     // blanks the whole dashboard with no visible error.
     const ramp = SOURCE_RAMPS[src.key] || SOURCE_RAMPS.search
     return (
-      <div className="usn-row" key={src.key}>
+      <div className={'usn-row' + (focus === src.key ? ' focus' : '')} key={src.key}
+        data-src={src.key}>
         <div className="usn-rowhead"><span className="usn-sw" style={{ background: src.color }} />{src.label}</div>
         <div className={cellsClass} style={{ gridTemplateColumns: columns }}
           onMouseMove={(e) => {
@@ -72,13 +73,20 @@ export default function SourceTimeline({ timeline, selectedDay, onSelectDay }) {
         </div>
       </div>
     )
-  }), [shown, sources, view, selectedDay, columns, cellsClass, onSelectDay])
+  }), [shown, sources, view, selectedDay, columns, cellsClass, onSelectDay, focus])
+
+  // Bring the highlighted source's row into view.
+  useEffect(() => {
+    if (!focus || !stripRef.current) return
+    const row = stripRef.current.querySelector('[data-src="' + focus + '"]')
+    if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' })
+  }, [focus, rows])
 
   return (
     <div className="tl">
       <div className="tl-block">
         <div className="tl-head">
-          <span className="tl-title">Shell-item activity</span>
+          <span className="tl-title">User activity</span>
           <span className="tl-sub">rows by artifact source, best-available time each &mdash; one cell per day including the quiet ones, click a day to explore it below</span>
         </div>
         <StripNavigator win={win} days={days} totals={totals} />
@@ -88,6 +96,13 @@ export default function SourceTimeline({ timeline, selectedDay, onSelectDay }) {
             <DayAxis days={view} columns={columns} pitch={pitch} />
           </div>
           {rows}
+          {!shown.length && (
+            <div className="detail-none small" style={{ padding: '14px 4px' }}>
+              No dated items for this selection. These sources record no time per entry
+              (or only their key's write time, shared by every entry) &mdash; every item is
+              listed under <b>All items</b> below.
+            </div>
+          )}
         </div>
         <div className="hm-hint">Registry-based MRUs mostly carry one key-write time, so their rows cluster on a day; Shellbags carry per-folder times and spread out.</div>
       </div>

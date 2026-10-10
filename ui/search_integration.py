@@ -228,8 +228,9 @@ def create_search_handlers(ui_instance,
     # Connect clear requested signal
     def on_clear_requested():
         try:
-            # Get batch processing method if available
-            batch_process_method = getattr(ui_instance, '_batch_process_data_with_loader', None)
+            # The batch-processing path this used to look up was removed
+            # (it had no callers); clear_search reloads through load_all_method.
+            batch_process_method = None
             
             # Clear search and reload data
             loaded_count = integration.clear_search(

@@ -1,0 +1,562 @@
+/* ==========================================================================
+   Eye-Describe - shared anatomy stylesheet
+   --------------------------------------------------------------------------
+   Consistency layer for the anatomy visualizer pages. Linked LAST in each
+   page's <head> (after style.css and the page-local <style>), so this wins the
+   cascade by source order and restyles every page through the shared rules.
+
+   Goal: make the anatomy pages read like the long-form GUIDE articles
+   (booting-process.html / registry-internals.html) - the same fonts, the same
+   blue (indigo/cyan) + green (emerald/lime) + red (rose) colour language, the
+   guide's translucent GLASS cards with a hover/selection glow, big uppercase
+   headers, and a step MORE futuristic animation.
+
+   Hard constraint: the BYTE MAPS ("binary maps") must NOT change. The byte grid
+   lives on --bg2 / --border and its inline bytemap.js fills; those values are
+   kept fixed here and .byte-cell is pinned explicitly. The byte-map
+   section-accent family (--header-color ... --mam-color) is kept verbatim.
+
+   style.css is already linked on every anatomy page, so its brand tokens
+   (--indigo/--cyan/--lime/--rose/--card/--card-hover/--border-hover/--shimmer/
+   --animation-timing) are in scope; they are also mirrored below so this file
+   is self-sufficient.
+   ========================================================================== */
+
+:root {
+  /* --- base surfaces ------------------------------------------------------ */
+  --bg:  #0a0c10;              /* neutral near-black (less blue - the early look) */
+  --bg1: #0f1218;
+  --bg2: #151a22;              /* BYTE-CELL background - DO NOT CHANGE */
+  --bg3: #1c2330;
+
+  /* --- borders (neutral gray-slate; byte grid depends on --border) -------- */
+  --border:  #1e2a3a;          /* BYTE-CELL border - DO NOT CHANGE */
+  --border2: #2a3a50;
+
+  /* --- text: bright for readability ("research-grade rigor") -------------- */
+  --tx:  #e8edf5;
+  --tx2: #94a3b8;
+  --tx3: #5a6b7d;
+
+  /* --- accents: indigo primary + green/cyan/rose co-accents (the guide mix) */
+  --accent:     #6366f1;                     /* brand indigo */
+  --accent-dim: rgba(99, 102, 241, 0.12);
+  --green:      #34d399;                     /* emerald */
+  --green-dim:  rgba(52, 211, 153, 0.12);
+
+  /* mirrored brand tokens (identical to style.css) so this file stands alone */
+  --indigo:  #6366f1;
+  --cyan:    #22d3ee;
+  --lime:    #bef264;
+  --rose:    #f43f5e;
+  --muted:   #94a3b8;
+  /* translucent so the animated page shows through (a real glass effect) */
+  --card:        rgba(14, 18, 30, 0.80);   /* opaque enough to read over the sky without a blur */
+  --card-hover:  rgba(18, 24, 40, 0.86);
+  --card-stripe: #15803d;                    /* dark-green left stripe on cards */
+  --border-hover: rgba(99, 102, 241, 0.40);
+  --animation-timing: cubic-bezier(0.16, 1, 0.3, 1);
+  --shimmer: linear-gradient(112deg, transparent 30%, rgba(255,255,255,.05) 44%, rgba(255,255,255,.11) 50%, rgba(255,255,255,.05) 56%, transparent 70%);
+
+  /* --- "Base Block" two-layer neutral palette for INTERACTIVE VISUALS -------
+     (registry-internals: .anat outer / .map-container inner / .side-panel);
+     translucent, outer-lighter / inner-darker */
+  --viz-outer: rgba(15, 18, 24, 0.68);   /* outer panel (lighter of the two) */
+  --viz-inner: rgba(10, 12, 16, 0.85);   /* inner grid holder (darker) */
+  --viz-panel: rgba(21, 26, 34, 0.85);   /* inspector / side panel */
+  --viz-bd:  rgba(148, 163, 184, 0.16);  /* neutral gray-slate border */
+  --viz-bd2: rgba(148, 163, 184, 0.22);
+
+  /* --- byte-map SECTION-ACCENT family: KEPT verbatim (semantic colours) --- */
+  --header-color:   #60a5fa;  --header-dim:   #0a1835;
+  --identity-color: #22d3ee;  --identity-dim: #0a1d2e;
+  --fileinfo-color: #34d399;  --fileinfo-dim: #0a2a1a;
+  --metrics-color:  #22d3ee;  --metrics-dim:  #0a1d2e;
+  --times-color:    #f87171;  --times-dim:    #2e000a;
+  --volumes-color:  #fbbf24;  --volumes-dim:  #352108;
+  --target-color:   #fbbf24;  --target-dim:   #352108;
+  --props-color:    #34d399;  --props-dim:    #0a2a1a;
+  --trace-color:    #a78bfa;  --trace-dim:    #1e1035;
+  --string-color:   #fca5a5;  --string-dim:   #45000f;
+  --hash-color:     #22d3ee;  --hash-dim:     #0a1d2e;
+  --mam-color:      #34d399;  --mam-dim:      #0a2a1a;
+  --danger:         #ff4d6a;
+}
+
+/* ==========================================================================
+   BYTE MAPS - pinned. Neutral outline at rest; the section colour appears only
+   on the SELECTED cell (each page's own .byte-cell.active rule handles that).
+   ========================================================================== */
+.byte-cell { background: #151a22; border-color: #1e2a3a; }
+
+/* ==========================================================================
+   Cards - matched to the GUIDE ARTICLE cards so the anatomy pages read the same
+   (booting-process / registry-internals). anatomy.css loads LAST, so these
+   fully override each page's old local card rules - there is now one source of
+   truth for the card look.
+
+     Tier A  big content boxes   = the article .premium-alert
+                                   (indigo -> navy gradient, indigo border,
+                                    indigo left stripe, 16px radius).
+     Tier B  small cards         = the article .glass-card
+                                   (translucent navy + indigo border, 14px).
+     Tier C  diagram / byte-map containers = neutral dark glass, NO indigo tint
+                                   so the byte grid keeps its dark backdrop
+                                   ("binary maps do not change").
+   ========================================================================== */
+
+/* BIG PROSE/REFERENCE cards - the article ".cli-card" (format-specification /
+   Sources & Credit): ONE flat translucent colour, a blur (transparent effect),
+   a 1px indigo border and a 4px indigo left stripe. No gradient. */
+.narrative-section, .kb-section, .full-reference {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--card-stripe);
+  border-radius: 16px;
+  padding: 30px 34px;
+  margin-bottom: 32px;
+
+  transition: background .3s var(--animation-timing),
+              border-color .2s ease,
+              box-shadow .3s var(--animation-timing),
+              transform  .2s var(--animation-timing);
+}
+
+/* INTERACTIVE VISUALS - the article "Base Block" TWO-LAYER neutral background.
+   .map-container/.diagram-card = the outer (lighter) panel; .unified-map = the
+   inner (darker) grid holder; .dynamic-side = the inspector panel. No indigo. */
+.map-container, .diagram-card {
+  background: var(--viz-outer);
+  border: 1px solid var(--viz-bd);
+  border-radius: 16px;
+  padding: 22px;
+  margin-bottom: 32px;
+  transition: border-color .2s ease, box-shadow .3s var(--animation-timing),
+              transform .2s var(--animation-timing);
+}
+.map-container { overflow-x: auto; }
+.unified-map {
+  background: var(--viz-inner);
+  border: 1px solid var(--viz-bd);
+  border-radius: 12px;
+  padding: 14px;
+}
+.dynamic-side {
+  background: var(--viz-panel);
+  border: 1px solid var(--viz-bd2);
+  border-radius: 16px;
+  padding: 24px;
+  transition: border-color .2s ease, box-shadow .3s var(--animation-timing);
+}
+
+/* SMALL cards - deliberately DIFFERENT: solid, opaque (no transparency). */
+.fact-card, .comp-card, .flow-node, .container-strip, .rel-card, .dcard {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 16px 18px;
+  transition: background .3s var(--animation-timing),
+              border-color .2s ease,
+              box-shadow .3s var(--animation-timing),
+              transform  .2s var(--animation-timing);
+}
+
+/* hover: prose cards get the indigo cli-card hover; the neutral visual panels
+   get a neutral hover (no indigo). */
+.narrative-section:hover, .kb-section:hover, .full-reference:hover {
+  border-color: var(--indigo);
+  box-shadow: 0 16px 40px rgba(99, 102, 241, 0.15);
+  transform: translateY(-4px);
+}
+.map-container:hover, .diagram-card:hover {
+  border-color: var(--viz-bd2);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.40);
+  transform: translateY(-3px);
+}
+.fact-card:hover, .comp-card:hover, .flow-node:hover, .dcard:hover {
+  border-color: var(--indigo);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  transform: translateY(-2px);
+}
+
+/* small cards get a shimmer sweep on hover (self-contained, clipped) */
+.fact-card, .comp-card { position: relative; overflow: hidden; }
+.fact-card::after, .comp-card::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: var(--shimmer); background-size: 220% 100%; background-position: 160% 0;
+  opacity: 0; transition: opacity .25s ease;
+}
+.fact-card:hover::after, .comp-card:hover::after {
+  opacity: 1; animation: anat-shimmer 1.0s ease;
+}
+@keyframes anat-shimmer {
+  from { background-position: 160% 0; }
+  to   { background-position: -60% 0; }
+}
+
+/* cross-reference cards: hover slides + turns GREEN (distinct from card hover) */
+.rel-card {
+  transition: transform .2s var(--animation-timing),
+              border-left-color .2s ease, box-shadow .25s ease;
+}
+.rel-card:hover {
+  transform: translateX(4px);
+  border-left-color: var(--green);
+  box-shadow: -4px 0 20px var(--green-dim);
+}
+
+/* connector strips: gentle lift */
+.container-strip:hover {
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.38), 0 0 30px rgba(99, 102, 241, 0.10);
+  transform: translateY(-2px);
+}
+
+/* ==========================================================================
+   Selection / active states -> GREEN + pulse (reads distinct from hover).
+   These classes exist only on the pages that use them; harmless elsewhere.
+   ========================================================================== */
+.ese-node.on, .v-tab.active {
+  border-color: var(--green) !important;
+  background: var(--green-dim) !important;
+  color: var(--green) !important;
+}
+.ese-node.on {
+  animation: anat-pulse 2.4s ease-in-out infinite;
+}
+@keyframes anat-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.35); }
+  50%      { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+}
+
+/* ==========================================================================
+   Headers - the guide treatment: big, uppercase, with an indigo->cyan accent
+   bar and a soft glow. Applies to plain <h2> (most pages) and h2.sec-title
+   (srum). Page hero title is <h1>, so it is untouched.
+   ========================================================================== */
+h2, h2.sec-title {
+  font-size: clamp(1.55rem, 2.7vw, 2.2rem);
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.012em;
+  line-height: 1.16;
+  color: var(--tx);
+  margin-bottom: 20px;
+  text-shadow: 0 0 22px rgba(99, 102, 241, 0.18);
+}
+
+/* plain h2 gets a gradient accent bar (srum's .sec-title already has a flex tick) */
+h2:not(.sec-title) { position: relative; padding-left: 20px; }
+h2:not(.sec-title)::before {
+  content: ''; position: absolute; left: 0; top: 0.16em; bottom: 0.18em; width: 5px;
+  border-radius: 3px;
+  background: linear-gradient(180deg, var(--indigo), var(--cyan));
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.45);
+}
+/* recolour srum's existing tick to the same gradient */
+h2.sec-title::before {
+  background: linear-gradient(180deg, var(--indigo), var(--cyan));
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.45);
+}
+
+/* A #fragment link (every Anatomy button in Crow-Eye is one) scrolls its
+   target to the top edge, under the fixed site header - the heading the
+   reader came for was the one thing hidden. Stop below the header instead. */
+h2[id], h3[id], h4[id] { scroll-margin-top: 112px; }
+
+/* A plain link inside running text had no rule at all and rendered in the
+   browser's default #0000EE - dark blue on a near-black page. */
+p a:not([class]), td a:not([class]) {
+  color: var(--cyan);
+  text-decoration: underline;
+  text-decoration-color: rgba(34, 211, 238, 0.4);
+  text-underline-offset: 2px;
+}
+p a:not([class]):hover, td a:not([class]):hover {
+  text-decoration-color: var(--cyan);
+}
+
+/* ==========================================================================
+   Prose <code> - the article inline-code look (JetBrains Mono + cyan chip).
+   This fully owns inline code so pages can drop their local `code {}` rule.
+   Byte cells and data panels use their OWN classes with 'Space Mono' (byte
+   maps unchanged) - they are never <code>, so they are unaffected.
+   ========================================================================== */
+code {
+  font-family: 'JetBrains Mono', 'Space Mono', ui-monospace, monospace;
+  font-size: 0.86em;
+  color: var(--cyan);
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* ==========================================================================
+   Scroll-reveal - the article entrance animation. main.js adds `.visible`
+   via IntersectionObserver. (style.css also defines this; kept here so the
+   pages animate even if only anatomy.css is present, e.g. boot-disk.)
+   ========================================================================== */
+.reveal {
+  opacity: 0;
+  transform: translateY(22px);
+  transition: opacity .7s var(--animation-timing), transform .7s var(--animation-timing);
+  will-change: opacity, transform;
+}
+.reveal.visible { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+/* ==========================================================================
+   Tables - the article "table.fmt" look (registry-internals): Space Mono,
+   muted-gray uppercase headers, green first columns, thin row borders.
+   Overrides each page's local indigo-header .ref-table/.kb-table.
+   ========================================================================== */
+.ref-table, .kb-table, table.fmt {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;                /* neutralise the pages' min-width:800px */
+  border-collapse: collapse;
+  /* AUTO layout: the browser sizes each column to the text it holds (the ratio) */
+  table-layout: auto;
+  font-family: 'Space Mono', ui-monospace, monospace;
+  font-size: 12.5px;
+}
+/* headers: bold, bigger, GREEN */
+.ref-table th, .kb-table th, table.fmt th {
+  text-align: left;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--green);
+  font-family: 'Space Mono', ui-monospace, monospace;
+  font-size: 13.5px;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.ref-table td, .kb-table td, table.fmt td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--tx2);
+  vertical-align: top;
+  /* NO width cap: table-layout:auto sizes each column to its content (the ratio);
+     only wrap long paths/tokens so nothing overflows horizontally. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+/* byte-map field tables (ref-table/.fmt): the offset/size code columns read
+   green and stay tight to their short content. NOT .kb-table (text tables). */
+.ref-table td:first-child, .ref-table td:nth-child(2),
+table.fmt td:first-child, table.fmt td:nth-child(2) {
+  white-space: nowrap;
+  color: var(--fileinfo-color);
+}
+.ref-table td.n, .kb-table td.n, table.fmt td.n { color: var(--tx); font-weight: 700; }
+.ref-table tr:hover, .kb-table tr:hover, table.fmt tr:hover { background: rgba(255, 255, 255, 0.02); }
+/* section-band rows stay a solid strip, span the full width, NOT green/capped */
+.ref-section-head td {
+  background: rgba(21, 26, 34, 0.55);
+  color: var(--tx);
+  font-weight: 800;
+  font-family: 'Space Mono', ui-monospace, monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  white-space: normal;
+  max-width: none;
+  min-width: 0;
+}
+
+/* Tables sit on a TRANSPARENT, BLURRED glass panel, and FILL the container
+   (override the pages' `width: fit-content`, which left unused space). */
+.responsive-table-wrap, .technical-table-wrap, .ref-wrap, .table-wrap {
+  width: 100%;
+  max-width: 100%;
+  background: rgba(15, 23, 42, 0.20);
+  border-radius: 14px;
+}
+
+/* ==========================================================================
+   Notes / callouts - take the CARD background (translucent), keep the accent
+   left border. `.forensic-text` is the anatomy note; `.warmup` is the article's.
+   ========================================================================== */
+.forensic-text, .warmup {
+  background: var(--card);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 10px 10px 0;
+  padding: 14px 18px;
+}
+.forensic-text.warn { border-left-color: var(--danger); }
+.warmup { border-left-color: var(--cyan); }
+
+/* ==========================================================================
+   Enhanced "What is ...?" intro card - polished animated collapsible.
+   Markup (pages that have one): .intro-card > .intro-icon + .intro-content
+   (.intro-title, .intro-body). Each page's own click handler toggles
+   .collapsed on the card.
+   ========================================================================== */
+
+/* one-shot cyan edge-glow the moment the card opens (Crow-Eye glow language) */
+@keyframes anat-open-glow {
+  0%   { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+  30%  { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 0 22px 2px rgba(34, 211, 238, 0.35); }
+  100% { box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45); }
+}
+
+.intro-card {
+  position: relative;
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+  max-width: 1200px;
+  padding: 20px 24px;
+  margin-bottom: 30px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.10) 0%, rgba(10, 16, 40, 0.42) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.20);
+  border-left: 4px solid var(--card-stripe);
+  border-radius: 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+  transition: border-left-color .35s ease, box-shadow .4s ease;
+}
+/* the glow fires whenever the card is (re-)opened */
+.intro-card:not(.collapsed) { animation: anat-open-glow .8s ease-out; }
+
+.intro-icon {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+  background: var(--accent-dim);
+  border: 1px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 16px;
+  cursor: pointer;
+  transition: background .25s ease, color .25s ease, transform .25s ease;
+}
+.intro-icon:hover { background: var(--accent); color: #fff; transform: scale(1.08); }
+
+/* icon + title are a slim header that STAYS in both states (title always readable) */
+.intro-content { flex: 1 1 0; min-width: 0; }
+.intro-title {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--tx);
+  margin-bottom: 8px;
+}
+/* the BODY is the animated part: on open it "prints in" from the top (clip wipe) */
+.intro-body {
+  font-size: 15px;
+  color: var(--tx2);
+  line-height: 1.7;
+  max-height: 600px;
+  opacity: 1;
+  overflow: hidden;
+  clip-path: inset(0 0 0 0);
+  transition: max-height .5s cubic-bezier(0.4, 0, 0.2, 1),
+              opacity   .38s ease,
+              clip-path .5s cubic-bezier(0.4, 0, 0.2, 1),
+              margin    .5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.intro-body strong { color: var(--tx); }
+.intro-body code {
+  font-family: 'JetBrains Mono', 'Space Mono', monospace; font-size: 13px;
+  background: var(--bg); padding: 2px 6px; border-radius: 4px;
+  color: var(--cyan); border: 1px solid var(--border);
+}
+
+/* --- collapsed: header (icon + title) stays; the body wipes UP and away ---- */
+.intro-card.collapsed { cursor: pointer; border-left-color: var(--indigo); }
+.intro-card.collapsed .intro-title { margin-bottom: 0; }
+.intro-card.collapsed .intro-body {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  clip-path: inset(0 0 100% 0);
+  pointer-events: none;
+}
+
+/* ==========================================================================
+   .page-toc - what this page covers, before the reader starts scrolling
+   --------------------------------------------------------------------------
+   Fifteen of the eighteen pages had no roadmap at all. Modelled on the bf-toc
+   block browser-forensics already carried, moved here so every page can have
+   one without another page-level style block.
+   ========================================================================== */
+.page-toc {
+  background: rgba(10, 12, 16, 0.55);
+  border: 1px solid var(--border, rgba(99, 102, 241, 0.25));
+  border-radius: 14px;
+  padding: 1.25rem 1.5rem;
+  margin: 0 0 2.25rem;
+}
+.page-toc h4 {
+  margin: 0 0 0.85rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent, #22d3ee);
+}
+.page-toc ol,
+.page-toc ul {
+  margin: 0;
+  padding-left: 1.3rem;
+  columns: 2;
+  column-gap: 2.5rem;
+}
+.page-toc li { margin: 0 0 0.45rem; break-inside: avoid; }
+.page-toc a {
+  color: var(--tx2, #94a3b8);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  font-size: 0.93rem;
+  line-height: 1.5;
+}
+.page-toc a:hover { color: var(--tx, #e2e8f0); border-bottom-color: currentColor; }
+@media (max-width: 720px) { .page-toc ol, .page-toc ul { columns: 1; } }
+
+/* ==========================================================================
+   .myth - "this artifact does not prove what it is usually said to prove"
+   --------------------------------------------------------------------------
+   The callout the limits sections are built from. It began as a local block on
+   shimcache_anatomy and registry_anatomy, which still carry their own
+   identical copies; it lives here so every page can state its limits without
+   another page-level style block.
+   ========================================================================== */
+.myth {
+  border-left: 3px solid #f87171;
+  padding: 14px 18px;
+  margin: 18px 0;
+  background: rgba(248, 113, 113, 0.06);
+  border-radius: 0 8px 8px 0;
+}
+.myth h4 { color: #f87171; margin: 0 0 8px; font-size: 15px; }
+.myth p  { margin: 0; }
+.myth p + p { margin-top: 10px; }
+
+/* ==========================================================================
+   Reduced motion - disable all the movement, keep the colours.
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+  .narrative-section, .diagram-card, .map-container, .dynamic-side,
+  .kb-section, .full-reference, .fact-card, .comp-card, .container-strip,
+  .flow-node, .rel-card, .dcard,
+  .intro-card, .intro-icon, .intro-content, .intro-title, .intro-body {
+    transition: none;
+  }
+  .fact-card:hover::after, .comp-card:hover::after { animation: none; }
+  .ese-node.on { animation: none; }
+  .intro-card, .intro-card:not(.collapsed) { animation: none; }
+  .narrative-section:hover, .diagram-card:hover, .map-container:hover,
+  .kb-section:hover, .full-reference:hover, .fact-card:hover, .comp-card:hover,
+  .flow-node:hover, .dcard:hover, .container-strip:hover, .rel-card:hover {
+    transform: none;
+  }
+}

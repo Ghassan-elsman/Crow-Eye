@@ -9,7 +9,7 @@ progress tracking, error aggregation, and collection summary generation.
 import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Optional, Callable, Dict
 
@@ -45,6 +45,10 @@ class CollectionSummary:
     artifacts: List[CollectedArtifactInfo]
     start_time: datetime
     end_time: datetime
+    # Per-file problems (grouped): a run with errors is not reported as a
+    # clean success.
+    errors: List[str] = field(default_factory=list)
+    cancelled: bool = False
 
 
 @dataclass
@@ -115,6 +119,9 @@ class CollectionCoordinator:
         self.artifacts_found = 0
         self.artifacts_collected = 0
         self.artifacts_failed = 0
+
+        # A cancelled run's summary of what it had done (collect_artifacts).
+        self.partial_summary: Optional[CollectionSummary] = None
     
     def set_progress_callback(self, callback: Callable[[ProgressUpdate], None]):
         """
@@ -199,15 +206,17 @@ class CollectionCoordinator:
         """
         if self.progress_callback and self.start_time:
             elapsed_time = time.time() - self.start_time
-            
-            # Create progress update
+            live = getattr(self.artifact_collector, "live_counts", None) or {}
+
+            # Create progress update (the collector's running counts: these
+            # were the totals, which only exist once the run is over)
             progress = ProgressUpdate(
                 current_file=current_file,
                 processed_count=processed_count,
                 total_count=total_count,
-                artifacts_found=self.artifacts_found,
-                artifacts_collected=self.artifacts_collected,
-                artifacts_failed=self.artifacts_failed,
+                artifacts_found=live.get("found", self.artifacts_found),
+                artifacts_collected=live.get("collected", self.artifacts_collected),
+                artifacts_failed=live.get("failed", self.artifacts_failed),
                 elapsed_time=elapsed_time
             )
             
@@ -271,11 +280,13 @@ class CollectionCoordinator:
             collection_time=collection_time,
             artifacts=collection_result.artifacts,
             start_time=start_time,
-            end_time=end_time
+            end_time=end_time,
+            errors=list(self.errors)
         )
-    
+
     def collect_artifacts(self, source_dir: str, artifact_type_filter: Optional[str] = None,
-                         include_subdirs: bool = True) -> CollectionSummary:
+                         include_subdirs: bool = True,
+                         specific_files: Optional[List[str]] = None) -> CollectionSummary:
         """
         Collect artifacts from a directory.
         
@@ -290,13 +301,17 @@ class CollectionCoordinator:
             source_dir: Source directory to scan
             artifact_type_filter: Optional filter (e.g., "Registry", "Prefetch", or None for all)
             include_subdirs: Whether to scan subdirectories recursively
-            
+            specific_files: Only these files (Select Files, or Collect after a
+                scan); the folder is still the base for browser and per-user paths.
+
         Returns:
             CollectionSummary containing complete session information
-            
+
         Raises:
             ValueError: If validation fails
-            InterruptedError: If collection is cancelled
+            InterruptedError: If collection is cancelled (partial_summary holds
+                what was done by then)
+            RuntimeError: If the collection itself failed
         """
         # Reset state
         self.errors = []
@@ -304,6 +319,7 @@ class CollectionCoordinator:
         self.artifacts_found = 0
         self.artifacts_collected = 0
         self.artifacts_failed = 0
+        self.partial_summary = None
         
         # Validate directories
         if not self._validate_source_directory(source_dir):
@@ -324,9 +340,10 @@ class CollectionCoordinator:
             collection_result = self.artifact_collector.collect_from_directory(
                 source_dir=source_dir,
                 artifact_type_filter=artifact_type_filter,
-                include_subdirs=include_subdirs
+                include_subdirs=include_subdirs,
+                specific_files=specific_files
             )
-            
+
             # Update statistics
             self.artifacts_found = collection_result.total_found
             self.artifacts_collected = collection_result.total_collected
@@ -360,24 +377,19 @@ class CollectionCoordinator:
             return summary
         
         except InterruptedError:
-            # Collection was cancelled - re-raise to propagate to caller
+            # Cancelled: keep what was done for the caller, then re-raise.
+            partial = getattr(self.artifact_collector, "partial_result", None)
+            if partial is not None:
+                self._aggregate_errors(partial)
+                summary = self._generate_collection_summary(partial, start_time, datetime.now())
+                summary.cancelled = True
+                self.partial_summary = summary
             raise
-            
+
         except Exception as e:
-            # Handle unexpected errors
+            # Not an empty "successful" summary: the caller is told it failed.
             self.errors.append(f"Collection failed: {str(e)}")
-            end_time = datetime.now()
-            
-            # Return partial results
-            return CollectionSummary(
-                total_found=self.artifacts_found,
-                total_collected=self.artifacts_collected,
-                failed=self.artifacts_failed,
-                collection_time=(end_time - start_time).total_seconds(),
-                artifacts=[],
-                start_time=start_time,
-                end_time=end_time
-            )
+            raise RuntimeError(f"Collection failed: {e}") from e
     
     def cancel(self):
         """
@@ -431,38 +443,6 @@ class CollectionCoordinator:
             )
         else:
             raise ValueError(f"Unsupported report format: {format}. Use 'html' or 'pdf'.")
-
-    def collect_artifacts_incremental(self, source_dir: str, artifact_type_filter: Optional[str] = None,
-                                      include_subdirs: bool = True) -> CollectionSummary:
-        """
-        Collect artifacts incrementally, adding to an existing case.
-        
-        This method is identical to collect_artifacts() but explicitly documents
-        that it supports incremental collection. The deduplication mechanism
-        automatically prevents re-collecting artifacts that already exist in the case.
-        
-        When this method is called:
-        1. Existing artifacts in the case are loaded and their hashes calculated
-        2. New artifacts are scanned from the source directory
-        3. Duplicates are detected by hash comparison
-        4. Only new (non-duplicate) artifacts are copied to the case
-        
-        Args:
-            source_dir: Source directory to scan
-            artifact_type_filter: Optional filter (e.g., "Registry", "Prefetch", or None for all)
-            include_subdirs: Whether to scan subdirectories recursively
-            
-        Returns:
-            CollectionSummary containing complete session information, including
-            count of skipped duplicates
-            
-        Raises:
-            ValueError: If validation fails
-            InterruptedError: If collection is cancelled
-        """
-        # The standard collect_artifacts method already supports incremental collection
-        # through the deduplication mechanism
-        return self.collect_artifacts(source_dir, artifact_type_filter, include_subdirs)
 
     def collect_artifacts_batch(self, source_dirs: List[str], artifact_type_filter: Optional[str] = None,
                                 include_subdirs: bool = True) -> CollectionSummary:

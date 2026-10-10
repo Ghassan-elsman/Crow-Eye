@@ -14,7 +14,20 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
 from .ui_styling import CorrelationEngineStyles
+from ui.site_theme import font, set_card, set_role, set_status, keep_style
 
+# interpretation kind -> label status (the site's meaning colours)
+_KIND_STATUS = {"high": "ok", "medium": "warn", "low": "bad"}
+
+
+def _sized(label, px, weight=QFont.Bold):
+    """A label larger than the site's 13px body text. The window sheet sets
+    font-size on every widget, which beats setFont, so the size goes in the
+    label's own (kept) sheet; its colour still comes from its status."""
+    label.setFont(font("ui", px, weight))
+    label.setStyleSheet("QLabel { font-size: %dpx; font-weight: %d; }"
+                        % (px, 700 if weight >= QFont.Bold else 600))
+    return keep_style(label)
 
 
 class ScoringBreakdownWidget(QWidget):
@@ -52,16 +65,16 @@ class ScoringBreakdownWidget(QWidget):
         """Create the prominent score display section"""
         widget = QFrame()
         widget.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
+        set_card(widget)
         layout = QHBoxLayout(widget)
         
         # Score label
         score_label_text = QLabel("Weighted Score:")
-        score_label_text.setFont(QFont("Arial", 10, QFont.Bold))
+        score_label_text.setFont(font("ui", 13, QFont.Bold))
         layout.addWidget(score_label_text)
         
         self.score_value_label = QLabel("0.00")
-        score_font = QFont("Arial", 16, QFont.Bold)
-        self.score_value_label.setFont(score_font)
+        _sized(self.score_value_label, 21)
         self.score_value_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.score_value_label)
         
@@ -73,12 +86,11 @@ class ScoringBreakdownWidget(QWidget):
         
         # Interpretation label
         interp_label_text = QLabel("Interpretation:")
-        interp_label_text.setFont(QFont("Arial", 10, QFont.Bold))
+        interp_label_text.setFont(font("ui", 13, QFont.Bold))
         layout.addWidget(interp_label_text)
         
         self.interpretation_label = QLabel("N/A")
-        interp_font = QFont("Arial", 14, QFont.Bold)
-        self.interpretation_label.setFont(interp_font)
+        _sized(self.interpretation_label, 19)
         self.interpretation_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.interpretation_label)
         
@@ -86,7 +98,7 @@ class ScoringBreakdownWidget(QWidget):
         
         # Match summary
         self.match_summary_label = QLabel("")
-        self.match_summary_label.setFont(QFont("Arial", 9))
+        set_role(self.match_summary_label, "muted")
         layout.addWidget(self.match_summary_label)
         
         return widget
@@ -129,12 +141,12 @@ class ScoringBreakdownWidget(QWidget):
         from .crow_eye_icons import apply_status_to_label
         matched_label = QLabel()
         apply_status_to_label(matched_label, "OK", "= Matched")
-        matched_label.setStyleSheet("color: #4CAF50; font-weight: bold;")
+        set_status(matched_label, "ok")
         legend_layout.addWidget(matched_label)
 
         unmatched_label = QLabel()
         apply_status_to_label(unmatched_label, "FAIL", "= Not Matched")
-        unmatched_label.setStyleSheet("color: #9E9E9E;")
+        set_status(unmatched_label, "neutral")
         legend_layout.addWidget(unmatched_label)
         
         legend_layout.addStretch()
@@ -184,40 +196,31 @@ class ScoringBreakdownWidget(QWidget):
     def _display_no_scoring(self):
         """Display message when no weighted scoring is available"""
         self.score_value_label.setText("N/A")
-        self.score_value_label.setStyleSheet("color: #9E9E9E;")
-        
+        set_status(self.score_value_label, "neutral")
+
         self.interpretation_label.setText("Simple Scoring")
-        self.interpretation_label.setStyleSheet("color: #9E9E9E;")
+        set_status(self.interpretation_label, "neutral")
         
         self.match_summary_label.setText("(Weighted scoring not enabled)")
         
         self.breakdown_table.setRowCount(0)
     
+    @staticmethod
+    def _interpretation_status(interpretation: str) -> str:
+        """ok / warn / bad for the words the engines emit (Critical / High /
+        Medium / Low / Minimal, Strong / Good / Partial / Weak Match) - the
+        old checks looked for Confirmed / Probable, which nothing emits, so
+        every score was painted the default blue."""
+        kind = CorrelationEngineStyles.interpretation_kind(interpretation)
+        return _KIND_STATUS.get(kind, "accent")
+
     def _apply_score_color(self, score: float, interpretation: str):
         """Apply color coding to score based on interpretation"""
-        if 'Confirmed' in interpretation:
-            color = CorrelationEngineStyles.SCORE_CONFIRMED # Green
-        elif 'Probable' in interpretation or 'Likely' in interpretation:
-            color = CorrelationEngineStyles.SCORE_PROBABLE # Orange
-        elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-            color = CorrelationEngineStyles.SCORE_WEAK # Red
-        else:
-            color = CorrelationEngineStyles.SCORE_DEFAULT # Blue (default)
-        
-        self.score_value_label.setStyleSheet(f"color: {color};")
-    
+        set_status(self.score_value_label, self._interpretation_status(interpretation))
+
     def _apply_interpretation_color(self, interpretation: str):
         """Apply color coding to interpretation label"""
-        if 'Confirmed' in interpretation:
-            color = CorrelationEngineStyles.SCORE_CONFIRMED # Green
-        elif 'Probable' in interpretation or 'Likely' in interpretation:
-            color = CorrelationEngineStyles.SCORE_PROBABLE # Orange
-        elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-            color = CorrelationEngineStyles.SCORE_WEAK # Red
-        else:
-            color = CorrelationEngineStyles.SCORE_DEFAULT # Blue (default)
-        
-        self.interpretation_label.setStyleSheet(f"color: {color};")
+        set_status(self.interpretation_label, self._interpretation_status(interpretation))
     
     def _populate_breakdown_table(self, breakdown: Dict[str, Dict[str, Any]]):
         """
@@ -252,7 +255,7 @@ class ScoringBreakdownWidget(QWidget):
             # Feather name
             feather_item = QTableWidgetItem(feather_id)
             if matched:
-                feather_item.setFont(QFont("Arial", 9, QFont.Bold))
+                feather_item.setFont(font("ui", 12, QFont.Bold))
             self.breakdown_table.setItem(row, 0, feather_item)
             
             # Status (matched/unmatched) — Crow-Eye icon on the item;
@@ -260,13 +263,13 @@ class ScoringBreakdownWidget(QWidget):
             from .crow_eye_icons import CrowEyeIcons
             status_item = QTableWidgetItem("")
             status_item.setIcon(CrowEyeIcons.success() if matched else CrowEyeIcons.fail())
-            status_font = QFont("Arial", 12, QFont.Bold)
+            status_font = font("ui", 16, QFont.Bold)
             status_item.setFont(status_font)
             status_item.setTextAlignment(Qt.AlignCenter)
             
             if matched:
                 status_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR)) # Green
-                status_item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # Light green background
+                status_item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # dark green tint
             else:
                 status_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR)) # Gray
             
@@ -276,7 +279,7 @@ class ScoringBreakdownWidget(QWidget):
             weight_item = QTableWidgetItem(f"{weight:.2f}")
             weight_item.setTextAlignment(Qt.AlignCenter)
             if matched:
-                weight_item.setFont(QFont("Arial", 9, QFont.Bold))
+                weight_item.setFont(font("ui", 12, QFont.Bold))
             self.breakdown_table.setItem(row, 2, weight_item)
             
             # Contribution
@@ -285,7 +288,7 @@ class ScoringBreakdownWidget(QWidget):
             
             if matched and contribution > 0:
                 contrib_item.setForeground(QColor(CorrelationEngineStyles.MATCHED_COLOR)) # Green
-                contrib_item.setFont(QFont("Arial", 9, QFont.Bold))
+                contrib_item.setFont(font("ui", 12, QFont.Bold))
             else:
                 contrib_item.setForeground(QColor(CorrelationEngineStyles.UNMATCHED_COLOR)) # Gray
             
@@ -299,7 +302,7 @@ class ScoringBreakdownWidget(QWidget):
             # Tier description
             tier_desc_item = QTableWidgetItem(tier_name if tier_name else "-")
             if matched:
-                tier_desc_item.setFont(QFont("Arial", 9, QFont.Bold))
+                tier_desc_item.setFont(font("ui", 12, QFont.Bold))
             self.breakdown_table.setItem(row, 5, tier_desc_item)
             
             # Highlight matched rows
@@ -307,17 +310,17 @@ class ScoringBreakdownWidget(QWidget):
                 for col in range(self.breakdown_table.columnCount()):
                     item = self.breakdown_table.item(row, col)
                     if item and col not in [1]: # Skip status column (already colored)
-                        item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # Very light green
+                        item.setBackground(QColor(CorrelationEngineStyles.MATCHED_BG)) # dark green tint
         
         self.breakdown_table.resizeRowsToContents()
     
     def clear(self):
         """Clear all displayed data"""
         self.score_value_label.setText("0.00")
-        self.score_value_label.setStyleSheet("")
-        
+        set_status(self.score_value_label, None)
+
         self.interpretation_label.setText("N/A")
-        self.interpretation_label.setStyleSheet("")
+        set_status(self.interpretation_label, None)
         
         self.match_summary_label.setText("")
         

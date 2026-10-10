@@ -447,6 +447,17 @@ body { margin: 0; background: var(--bg); }
   border-left-color: rgba(199,210,254,0.7); }
 .usn-axtick--first > i { left: 0; transform: none; }
 .usn-row { display: flex; align-items: center; gap: 8px; }
+/* The source whose table's Charts button opened the dashboard. */
+.usn-row.focus { outline: 2px solid #22d3ee; outline-offset: 1px; border-radius: 4px;
+  background: rgba(34, 211, 238, 0.07); }
+.focus-banner { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0 0 8px; padding: 7px 10px; border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 6px; background: rgba(34, 211, 238, 0.06); color: #cbd5e1; font-size: 12.5px; }
+.focus-banner b { color: #67e8f9; }
+.focus-btn { background: #0e3a47; color: #e0f2fe; border: 1px solid #22d3ee; border-radius: 4px;
+  padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.focus-btn:hover { background: #155e75; }
+.focus-btn.ghost { background: transparent; border-color: #475569; color: #94a3b8; }
 /* `align-self: stretch` so the row head covers the full height of its row. */
 .usn-rowhead { width: 120px; flex-shrink: 0; font-size: 13px; color: var(--tx); display: flex; align-items: center; gap: 7px; font-weight: 700;
   position: sticky; left: 0; z-index: 2; background: var(--bg-card); align-self: stretch; }

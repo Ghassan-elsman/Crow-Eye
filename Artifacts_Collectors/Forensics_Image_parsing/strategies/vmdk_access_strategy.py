@@ -5,6 +5,8 @@ This module implements the VMDKAccessStrategy for accessing VMDK
 virtual disk images using the dissect ecosystem for file system access.
 """
 
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.strategies.vmdk_access_strategy")
 import os
 import time
 from typing import List, Optional
@@ -15,7 +17,7 @@ try:
     DISSECT_AVAILABLE = True
 except ImportError:
     DISSECT_AVAILABLE = False
-    print("Warning: dissect not available - VMDK file system access will be limited")
+    _log.warning("Warning: dissect not available - VMDK file system access will be limited")
 
 # Handle both relative and absolute imports
 try:
@@ -117,14 +119,14 @@ class VMDKAccessStrategy(FileAccessStrategy):
     
     def _open_image(self, file_path: str) -> bool:
         if not DISSECT_AVAILABLE:
-            print("[ERROR] Cannot open VMDK image: dissect is not installed")
+            _log.error("Cannot open VMDK image: dissect is not installed")
             return False
         
         try:
             self.img_info = open_container(file_path)
             return True
         except Exception as e:
-            print(f"[ERROR] Failed to open VMDK image: {e}")
+            _log.error(f"Failed to open VMDK image: {e}")
             return False
     
     def _close_image(self):
@@ -141,7 +143,7 @@ class VMDKAccessStrategy(FileAccessStrategy):
         try:
             return detect_partitions(self.img_info)
         except Exception as e:
-            print(f"[ERROR] Failed to detect partitions: {e}")
+            _log.error(f"Failed to detect partitions: {e}")
             return []
     
     def get_img_info(self):

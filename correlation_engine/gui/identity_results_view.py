@@ -34,6 +34,136 @@ from correlation_engine.engine.identity_grouping import ( # noqa: F401
     extract_original_name,
 )
 from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
+from ui import site_theme as _site
+
+# --- the site look (ui/site_theme.py) ------------------------------------------
+# Both result viewers (this one and timebased_results_viewer, which imports
+# these) take colour from the site's meaning colours, so a score, a severity or
+# a tree level reads the same everywhere in the engine. No per-widget palette.
+_TONES = dict(_site.STATUS_COLORS, empty="#64748B", variant="#FB923C")
+# Tree levels: what each row IS. A variant is orange and an anchor amber, so
+# the two adjacent levels stay apart as they did before.
+LEVEL_TONE = {
+    "identity": "accent",       # the tracked actor / app
+    "sub_identity": "variant",  # a name / version variant
+    "anchor": "warn",           # a temporal evidence cluster
+    "evidence": "ok",           # a raw artifact record
+    "semantic": "accent",       # a semantic value
+}
+# Engine bookkeeping carried on a record, never one of its fields: the record
+# tables showed the `_semantic_mappings` dict as a field row.
+HIDDEN_RECORD_KEYS = frozenset({
+    'semantic_data', 'semantic_mappings', '_semantic_mappings', '_metadata',
+    '_internal', '_feather_id', '_table',
+})
+# The filter bar (36 px) and the stats strip (120 px) keep their density: the
+# site's 13 px fields with 7 px padding do not fit them. Layout only - colours
+# all come from the window's site sheet. Scoped by objectName, so it reaches
+# nothing else; set once on the viewer (keepStyle).
+VIEWER_DENSITY_QSS = """
+QFrame#ceFilterBar QLabel { font-size: 12px; }
+QFrame#ceFilterBar QLineEdit, QFrame#ceFilterBar QComboBox, QFrame#ceFilterBar QDateTimeEdit {
+    font-size: 12px; padding: 1px 8px; border-radius: 8px; }
+QFrame#ceFilterBar QComboBox::drop-down, QFrame#ceFilterBar QDateTimeEdit::drop-down { width: 18px; }
+QFrame#ceFilterBar QPushButton { font-size: 11px; padding: 1px 8px; border-radius: 9px; min-height: 0; }
+QFrame#ceStatsStrip { border-top: 1px solid rgba(255, 255, 255, 0.07); }
+QFrame#ceStatsStrip QGroupBox { margin-top: 14px; padding: 4px 4px 2px 4px; border-radius: 10px; }
+QFrame#ceStatsStrip QGroupBox::title { font-size: 10px; }
+QFrame#ceStatsStrip QTableWidget { font-size: 11px; border-radius: 8px; }
+QFrame#ceStatsStrip QTableWidget::item { padding: 0 4px; }
+QFrame#ceStatsStrip QHeaderView::section { padding: 2px 4px; }
+"""
+_FONTS = {}
+
+
+def _tone(kind) -> QBrush:
+    """A brush in a meaning colour: ok / warn / bad / info / accent / neutral /
+    empty, or a tree level from LEVEL_TONE."""
+    return QBrush(QColor(_TONES.get(LEVEL_TONE.get(kind, kind), kind)))
+
+
+def _colour_score(item, column, score):
+    """Score colour, high / medium / low (the engines' 0.7 / 0.4 cut-offs);
+    no colour for no score."""
+    kind = _site.score_kind(score)
+    if kind != "none":
+        item.setForeground(column, QBrush(QColor(_site.SCORE_COLORS[kind])))
+
+
+def _colour_severity(table_item, severity):
+    """critical / high rose, medium amber, low / info green - 'critical' was
+    painted green as "anything else"."""
+    table_item.setForeground(_tone(_site.severity_kind(severity)))
+
+
+def _percent(value) -> str:
+    """A confidence as a percentage; whatever it is otherwise (None, text)."""
+    try:
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return "" if value is None else str(value)
+
+
+def _item_font(px, bold=False):
+    f = _FONTS.get((px, bold))
+    if f is None:
+        f = _FONTS[(px, bold)] = _site.font("ui", px, QFont.Bold if bold else QFont.Normal)
+    return f
+
+
+def style_viewer_bars(view, top_frame, stats_frame):
+    """The filter bar as a site card and the stats strip, at their density."""
+    top_frame.setObjectName("ceFilterBar")
+    _site.set_card(top_frame)
+    stats_frame.setObjectName("ceStatsStrip")
+    view.setStyleSheet(VIEWER_DENSITY_QSS)
+    _site.keep_style(view)
+
+
+def bar_label(label, kind=None, strong=False):
+    """A filter-bar label: muted, or a meaning colour; bold for the counts."""
+    if kind:
+        _site.set_status(label, kind)
+    else:
+        _site.set_role(label, "muted")
+    if strong:
+        label.setFont(_item_font(12, True))
+    return label
+
+
+def fit_header_titles(table, cap=260):
+    """Widen Interactive columns so each title fits in the site's header font
+    (11px bold, uppercase, tracked - wider than the old lowercase one); the
+    cell content still decides nothing, the analyst can still drag. Capped so
+    one long field name cannot take the whole table."""
+    from PyQt5.QtGui import QFontMetrics
+    fm = QFontMetrics(_site.font("ui", 11, QFont.Bold, upper=True, spacing=108))
+    header = table.horizontalHeader()
+    for c in range(table.columnCount()):
+        item = table.horizontalHeaderItem(c)
+        if item is None:
+            continue
+        need = min(cap, fm.horizontalAdvance(item.text().upper()) + 28)
+        if header.sectionSize(c) < need:
+            table.setColumnWidth(c, need)
+
+
+def begin_dialog_look(dialog):
+    """The site sheet on a detail dialog BEFORE its children exist."""
+    try:
+        from correlation_engine.gui.ui_styling import engine_extra
+        _site.begin_site_theme(dialog, extra=engine_extra())
+    except Exception as e:                       # cosmetic: never block the dialog
+        logger.debug(f"dialog look not applied: {e}")
+
+
+def finish_dialog_look(dialog):
+    """Roles and the ghost Close button once the dialog is built."""
+    try:
+        from correlation_engine.gui.ui_styling import CorrelationEngineStyles
+        CorrelationEngineStyles.apply_evidence_detail_styling(dialog, clear_inline=True)
+    except Exception as e:
+        logger.debug(f"dialog look not finished: {e}")
 
 
 # Record-level timestamp fields, in priority order (mirrors the engine's
@@ -505,209 +635,105 @@ class IdentityResultsView(QWidget):
         main_layout.setSpacing(4)
         main_layout.setContentsMargins(4, 4, 4, 4)
         
-        # Set widget background
-        self.setStyleSheet("background-color: #0B1220;")
-        
         # === TOP: Summary + Filters (single compact row) ===
         top_frame = QFrame()
         top_frame.setMaximumHeight(36)
-        top_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 6px;
-            }
-        """)
         top_layout = QHBoxLayout(top_frame)
         top_layout.setSpacing(10)
         top_layout.setContentsMargins(8, 4, 8, 4)
         
         # Summary labels (compact)
         self.identities_lbl = QLabel("Identities: 0")
-        self.identities_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
+        bar_label(self.identities_lbl, "info", strong=True)
         top_layout.addWidget(self.identities_lbl)
         
         self.anchors_lbl = QLabel("Anchors: 0")
-        self.anchors_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.anchors_lbl)
         top_layout.addWidget(self.anchors_lbl)
         
         self.evidence_lbl = QLabel("Records: 0")
-        self.evidence_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.evidence_lbl)
         top_layout.addWidget(self.evidence_lbl)
         
         self.feathers_used_lbl = QLabel("Feathers: 0")
-        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
+        bar_label(self.feathers_used_lbl, "ok", strong=True)
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
         self.scoring_lbl = QLabel("Scoring: Off")
-        self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.scoring_lbl, "neutral")
         top_layout.addWidget(self.scoring_lbl)
 
         # MITRE ATT&CK coverage rollup (from advanced/semantic rule hits).
         # Annotation only — hidden until at least one technique is covered.
         self.attack_lbl = QLabel("ATT&CK: —")
-        self.attack_lbl.setStyleSheet("font-size: 8pt; color: #9C27B0; font-weight: bold;")
+        bar_label(self.attack_lbl, "accent", strong=True)
         self.attack_lbl.setVisible(False)
         top_layout.addWidget(self.attack_lbl)
 
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep)
         
         # Filters with labels
         search_lbl = QLabel("Search:")
-        search_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(search_lbl)
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
         self.identity_filter.setPlaceholderText("Search name or semantic value...")
         self.identity_filter.setMaximumWidth(250)
-        self.identity_filter.setStyleSheet("""
-            QLineEdit {
-                font-size: 8pt; 
-                padding: 2px 4px;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QLineEdit:focus {
-                border: 1px solid #00FFFF;
-            }
-        """)
         self.identity_filter.textChanged.connect(self._on_search_text_changed)
         top_layout.addWidget(self.identity_filter)
         
         feather_lbl = QLabel("Feather:")
-        feather_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(feather_lbl)
         top_layout.addWidget(feather_lbl)
         
         self.feather_filter = QComboBox()
         self.feather_filter.addItem("All")
         self.feather_filter.setMaximumWidth(100)
-        self.feather_filter.setStyleSheet("""
-            QComboBox {
-                font-size: 8pt;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 2px 4px;
-            }
-            QComboBox:hover {
-                border: 1px solid #00FFFF;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1E293B;
-                color: #E2E8F0;
-                selection-background-color: #334155;
-            }
-        """)
         self.feather_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.feather_filter)
         
         min_lbl = QLabel("Min:")
-        min_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(min_lbl)
         top_layout.addWidget(min_lbl)
         
         self.min_filter = QComboBox()
         self.min_filter.addItems(["1", "2", "3", "5", "10"])
         self.min_filter.setMaximumWidth(50)
-        self.min_filter.setStyleSheet("""
-            QComboBox {
-                font-size: 8pt;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 2px 4px;
-            }
-            QComboBox:hover {
-                border: 1px solid #00FFFF;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1E293B;
-                color: #E2E8F0;
-                selection-background-color: #334155;
-            }
-        """)
         self.min_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.min_filter)
         
         reset_btn = QPushButton("Reset")
         reset_btn.setMaximumWidth(50)
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px 6px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(reset_btn, "ghost")
+        # The variant's uppercase, tracked font is wider: never clip the label
+        reset_btn.setMaximumWidth(max(reset_btn.maximumWidth(), reset_btn.sizeHint().width()))
         reset_btn.clicked.connect(self._reset_filters)
         top_layout.addWidget(reset_btn)
         
         # Separator
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep2)
         
         # Pagination controls
         self.prev_btn = QPushButton("<")
         self.prev_btn.setMaximumWidth(24)
-        self.prev_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(self.prev_btn, "ghost")
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
         self.page_lbl = QLabel("1/1")
-        self.page_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.page_lbl)
         top_layout.addWidget(self.page_lbl)
         
         self.next_btn = QPushButton(">")
         self.next_btn.setMaximumWidth(24)
-        self.next_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(self.next_btn, "ghost")
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -722,12 +748,6 @@ class IdentityResultsView(QWidget):
         stats_frame = QFrame()
         stats_frame.setMinimumHeight(80)
         stats_frame.setMaximumHeight(120)
-        stats_frame.setStyleSheet("""
-            QFrame {
-                background-color: #0B1220;
-                border-top: 1px solid #334155;
-            }
-        """)
         stats_main_layout = QVBoxLayout(stats_frame)
         stats_main_layout.setSpacing(4)
         stats_main_layout.setContentsMargins(4, 4, 4, 4)
@@ -750,6 +770,7 @@ class IdentityResultsView(QWidget):
         
         stats_main_layout.addLayout(bottom_stats)
         main_layout.addWidget(stats_frame)
+        style_viewer_bars(self, top_frame, stats_frame)
 
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and score column."""
@@ -772,63 +793,9 @@ class IdentityResultsView(QWidget):
         tree.itemExpanded.connect(self._on_item_expanded)
         tree.itemCollapsed.connect(self._on_item_collapsed)
 
-        # Dark theme + hierarchy visualization: slate guide lines show which
-        # row nests under which, and cyan chevrons show expanded/collapsed
-        # state on every row that has children.
-        vline = CrowEyeIcons.icon_path("branch_vline")
-        more = CrowEyeIcons.icon_path("branch_more")
-        end = CrowEyeIcons.icon_path("branch_end")
-        closed = CrowEyeIcons.icon_path("branch_closed")
-        opened = CrowEyeIcons.icon_path("branch_open")
-        tree.setStyleSheet(f"""
-            QTreeWidget {{
-                font-size: 8pt;
-                background-color: #0B1220;
-                alternate-background-color: #1E293B;
-                border: 1px solid #334155;
-                color: #E2E8F0;
-            }}
-            QTreeWidget::item {{
-                padding: 4px 2px;
-                min-height: 24px;
-            }}
-            QTreeWidget::item:selected {{
-                background-color: #334155;
-                color: #00FFFF;
-            }}
-            QTreeWidget::branch {{
-                background-color: transparent;
-            }}
-            QTreeWidget::branch:has-siblings:!adjoins-item {{
-                border-image: url({vline}) 0;
-            }}
-            QTreeWidget::branch:has-siblings:adjoins-item {{
-                border-image: url({more}) 0;
-            }}
-            QTreeWidget::branch:!has-children:!has-siblings:adjoins-item {{
-                border-image: url({end}) 0;
-            }}
-            QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {{
-                border-image: none;
-                image: url({closed});
-            }}
-            QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {{
-                border-image: none;
-                image: url({opened});
-            }}
-            QHeaderView::section {{
-                background-color: #1E293B;
-                color: #00FFFF;
-                padding: 6px 4px;
-                font-size: 8pt;
-                font-weight: bold;
-                border: none;
-                border-bottom: 2px solid #00FFFF;
-                min-height: 26px;
-            }}
-        """)
+        # Guide lines show which row nests under which, chevrons the expanded /
+        # collapsed state: ui_styling.engine_extra(), one rule set for every
+        # engine tree (the window's site sheet).
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
@@ -843,55 +810,11 @@ class IdentityResultsView(QWidget):
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setDefaultSectionSize(18) # Compact rows
         table.horizontalHeader().setFixedHeight(22) # Compact header
-        table.setStyleSheet("""
-            QTableWidget {
-                font-size: 8pt;
-                background-color: #0B1220;
-                alternate-background-color: #1E293B;
-                border: 1px solid #334155;
-                color: #E2E8F0;
-            }
-            QTableWidget::item { 
-                padding: 2px; 
-            }
-            QTableWidget::item:selected {
-                background-color: #334155;
-                color: #00FFFF;
-            }
-            QHeaderView::section {
-                background-color: #1E293B;
-                color: #00FFFF;
-                padding: 2px;
-                font-size: 8pt;
-                font-weight: bold;
-                border: none;
-                border-bottom: 1px solid #00FFFF;
-            }
-        """)
         return table
     
     def _wrap_table(self, title: str, table: QTableWidget) -> QGroupBox:
         """Wrap table in group box with dark theme styling."""
         group = QGroupBox(title)
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 8pt; 
-                font-weight: bold; 
-                color: #00FFFF;
-                padding-top: 12px; 
-                margin-top: 4px;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                background-color: #0B1220;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 1px 6px;
-                background-color: #1E293B;
-                border-radius: 3px;
-            }
-        """)
         layout = QVBoxLayout()
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(1)
@@ -1152,11 +1075,11 @@ class IdentityResultsView(QWidget):
         identity_count = stats.get('total_identities', len(self.identities))
         if is_cancelled:
             apply_status_to_label(self.identities_lbl, "WARN", f"Identities: {identity_count:,} (Cancelled)")
-            self.identities_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
+            _site.set_status(self.identities_lbl, "warn")
             self.identities_lbl.setToolTip("Execution was cancelled by user. Showing partial results.")
         else:
             self.identities_lbl.setText(f"Identities: {identity_count:,}")
-            self.identities_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
+            _site.set_status(self.identities_lbl, "info")
             self.identities_lbl.setToolTip("")
         
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
@@ -1220,8 +1143,8 @@ class IdentityResultsView(QWidget):
             if not identities:
                 # Show a message when there are no results (8 columns)
                 empty_item = QTreeWidgetItem(["No correlation matches found", "", "", "", "", "", "", ""])
-                empty_item.setForeground(0, QBrush(QColor("#64748B")))
-                empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
+                empty_item.setForeground(0, _tone("empty"))
+                empty_item.setFont(0, _item_font(12))
                 self.results_tree.addTopLevelItem(empty_item)
                 return
 
@@ -1339,28 +1262,23 @@ class IdentityResultsView(QWidget):
         if has_semantic:
             # Descriptive tag icon on the Semantic column (replaces "[S] ")
             item.setIcon(4, CrowEyeIcons.tag())
-        item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
-        item.setForeground(0, QBrush(QColor("#2196F3")))
+        item.setFont(0, _item_font(13, True))
+        item.setForeground(0, _tone("identity"))
         self._decorate_wings_column(item, wings)
 
         # Color score based on value
-        if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50"))) # Green - high score
-        elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange - medium score
-        elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336"))) # Red - low score
+        _colour_score(item, 3, avg_score)
 
         # Task 6.2: Color semantic column with error handling
         try:
             if semantic_value == "Error":
-                item.setForeground(4, QBrush(QColor("#F44336"))) # Red for errors
+                item.setForeground(4, _tone("bad"))
                 item.setToolTip(4, "Error retrieving semantic data")
             elif semantic_value == "Fallback":
-                item.setForeground(4, QBrush(QColor("#FF9800"))) # Orange for fallback
+                item.setForeground(4, _tone("warn"))
                 item.setToolTip(4, "Using fallback semantic data")
             elif semantic_value != "-":
-                item.setForeground(4, QBrush(QColor("#9C27B0"))) # Purple for semantic values
+                item.setForeground(4, _tone("semantic"))
                 if semantic_tooltip:
                     item.setToolTip(4, semantic_tooltip)
         except Exception as e:
@@ -1402,7 +1320,7 @@ class IdentityResultsView(QWidget):
         item.setToolTip(7, "Found by:\n" + "\n".join(f"- {w}" for w in wings))
         if len(wings) > 1:
             # Cyan accent highlights identities corroborated by multiple wings
-            item.setForeground(7, QBrush(QColor("#00BCD4")))
+            item.setForeground(7, _tone("info"))
 
     def _calculate_identity_score(self, identity: Dict) -> float:
         """Calculate average weighted score for an identity across all evidence."""
@@ -1660,17 +1578,12 @@ class IdentityResultsView(QWidget):
             self._format_wings(sub_wings)
         ])
         item.setIcon(0, CrowEyeIcons.sub_identity()) # branch-to-variant: name/version variant
-        item.setFont(0, QFont("Segoe UI", 8))
-        item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
+        item.setFont(0, _item_font(12))
+        item.setForeground(0, _tone("sub_identity"))
         self._decorate_wings_column(item, sub_wings)
 
         # Color score
-        if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
-        elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
-        elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+        _colour_score(item, 3, avg_score)
         
         item.setData(0, Qt.UserRole, {'type': 'sub_identity', 'data': sub_identity})
         
@@ -1748,8 +1661,8 @@ class IdentityResultsView(QWidget):
             anchor.get('wing_name') or "-" # Wing that produced this anchor's match
         ])
         item.setIcon(0, CrowEyeIcons.anchor()) # anchor+clock: temporal evidence cluster
-        item.setForeground(0, QBrush(QColor("#FFC107")))
-        item.setForeground(1, QBrush(QColor("#94A3B8")))
+        item.setForeground(0, _tone("anchor"))
+        item.setForeground(1, _tone("neutral"))
         # Primary artifact type shown in the Anchor Number tooltip
         if artifact_info and artifact_info != '-':
             item.setToolTip(6, f"Primary artifact: {artifact_info}")
@@ -1762,12 +1675,7 @@ class IdentityResultsView(QWidget):
             item.setToolTip(1, time_tooltip)
 
         # Color score and add tooltip
-        if score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50"))) # Green
-        elif score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800"))) # Orange
-        elif score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336"))) # Red
+        _colour_score(item, 3, score)
         
         # Build comprehensive tooltip
         tooltip_lines = []
@@ -1894,8 +1802,8 @@ class IdentityResultsView(QWidget):
             "" # Wings: record inherits the parent anchor's wing
         ])
         item.setIcon(0, CrowEyeIcons.evidence()) # record+magnifier: raw artifact record
-        item.setForeground(0, QBrush(QColor("#4CAF50")))
-        item.setForeground(1, QBrush(QColor("#94A3B8")))
+        item.setForeground(0, _tone("evidence"))
+        item.setForeground(1, _tone("neutral"))
         if evidence_time_full:
             item.setToolTip(1, evidence_time_full)
 
@@ -2160,11 +2068,11 @@ class IdentityResultsView(QWidget):
         if total_scored > 0:
             self.scoring_enabled = True
             self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
-            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #4CAF50;")
+            _site.set_status(self.scoring_lbl, "ok")
         else:
             self.scoring_enabled = False
             self.scoring_lbl.setText("Scoring: Off")
-            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+            _site.set_status(self.scoring_lbl, "neutral")
         
         # Populate scoring table
         self.scoring_table.setRowCount(len(score_ranges))
@@ -2172,12 +2080,10 @@ class IdentityResultsView(QWidget):
             self.scoring_table.setItem(row, 0, QTableWidgetItem(range_name))
             count_item = QTableWidgetItem(str(count))
             # Color code
-            if 'High' in range_name:
-                count_item.setForeground(QBrush(QColor("#4CAF50")))
-            elif 'Medium' in range_name:
-                count_item.setForeground(QBrush(QColor("#FF9800")))
-            elif 'Low' in range_name:
-                count_item.setForeground(QBrush(QColor("#F44336")))
+            for word, kind in (('High', 'high'), ('Medium', 'medium'), ('Low', 'low')):
+                if word in range_name:
+                    count_item.setForeground(QBrush(QColor(_site.SCORE_COLORS[kind])))
+                    break
             self.scoring_table.setItem(row, 1, count_item)
     
     # NOTE: an earlier definition of `_on_search_text_changed` was removed here. Python keeps
@@ -2307,6 +2213,7 @@ class IdentityDetailDialog(QDialog):
         """Setup dialog."""
         display = self._TYPE_DISPLAY.get(self.item_type, self.item_type.capitalize())
         self.setWindowTitle(f"{display} Details")
+        begin_dialog_look(self)
         self.setMinimumSize(900, 600)
         
         # Get screen size and set maximum to 90%
@@ -2352,7 +2259,8 @@ class IdentityDetailDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
-    
+        finish_dialog_look(self)
+
     def _create_header(self) -> QFrame:
         """Create header."""
         frame = QFrame()
@@ -2431,7 +2339,7 @@ class IdentityDetailDialog(QDialog):
 
     @staticmethod
     def _records_header(name, variants, anchors, feathers, timestamps, records):
-        parts = [f"<b style='color:#2196F3;'>{name}</b>"]
+        parts = [f"<b style='color:#A5B4FC;'>{name}</b>"]
         if variants:
             parts.append(f"Variants: {variants}")
         parts.append(f"Anchors: {anchors}")
@@ -2442,8 +2350,7 @@ class IdentityDetailDialog(QDialog):
             parts.append(f"Time: {ts[0]} → {ts[-1]}")
         lbl = QLabel(" &nbsp;|&nbsp; ".join(parts))
         lbl.setTextFormat(Qt.RichText)
-        lbl.setStyleSheet("font-size: 8pt; color: #aaa; padding: 6px; "
-                          "background-color: #1a1a2e; border: 1px solid #333;")
+        _site.set_role(lbl, "muted")
         lbl.setWordWrap(True)
         return lbl
 
@@ -2458,7 +2365,6 @@ class IdentityDetailDialog(QDialog):
 
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
-        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
         search_box.setMaximumHeight(30)
         layout.addWidget(search_box)
 
@@ -2496,6 +2402,7 @@ class IdentityDetailDialog(QDialog):
 
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        fit_header_titles(table)
 
         def filter_table(text):
             text = (text or '').lower()
@@ -2525,12 +2432,12 @@ class IdentityDetailDialog(QDialog):
         
         # Identity name header
         name = self.data.get('primary_name', 'Unknown')
-        name_lbl = QLabel(f"<h2 style='color: #2196F3;'>{name}</h2>")
+        name_lbl = QLabel(f"<h2 style='color: #A5B4FC;'>{name}</h2>")
         layout.addWidget(name_lbl)
         
         # Statistics frame
         stats_frame = QFrame()
-        stats_frame.setStyleSheet("background-color: #1a1a2e; border: 1px solid #333; padding: 8px;")
+        _site.set_card(stats_frame)
         stats_layout = QHBoxLayout(stats_frame)
         
         # Sub-identities count
@@ -2555,18 +2462,10 @@ class IdentityDetailDialog(QDialog):
         
         # Feather contribution table
         feather_group = QGroupBox()
-        feather_group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 9pt; font-weight: bold; color: #aaa;
-                padding-top: 12px; margin-top: 8px;
-                border: 1px solid #333; background-color: #1a1a2e;
-            }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-        """)
         feather_layout = QVBoxLayout(feather_group)
         from .crow_eye_icons import group_title_label
         _feather_title = group_title_label("feather", "Feather Contributions", size_px=14)
-        _feather_title.setStyleSheet("font-size: 9pt; color: #aaa;")
+        _site.set_role(_feather_title, "section")
         feather_layout.addWidget(_feather_title)
         
         # Group feather records by base name
@@ -2595,14 +2494,6 @@ class IdentityDetailDialog(QDialog):
         # Sub-identities list (if any)
         if sub_identities:
             variants_group = QGroupBox("Filename Variants")
-            variants_group.setStyleSheet("""
-                QGroupBox { 
-                    font-size: 9pt; font-weight: bold; color: #aaa;
-                    padding-top: 12px; margin-top: 8px;
-                    border: 1px solid #333; background-color: #1a1a2e;
-                }
-                QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-            """)
             variants_layout = QVBoxLayout(variants_group)
             
             variants_table = QTableWidget()
@@ -2631,14 +2522,13 @@ class IdentityDetailDialog(QDialog):
         
         # Header - compact, takes minimal space
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
-        header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
+        _site.set_role(header, "muted")
         header.setMaximumHeight(30) # Limit header height
         layout.addWidget(header)
         
         # Search box - compact, takes minimal space
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
-        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
         search_box.setMaximumHeight(30) # Limit search box height
         layout.addWidget(search_box)
         
@@ -2647,7 +2537,7 @@ class IdentityDetailDialog(QDialog):
         for rec in records:
             data = rec.get('data', {})
             if isinstance(data, dict):
-                all_keys.update(data.keys())
+                all_keys.update(k for k in data.keys() if k not in HIDDEN_RECORD_KEYS)
         
         # Create table with all fields - THIS SHOULD TAKE 75% OF SPACE
         table = QTableWidget()
@@ -2656,7 +2546,6 @@ class IdentityDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True) # Enable column sorting
         
         # Set size policy to expand and fill available space
         from PyQt5.QtWidgets import QSizePolicy
@@ -2677,9 +2566,14 @@ class IdentityDetailDialog(QDialog):
                 item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
+        # Sorting on after the fill, as Qt documents: once a header has been
+        # clicked, a fill with sorting on moves each row as its sort cell lands.
+        table.setSortingEnabled(True)
+
         # Enable column resizing
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        fit_header_titles(table)
         
         # Connect search box to filter function
         def filter_table(search_text):
@@ -2756,14 +2650,6 @@ class IdentityDetailDialog(QDialog):
 
         # 1) Records in this anchor (existing raw-record table)
         records_group = QGroupBox("Records in this Anchor")
-        records_group.setStyleSheet("""
-            QGroupBox {
-                font-size: 9pt; font-weight: bold; color: #aaa;
-                padding-top: 12px; margin-top: 8px;
-                border: 1px solid #333; background-color: #1a1a2e;
-            }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-        """)
         rg_layout = QVBoxLayout(records_group)
         try:
             rg_layout.addWidget(self._create_anchor_table(self.data))
@@ -2786,7 +2672,6 @@ class IdentityDetailDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(container)
-        scroll.setStyleSheet("QScrollArea { border: none; background-color: #1a1a2e; }")
         return scroll
 
     @staticmethod
@@ -2856,15 +2741,9 @@ class IdentityDetailDialog(QDialog):
         rule's conditions/logic shown in plain English."""
         from PyQt5.QtWidgets import QTextEdit
 
-        group = QGroupBox("Semantic Mapping & Matched Rules")
-        group.setStyleSheet("""
-            QGroupBox {
-                font-size: 9pt; font-weight: bold; color: #2196F3;
-                padding-top: 12px; margin-top: 8px;
-                border: 2px solid #2196F3; background-color: #1a1a2e;
-            }
-            QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-        """)
+        # "&&": a single "&" in a group-box title is a mnemonic - it was
+        # drawn as "Semantic Mapping _Matched Rules".
+        group = QGroupBox("Semantic Mapping && Matched Rules")
         layout = QVBoxLayout(group)
 
         # (0) Anchor-level semantic mappings — the primary "there IS a mapping"
@@ -2884,12 +2763,7 @@ class IdentityDetailDialog(QDialog):
                 amt.setItem(r, 3, QTableWidgetItem(str(m.get('category', ''))))
                 sev = str(m.get('severity', 'info') or 'info')
                 sev_item = QTableWidgetItem(sev.upper())
-                if sev == 'high':
-                    sev_item.setForeground(QColor('#ff5252'))
-                elif sev == 'medium':
-                    sev_item.setForeground(QColor('#ffa726'))
-                else:
-                    sev_item.setForeground(QColor('#66bb6a'))
+                _colour_severity(sev_item, sev)
                 amt.setItem(r, 4, sev_item)
                 conf = m.get('confidence', '')
                 try:
@@ -2968,12 +2842,7 @@ class IdentityDetailDialog(QDialog):
 
                 severity = str(rule.get('severity', 'info') or 'info')
                 sev_item = QTableWidgetItem(severity.upper())
-                if severity == 'high':
-                    sev_item.setForeground(QColor('#ff5252'))
-                elif severity == 'medium':
-                    sev_item.setForeground(QColor('#ffa726'))
-                else:
-                    sev_item.setForeground(QColor('#66bb6a'))
+                _colour_severity(sev_item, severity)
                 rtable.setItem(r, 3, sev_item)
 
                 conf = rule.get('confidence', 0)
@@ -3057,14 +2926,6 @@ class IdentityDetailDialog(QDialog):
         if has_semantic_data:
             # Add Semantic Mappings section
             semantic_group = QGroupBox("Semantic Mappings")
-            semantic_group.setStyleSheet("""
-                QGroupBox { 
-                    font-size: 9pt; font-weight: bold; color: #2196F3;
-                    padding-top: 12px; margin-top: 8px;
-                    border: 2px solid #2196F3; background-color: #1a1a2e;
-                }
-                QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-            """)
             semantic_layout = QVBoxLayout(semantic_group)
             
             # Create semantic mappings table
@@ -3103,15 +2964,10 @@ class IdentityDetailDialog(QDialog):
                         conf_item = QTableWidgetItem(conf_str)
                         semantic_table.setItem(row, 4, conf_item)
                         
-                        severity = mapping.get('severity', 'info')
+                        severity = str(mapping.get('severity', 'info') or 'info')
                         sev_item = QTableWidgetItem(severity.upper())
                         # Color code severity
-                        if severity == 'high':
-                            sev_item.setForeground(QColor('#ff5252'))
-                        elif severity == 'medium':
-                            sev_item.setForeground(QColor('#ffa726'))
-                        else:
-                            sev_item.setForeground(QColor('#66bb6a'))
+                        _colour_severity(sev_item, severity)
                         semantic_table.setItem(row, 5, sev_item)
                         
                         row += 1
@@ -3133,35 +2989,14 @@ class IdentityDetailDialog(QDialog):
         if has_feather_records:
             # Add Feather Records section
             feather_group = QGroupBox()
-            feather_group.setStyleSheet("""
-                QGroupBox { 
-                    font-size: 9pt; font-weight: bold; color: #aaa;
-                    padding-top: 12px; margin-top: 8px;
-                    border: 1px solid #333; background-color: #1a1a2e;
-                }
-                QGroupBox::title { subcontrol-origin: margin; padding: 0 5px; }
-            """)
             feather_layout = QVBoxLayout(feather_group)
             from .crow_eye_icons import group_title_label
             _ce_title = group_title_label("feather", "Feather Records", size_px=14)
-            _ce_title.setStyleSheet("font-size: 9pt; color: #aaa;")
+            _site.set_role(_ce_title, "section")
             feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
             feather_tabs = QTabWidget()
-            feather_tabs.setStyleSheet("""
-                QTabBar::tab { 
-                    font-size: 7pt; 
-                    padding: 3px 10px; 
-                    background-color: #1a1a2e;
-                    color: #777;
-                    border: 1px solid #333;
-                }
-                QTabBar::tab:selected { 
-                    background-color: #2a3a5e; 
-                    color: #ccc;
-                }
-            """)
             
             for feather_name, feather_data_item in sorted(feather_records.items()):
                 if isinstance(feather_data_item, list) and feather_data_item:
@@ -3229,8 +3064,7 @@ class IdentityDetailDialog(QDialog):
                 all_keys.update(record.keys())
         
         # Remove internal/metadata keys
-        excluded_keys = {'semantic_data', 'semantic_mappings', '_metadata', '_internal', '_feather_id', '_table'}
-        all_keys = sorted([k for k in all_keys if k not in excluded_keys])
+        all_keys = sorted([k for k in all_keys if k not in HIDDEN_RECORD_KEYS])
         
         # Create table with VERTICAL layout (fields as rows)
         # Columns: Record 1 | Record 2 | ... | Record N

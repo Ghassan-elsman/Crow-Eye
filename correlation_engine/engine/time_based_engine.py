@@ -857,8 +857,10 @@ class OptimizedFeatherQuery:
             'timestamp_utc', 'time_stamp',
             # MFT & USN
             'created', 'modified', 'accessed', 'mft_modified',
-            'si_creation_time', 'si_modification_time', 'si_access_time', 'si_mft_modified_time',
-            'fn_creation_time', 'fn_modification_time', 'fn_access_time', 'fn_mft_modified_time',
+            'si_creation_time', 'si_modification_time', 'si_access_time', 'si_mft_entry_change_time',
+            'fn_creation_time', 'fn_modification_time', 'fn_access_time', 'fn_mft_entry_change_time',
+            'si_mft_modified_time', 'fn_mft_modified_time',   # older spellings
+            'usn_timestamp', 'rename_time',
             # Event Logs
             'eventtimestamputc', 'event_time', 'generated_time',
             # Registry artifacts
@@ -1144,6 +1146,37 @@ class OptimizedFeatherQuery:
         self._expanded_records_cache = expanded
         return expanded
 
+    def _naive_ts(self, value):
+        """A raw timestamp as a naive datetime, or None - memoised per feather.
+
+        The window scan asks for the same values once per window they fall
+        near: on a real pipeline 2.66 million parses for a few hundred
+        thousand distinct values, and 74% of the run inside strptime. The
+        answer for a value never changes within a feather (the parser's
+        source timezone is set per feather), so it is computed once.
+        """
+        memo = self.__dict__.setdefault("_ts_memo", {})
+        # Keyed with the type (1, 1.0 and True hash alike) and the parser's
+        # source timezone (the answer depends on it).
+        key = (type(value), value, getattr(self.timestamp_parser, "source_timezone", None))
+        try:
+            return memo[key]
+        except KeyError:
+            pass
+        except TypeError:               # unhashable: parse every time
+            memo = None
+        try:
+            parsed = self.timestamp_parser.parse_timestamp(value)
+            dt = (parsed.datetime_value.replace(tzinfo=None)
+                  if parsed.success and parsed.datetime_value is not None else None)
+        except Exception:
+            dt = None
+        if memo is not None:
+            if len(memo) > 1000000:
+                memo.clear()
+            memo[key] = dt
+        return dt
+
     def _filter_expanded_for_window(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
         """Return virtual records whose primary timestamp lies in [start, end]."""
         records = self._expand_multi_timestamp_records()
@@ -1158,12 +1191,11 @@ class OptimizedFeatherQuery:
             ts_raw = r.get(primary_ts_col)
             if not ts_raw:
                 continue
-            parsed = self.timestamp_parser.parse_timestamp(ts_raw)
-            if not parsed.success or parsed.datetime_value is None:
+            # Naive, to compare with naive start_time / end_time, which is how
+            # the rest of the engine carries window boundaries.
+            dt = self._naive_ts(ts_raw)
+            if dt is None:
                 continue
-            # Strip tz to compare with naive start_time / end_time, which is
-            # how the rest of the engine carries window boundaries.
-            dt = parsed.datetime_value.replace(tzinfo=None)
             # Plausibility gate — drop NTFS / LNK placeholder dates
             # (1601-01-01, 1980-01-01, 2000-01-01) that occasionally
             # appear in JSON-list run_times alongside real entries.
@@ -1217,20 +1249,26 @@ class OptimizedFeatherQuery:
 
         ts_cols = list(self.timestamp_columns)
         out: List[Dict[str, Any]] = []
+        # A correlated MFT/USN row repeats its file's $SI / $FN times once per
+        # journal event (Amcache.hve: 21,689 rows on one case), so each of a
+        # busy file's eight MFT times joined the windows thousands of times.
+        # Those times are emitted once per FILE (volume, record, sequence); the
+        # journal's own time stays per row - each event is its own moment.
+        seen_file_times: set = set()
 
         for row in rows:
             seen_in_row: set = set()
+            file_key = None
+            if row.get("mft_record_number") is not None:
+                file_key = (row.get("volume_letter"), row.get("mft_record_number"),
+                            row.get("mft_sequence_number"))
             for col in ts_cols:
                 value = row.get(col)
                 if value is None or value == "":
                     continue
-                try:
-                    parsed = self.timestamp_parser.parse_timestamp(value)
-                except Exception:
+                dt = self._naive_ts(value)
+                if dt is None:
                     continue
-                if not parsed.success or parsed.datetime_value is None:
-                    continue
-                dt = parsed.datetime_value.replace(tzinfo=None)
                 # Plausibility filter: drop NTFS / LNK placeholder dates
                 # (1980-01-01, 2000-01-01, 2001-01-01) and any year past
                 # 2100. Matches the same heuristic used by Method 2's
@@ -1243,6 +1281,11 @@ class OptimizedFeatherQuery:
                 if iso in seen_in_row:
                     continue
                 seen_in_row.add(iso)
+                if file_key is not None and col.startswith(("si_", "fn_")):
+                    fk = file_key + (col, iso)
+                    if fk in seen_file_times:
+                        continue
+                    seen_file_times.add(fk)
                 virtual = dict(row)
                 virtual["_canonical_timestamp"] = iso
                 virtual["_canonical_timestamp_column"] = col
@@ -1609,17 +1652,17 @@ class OptimizedFeatherQuery:
                         # If value > 1 billion, it's likely milliseconds (after year 2001)
                         try:
                             if min_val > 1000000000000:
-                                min_dt = datetime.fromtimestamp(min_val / 1000)
+                                min_dt = _unix_to_naive_utc(min_val / 1000)
                             elif min_val > 1000000000:
-                                min_dt = datetime.fromtimestamp(min_val)
+                                min_dt = _unix_to_naive_utc(min_val)
                             else:
                                 # Fallback to parser for unusual formats
                                 min_dt = self._parse_timestamp_value(min_val)
                             
                             if max_val > 1000000000000:
-                                max_dt = datetime.fromtimestamp(max_val / 1000)
+                                max_dt = _unix_to_naive_utc(max_val / 1000)
                             elif max_val > 1000000000:
-                                max_dt = datetime.fromtimestamp(max_val)
+                                max_dt = _unix_to_naive_utc(max_val)
                             else:
                                 # Fallback to parser for unusual formats
                                 max_dt = self._parse_timestamp_value(max_val)
@@ -1690,13 +1733,13 @@ class OptimizedFeatherQuery:
         if isinstance(value, (int, float)):
             try:
                 if value > 1000000000000: # Milliseconds
-                    dt = datetime.fromtimestamp(value / 1000)
+                    dt = _unix_to_naive_utc(value / 1000)
                     # Cache successful fallback parse
                     from ..optimization.optimization_components import TimestampFormat
                     self.timestamp_parse_cache.put_success(value, dt, TimestampFormat.UNIX_MILLISECONDS)
                     return dt
                 elif value > 1000000000: # Seconds
-                    dt = datetime.fromtimestamp(value)
+                    dt = _unix_to_naive_utc(value)
                     # Cache successful fallback parse
                     from ..optimization.optimization_components import TimestampFormat
                     self.timestamp_parse_cache.put_success(value, dt, TimestampFormat.UNIX_SECONDS)
@@ -3866,7 +3909,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 else:
                     # Fallback: use simple per-window estimate
                     estimated_processing_minutes = (estimated_windows * 0.1) / 60 # 100ms per window
-                
+                # Both branches define it: the "< 1 minute" log line below reads
+                # it, and on the fallback branch it was unbound - an
+                # UnboundLocalError that aborted the whole wing's scan, so
+                # "Security Control Tampering" returned 0 matches for a LOG LINE.
+                estimated_seconds = estimated_processing_minutes * 60
+
                 estimated_time_str = self._format_time_duration(estimated_processing_minutes)
                 
                 # Show estimate with context
@@ -4914,8 +4962,8 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     outliers_by_method['20yr_rule'] += 1
                 
                 if self.debug_mode:
-                    outlier_dt = datetime.fromtimestamp(unix_ts)
-                    latest_dt = datetime.fromtimestamp(latest_timestamp)
+                    outlier_dt = _unix_to_naive_utc(unix_ts)
+                    latest_dt = _unix_to_naive_utc(latest_timestamp)
                     years_diff = (latest_timestamp - unix_ts) / (365.25 * 24 * 3600)
                     
                     method = []

@@ -158,7 +158,9 @@ class IdentityRegistry:
             # knows their data was dropped. Prevents silent loss of pre-processed
             # IdentityRecords passed to add_identity().
             if identity.semantic_data is not None:
-                if existing.semantic_data is None:
+                # An EMPTY existing dict holds nothing to protect: the caller's
+                # data wins (it used to be dropped as "already populated").
+                if not existing.semantic_data:
                     existing.semantic_data = identity.semantic_data
                     # If the caller's record was processed, reflect that status
                     if identity.processing_status == 'processed':
@@ -167,8 +169,10 @@ class IdentityRegistry:
                         if old_status in self._identities_by_status:
                             self._identities_by_status[old_status].discard(identity_key)
                         self._identities_by_status['processed'].add(identity_key)
-                else:
-                    logger.warning(
+                elif identity.semantic_data and identity.semantic_data != existing.semantic_data:
+                    # DEBUG: one line per identity flooded the run log
+                    # (350,457 lines on one case, nearly all for two empty dicts).
+                    logger.debug(
                         f"[IdentityRegistry] add_identity for '{identity_key}': "
                         f"incoming semantic_data dropped (existing already populated). "
                         f"Caller had keys={list(identity.semantic_data.keys())}, "

@@ -25,6 +25,42 @@ Two users' `Default\History` do not collide because each row records which
 browser, user and profile it came from. `parsed_at` is when the parser ran — it
 is **never** an event time.
 
+### Offline folders and forensic images
+
+The same 37 tables are produced from a collected folder (Offline Importer) or a
+forensic image as from the live machine. The collectors keep each profile's
+folder tree intact, at
+`live_acquisition/Browser/<source>/Users/<name>/AppData/...`, where `<source>`
+is `vol_<N>_<id>` for partition N of an image, `src_<folder>_<id>` for each
+imported source (the folder that held its `Users` folder) and `live` for a
+Crow-Claw collection. The `<id>` is a short hash of the image or folder path,
+so two images, two drive roots or two hosts in one export never merge. On
+these cases:
+
+- `user_name` is the `Users\<name>` folder the profile sits in — nothing else.
+- `sid` comes from the **evidence's own** SOFTWARE hive (ProfileList), matched on
+  that folder name (`<SID>.bak` counts as `<SID>`). It is empty when no SOFTWARE
+  hive was collected, when two hives name the folder with different SIDs, or when
+  the case holds browser trees from **more than one source** - hives are stored
+  flat and cannot be tied to the source they came from, so a SID is withheld
+  rather than guessed (the parse records a warning). It is never looked up on
+  the analyst's machine.
+- A tree with no user folder at all is filed under a pseudo-user
+  `_unattributed_<folder>_<id>`, one per folder it was found in.
+- `source_path` is the **copied** file under `live_acquisition/Browser/...`; the
+  part after `Users\` is the original location on the evidence drive.
+- A Firefox `profiles.ini` path that points outside the collected `Users` tree
+  is ignored rather than read from the analyst's disk.
+- "Include browser cache" (on by default) controls whether the HTTP cache,
+  Service Worker CacheStorage and Firefox `cache2` are collected. When it is off,
+  `browser_cache` and `browser_service_worker` (which reads CacheStorage) are
+  empty **by choice**, not because the evidence lacks them.
+- Older Chrome (roughly 2016-2019 images) used other names — `secure` /
+  `httponly` cookie columns, a `thumbnails` table for top sites, and
+  `Current Session` / `Last Session` files in the profile folder. All are read.
+  A file that is present but unreadable (for example damaged clusters in an
+  image) is reported as a warning for that profile, not silently skipped.
+
 ## Timestamps
 
 - Chromium times are **WebKit** microseconds since 1601-01-01. Firefox times are
@@ -104,7 +140,9 @@ that older format is in use (`browser_cache.cache_format` says which).
   values from Web Data's `address_type_tokens`) and payment methods (card / bank
   / IBAN metadata + the encrypted PAN blob; the plaintext number is never stored).
 - **browser_search_engines** — configured search providers (`keywords`), with the
-  default flagged from Preferences.
+  default flagged from Preferences. `date_created` is when the profile added the
+  engine (UTC); it is empty for the browser's built-in engines, which store no
+  creation time - an empty date is not a parse failure.
 - **browser_extension_storage** — the LevelDB stores behind extensions
   (`Local/Sync Extension Settings`, `Extension State`): where crypto-wallet vaults,
   password-manager blobs and extension OAuth tokens live. Values are preserved

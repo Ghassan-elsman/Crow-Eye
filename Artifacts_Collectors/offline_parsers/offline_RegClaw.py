@@ -37,6 +37,18 @@ import shutil
 import tempfile
 from Registry import Registry
 
+# Each hive read once per parse: opening a hive reads the whole file, and
+# the helpers below used to call it on every lookup (see registry_hive_cache).
+try:
+    from Artifacts_Collectors.registry_hive_cache import open_hive as _open_hive, hive_cache
+except ModuleNotFoundError:
+    import sys
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from Artifacts_Collectors.registry_hive_cache import open_hive as _open_hive, hive_cache
+
+# Named, so its records reach parsers.log: the root logger's do not.
+logger = logging.getLogger(__name__)
+
 # Import registry_binary_parser with fallback
 try:
     from Artifacts_Collectors import registry_binary_parser
@@ -67,6 +79,7 @@ except ModuleNotFoundError:
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     from Artifacts_Collectors import user_identity
+from Artifacts_Collectors.user_artifact_paths import collected_base, owner_from_path
 
 # Also shared with the live parser - LSA policy, audit policy and secret
 # metadata from the SECURITY hive.
@@ -99,22 +112,15 @@ except ImportError:
 # ============================================================================
 
 def _configure_logging(log_file='offline_regclaw_errors.log'):
-    """Configure logging with fallback for low disk space."""
-    import shutil
-    try:
-        usage = shutil.disk_usage(os.getcwd())
-        free = usage.free
-    except Exception:
-        free = 0
+    """Kept for callers; configures nothing.
 
-    if free < 5 * 1024 * 1024:
-        logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
-    else:
-        logging.basicConfig(
-            filename=log_file,
-            level=logging.ERROR,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
+    It used to give logging's basicConfig a file name, which - whenever the
+    root logger had no handler yet, i.e. any standalone run - wrote offline_regclaw_errors.log
+    into whatever the working folder happened to be, and otherwise did
+    nothing. Inside Crow-Eye the case logging files these records; run alone,
+    Python's last-resort handler still prints warnings and errors to stderr.
+    """
+    return None
 
 
 def format_focus_time(milliseconds):
@@ -164,7 +170,7 @@ def check_exists(cursor, table_name, conditions, values):
         cursor.execute(query, values)
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.error(f"Error checking existence in {table_name}: {e}")
+        logger.error(f"Error checking existence in {table_name}: {e}")
         return False
 
 
@@ -314,7 +320,7 @@ def _extract_usbstor(device_class):
                 revision = part[4:]
         return vendor_id, product_id, revision
     except Exception as e:
-        logging.error(f"Error extracting USBSTOR: {e}")
+        logger.error(f"Error extracting USBSTOR: {e}")
         return "", "", ""
 
 
@@ -352,6 +358,24 @@ def _get_risk_level(severity):
     """Convert numeric severity to risk level."""
     severity_map = {5: 'CRITICAL', 4: 'HIGH', 3: 'MEDIUM', 2: 'LOW', 1: 'INFO'}
     return severity_map.get(severity, 'UNKNOWN')
+
+
+def _user_hive_label(kind, path, index):
+    """``NTUSER.DAT[Hunter]`` - the same form the live parser writes.
+
+    The owner comes from the folder the hive was collected under (a replayed
+    hive is looked up by its original path). Hives from an old flat
+    collection have no owner folder and keep the index form, ``NTUSER.DAT``
+    then ``NTUSER.DAT[1]``.
+    """
+    source = registry_transaction_log.source_path_for(path)
+    # Only a Users folder INSIDE the collected tree names the owner. A case
+    # kept under C:\Users\<analyst>\... used to label every flat NTUSER.DAT
+    # as the analyst's: NTUSER.DAT[<analyst>] on evidence from another machine.
+    owner = owner_from_path(source, collected_base(source)) if source else None
+    if owner:
+        return "%s[%s]" % (kind, owner)
+    return kind if index == 0 else "%s[%d]" % (kind, index)
 
 
 def detect_hive_files(registry_dir):
@@ -416,7 +440,7 @@ def detect_hive_files(registry_dir):
     
     # Check if registry_dir exists
     if not os.path.exists(registry_dir):
-        logging.warning(f"Registry directory not found: {registry_dir}")
+        logger.warning(f"Registry directory not found: {registry_dir}")
         return detected_hives
     
     # Try to detect each hive type - collect ALL matching files for ntuser/usrclass
@@ -449,11 +473,14 @@ def detect_hive_files(registry_dir):
 
             matching_files = []
             for root, _dirs, files in os.walk(registry_dir):
-                for fname in files:
+                # Sorted walk: the order decides which hive is [0] when no
+                # owner can be named, and must not change between runs.
+                _dirs.sort()
+                for fname in sorted(files):
                     if _is_hive(fname):
                         full = os.path.join(root, fname)
                         matching_files.append(full)
-                        logging.info(f"Detected {hive_type} hive: {full}")
+                        logger.info(f"Detected {hive_type} hive: {full}")
 
 
             # Store ALL matching files as a list (not just one)
@@ -469,14 +496,14 @@ def detect_hive_files(registry_dir):
                 
                 detected_hives[hive_type] = unique_files
                 if len(unique_files) > 1:
-                    logging.info(f"Multiple {hive_type} files found ({len(unique_files)}), will parse all")
+                    logger.info(f"Multiple {hive_type} files found ({len(unique_files)}), will parse all")
         else:
             # For other hive types, use first match
             for pattern in patterns:
                 hive_path = os.path.join(registry_dir, pattern)
                 if os.path.exists(hive_path) and os.path.isfile(hive_path):
                     detected_hives[hive_type] = hive_path
-                    logging.info(f"Detected {hive_type} hive: {hive_path}")
+                    logger.info(f"Detected {hive_type} hive: {hive_path}")
                     break  # Found this hive type, move to next
     
     return detected_hives
@@ -540,11 +567,11 @@ def validate_hive_file(hive_path, hive_type=''):
     # Warn if file is very large (but don't fail)
     MAX_HIVE_SIZE = 2 * 1024 * 1024 * 1024  # 2GB warning threshold
     if file_size > MAX_HIVE_SIZE:
-        logging.warning(f"{hive_label}: Large file detected ({file_size / (1024*1024):.1f} MB): '{hive_path}'")
+        logger.warning(f"{hive_label}: Large file detected ({file_size / (1024*1024):.1f} MB): '{hive_path}'")
     
     # Check 4: Validate registry hive format using python-registry
     try:
-        reg = Registry.Registry(hive_path)
+        reg = _open_hive(hive_path)
         # Try to access the root key to verify it's a valid hive
         root = reg.root()
         # Verify root has a name (basic sanity check)
@@ -585,7 +612,7 @@ def check_hive_dirty(hive_path):
         primary, secondary = struct.unpack_from('<II', header, 0x04)
         return (primary != secondary, primary, secondary)
     except Exception as e:
-        logging.debug(f"Could not read hive header for {hive_path}: {e}")
+        logger.debug(f"Could not read hive header for {hive_path}: {e}")
         return (None, None, None)
 
 
@@ -607,7 +634,7 @@ def get_active_controlset(system_hive):
     Requirements: 2.14, 2.17, 2.24, 2.25
     """
     try:
-        reg = Registry.Registry(system_hive)
+        reg = _open_hive(system_hive)
         select_key = reg.open("Select")
         
         # Read the Current value
@@ -615,15 +642,15 @@ def get_active_controlset(system_hive):
             if value.name() == "Current":
                 current_value = value.value()
                 controlset_name = f"ControlSet{current_value:03d}"
-                logging.debug(f"Detected active ControlSet: {controlset_name}")
+                logger.debug(f"Detected active ControlSet: {controlset_name}")
                 return controlset_name
         
         # If Current value not found, fallback to ControlSet001
-        logging.warning("SYSTEM\\Select\\Current value not found, defaulting to ControlSet001")
+        logger.warning("SYSTEM\\Select\\Current value not found, defaulting to ControlSet001")
         return "ControlSet001"
     
     except Exception as e:
-        logging.warning(f"Error detecting active ControlSet: {e}, defaulting to ControlSet001")
+        logger.warning(f"Error detecting active ControlSet: {e}, defaulting to ControlSet001")
         return "ControlSet001"
 
 
@@ -683,8 +710,8 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
     # Try each path and collect data
     for path in paths_to_try:
         try:
-            logging.debug(f"Checking path: {path}")
-            reg = Registry.Registry(hive)
+            logger.debug(f"Checking path: {path}")
+            reg = _open_hive(hive)
             key = reg.open(path)
             
             # Read all values from this path
@@ -707,7 +734,7 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
                 path_values[name] = (data, value_type_str)
             
             if path_values:
-                logging.debug(f"Successfully read from: {path}")
+                logger.debug(f"Successfully read from: {path}")
                 successful_paths.append(path)
                 
                 # Merge values (prefer values from earlier paths, i.e., active ControlSet)
@@ -718,14 +745,14 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
         except Exception as e:
             # Not necessarily missing: say what actually happened, because
             # "Path not found" sent an earlier investigation the wrong way.
-            logging.debug(f"Could not read {path}: {type(e).__name__}: {e}")
+            logger.debug(f"Could not read {path}: {type(e).__name__}: {e}")
             continue
     
     # Log summary
     if successful_paths:
-        logging.debug(f"Extracted {len(merged_values)} values from {len(successful_paths)} path(s): {successful_paths}")
+        logger.debug(f"Extracted {len(merged_values)} values from {len(successful_paths)} path(s): {successful_paths}")
     else:
-        logging.debug(f"No data found for base path: {base_path}")
+        logger.debug(f"No data found for base path: {base_path}")
     
     return merged_values, successful_paths
 
@@ -737,7 +764,17 @@ def read_registry_multi_path(hive, base_path, controlset_dependent=True, active_
 def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     """
     Enhanced comprehensive offline registry collection with 40+ forensic tables.
+
+    Every hive is read from disk once for the whole parse (registry_hive_cache):
+    the lookups below used to re-read a 127 MB SOFTWARE hive for each key.
     """
+    with hive_cache():
+        return _reg_Claw(case_root=case_root, offline_mode=offline_mode,
+                         windows_partition=windows_partition)
+
+
+def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
+    """The parse itself (reg_Claw wraps it in the per-parse hive cache)."""
     _configure_logging()
     print("=" * 80)
     print("COMPREHENSIVE OFFLINE FORENSIC REGISTRY ANALYSIS")
@@ -872,9 +909,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             "DEFAULT": default_reg_hive,
         }
         for _i, _h in enumerate(ntuser_hives or []):
-            _pre_replay["NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i] = _h
+            _pre_replay[_user_hive_label("NTUSER.DAT", _h, _i)] = _h
         for _i, _h in enumerate(usrclass_hives or []):
-            _pre_replay["UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i] = _h
+            _pre_replay[_user_hive_label("UsrClass.dat", _h, _i)] = _h
         _pre_replay.update(_extra_hives)
         # Built before the replay, from the paths as collected, because that is
         # what RecoveryResult recorded - it is keyed on the source hive, not on
@@ -917,7 +954,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     else:
                         print(f"  [FAIL] {hive_type.upper()}[{idx}]: {error_msg}")
                         validation_errors.append(error_msg)
-                        logging.error(f"Hive validation failed: {error_msg}")
+                        logger.error(f"Hive validation failed: {error_msg}")
             else:
                 is_valid, error_msg = validate_hive_file(hive_path, hive_type.upper())
                 if is_valid:
@@ -925,7 +962,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 else:
                     print(f"  [FAIL] {hive_type.upper()}: {error_msg}")
                     validation_errors.append(error_msg)
-                    logging.error(f"Hive validation failed: {error_msg}")
+                    logger.error(f"Hive validation failed: {error_msg}")
         
         if validation_errors:
             print(f"\n[ERROR] {len(validation_errors)} hive validation error(s) detected")
@@ -973,7 +1010,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 else:
                     print(f"  [FAIL] {hive_name}: {error_msg}")
                     validation_errors.append(error_msg)
-                    logging.error(f"Hive validation failed: {error_msg}")
+                    logger.error(f"Hive validation failed: {error_msg}")
         
         # Validate NTUSER hives
         for idx, ntuser_path in enumerate(ntuser_hives):
@@ -985,7 +1022,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 else:
                     print(f"  [FAIL] {hive_label}: {error_msg}")
                     validation_errors.append(error_msg)
-                    logging.error(f"Hive validation failed: {error_msg}")
+                    logger.error(f"Hive validation failed: {error_msg}")
         
         if validation_errors:
             print(f"\n[ERROR] {len(validation_errors)} hive validation error(s) detected")
@@ -1023,7 +1060,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     def read_registry_values(hive, key):
         """Read registry values from hive file."""
         try:
-            reg = Registry.Registry(hive)
+            reg = _open_hive(hive)
             key = reg.open(key)
             values = {}
             for value in key.values():
@@ -1044,7 +1081,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 values[name] = (data, value_type_str)
             return values
         except Exception as e:
-            logging.debug(f"Error reading registry key: {e}")
+            logger.debug(f"Error reading registry key: {e}")
             return {}
 
     def key_last_write(hive, key_path):
@@ -1057,16 +1094,16 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         expects.
         """
         try:
-            reg = Registry.Registry(hive)
+            reg = _open_hive(hive)
             return format_forensic_timestamp(reg.open(key_path).timestamp())
         except Exception as e:
-            logging.debug(f"No last-write time for {key_path}: {e}")
+            logger.debug(f"No last-write time for {key_path}: {e}")
             return ""
 
     def get_subkeys(hive, key):
         """Get subkeys and their values from registry hive."""
         try:
-            reg = Registry.Registry(hive)
+            reg = _open_hive(hive)
             key = reg.open(key)
             subkey_values = {}
             for subkey in key.subkeys():
@@ -1089,7 +1126,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     subkey_values[subkey.name()][name] = (data, value_type_str)
             return subkey_values
         except Exception as e:
-            logging.debug(f"Error reading subkeys: {e}")
+            logger.debug(f"Error reading subkeys: {e}")
             return {}
 
     # ========================================================================
@@ -1225,7 +1262,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     cursor.execute('ALTER TABLE "%s" ADD COLUMN "%s" %s'
                                    % (_t, _c, _ty))
                 except Exception as _exc:
-                    logging.debug("could not add %s.%s: %s", _t, _c, _exc)
+                    logger.debug("could not add %s.%s: %s", _t, _c, _exc)
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS WindowsUpdateInfo (
@@ -1264,7 +1301,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cursor.execute(
                 "ALTER TABLE registry_hive_state ADD COLUMN reorganized_at TEXT")
     except sqlite3.Error as _e:
-        logging.debug("source_sha256 migration: %s", _e)
+        logger.debug("source_sha256 migration: %s", _e)
 
 
     # ---- what a tree walk cannot see -------------------------------------
@@ -1532,7 +1569,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 cursor.execute(
                     "ALTER TABLE %s ADD COLUMN key_last_write TEXT" % _mru_t)
         except sqlite3.Error as _e:
-            logging.debug("key_last_write migration for %s: %s", _mru_t, _e)
+            logger.debug("key_last_write migration for %s: %s", _mru_t, _e)
 
     # The subtractive counterpart, mirroring Regclaw. last_written / time_basis
     # are filled by the time-basis pass for any table that has them and a column
@@ -1557,7 +1594,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         except sqlite3.Error as _e:
             # Needs SQLite 3.35+. Older builds keep the columns; the tabs place
             # values by name now, so they render empty instead of shifting.
-            logging.debug("dead-column drop for %s: %s", _dead_t, _e)
+            logger.debug("dead-column drop for %s: %s", _dead_t, _e)
 
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS MUICache (
@@ -1603,7 +1640,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cursor.execute(
                 "ALTER TABLE AutoStartPrograms ADD COLUMN record_state TEXT")
     except sqlite3.Error as _e:
-        logging.debug("record_state migration: %s", _e)
+        logger.debug("record_state migration: %s", _e)
 
     # NEW: USB Device Tables (5 tables)
     cursor.execute('''
@@ -1672,7 +1709,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         _identity_accounts, _ = user_identity.build_user_accounts(
             sam_reg_hive, Software_reg_hive, system_reg_hive)
     except Exception as e:
-        logging.debug(f"identity lookup unavailable: {e}")
+        logger.debug(f"identity lookup unavailable: {e}")
         _identity_accounts = []
 
     # ========================================================================
@@ -1724,9 +1761,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     # command, so nothing observed is lost - only the guess about it.
 
                 except Exception as e:
-                    logging.error(f"Error processing autostart {name}: {e}")
+                    logger.error(f"Error processing autostart {name}: {e}")
         except Exception as e:
-            logging.error(f"Error reading {table_name}: {e}")
+            logger.error(f"Error reading {table_name}: {e}")
     
     # Process user run paths from all NTUSER hives
     for ntuser_idx, Ntuser_reg_hive in enumerate(ntuser_hives):
@@ -1761,9 +1798,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         # command, so nothing observed is lost - only the guess about it.
 
                     except Exception as e:
-                        logging.error(f"Error processing autostart {name}: {e}")
+                        logger.error(f"Error processing autostart {name}: {e}")
             except Exception as e:
-                logging.debug(f"Error reading {table_name} from NTUSER[{ntuser_idx}]: {e}")
+                logger.debug(f"Error reading {table_name} from NTUSER[{ntuser_idx}]: {e}")
 
     conn.commit()
     print("[OK] AutoStart programs collected\n")
@@ -1773,7 +1810,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     try:
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
-        logging.info(f"Using active ControlSet for DAM/BAM extraction: {active_controlset}")
+        logger.info(f"Using active ControlSet for DAM/BAM extraction: {active_controlset}")
         
         # DAM - Enhanced with full binary parsing and execution tracking
         # Try BOTH version paths: State\UserSettings (Win10 1809+) AND UserSettings (Win10 1709-1803)
@@ -1786,14 +1823,14 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 cs_name = f"ControlSet{cs_num:03d}"
                 try:
                     full_path = f"{cs_name}\\{dam_path}"
-                    logging.debug(f"Checking DAM path: {full_path}")
+                    logger.debug(f"Checking DAM path: {full_path}")
                     subkeys = get_subkeys(system_reg_hive, full_path)
                     if subkeys:
-                        logging.debug(f"Successfully read DAM data from: {full_path}")
-                        logging.debug(f"Using registry_binary_parser.parse_dam_entry() for DAM data")
+                        logger.debug(f"Successfully read DAM data from: {full_path}")
+                        logger.debug(f"Using registry_binary_parser.parse_dam_entry() for DAM data")
                         dam_subkeys.update(subkeys)
                 except Exception as e:
-                    logging.debug(f"DAM path not found: {full_path}")
+                    logger.debug(f"DAM path not found: {full_path}")
 
         for subkey, values in dam_subkeys.items():
             for name, (data, value_type) in values.items():
@@ -1813,7 +1850,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             process_path = parsed_data.get('process_path', name)
                             last_execution = parsed_data.get('last_execution', '')
                         except Exception as e:
-                            logging.error(f"Error parsing DAM binary data for {name}: {e}")
+                            logger.error(f"Error parsing DAM binary data for {name}: {e}")
                             process_path = name
                             app_name = os.path.basename(process_path)
                     else:
@@ -1834,7 +1871,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 from Artifacts_Collectors.registry_binary_parser import parse_filetime
                                 last_execution = parse_filetime(last_accessed_data[:8])
                         except Exception as e:
-                            logging.debug(f"Could not parse LastAccessed for {name}: {e}")
+                            logger.debug(f"Could not parse LastAccessed for {name}: {e}")
                     
                     # AccessCount: Execution count field
                     if 'AccessCount' in values:
@@ -1847,7 +1884,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             else:
                                 execution_count = int(access_count_data)
                         except Exception as e:
-                            logging.debug(f"Could not parse AccessCount for {name}: {e}")
+                            logger.debug(f"Could not parse AccessCount for {name}: {e}")
                             execution_count = 0
 
                     # Extract SID from subkey path
@@ -1872,7 +1909,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                              _dam_blob.get('trailing_value'),
                              get_current_forensic_timestamp()))
                 except Exception as e:
-                    logging.error(f"Error processing DAM entry {name}: {e}")
+                    logger.error(f"Error processing DAM entry {name}: {e}")
 
         # BAM - Try BOTH version paths: State\UserSettings (Win10 1809+) AND UserSettings (Win10 1709-1803)
         bam_paths = ["Services\\bam\\State\\UserSettings", "Services\\bam\\UserSettings"]
@@ -1884,14 +1921,14 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 cs_name = f"ControlSet{cs_num:03d}"
                 try:
                     full_path = f"{cs_name}\\{bam_path}"
-                    logging.debug(f"Checking BAM path: {full_path}")
+                    logger.debug(f"Checking BAM path: {full_path}")
                     subkeys = get_subkeys(system_reg_hive, full_path)
                     if subkeys:
-                        logging.debug(f"Successfully read BAM data from: {full_path}")
-                        logging.debug(f"Using registry_binary_parser.parse_bam_entry() for BAM data")
+                        logger.debug(f"Successfully read BAM data from: {full_path}")
+                        logger.debug(f"Using registry_binary_parser.parse_bam_entry() for BAM data")
                         bam_subkeys.update(subkeys)
                 except Exception as e:
-                    logging.debug(f"BAM path not found: {full_path}")
+                    logger.debug(f"BAM path not found: {full_path}")
 
         for subkey, values in bam_subkeys.items():
             for name, (data, value_type) in values.items():
@@ -1927,7 +1964,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             trailing_value = blob['trailing_value']
                             app_name = os.path.basename(process_path)
                         except Exception as e:
-                            logging.error(f"Error parsing BAM binary data for {name}: {e}")
+                            logger.error(f"Error parsing BAM binary data for {name}: {e}")
                             process_path = name
                             app_name = os.path.basename(name) if name else ''
                     else:
@@ -1954,12 +1991,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                              last_execution, name_kind, name_kind_raw,
                              trailing_value, get_current_forensic_timestamp()))
                 except Exception as e:
-                    logging.error(f"Error processing BAM entry {name}: {e}")
+                    logger.error(f"Error processing BAM entry {name}: {e}")
 
         conn.commit()
         print("[OK] DAM/BAM data collected\n")
     except Exception as e:
-        logging.error(f"Error with DAM/BAM: {e}")
+        logger.error(f"Error with DAM/BAM: {e}")
 
     # PHASE: UserAssist
     print("[USERASSIST] Collecting program execution tracking...")
@@ -1985,7 +2022,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         or user_identity.identify_ntuser_hive(Ntuser_reg_hive))
 
             try:
-                reg = Registry.Registry(Ntuser_reg_hive)
+                reg = _open_hive(Ntuser_reg_hive)
                 userassist_key = reg.open(userassist_base_path)
 
                 for guid_subkey in userassist_key.subkeys():
@@ -2022,18 +2059,18 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                         (program_path, run_count, last_execution, focus_count,
                                          int(focus_time_ms), _owner, get_current_forensic_timestamp()))
                             except Exception as e:
-                                logging.debug(f"Error parsing UserAssist entry: {e}")
+                                logger.debug(f"Error parsing UserAssist entry: {e}")
 
                     except Exception as e:
-                        logging.error(f"Error accessing UserAssist Count: {e}")
+                        logger.error(f"Error accessing UserAssist Count: {e}")
 
             except Exception as e:
-                logging.error(f"Error accessing UserAssist in {hive_label}: {e}")
+                logger.error(f"Error accessing UserAssist in {hive_label}: {e}")
 
         conn.commit()
         print("[OK] UserAssist data collected\n")
     except Exception as e:
-        logging.error(f"Error with UserAssist: {e}")
+        logger.error(f"Error with UserAssist: {e}")
 
     # Helper for RecentDocs subkey processing
     def process_recent_docs_key(hive, path, subkey_label, cursor):
@@ -2051,7 +2088,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     try:
                         mru_order = registry_binary_parser.parse_mru_list_ex(_d)
                     except Exception as e:
-                        logging.debug(f"MRUListEx unreadable in {subkey_label}: {e}")
+                        logger.debug(f"MRUListEx unreadable in {subkey_label}: {e}")
                     break
 
             _lastwrite = key_last_write(hive, path)
@@ -2082,9 +2119,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                       (subkey_label, name, str(parsed_filename), value_type, _hive_user,
                                        mru_position, _lastwrite, _stamp))
                 except Exception as e:
-                    logging.debug(f"Error with RecentDocs entry in {subkey_label}: {e}")
+                    logger.debug(f"Error with RecentDocs entry in {subkey_label}: {e}")
         except Exception as e:
-            logging.debug(f"Error accessing RecentDocs path {path}: {e}")
+            logger.debug(f"Error accessing RecentDocs path {path}: {e}")
 
     # The evidence machine's UTC offset, read BEFORE any shell item is
     # decoded. Shell items carry DOS date/time, which is that machine's local
@@ -2116,7 +2153,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             print("[--] No timezone bias in this evidence - shell item times "
                   "stay on the evidence machine's local clock")
     except Exception as _exc:
-        logging.debug("evidence bias: %s", _exc)
+        logger.debug("evidence bias: %s", _exc)
 
     # PHASE: Shellbags
     print("[SHELLBAGS] Collecting folder access history...")
@@ -2173,7 +2210,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         """
         try:
             full_path = f"{base_path}\\{subkey_path}" if subkey_path else base_path
-            reg = Registry.Registry(reg_hive)
+            reg = _open_hive(reg_hive)
             current_key = reg.open(full_path)
             # The Bags tree is the sibling of BagMRU, per hive - NTUSER's Shell
             # and ShellNoRoam trees and the UsrClass tree each have their own.
@@ -2200,7 +2237,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     try:
                         mru_order = registry_binary_parser.parse_mru_list_ex(mrulistex_data)
                     except Exception as e:
-                        logging.error(f"Error parsing MRUListEx at {full_path}: {e}")
+                        logger.error(f"Error parsing MRUListEx at {full_path}: {e}")
             
             # Process binary Shell Items
             for name, (data, val_type) in subkey_values.items():
@@ -2320,7 +2357,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     (last_written, time_basis, file_name,
                                      registry_path, _sb_user, name))
                 except Exception as e:
-                    logging.error(f"Error parsing Shellbag entry at {full_path}\\{name}: {e}")
+                    logger.error(f"Error parsing Shellbag entry at {full_path}\\{name}: {e}")
 
             # Recursively process nested subkeys.
             #
@@ -2346,7 +2383,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                                   cursor, child_readable)
                 
         except Exception as e:
-            logging.debug(f"Error processing Shellbag subkey {full_path}: {e}")
+            logger.debug(f"Error processing Shellbag subkey {full_path}: {e}")
     
     try:
         # Define ShellBags paths for different hive types
@@ -2393,7 +2430,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     # Start recursive processing from the base path
                     process_shellbag_subkey_recursive(Ntuser_reg_hive, shellbags_base_path, "", cursor)
                 except Exception as e:
-                    logging.debug(f"Shellbags path unavailable in {hive_label}: {shellbags_base_path}")
+                    logger.debug(f"Shellbags path unavailable in {hive_label}: {shellbags_base_path}")
         
         # Process each UsrClass.dat hive file (NEW)
         usrclass_hives = detected_hives.get('usrclass', [])
@@ -2412,15 +2449,15 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         # Start recursive processing from the base path
                         process_shellbag_subkey_recursive(usrclass_hive, shellbags_base_path, "", cursor)
                     except Exception as e:
-                        logging.debug(f"Shellbags path unavailable in {hive_label}: {shellbags_base_path}")
+                        logger.debug(f"Shellbags path unavailable in {hive_label}: {shellbags_base_path}")
         else:
-            logging.warning("No UsrClass.dat hives detected - ShellBags data will be incomplete")
+            logger.warning("No UsrClass.dat hives detected - ShellBags data will be incomplete")
             print("  [WARNING] No UsrClass.dat files found - Windows Explorer ShellBags unavailable")
 
         conn.commit()
         print("[OK] Shellbags data collected\n")
     except Exception as e:
-        logging.error(f"Error with Shellbags: {e}")
+        logger.error(f"Error with Shellbags: {e}")
 
     # PHASE: OpenSaveMRU & LastSaveMRU
     print("[MRU] Collecting Open/Save dialog history...")
@@ -2466,9 +2503,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                          parsed_data.get('drive_letter', ''), parsed_data.get('access_date', ''),
                                          _osm_kw, str(data), get_current_forensic_timestamp(), _hive_user))
                         except Exception as e:
-                            logging.debug(f"Error parsing OpenSaveMRU in {ext_subkey}: {e}")
+                            logger.debug(f"Error parsing OpenSaveMRU in {ext_subkey}: {e}")
             except Exception as e:
-                logging.debug(f"Error reading OpenSaveMRU from {hive_label}: {e}")
+                logger.debug(f"Error reading OpenSaveMRU from {hive_label}: {e}")
 
         # LastSaveMRU
         for ntuser_idx, Ntuser_reg_hive in enumerate(ntuser_hives):
@@ -2494,13 +2531,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                      parsed_data.get('drive_letter', ''), '', _lsm_kw, str(data),
                                      get_current_forensic_timestamp(), _hive_user))
                     except Exception as e:
-                        logging.debug(f"Error parsing LastSaveMRU in {hive_label}: {e}")
+                        logger.debug(f"Error parsing LastSaveMRU in {hive_label}: {e}")
             except Exception as e:
-                logging.debug(f"Error reading LastSaveMRU from {hive_label}: {e}")
+                logger.debug(f"Error reading LastSaveMRU from {hive_label}: {e}")
 
         conn.commit()
     except Exception as e:
-        logging.error(f"Error with MRU: {e}")
+        logger.error(f"Error with MRU: {e}")
 
     # PHASE: Additional MRU types (RunMRU, WordWheelQuery)
     print("[RUNMRU/WHEELQUERY] Collecting additional history...")
@@ -2532,9 +2569,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 cursor.execute('INSERT INTO RunMRU (command, mru_position, access_date, key_last_write, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?)',
                                               (parsed.get('command', cmd), parsed.get('mru_position', -1), None, _rm_kw, get_current_forensic_timestamp(), _hive_user))
                     except Exception as e:
-                        logging.debug(f"RunMRU {_hive_user}/{value_name}: {e}")
+                        logger.debug(f"RunMRU {_hive_user}/{value_name}: {e}")
             except Exception as e:
-                logging.debug(f"RunMRU hive {Ntuser_reg_hive}: {e}")
+                logger.debug(f"RunMRU hive {Ntuser_reg_hive}: {e}")
 
         # WordWheelQuery
         for ntuser_idx, Ntuser_reg_hive in enumerate(ntuser_hives):
@@ -2568,9 +2605,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                            None, _ww_kw,
                                            get_current_forensic_timestamp(), _hive_user))
                     except Exception as e:
-                        logging.debug(f"WordWheelQuery {_hive_user}/{v_name}: {e}")
+                        logger.debug(f"WordWheelQuery {_hive_user}/{v_name}: {e}")
             except Exception as e:
-                logging.debug(f"WordWheelQuery hive {Ntuser_reg_hive}: {e}")
+                logger.debug(f"WordWheelQuery hive {Ntuser_reg_hive}: {e}")
 
         # MUICache
         muicache_hives = ntuser_hives + usrclass_hives
@@ -2609,19 +2646,19 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             elif not entry['app_name'] and not prop:
                                 entry['app_name'] = display_name
                         except Exception as e:
-                            logging.debug(f"MUICache {_mui_user}/{v_name}: {e}")
+                            logger.debug(f"MUICache {_mui_user}/{v_name}: {e}")
                 for path, entry in apps.items():
                     if not check_exists(cursor, 'MUICache', ['app_path', 'user_name'], (path, _mui_user)):
                         cursor.execute('INSERT INTO MUICache (app_path, app_name, company, file_extension, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?)',
                                       (path, entry['app_name'], entry['company'],
                                        entry['file_extension'], get_current_forensic_timestamp(), _mui_user))
             except Exception as e:
-                logging.debug(f"MUICache hive {h_path}: {e}")
+                logger.debug(f"MUICache hive {h_path}: {e}")
 
         conn.commit()
         print("[OK] RunMRU/WordWheel/MUICache collected\n")
     except Exception as e:
-        logging.error(f"Error with additional MRU: {e}")
+        logger.error(f"Error with additional MRU: {e}")
 
     # PHASE: RecentDocs & TypedPaths
     print("[DOCUMENTS] Collecting recent documents and typed paths...")
@@ -2666,14 +2703,14 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         conn.commit()
         print("[OK] Recent documents and typed paths collected\n")
     except Exception as e:
-        logging.error(f"Error with documents: {e}")
+        logger.error(f"Error with documents: {e}")
 
     # PHASE: PHASE 2-4: USB DEVICE TRACKING (ENHANCED)
     print("[USB] Collecting USB device timeline...")
     try:
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
-        logging.info(f"Using active ControlSet for USB extraction: {active_controlset}")
+        logger.info(f"Using active ControlSet for USB extraction: {active_controlset}")
         
         # Helper function to extract VID and PID from device ID
         def extract_vid_pid(device_id):
@@ -2702,13 +2739,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cs_name = f"ControlSet{cs_num:03d}"
             try:
                 full_path = f"{cs_name}\\{usb_path}"
-                logging.debug(f"Checking USB path: {full_path}")
+                logger.debug(f"Checking USB path: {full_path}")
                 devices = get_subkeys(system_reg_hive, full_path)
                 if devices:
-                    logging.debug(f"Successfully read USB devices from: {full_path}")
+                    logger.debug(f"Successfully read USB devices from: {full_path}")
                     usb_devices.update(devices)
             except Exception as e:
-                logging.debug(f"USB path not found: {full_path}")
+                logger.debug(f"USB path not found: {full_path}")
 
         # Under Enum\USB the first level is the device model (VID_xxxx&PID_yyyy)
         # and the level below it is one key per physical unit that was plugged
@@ -2799,7 +2836,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 # 3. USB Instances (USBInstances table)
                 # Check for instance subkeys
                 try:
-                    reg = Registry.Registry(system_reg_hive)
+                    reg = _open_hive(system_reg_hive)
                     # Try to find the device in any ControlSet
                     device_key = None
                     for cs_num in [int(active_controlset[-1]) if active_controlset[-1].isdigit() else 1, 1, 2, 3]:
@@ -2840,10 +2877,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                     VALUES (?, ?, ?, ?, ?)''',
                                     (device_id, instance_id, parent_id, service, status))
                 except Exception as e:
-                    logging.debug(f"Error processing USB instances for {device_id}: {e}")
+                    logger.debug(f"Error processing USB instances for {device_id}: {e}")
                 
             except Exception as e:
-                logging.error(f"Error with USB device {device_id}: {e}")
+                logger.error(f"Error with USB device {device_id}: {e}")
 
         # 4. USB Storage devices (USBStorageDevices table)
         # Use multi-path reader with ControlSet resolution
@@ -2855,13 +2892,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cs_name = f"ControlSet{cs_num:03d}"
             try:
                 full_path = f"{cs_name}\\{usbstor_path}"
-                logging.debug(f"Checking USBSTOR path: {full_path}")
+                logger.debug(f"Checking USBSTOR path: {full_path}")
                 devices = get_subkeys(system_reg_hive, full_path)
                 if devices:
-                    logging.debug(f"Successfully read USBSTOR devices from: {full_path}")
+                    logger.debug(f"Successfully read USBSTOR devices from: {full_path}")
                     usbstor_devices.update(devices)
             except Exception as e:
-                logging.debug(f"USBSTOR path not found: {full_path}")
+                logger.debug(f"USBSTOR path not found: {full_path}")
 
         for device_class, device_instances in usbstor_devices.items():
             try:
@@ -2870,7 +2907,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
 
                 # Get serial numbers (subkeys under device class)
                 try:
-                    reg = Registry.Registry(system_reg_hive)
+                    reg = _open_hive(system_reg_hive)
                     device_class_key = None
                     # Try to find the device class in any ControlSet
                     for cs_num in [int(active_controlset[-1]) if active_controlset[-1].isdigit() else 1, 1, 2, 3]:
@@ -2956,15 +2993,15 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                          get_current_forensic_timestamp()))
 
                 except Exception as e:
-                    logging.error(f"Error processing USB storage {device_class}: {e}")
+                    logger.error(f"Error processing USB storage {device_class}: {e}")
 
             except Exception as e:
-                logging.error(f"Error with USBSTOR: {e}")
+                logger.error(f"Error with USBSTOR: {e}")
 
         conn.commit()
         print(f"[OK] USB device timeline collected: {len(usb_devices)} devices, {len(usbstor_devices)} storage classes\n")
     except Exception as e:
-        logging.error(f"Error with USB: {e}")
+        logger.error(f"Error with USB: {e}")
 
     # PHASE 5: BROWSER HISTORY & SOFTWARE INVENTORY (NEW)
     print("[SOFTWARE] Collecting software and browser history...")
@@ -2991,7 +3028,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             try:
                                 when = registry_binary_parser.parse_filetime(_t[0]) or ''
                             except Exception as e:
-                                logging.debug(f"TypedURLsTime {name}: {e}")
+                                logger.debug(f"TypedURLsTime {name}: {e}")
                         # Keyed by user: two accounts can type the same URL, and
                         # both are evidence. On url alone the second hive's row
                         # was dropped, and the table could not say whose it was -
@@ -3005,9 +3042,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 ('Internet Explorer', url, '', 0, when,
                                  get_current_forensic_timestamp(), _hive_user))
                     except Exception as e:
-                        logging.error(f"Error with BrowserHistory entry: {e}")
+                        logger.error(f"Error with BrowserHistory entry: {e}")
             except Exception as e:
-                logging.debug(f"TypedURLs unavailable in NTUSER[{ntuser_idx}]: {e}")
+                logger.debug(f"TypedURLs unavailable in NTUSER[{ntuser_idx}]: {e}")
 
         # Installed Software (64-bit & 32-bit)
         uninstall_paths = [
@@ -3050,22 +3087,22 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             # name alone and accused legitimate tools.
 
                     except Exception as e:
-                        logging.error(f"Error with software {software_name}: {e}")
+                        logger.error(f"Error with software {software_name}: {e}")
 
             except Exception as e:
-                logging.debug(f"Uninstall path unavailable: {path}")
+                logger.debug(f"Uninstall path unavailable: {path}")
 
         conn.commit()
         print("[OK] Software and browser history collected\n")
     except Exception as e:
-        logging.error(f"Error with software: {e}")
+        logger.error(f"Error with software: {e}")
 
     # PHASE 5: SYSTEM SERVICES (NEW)
     print("[SERVICES] Collecting system services...")
     try:
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
-        logging.info(f"Using active ControlSet for System Services extraction: {active_controlset}")
+        logger.info(f"Using active ControlSet for System Services extraction: {active_controlset}")
         
         # Use multi-path reader with ControlSet resolution
         services_path = "Services"
@@ -3076,13 +3113,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cs_name = f"ControlSet{cs_num:03d}"
             try:
                 full_path = f"{cs_name}\\{services_path}"
-                logging.debug(f"Checking System Services path: {full_path}")
+                logger.debug(f"Checking System Services path: {full_path}")
                 services = get_subkeys(system_reg_hive, full_path)
                 if services:
-                    logging.debug(f"Successfully read System Services from: {full_path}")
+                    logger.debug(f"Successfully read System Services from: {full_path}")
                     services_subkeys.update(services)
             except Exception as e:
-                logging.debug(f"System Services path not found: {full_path}")
+                logger.debug(f"System Services path not found: {full_path}")
 
         for service_name, values in services_subkeys.items():
             try:
@@ -3131,12 +3168,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         # and its start type are all kept in SystemServices.
 
             except Exception as e:
-                logging.error(f"Error with service {service_name}: {e}")
+                logger.error(f"Error with service {service_name}: {e}")
 
         conn.commit()
         print("[OK] System services collected\n")
     except Exception as e:
-        logging.error(f"Error with services: {e}")
+        logger.error(f"Error with services: {e}")
 
     # PHASE 6: NETWORK CONFIGURATION (NEW)
     print("[NETWORK] Collecting network configuration and history...")
@@ -3160,11 +3197,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             _nl_kind = ("profile" if network_list_path.rstrip(chr(92)).lower()
                         .endswith("profiles") else "signature")
             try:
-                logging.debug(f"Checking Network Lists path: {network_list_path}")
+                logger.debug(f"Checking Network Lists path: {network_list_path}")
                 network_profiles = get_subkeys(Software_reg_hive, network_list_path)
                 
                 if network_profiles:
-                    logging.debug(f"Successfully read Network Lists from: {network_list_path}")
+                    logger.debug(f"Successfully read Network Lists from: {network_list_path}")
             
                 for profile_guid, values in network_profiles.items():
                     try:
@@ -3265,9 +3302,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                  get_current_forensic_timestamp()))
 
                     except Exception as e:
-                        logging.error(f"Error with network profile {profile_guid}: {e}")
+                        logger.error(f"Error with network profile {profile_guid}: {e}")
             except Exception as e:
-                logging.debug(f"NetworkList path unavailable: {network_list_path}")
+                logger.debug(f"NetworkList path unavailable: {network_list_path}")
 
 
         # --- one row per network, joined on ProfileGuid --------------------
@@ -3365,12 +3402,12 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                      'key upper bound' if _written else None,
                      get_current_forensic_timestamp()))
         except Exception as _exc:
-            logging.error("NetworkProfiles could not be built: %s", _exc)
+            logger.error("NetworkProfiles could not be built: %s", _exc)
 
         # Network Interfaces
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
-        logging.info(f"Using active ControlSet for Network Interfaces extraction: {active_controlset}")
+        logger.info(f"Using active ControlSet for Network Interfaces extraction: {active_controlset}")
         
         # Use multi-path reader with ControlSet resolution
         network_interfaces_path = "Services\\Tcpip\\Parameters\\Interfaces"
@@ -3381,13 +3418,13 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             cs_name = f"ControlSet{cs_num:03d}"
             try:
                 full_path = f"{cs_name}\\{network_interfaces_path}"
-                logging.debug(f"Checking Network Interfaces path: {full_path}")
+                logger.debug(f"Checking Network Interfaces path: {full_path}")
                 interfaces = get_subkeys(system_reg_hive, full_path)
                 if interfaces:
-                    logging.debug(f"Successfully read Network Interfaces from: {full_path}")
+                    logger.debug(f"Successfully read Network Interfaces from: {full_path}")
                     network_interfaces.update(interfaces)
             except Exception as e:
-                logging.debug(f"Network Interfaces path not found: {full_path}")
+                logger.debug(f"Network Interfaces path not found: {full_path}")
 
         # Raw layer: every value verbatim, keyed by interface. The structured
         # table below keeps only the fields it understands, so without this the
@@ -3425,7 +3462,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                  'network_interfaces', _vn, _d, _t),
                              str(_t)))
                 except Exception as e:
-                    logging.debug(f"raw network_interfaces {interface_id}/{_vn}: {e}")
+                    logger.debug(f"raw network_interfaces {interface_id}/{_vn}: {e}")
 
         # Adapter MAC overrides, keyed by the interface GUID that ties an
         # adapter to its Tcpip interface key. Built once: the class key holds
@@ -3453,7 +3490,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 if _guid and _mac:
                     _mac_overrides[str(_guid).lower()] = _mac
         except Exception as _exc:
-            logging.debug("adapter MAC overrides: %s", _exc)
+            logger.debug("adapter MAC overrides: %s", _exc)
         if _mac_overrides:
             print("[OK] %d network adapter(s) carry a MAC override - a MAC in "
                   "the registry is one somebody set" % len(_mac_overrides))
@@ -3534,19 +3571,19 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                          lease_obtained or None, lease_expires or None,
                          get_current_forensic_timestamp()))
             except Exception as e:
-                logging.error(f"Error with network interface {interface_id}: {e}")
+                logger.error(f"Error with network interface {interface_id}: {e}")
 
         conn.commit()
         print("[OK] Network configuration collected\n")
     except Exception as e:
-        logging.error(f"Error with network: {e}")
+        logger.error(f"Error with network: {e}")
     
     # PHASE 6.5: COMPUTER NAME AND TIMEZONE (NEW)
     print("[SYSTEM] Collecting computer name and timezone information...")
     try:
         # Get active ControlSet for this system
         active_controlset = get_active_controlset(system_reg_hive)
-        logging.info(f"Using active ControlSet: {active_controlset}")
+        logger.info(f"Using active ControlSet: {active_controlset}")
         
         # Computer Name
         try:
@@ -3561,7 +3598,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             computer_name = computer_name_values.get('ComputerName', ('', 'REG_SZ'))[0] if 'ComputerName' in computer_name_values else ''
             
             if successful_paths:
-                logging.debug(f"Extracted Computer Name from {len(successful_paths)} path(s): {successful_paths}")
+                logger.debug(f"Extracted Computer Name from {len(successful_paths)} path(s): {successful_paths}")
             
             # Get additional system info from SOFTWARE hive
             current_version_path = "Microsoft\\Windows NT\\CurrentVersion"
@@ -3612,7 +3649,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     cursor.execute('INSERT INTO computer_Name (name, row_data, type) VALUES (?, ?, ?)',
                                    (_cn_name, str(_cn_d), str(_cn_t)))
         except Exception as e:
-            logging.debug(f"ComputerName path unavailable: {e}")
+            logger.debug(f"ComputerName path unavailable: {e}")
         
         # TimeZone Information
         try:
@@ -3631,7 +3668,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             active_time_bias = timezone_values.get('ActiveTimeBias', (0, 'REG_DWORD'))[0] if 'ActiveTimeBias' in timezone_values else 0
             
             if successful_paths:
-                logging.debug(f"Extracted Time Zone from {len(successful_paths)} path(s): {successful_paths}")
+                logger.debug(f"Extracted Time Zone from {len(successful_paths)} path(s): {successful_paths}")
             
             daylight_bias = timezone_values.get('DaylightBias', (0, 'REG_DWORD'))[0] if 'DaylightBias' in timezone_values else 0
             standard_start = timezone_values.get('StandardStart', (b'', 'REG_BINARY'))[0] if 'StandardStart' in timezone_values else b''
@@ -3681,7 +3718,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     elif any(_c is False for _c in _checks):
                         agrees_tzi = "NO - the Start values and TZI disagree"
             except Exception as _exc:
-                logging.debug("TZI cross-check unavailable: %s", _exc)
+                logger.debug("TZI cross-check unavailable: %s", _exc)
 
             _signed = registry_binary_parser.signed_bias(bias)
             if not check_exists(cursor, 'TimeZoneInfo', ['time_zone_name'], (str(time_zone_name),)):
@@ -3750,7 +3787,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         'UPDATE time_zone SET decoded = ? WHERE name = ? '
                         'AND (decoded IS NULL OR decoded = ?)', (_val, _col, ""))
         except Exception as e:
-            logging.debug(f"TimeZone path unavailable: {e}")
+            logger.debug(f"TimeZone path unavailable: {e}")
         
         # User Profiles
         try:
@@ -3785,15 +3822,15 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                              int(profile_loaded), get_current_forensic_timestamp()))
                 
                 except Exception as e:
-                    logging.error(f"Error with user profile {user_sid}: {e}")
+                    logger.error(f"Error with user profile {user_sid}: {e}")
         
         except Exception as e:
-            logging.debug(f"ProfileList path unavailable: {e}")
+            logger.debug(f"ProfileList path unavailable: {e}")
         
         conn.commit()
         print("[OK] Computer name and timezone collected\n")
     except Exception as e:
-        logging.error(f"Error with system info: {e}")
+        logger.error(f"Error with system info: {e}")
 
     # PHASE 7: WINDOWS UPDATE & SHUTDOWN (NEW)
     print("[SYSTEM] Collecting Windows Update and shutdown information...")
@@ -3856,7 +3893,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                 '(name, row_data, type) VALUES (?, ?, ?)',
                                 ("SusClientIdValidation_Parsed", _parsed, "REG_SZ"))
                 except Exception as e:
-                    logging.debug(f"raw Windows_lastupdate {_vn}: {e}")
+                    logger.debug(f"raw Windows_lastupdate {_vn}: {e}")
 
             # And its subkeys.
             for _sk in (get_subkeys(Software_reg_hive, _wu_root) or []):
@@ -3875,14 +3912,14 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                  _off_decoded('Windows_lastupdate_subkeys',
                                               _vn, _d, _t), str(_t)))
                 except Exception as e:
-                    logging.debug(f"raw Windows_lastupdate_subkeys {_sk}: {e}")
+                    logger.debug(f"raw Windows_lastupdate_subkeys {_sk}: {e}")
 
             # A SuspiciousIndicators verdict was written here when
             # au_options == 2. The value itself is stored above in
             # WindowsUpdateInfo, where its meaning can be judged in context.
 
         except Exception as e:
-            logging.debug(f"Windows Update path unavailable: {e}")
+            logger.debug(f"Windows Update path unavailable: {e}")
 
         # Shutdown Information
         try:
@@ -3895,17 +3932,17 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             )
             
             if successful_paths:
-                logging.debug(f"Extracted Shutdown info from {len(successful_paths)} path(s): {successful_paths}")
+                logger.debug(f"Extracted Shutdown info from {len(successful_paths)} path(s): {successful_paths}")
 
             shutdown_time_value = shutdown_values.get('ShutdownTime', ('', 'REG_BINARY'))[0] if 'ShutdownTime' in shutdown_values else ''
             # ShutdownTime is FILETIME
             shutdown_time = ''
             if shutdown_time_value and isinstance(shutdown_time_value, bytes) and len(shutdown_time_value) == 8:
                 try:
-                    logging.debug("Using registry_binary_parser.parse_filetime() for ShutdownTime")
+                    logger.debug("Using registry_binary_parser.parse_filetime() for ShutdownTime")
                     shutdown_time = registry_binary_parser.parse_filetime(shutdown_time_value)
                 except Exception as e:
-                    logging.error(f"Error parsing ShutdownTime: {e}")
+                    logger.error(f"Error parsing ShutdownTime: {e}")
 
             # The rest of the key. Only shutdown_time was written, so three
             # columns were NULL offline and 0 live for the same evidence - and
@@ -3945,15 +3982,15 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                              _off_decoded('shutdown_information', _vn, _d, _t),
                              str(_t)))
                 except Exception as e:
-                    logging.debug(f"raw shutdown_information {_vn}: {e}")
+                    logger.debug(f"raw shutdown_information {_vn}: {e}")
 
         except Exception as e:
-            logging.debug(f"Shutdown info unavailable: {e}")
+            logger.debug(f"Shutdown info unavailable: {e}")
 
         conn.commit()
         print("[OK] System information collected\n")
     except Exception as e:
-        logging.error(f"Error with system info: {e}")
+        logger.error(f"Error with system info: {e}")
 
     # ========================================================================
     # SCHEDULED TASKS (TaskCache)  -  SOFTWARE hive
@@ -3986,7 +4023,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             print("Scheduled Tasks: SOFTWARE hive not available - skipped")
         else:
             _tc_base = "Microsoft\\Windows NT\\CurrentVersion\\Schedule\\TaskCache"
-            _tc_reg = Registry.Registry(Software_reg_hive)
+            _tc_reg = _open_hive(Software_reg_hive)
 
             def _tc_open(subpath):
                 try:
@@ -4083,7 +4120,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 print(f"Scheduled Tasks collected successfully. Total tasks: {_task_count}")
 
     except Exception as e:
-        logging.error(f"Error collecting Scheduled Tasks (offline): {e}")
+        logger.error(f"Error collecting Scheduled Tasks (offline): {e}")
         print(f"Warning: Could not collect Scheduled Tasks data: {e}")
 
     # ========================================================================
@@ -4128,7 +4165,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     cursor.execute(
                         f'ALTER TABLE {_t} ADD COLUMN data_decoded TEXT')
                 except sqlite3.Error as _mig:
-                    logging.debug('data_decoded migration %s: %s', _t, _mig)
+                    logger.debug('data_decoded migration %s: %s', _t, _mig)
 
         _asep_cs = get_active_controlset(system_reg_hive) if system_reg_hive else "ControlSet001"
         _asep_stamp = format_forensic_timestamp(get_current_utc())
@@ -4226,7 +4263,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if 'SystemRoot' in _asep_env:
                 _asep_env.setdefault('windir', _asep_env['SystemRoot'])
         except Exception as _env_exc:
-            logging.debug('offline evidence environment: %s', _env_exc)
+            logger.debug('offline evidence environment: %s', _env_exc)
 
         SW = Software_reg_hive
         SY = system_reg_hive
@@ -4352,7 +4389,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     _asep_record("command_processor", "HKCU", _u_cp, nm, dt, ty,
                                  user_name=_nt_user, roll_up="Command Processor")
             except Exception as _e:
-                logging.debug("per-user ASEP pass failed for %s: %s", _nt, _e)
+                logger.debug("per-user ASEP pass failed for %s: %s", _nt, _e)
 
         # 11. COM hijacking - per-user CLSID shadowing the machine-wide one.
         # Offline this is per UsrClass.dat hive, one per user.
@@ -4582,7 +4619,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         print(f"[OK] Persistence keys collected successfully. Total values: {_asep_count}")
 
     except Exception as e:
-        logging.error(f"Error collecting persistence keys (offline): {e}")
+        logger.error(f"Error collecting persistence keys (offline): {e}")
         print(f"Warning: Could not collect persistence key data: {e}")
 
     # ========================================================================
@@ -5640,7 +5677,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 _mdev_added += 1
             _cov_counts["USBStorageVolumes(MountedDevices)"] = _mdev_added
         except Exception as e:
-            logging.error("Error reading MountedDevices (offline): %s", e)
+            logger.error("Error reading MountedDevices (offline): %s", e)
 
         # PrefetchParameters: the other live-only gap. 0 means prefetch is off,
         # so an absent Prefetch directory is configuration, not wiping.
@@ -5666,7 +5703,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                  ", ".join("%s=%d" % (k, v) for k, v in sorted(_cov_counts.items()))))
 
     except Exception as e:
-        logging.error(f"Error collecting forensic coverage (offline): {e}")
+        logger.error(f"Error collecting forensic coverage (offline): {e}")
         print(f"Warning: Could not collect forensic coverage data: {e}")
 
     # ========================================================================
@@ -5684,7 +5721,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         print(f"[OK] User accounts: {_accts} ({_machine or 'unknown machine'}), "
               f"{_enriched} SID references resolved to names")
     except Exception as e:
-        logging.error(f"Error building user identity (offline): {e}")
+        logger.error(f"Error building user identity (offline): {e}")
         print(f"Warning: Could not build user identity: {e}")
 
     # ========================================================================
@@ -5707,7 +5744,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
         else:
             print("[--] No SECURITY hive in this collection - LSA tables empty")
     except Exception as e:
-        logging.error(f"Error parsing SECURITY hive (offline): {e}")
+        logger.error(f"Error parsing SECURITY hive (offline): {e}")
         print(f"Warning: Could not parse SECURITY hive: {e}")
 
     # --------------------------------------------- walking the allocator
@@ -5733,9 +5770,9 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if _path:
                 _walk_targets.append((_label, _path))
         for _i, _p in enumerate(ntuser_hives or []):
-            _walk_targets.append(("NTUSER.DAT" if _i == 0 else "NTUSER.DAT[%d]" % _i, _p))
+            _walk_targets.append((_user_hive_label("NTUSER.DAT", _p, _i), _p))
         for _i, _p in enumerate(usrclass_hives or []):
-            _walk_targets.append(("UsrClass.dat" if _i == 0 else "UsrClass.dat[%d]" % _i, _p))
+            _walk_targets.append((_user_hive_label("UsrClass.dat", _p, _i), _p))
         for _label, _p in sorted(_extra_hives.items()):
             if _p:
                 _walk_targets.append((_label, _p))
@@ -5748,7 +5785,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             _w = registry_hive_walk.walk_hive(_path)
             _walk_results[_label] = _w
             if _w.error:
-                logging.debug("hive walk %s: %s", _label, _w.error)
+                logger.debug("hive walk %s: %s", _label, _w.error)
 
             # Whether this hive still holds the free space carving reads.
             # Windows compacts a hive on its own schedule and drops the freed
@@ -5864,7 +5901,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 try:
                     _rows = registry_hive_walk.value_changes(_path)
                 except Exception as _exc:
-                    logging.debug("value changes %s: %s", _label, _exc)
+                    logger.debug("value changes %s: %s", _label, _exc)
                     continue
                 if _rows:
                     _change_hives += 1
@@ -5904,7 +5941,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     _changes += cursor.rowcount if cursor.rowcount > 0 else 0
             conn.commit()
         except Exception as _exc:
-            logging.debug("value change pass: %s", _exc)
+            logger.debug("value change pass: %s", _exc)
         print("[OK] Value changes from transaction logs: %d across %d hive(s)"
               % (_changes, _change_hives))
 
@@ -6074,7 +6111,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                     print("     %d AutoStartPrograms row(s) carry their real "
                           "enabled/disabled state" % _marked)
             except Exception as _exc:
-                logging.debug("autostart state pass: %s", _exc)
+                logger.debug("autostart state pass: %s", _exc)
 
             conn.commit()
             _dis = cursor.execute(
@@ -6085,7 +6122,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 print("     %d autostart entr%s disabled - AutoStartPrograms marks "
                       "them" % (_dis, "y is" if _dis == 1 else "ies are"))
         except Exception as _exc:
-            logging.debug("extra key pass: %s", _exc)
+            logger.debug("extra key pass: %s", _exc)
 
         # ---- when was this written, and how well do we know -------------
         # A key's last-write time is an UPPER BOUND on every value it holds:
@@ -6236,7 +6273,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         "WHERE rowid = ?" % _tbl, _updates)
             conn.commit()
         except Exception as _exc:
-            logging.debug("time basis pass: %s", _exc)
+            logger.debug("time basis pass: %s", _exc)
         print("[OK] Key times: %d keys; value rows dated: %d exact, %d bounded, "
               "%d without a key" % (_key_rows, _timed["exact"], _timed["bound"],
                                     _timed["none"]))
@@ -6286,10 +6323,10 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                                              "y" if _deleted_asep == 1 else "ies"))
             conn.commit()
         except Exception as e:
-            logging.error("Could not attribute carved autostart entries: %s", e)
+            logger.error("Could not attribute carved autostart entries: %s", e)
 
     except Exception as e:
-        logging.error("Hive allocator walk failed: %s", e)
+        logger.error("Hive allocator walk failed: %s", e)
         print("Warning: allocator walk did not complete: %s" % e)
 
     # ------------------------------------------------------- hive provenance
@@ -6303,9 +6340,11 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             # share a name. Computed before the guard so the check_exists sits
             # directly above the INSERT (the re-parse-stable test reads the lines
             # just above an INSERT for its guard).
-            _reorg = _hive_reorg.get(
-                _hive_label_by_path.get(os.path.abspath(_st.hive_path or ""),
-                                        _st.hive_name))
+            # The owner label (NTUSER.DAT[Hunter]), the form the live parser
+            # writes, so four rows are not all called NTUSER.DAT.
+            _hs_name = _hive_label_by_path.get(os.path.abspath(_st.hive_path or ""),
+                                               _st.hive_name)
+            _reorg = _hive_reorg.get(_hs_name)
             # Guarded like every other insert here: the table carries no UNIQUE
             # constraint, so OR IGNORE would be a no-op and re-parsing the same
             # case would append the same hive state again. Keyed on the hive and
@@ -6314,7 +6353,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             if check_exists(cursor, 'registry_hive_state',
                             ['hive_name', 'hive_path', 'sequence_1',
                              'sequence_2', 'replayed'],
-                            (_st.hive_name, _st.hive_path, _st.sequence_1,
+                            (_hs_name, _st.hive_path, _st.sequence_1,
                              _st.sequence_2, 1 if _st.recovered else 0)):
                 continue
             cursor.execute(
@@ -6324,7 +6363,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                 'source_sha256, acquisition_route, reorganized_at, reason, '
                 'parsed_at) '
                 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                (_st.hive_name, _st.hive_path, _st.sequence_1, _st.sequence_2,
+                (_hs_name, _st.hive_path, _st.sequence_1, _st.sequence_2,
                  1 if _st.was_dirty else 0,
                  "; ".join(os.path.basename(x) for x in _st.logs_found),
                  _st.log_format, 1 if _st.recovered else 0,
@@ -6342,7 +6381,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             for _st in _stale:
                 print("    %s - %s" % (_st.hive_name, _st.reason))
     except Exception as e:
-        logging.error("Could not record registry_hive_state: %s", e)
+        logger.error("Could not record registry_hive_state: %s", e)
 
     # ========================================================================
     # FINAL SUMMARY
@@ -6360,7 +6399,7 @@ def reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             count = cursor.fetchone()[0]
             total_records += count
     except Exception as e:
-        logging.error(f"Error counting records: {e}")
+        logger.error(f"Error counting records: {e}")
         total_records = 0
     
     conn.close()

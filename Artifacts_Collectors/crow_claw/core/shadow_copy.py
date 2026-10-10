@@ -32,6 +32,7 @@ class ShadowCopy:
     
     def __str__(self) -> str:
         """Return a human-readable string representation."""
+        created = self.creation_time.isoformat() if self.creation_time else "unknown"
         return (f"ShadowCopy(id={self.shadow_copy_id}, "
                 f"volume={self.original_volume}, "
-                f"created={self.creation_time.isoformat()})")
+                f"created={created})")

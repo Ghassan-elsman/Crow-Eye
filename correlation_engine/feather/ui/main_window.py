@@ -4,6 +4,7 @@ Professional cyberpunk-styled PyQt5 interface for data import and normalization.
 """
 
 import os
+from datetime import datetime
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QLineEdit, QPushButton, QToolButton,
@@ -15,6 +16,19 @@ from PyQt5.QtGui import QFont
 from ..database import FeatherDatabase
 from ..transformer import DataTransformer
 from ...gui.crow_eye_icons import apply_status_to_label
+
+# The site look (ui/site_theme.py). Standalone, without Crow-Eye's ui
+# package, the window simply keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
+
+def _status(widget, kind):
+    """Colour a label by meaning (ok / warn / bad / info) through the sheet."""
+    if _site is not None:
+        _site.set_status(widget, kind)
 
 # Import config system
 try:
@@ -62,8 +76,14 @@ class FeatherBuilderWindow(QMainWindow):
         if self.configuration_manager and self.configuration_manager.feathers_dir:
             self.feather_path = str(self.configuration_manager.feathers_dir)
         
+        # Freed when closed: the opener (pipeline_builder) only holds it
+        # until it is destroyed, and nothing reads it after it closes.
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        # The site sheet BEFORE the children exist, the roles once built.
+        if _site is not None:
+            _site.begin_site_theme(self)
         self.init_ui()
-        self.load_stylesheet()
+        self._apply_site_look()
         self.connect_import_signals()
         
         # Update path input if auto-set
@@ -115,8 +135,10 @@ class FeatherBuilderWindow(QMainWindow):
         
         # Title label
         title_label = QLabel("FEATHER BUILDER")
-        title_font = QFont("Consolas", 18, QFont.Bold)
-        title_label.setFont(title_font)
+        if _site is not None:
+            _site.set_role(title_label, "title")        # 24px, as the 18pt it was
+        else:
+            title_label.setFont(QFont("Consolas", 18, QFont.Bold))
         title_label.setAlignment(Qt.AlignCenter)
         header_layout.addWidget(title_label)
         
@@ -140,6 +162,8 @@ class FeatherBuilderWindow(QMainWindow):
         self.path_button = QPushButton("Browse...")
         self.path_button.setMaximumWidth(120)
         self.path_button.clicked.connect(self.select_feather_path)
+        if _site is not None:
+            _site.set_variant(self.path_button, "ghost")
         
         # Add to layout
         name_path_layout.addWidget(name_label)
@@ -167,7 +191,9 @@ class FeatherBuilderWindow(QMainWindow):
         detection_label.setMinimumWidth(120)
         self.artifact_detection_label = QLabel()
         apply_status_to_label(self.artifact_detection_label, "WARN", "Not detected yet")
-        self.artifact_detection_label.setStyleSheet("color: #00d9ff; font-weight: bold;")
+        if _site is not None:
+            self.artifact_detection_label.setFont(_site.font("ui", 13, QFont.Bold))
+        _status(self.artifact_detection_label, "info")
         detection_layout.addWidget(detection_label)
         detection_layout.addWidget(self.artifact_detection_label)
         detection_layout.addStretch()
@@ -189,19 +215,8 @@ class FeatherBuilderWindow(QMainWindow):
         # "UTC" for sources already in UTC (Plaso CSV, anything ISO-8601
         # with explicit "+00:00"). Choose the acquisition workstation's
         # timezone for local-time exports (typical Autopsy CSV).
-        # Use the canonical Crow-Eye input-field styling so the timezone
-        # combo matches the artifact-type combo (both are dropdowns inside
-        # the same group box).
-        try:
-            from styles import Colors as _Colors, CrowEyeStyles as _Styles
-            _tz_input_style = _Styles.INPUT_FIELD
-            _label_color = _Colors.TEXT_SECONDARY
-            _warning_color = _Colors.WARNING
-        except ImportError:
-            _tz_input_style = ""
-            _label_color = "#94A3B8"
-            _warning_color = "#F59E0B"
-
+        # The timezone combo matches the artifact-type combo through the
+        # window's one sheet (both are dropdowns inside the same group box).
         tz_layout = QHBoxLayout()
         tz_label = QLabel("Source Timezone:")
         tz_label.setMinimumWidth(120)
@@ -216,8 +231,6 @@ class FeatherBuilderWindow(QMainWindow):
             "before converting to UTC."
         )
         self.source_timezone_combo.setToolTip(self._TZ_TOOLTIP)
-        # Apply canonical input-field chrome.
-        self.source_timezone_combo.setStyleSheet(_tz_input_style)
 
         # Discoverable help icon next to the combo, using the Crow-Eye
         # info icon so the whole app's icon set stays consistent.
@@ -242,9 +255,11 @@ class FeatherBuilderWindow(QMainWindow):
         # _apply_artifact_type_tz_default on artifact_type_changed.
         self.source_timezone_hint = QLabel("")
         self.source_timezone_hint.setWordWrap(True)
-        self.source_timezone_hint.setStyleSheet(
-            f"color: {_warning_color}; font-size: 9pt; padding-left: 124px;"
-        )
+        # Indented under the combo (124px: the label column), amber caption.
+        self.source_timezone_hint.setContentsMargins(124, 0, 0, 0)
+        if _site is not None:
+            _site.set_role(self.source_timezone_hint, "muted")
+        _status(self.source_timezone_hint, "warn")
         self.source_timezone_hint.setVisible(False)
         layout.addWidget(self.source_timezone_hint)
 
@@ -256,7 +271,8 @@ class FeatherBuilderWindow(QMainWindow):
             "controls how naive timestamps in the source get converted to UTC."
         )
         help_label.setWordWrap(True)
-        help_label.setStyleSheet(f"color: {_label_color}; font-size: 9pt;")
+        if _site is not None:
+            _site.set_role(help_label, "muted")
         layout.addWidget(help_label)
 
         group.setLayout(layout)
@@ -621,15 +637,26 @@ class FeatherBuilderWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
-    def load_stylesheet(self):
-        """Load the cyberpunk stylesheet."""
-        style_path = os.path.join(os.path.dirname(__file__), "styles.qss")
-        try:
-            with open(style_path, 'r') as f:
-                stylesheet = f.read()
-                self.setStyleSheet(stylesheet)
-        except FileNotFoundError:
-            print(f"Warning: Stylesheet not found at {style_path}")
+    def _apply_site_look(self):
+        """The site look (ui/site_theme.py) - one sheet, the site fonts.
+
+        It used to load feather/ui/styles.qss; the site sheet replaces it.
+        Buttons get their role here: the import is the main action, the
+        browse buttons are everyday, deleting rows is destructive."""
+        if _site is None:
+            return
+        for tab in (self.db_tab, self.csv_tab, self.json_tab):
+            _site.set_variant(tab.import_btn, "primary")
+        for btn in (self.db_tab.db_browse_btn, self.csv_tab.csv_browse_btn,
+                    self.json_tab.json_browse_btn, self.data_viewer.refresh_btn,
+                    self.data_viewer.export_btn):
+            _site.set_variant(btn, "ghost")
+        _site.set_variant(self.data_viewer.delete_btn, "danger")
+        _site.apply_site_theme(self)
+        # The site's button font is uppercase and tracked: the capped Browse
+        # button grows to the label it now carries, or "BROWSE..." clips.
+        self.path_button.ensurePolished()
+        self.path_button.setMaximumWidth(max(120, self.path_button.sizeHint().width()))
     
     def on_feather_name_changed(self, text):
         """Handle feather name input changes."""
@@ -1254,7 +1281,7 @@ class FeatherBuilderWindow(QMainWindow):
                 self.artifact_detection_label.setText(
                     f"{confidence_icon} {artifact_type} ({confidence:.0%} confidence)"
                 )
-                self.artifact_detection_label.setStyleSheet("color: #00ff00; font-weight: bold;")
+                _status(self.artifact_detection_label, "ok")
                 
                 # Update artifact type
                 self.artifact_type = artifact_type
@@ -1275,13 +1302,13 @@ class FeatherBuilderWindow(QMainWindow):
             else:
                 # No detection
                 apply_status_to_label(self.artifact_detection_label, "WARN", "Could not detect artifact type")
-                self.artifact_detection_label.setStyleSheet("color: #ff9900; font-weight: bold;")
+                _status(self.artifact_detection_label, "warn")
                 self.status_bar.showMessage(f"Artifact detection: {reason}", 5000)
                 
         except Exception as e:
             print(f"Error during artifact detection: {e}")
             apply_status_to_label(self.artifact_detection_label, "WARN", "Detection error")
-            self.artifact_detection_label.setStyleSheet("color: #ff0000; font-weight: bold;")
+            _status(self.artifact_detection_label, "bad")
     
     def _auto_register_feather_if_available(self):
         """

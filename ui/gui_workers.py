@@ -7,7 +7,6 @@ These workers prevent GUI freezing by moving operations off the main thread.
 Classes:
     LiveAcquisitionWorker: Worker for live artifact acquisition operations
     DataLoadingWorker: Worker for data loading operations into GUI tabs
-    BatchProcessingWorker: Worker for batch data processing operations
 """
 
 import logging
@@ -172,77 +171,3 @@ class DataLoadingWorker(QThread):
         """Emit progress update signal (called from loading function)."""
         if not self._cancelled:
             self.progress_update.emit(current, total, self.data_type)
-
-
-class BatchProcessingWorker(QThread):
-    """
-    Worker thread for batch data processing operations.
-    
-    Bug Fix: Move _batch_process_data and _paginated_batch_process_data operations
-    to worker thread to prevent GUI freezing during large dataset processing.
-    
-    Signals:
-        batch_progress: Emitted during processing (current, total, table_name)
-        batch_complete: Emitted when processing finishes successfully (table_name, loaded_count)
-        batch_error: Emitted if processing fails (table_name, error_message)
-    """
-    
-    batch_progress = pyqtSignal(int, int, str)  # current, total, table_name
-    batch_complete = pyqtSignal(str, int)  # table_name, loaded_count
-    batch_error = pyqtSignal(str, str)  # table_name, error_message
-    
-    def __init__(self,
-                 table_name: str,
-                 processing_function: Callable,
-                 **processing_kwargs):
-        """
-        Initialize the batch processing worker thread.
-        
-        Args:
-            table_name: Name of the table being processed
-            processing_function: Function that performs the batch processing
-            **processing_kwargs: Additional keyword arguments for processing_function
-        """
-        super().__init__()
-        self.table_name = table_name
-        self.processing_function = processing_function
-        self.processing_kwargs = processing_kwargs
-        self._cancelled = False
-    
-    def cancel(self):
-        """Request cancellation of the processing operation."""
-        self._cancelled = True
-        logger.info(f"Batch processing cancellation requested for {self.table_name}")
-    
-    def is_cancelled(self) -> bool:
-        """Check if cancellation has been requested."""
-        return self._cancelled
-    
-    def run(self):
-        """Execute batch processing in background thread."""
-        try:
-            logger.info(f"Starting batch processing worker thread for {self.table_name}")
-            
-            # Call the processing function with progress callback
-            loaded_count = self.processing_function(
-                progress_callback=self._emit_batch_progress,
-                cancellation_check=self.is_cancelled,
-                **self.processing_kwargs
-            )
-            
-            if not self._cancelled:
-                self.batch_complete.emit(self.table_name, loaded_count)
-                logger.info(f"Batch processing completed successfully for {self.table_name}: {loaded_count} records")
-            else:
-                self.batch_error.emit(self.table_name, "Processing cancelled by user")
-                logger.info(f"Batch processing cancelled for {self.table_name}")
-                
-        except Exception as e:
-            error_msg = f"Batch processing failed: {str(e)}"
-            self.batch_error.emit(self.table_name, error_msg)
-            logger.error(f"Batch processing failed for {self.table_name}: {error_msg}", exc_info=True)
-    
-    def _emit_batch_progress(self, current: int, total: int):
-        """Emit batch progress signal (called from processing function)."""
-        if not self._cancelled:
-            self.batch_progress.emit(current, total, self.table_name)

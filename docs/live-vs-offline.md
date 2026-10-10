@@ -258,3 +258,37 @@ The current comparison:
 Two further checks in the same file need no fixtures and always run: no `#` comment inside a SQL
 string (Python is happy, SQLite is not, and the table comes out empty), and no formatted string
 written into a numeric column (SQLite keeps it as TEXT, and TEXT sorts above every integer).
+
+---
+
+## 6. Browsers: live and offline
+
+`Artifacts_Collectors/Browser_Claw.py` serves both sides. A live parse discovers profiles on this
+host; `offline_parsers/offline_BrowserClaw.py` discovers them in the case's collected trees,
+`live_acquisition/Browser/<source>/Users/<name>/AppData/...`, and hands them to the same parser. The
+37 tables are the same.
+
+Measured on one machine (Crow-Claw collection, then Offline Importer, then Parse, against a live
+parse taken afterwards): 34 of 37 tables match row for row on their evidence columns. The other
+three differ only in this way:
+
+| table | why it differs |
+|---|---|
+| `browser_extensions` | `manifest_path` points into the case copy. |
+| `browser_metadata` | The Firefox key-file path points into the case's `browser_extracted`. |
+| `browser_service_worker` | 3 rows: cache entries the browser deleted while the collection ran. |
+
+What an offline parse decides differently, on purpose:
+
+* **Owner.** The user is the `Users\<name>` folder the profile was collected from. It is never
+  looked up on the analyst's machine, and a `Users` folder above the imported folder (the
+  analyst's own profile) is never the owner.
+* **SID.** Read from the case's own SOFTWARE hive. It is withheld when the case holds browser
+  trees from more than one source, because a flat `Registry_Hives` folder cannot say which
+  source a hive came from.
+* **Cache.** *Include browser cache* can leave out the HTTP cache, CacheStorage and `cache2`. With
+  it off, `browser_cache` and `browser_service_worker` are empty by choice.
+* **Old Chrome.** Images are often old. Pre-2018 cookie columns, the `thumbnails` top-sites
+  table and profile-root session files are all read. A live machine rarely has them.
+
+The guard is `correlation_engine/tests/test_browser_offline.py`.

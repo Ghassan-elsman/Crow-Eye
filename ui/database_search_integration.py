@@ -131,9 +131,10 @@ class DatabaseSearchIntegration:
             'system_logs': ('Event Logs', 'SystemLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SystemLogs': ('Event Logs', 'SystemLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SystemLogs_table': ('Event Logs', 'SystemLogs_table', None, 'id', ['event_id', 'timestamp']),
-            'application_logs': ('Event Logs', 'ApplicationLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
-            'ApplicationLogs': ('Event Logs', 'ApplicationLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
-            'ApplicationLogs_table': ('Event Logs', 'ApplicationLogs_table', None, 'id', ['event_id', 'timestamp']),
+            # The widget is AppLogs_table; 'ApplicationLogs_table' never existed.
+            'application_logs': ('Event Logs', 'AppLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
+            'ApplicationLogs': ('Event Logs', 'AppLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
+            'ApplicationLogs_table': ('Event Logs', 'AppLogs_table', None, 'id', ['event_id', 'timestamp']),
             'security_logs': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SecurityLogs': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SecurityLogs_table': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp']),
@@ -553,9 +554,21 @@ class DatabaseSearchIntegration:
             match_columns: Columns to match for finding the row
             timestamp_info: Optional timestamp context information
         """
-        # For virtual tables, we need to find the row by matching data fields
-        # since the database ID might not match the GUI row index
-        
+        # A paged table knows which view row holds which database rowid. The
+        # code below asked it for items and pages it does not have, and for
+        # tables mapped without a loader it did nothing at all.
+        if hasattr(table_widget, 'select_rowid'):
+            try:
+                if table_widget.select_rowid(int(row_id)):
+                    return
+            except (TypeError, ValueError):
+                pass
+            QtWidgets.QMessageBox.information(
+                getattr(self.parent, 'main_window', None), "Result Not Visible",
+                "The record is in the database but not in the table's current view "
+                "(a filter may be hiding it).")
+            return
+
         # Get the data loader
         if loader_attr and hasattr(self.parent, loader_attr):
             loader = getattr(self.parent, loader_attr)

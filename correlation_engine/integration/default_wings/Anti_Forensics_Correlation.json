@@ -232,7 +232,7 @@
       "threshold": {
         "condition": {
           "feather_id": "mft_usn",
-          "field_name": "reason",
+          "field_name": "usn_reason",
           "operator": "contains",
           "value": "FILE_DELETE"
         },

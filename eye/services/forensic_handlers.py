@@ -15,6 +15,14 @@ import json
 import logging
 from pathlib import Path
 from datetime import datetime
+
+
+def _utc_now_text():
+    try:
+        from utils.time_utils import get_current_forensic_timestamp
+        return get_current_forensic_timestamp()
+    except Exception:                                   # pragma: no cover
+        return None
 from typing import Dict, Any, List, Optional
 import urllib.request
 import urllib.parse
@@ -645,6 +653,227 @@ class ForensicHandlers:
             "databases_absent": sorted(set(skipped)),
             "note": note.strip(),
         }
+
+    # ------------------------------------------------------------------ #
+    # User Behavior Analytics as a tool
+    # ------------------------------------------------------------------ #
+    _UBA_MAX_ROWS = 300
+
+    def _uba_engine(self):
+        """(engine, error, ran_now) - one BehaviorEngine run per case.
+
+        The run reads every artifact database once (a few seconds to a minute
+        on a large case) and keeps its BehaviorEvents in an in-memory store,
+        so every later call - any day, any user - is a query on that store.
+        Kept on the ContextManager; rebuilt when the case changes or when a
+        database in Target_Artifacts is newer than the run (a re-parse).
+        Eye's own instance: the UBA window runs its own, and the two never
+        share connections.
+        """
+        import threading
+        case = getattr(self.cm, "case_directory", None)
+        if not case:
+            return None, "No case is open.", False
+        artifacts = Path(case) / "Target_Artifacts"
+        if not artifacts.is_dir():
+            artifacts = Path(case)
+
+        def _stamp():
+            try:
+                return max((p.stat().st_mtime for p in artifacts.glob("*.db")), default=0.0)
+            except OSError:
+                return 0.0
+
+        lock = getattr(self.cm, "_uba_lock", None)
+        if lock is None:
+            lock = self.cm._uba_lock = threading.Lock()
+        with lock:
+            cache = getattr(self.cm, "_uba_cache", None) or {}
+            stamp = _stamp()
+            if (cache.get("engine") is not None and cache.get("case") == str(artifacts)
+                    and cache.get("stamp", 0) >= stamp):
+                return cache["engine"], None, False
+            try:
+                from uba.engine.behavior_engine import BehaviorEngine
+            except Exception as exc:                      # pragma: no cover
+                return None, "UBA is not available: %s" % exc, False
+            old = cache.get("engine")
+            if old is not None:
+                try:
+                    old.close()
+                except Exception:
+                    pass
+            engine = BehaviorEngine(str(artifacts))
+            try:
+                self.logger.info("Eye: running behaviour analysis on %s", artifacts)
+                engine.run()
+            except Exception as exc:
+                self.logger.error("Eye: behaviour analysis failed: %s", exc, exc_info=True)
+                return None, "The behaviour analysis failed: %s" % exc, False
+            finally:
+                # Eye answers each question on a new QThread: this thread's
+                # connections go with it (the queries below only touch the
+                # in-memory event store).
+                try:
+                    engine.db_pool.cleanup_thread_connections()
+                except Exception:
+                    pass
+            self.cm._uba_cache = {"engine": engine, "case": str(artifacts), "stamp": stamp,
+                                  "ran_at": _utc_now_text()}
+            return engine, None, True
+
+    def handle_query_user_behavior(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """What the people on this computer did - as behaviour, not rows.
+
+        Runs Crow-Eye's User Behavior Analytics (the same 81 rules as the UBA
+        window: sign-ins, programs run, files opened / created / deleted,
+        downloads, USB, persistence, log clearing...) once per case, then
+        answers from its event store: any day, any range, any user. Each event
+        is a sentence with an actor, a severity, a confidence, a caveat when
+        the artifact cannot prove who did it, and evidence pointers
+        (database, table, rowids) to confirm with query_database before a
+        claim rests on it.
+        """
+        engine, err, ran_now = self._uba_engine()
+        if err:
+            return {"success": False, "error": err}
+        store = engine.store
+        if store is None:
+            return {"success": False, "error": "The behaviour analysis produced no store."}
+
+        # Window: a calendar day, an explicit range, or `around`; none = all time.
+        start = end = None
+        day = params.get("day")
+        if day:
+            d = self._parse_dt(str(day)[:10] + " 00:00:00")
+            if d is None:
+                return {"success": False, "error": "day must be 'YYYY-MM-DD'."}
+            start, end = str(day)[:10] + " 00:00:00", str(day)[:10] + " 23:59:59"
+        elif params.get("start_time") or params.get("end_time") or params.get("around"):
+            start, end, werr = self._timeline_window(params)
+            if werr:
+                return {"success": False, "error": werr}
+
+        def _list(name):
+            v = params.get(name)
+            if isinstance(v, str):
+                v = [x.strip() for x in v.split(",") if x.strip()]
+            return list(v) if v else None
+
+        filters = {"order": "asc" if str(params.get("order", "asc")).lower() == "asc" else "desc"}
+        if start:
+            filters["start"] = start.replace(" ", "T") if "T" in (self._uba_ts_sample(store) or "") else start
+        if end:
+            filters["end"] = end.replace(" ", "T") if "T" in (self._uba_ts_sample(store) or "") else end
+        for key, name in (("actors", "users"), ("activities", "activities"),
+                          ("severities", "severities"), ("rules", "rules"),
+                          ("classes", "classes")):
+            got = _list(name)
+            if got:
+                filters[key] = got
+        if filters.get("actors") and params.get("include_signed_in", True):
+            # Also what happened while that person was signed in (a label,
+            # never attribution - each event says which it is).
+            filters["include_session_user"] = True
+        if params.get("search"):
+            filters["search"] = str(params["search"])
+
+        try:
+            limit = int(params.get("limit", 100) or 100)
+        except (TypeError, ValueError):
+            limit = 100
+        limit = max(1, min(self._UBA_MAX_ROWS, limit))
+
+        summary = store.summary(filters)
+        out = {
+            "success": True,
+            "window": {"start": start, "end": end} if (start or end) else "all time",
+            # What was asked of the store - also what the sealed record keeps.
+            "filters": {k: v for k, v in filters.items() if k not in ("start", "end")},
+            "analysis": {"ran_now": ran_now,
+                         "ran_at_utc": (getattr(self.cm, "_uba_cache", {}) or {}).get("ran_at"),
+                         "events_in_case": engine.stats.get("total_events"),
+                         "elapsed_seconds": engine.stats.get("elapsed_seconds")},
+            "summary": {
+                "by_activity": summary["by_activity"][:25],
+                "by_actor": summary["by_actor"][:15],
+                "by_severity": summary["by_severity"],
+                "by_class": summary["by_class"],
+                "time_span": summary["time_span"],
+                "events_without_time": summary["timeless_count"],
+            },
+        }
+        unavailable = [r for r in (engine.coverage_report or {}).get("rules", [])
+                       if r.get("status") == "unavailable"]
+        if unavailable:
+            out["rules_unavailable"] = {
+                "count": len(unavailable),
+                "examples": [{"rule": r.get("rule_id"), "why": r.get("note") or r.get("reason")}
+                             for r in unavailable[:8]],
+                "meaning": "These behaviours could not be looked for (their artifact was not "
+                           "parsed): absence of such events is not evidence of absence."}
+        if params.get("summary_only"):
+            out["note"] = ("Summary only. Ask again without summary_only (and with day / users / "
+                           "activities) for the events themselves.")
+            return out
+
+        page = store.query_events(filters, page_size=limit)
+
+        # UBA names databases logically ("registry", "logs"); query_database
+        # needs the file in Target_Artifacts that the analysis actually read.
+        import os
+        from uba.utils import db_access as _dba
+        _files = {}
+
+        def _db_file(logical):
+            if logical not in _files:
+                path = None
+                try:
+                    path = _dba.resolve_db_path(engine.artifacts_dir, logical)
+                except Exception:
+                    path = None
+                _files[logical] = os.path.relpath(path, engine.artifacts_dir) if path else logical
+            return _files[logical]
+        events = []
+        for e in page["events"]:
+            events.append({
+                "time": e.get("ts_start"), "end": e.get("ts_end"),
+                "what": e.get("description"), "activity": e.get("activity"),
+                "rule": e.get("rule_id"), "class": e.get("behavior_class"),
+                "actor": e.get("actor_name") or "(unattributed)",
+                "actor_basis": e.get("actor_basis"),
+                "signed_in_user": e.get("session_user"),
+                "app": e.get("app_name"), "severity": e.get("severity"),
+                "confidence": e.get("confidence"), "caveat": e.get("caveat"),
+                "occurrences": e.get("aggregate_count"),
+                "evidence": [{"database": _db_file(ev.get("db")), "table": ev.get("table"),
+                              "role": ev.get("role"),
+                              "rowids": (ev.get("rowids") or [])[:10],
+                              "rowid_range": ev.get("rowid_range"),
+                              "rows": ev.get("count") or len(ev.get("rowids") or [])}
+                             for ev in (e.get("evidence") or [])[:4]],
+            })
+        out["events"] = events
+        out["total_matching"] = page["total"]
+        note = ""
+        if page["total"] > len(events):
+            note = ("Showing %d of %d matching events (oldest first). Narrow with day, users, "
+                    "activities or severities for the rest." % (len(events), page["total"]))
+        note += (" Each event is an interpretation of artifact rows: confirm a claim against its "
+                 "evidence rows with query_database before stating it as fact; 'actor_basis' says "
+                 "how the person was attributed, and 'signed_in_user' is only who was signed in.")
+        out["note"] = note.strip()
+        return out
+
+    @staticmethod
+    def _uba_ts_sample(store):
+        """One stored ts_start, to match its 'T' or ' ' separator in filters."""
+        try:
+            row = store.conn.execute(
+                "SELECT ts_start FROM events WHERE ts_start IS NOT NULL LIMIT 1").fetchone()
+            return row[0] if row else None
+        except Exception:
+            return None
 
     def _timeline_window(self, params):
         """(start, end, error) from either an explicit range or `around`."""

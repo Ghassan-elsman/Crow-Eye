@@ -43,6 +43,7 @@ import atexit
 import hashlib
 import logging
 import os
+import re
 import shutil
 import struct
 import tempfile
@@ -63,6 +64,13 @@ _OFF_SEQ1 = 0x04
 _OFF_SEQ2 = 0x08
 _OFF_HBINS_SIZE = 0x28
 _OFF_CHECKSUM = 508
+# The tail of the hive's own path (UTF-16LE, last 31 characters), and the
+# resource-manager GUID Windows gives a hive when it creates it. A log's base
+# block is a copy of its hive's, so both fields say which hive a log belongs to.
+_OFF_FILE_NAME = 0x30
+_FILE_NAME_LEN = 64
+_OFF_RM_ID = 0x70
+_GUID_LEN = 16
 
 # A log entry header, and the size of one dirty-page reference.
 _LOG_ENTRY_HEADER_LEN = 40
@@ -96,6 +104,12 @@ class RecoveryResult(object):
         self.entries_applied = 0
         self.highest_sequence = None
         self.reason = ""
+        # Logs found beside (or, in an old flat case, near) the hive that
+        # belong to a different hive, as (path, why) pairs. Never replayed.
+        self.foreign_logs = []
+        # True when the hive sits in a folder of renamed hives from an old
+        # flat collection, where logs had to be matched by content.
+        self.flat_layout = False
         # The evidence hash, so "the original was never written to" is a fact
         # the case carries rather than something only a test knows.
         self.source_sha256 = ""
@@ -209,7 +223,12 @@ def read_base_block(path):
 
     seq1, seq2 = struct.unpack_from("<II", block, _OFF_SEQ1)
     stored = struct.unpack_from("<I", block, _OFF_CHECKSUM)[0]
+    file_name = block[_OFF_FILE_NAME:_OFF_FILE_NAME + _FILE_NAME_LEN]
+    file_name = file_name.decode("utf-16-le", "replace").split("\x00", 1)[0]
+    rm_id = block[_OFF_RM_ID:_OFF_RM_ID + _GUID_LEN]
     return {
+        "file_name": file_name,
+        "rm_id": rm_id if rm_id.strip(b"\x00") else b"",
         "sequence_1": seq1,
         "sequence_2": seq2,
         "hbins_size": struct.unpack_from("<I", block, _OFF_HBINS_SIZE)[0],
@@ -332,6 +351,75 @@ def read_log_entries(log_path):
     return entries
 
 
+def log_ownership(hive_base, log_base, strict=False):
+    r"""None when the log belongs to the hive, else the reason it does not.
+
+    A log's base block is a copy of its hive's, so the two carry the same tail
+    of the hive's own path (``\??\C:\Users\Hunter\ntuser.dat``) and the
+    same resource-manager GUID. Every user has an ``NTUSER.DAT``, and a log
+    applied to another user's hive writes that user's pages over this one's -
+    a plausible, wrong registry, with no error anywhere.
+
+    The path does not separate two users' ``UsrClass.dat`` (its tail is
+    ``\Microsoft\Windows\UsrClass.dat`` for everyone), and profiles created
+    from the same template share a GUID - so each field rejects what the other
+    cannot. ``strict`` (for a log that is NOT beside the hive under its exact
+    name) additionally requires both fields to be present and equal.
+    """
+    h_name = (hive_base.get("file_name") or "").lower()
+    l_name = (log_base.get("file_name") or "").lower()
+    h_rm = hive_base.get("rm_id") or b""
+    l_rm = log_base.get("rm_id") or b""
+    if h_name and l_name and h_name != l_name:
+        return "log was written for %s" % log_base.get("file_name")
+    if h_rm and l_rm and h_rm != l_rm:
+        return "log belongs to a different hive (resource manager id differs)"
+    if strict and not (h_name and l_name and h_rm and l_rm):
+        return "log cannot be matched to this hive"
+    return None
+
+
+# ``NTUSER_1.DAT`` / ``NTUSER.DAT_1.LOG1``: the renames of an old flat collection.
+_RENAMED_HIVE = re.compile(r"^(?P<stem>.+?)_\d+(?P<ext>\.[^.]*)?$", re.I)
+_RENAMED_LOG = re.compile(r"^(?P<hive>.+?)(?:_\d+)?\.log[12]$", re.I)
+
+
+def _hive_family(name):
+    """``ntuser.dat`` for NTUSER.DAT, NTUSER_1.DAT and NTUSER.DAT_1.LOG1."""
+    low = name.lower()
+    m = _RENAMED_LOG.match(low)
+    if m:
+        low = m.group("hive")
+    m = _RENAMED_HIVE.match(low)
+    if m:
+        low = m.group("stem") + (m.group("ext") or "")
+    return low
+
+
+def flat_sibling_logs(hive_path):
+    """Logs near a hive collected by an old flat collector, or [].
+
+    Old cases hold every user's hive in one folder, renamed ``NTUSER_1.DAT``
+    while the logs were renamed ``NTUSER.DAT_1.LOG1`` - so no hive's logs
+    carry its name. Every log of the same family in the folder is returned,
+    and recover_hive keeps only the ones whose content says they belong
+    (``log_ownership(strict=True)``). Empty when the folder shows no renames:
+    a per-user folder has its logs under their exact names.
+    """
+    directory = os.path.dirname(hive_path) or "."
+    family = _hive_family(os.path.basename(hive_path))
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return []
+    renamed = any(_RENAMED_HIVE.match(n) and _hive_family(n) == family
+                  and not n.lower().endswith((".log1", ".log2")) for n in names)
+    if not renamed and not _RENAMED_HIVE.match(os.path.basename(hive_path)):
+        return []
+    return sorted(os.path.join(directory, n) for n in names
+                  if n.lower().endswith((".log1", ".log2")) and _hive_family(n) == family)
+
+
 def find_logs_for(hive_path):
     """The .LOG1 / .LOG2 sitting beside a hive, whatever their case.
 
@@ -377,11 +465,32 @@ def recover_hive(hive_path, output_path, log_paths=None):
         result.reason = "hive was closed cleanly; nothing to replay"
         return result
 
-    if log_paths is None:
-        log_paths = find_logs_for(hive_path)
+    # Which logs this hive may use. Beside it under its exact name is the
+    # normal case and is trusted unless its content says otherwise; anything
+    # gathered from a flat folder must PROVE it belongs.
+    explicit = log_paths is not None
+    beside = list(log_paths) if explicit else find_logs_for(hive_path)
+    siblings = [] if explicit else [p for p in flat_sibling_logs(hive_path) if p not in beside]
+    result.flat_layout = bool(siblings) or (not explicit and bool(
+        _RENAMED_HIVE.match(os.path.basename(hive_path))))
+    log_paths = []
+    for path, strict in [(p, False) for p in beside] + [(p, True) for p in siblings]:
+        log_base = read_base_block(path)
+        why = log_ownership(base, log_base, strict=strict) if log_base else None
+        if why:
+            result.foreign_logs.append((path, why))
+            if not strict:
+                (logger.info if result.flat_layout else logger.warning)(
+                    "Not replaying %s into %s: %s", path, hive_path, why)
+            continue
+        log_paths.append(path)
     result.logs_found = list(log_paths)
     if not log_paths:
-        result.reason = "hive is dirty but no transaction log was collected"
+        if result.foreign_logs and not siblings:
+            result.reason = ("hive is dirty, and the transaction log beside it belongs to "
+                             "another hive")
+        else:
+            result.reason = "hive is dirty but no transaction log was collected"
         return result
 
     # Gather the candidate logs, rejecting the ones that cannot apply.
@@ -488,6 +597,7 @@ _replay_cache = {}
 _replay_dir = None
 _replay_results = []
 _replay_by_source = {}
+_source_by_recovered = {}
 
 
 def _replay_workspace():
@@ -527,11 +637,24 @@ def hive_for_reading(path):
             _replay_by_source[key] = recovery
             if recovery.recovered:
                 result = recovery.recovered_path
+                _source_by_recovered[os.path.abspath(result)] = path
     except Exception as exc:
         logger.error("Transaction-log replay failed for %s: %s", path, exc)
 
     _replay_cache[key] = result
     return result
+
+
+def source_path_for(path):
+    """The collected hive a recovered copy was made from, or `path` itself.
+
+    A recovered copy lives in a temp folder named after nothing, so anything
+    that reads the owner from the path (``Users\\<name>\\NTUSER.DAT``) has to
+    ask for the original first.
+    """
+    if not path:
+        return path
+    return _source_by_recovered.get(os.path.abspath(path), path)
 
 
 def recovery_results():
@@ -556,6 +679,7 @@ def reset_replay_cache():
     global _replay_dir
     _replay_cache.clear()
     _replay_by_source.clear()
+    _source_by_recovered.clear()
     del _replay_results[:]
     if _replay_dir:
         shutil.rmtree(_replay_dir, ignore_errors=True)

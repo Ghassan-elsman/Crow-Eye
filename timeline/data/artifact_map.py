@@ -415,11 +415,14 @@ TIMESTAMP_MAPPINGS = {
         ("mft_file_names", "modified", "modified", "$FN modified"),
         ("mft_file_names", "accessed", "accessed", "$FN accessed"),
         ("mft_file_names", "mft_modified", "mft_modified", "$FN MFT entry changed"),
-        # Renames recovered by the correlator - 133,614 of them here, and a
-        # rename is exactly the kind of thing a timeline is asked about.
-        ("filename_changes", "change_timestamp", "modified", "File renamed"),
+        # The MFT keeps current names only - a record's second name is a hard
+        # link, never a rename. Renames are paired from the USN journal into
+        # `filename_changes` in the correlated database (MftUsn below).
     ],
     "MftUsn": [
+        # One row per rename, old name -> new name, paired from the journal's
+        # RENAME_OLD_NAME / RENAME_NEW_NAME records by the correlator.
+        ("filename_changes", "rename_time", "modified", "Renamed: old name -> new name"),
         # Ten time columns; the bridge used three. $SI and $FN side by side per
         # record is the whole reason this table exists.
         ("mft_usn_correlated", "si_creation_time", "created", "$SI created"),

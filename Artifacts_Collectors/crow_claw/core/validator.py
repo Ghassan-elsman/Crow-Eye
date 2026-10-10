@@ -527,11 +527,87 @@ class ArtifactValidator:
         except (OSError, IOError):
             return False
     
+    # Header checks per artifact type: (applies to this file?, check, problem).
+    # A file the check does not apply to (a hive's .blf, SRUM's .jrs, a
+    # Recycle Bin $R content file) is not judged at all - it has no fixed
+    # header, and calling it invalid would bury the real failures.
+    _LNK_HEADER = (b"\x4c\x00\x00\x00\x01\x14\x02\x00\x00\x00\x00\x00"
+                   b"\xc0\x00\x00\x00\x00\x00\x00\x46")
+    _CFB_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
+
+    @staticmethod
+    def _coerce_type(artifact_type):
+        """The collector passes the enum's VALUE ("Registry"), not the enum.
+
+        Every comparison below was against the enum, so none ever matched and
+        every file was reported signature-valid without being read.
+        """
+        if isinstance(artifact_type, ArtifactType):
+            return artifact_type
+        for t in ArtifactType:
+            if str(artifact_type).lower() in (t.value.lower(), t.name.lower()):
+                return t
+        return None
+
+    def _header(self, file_path, n=16):
+        with open(file_path, "rb") as fh:
+            return fh.read(n)
+
+    def _signature_check(self, file_path, kind):
+        """(applies, ok, message) for this file's header."""
+        name = os.path.basename(file_path).lower()
+        if kind in (ArtifactType.REGISTRY_HIVES, ArtifactType.AMCACHE, ArtifactType.SHIMCACHE):
+            if name.endswith((".blf", ".regtrans-ms")) or name.endswith(".tmp"):
+                return False, True, ""
+            ok = self._header(file_path, 4) == b"regf"
+            if name.endswith((".log", ".log1", ".log2")):
+                # A transaction log opens with a copy of the hive's base block.
+                return True, ok, "" if ok else "transaction log without a 'regf' base block"
+            return True, ok, "" if ok else "Invalid registry hive signature (expected 'regf')"
+        if kind == ArtifactType.EVENT_LOGS:
+            if not name.endswith(".evtx"):
+                return False, True, ""
+            ok = self._header(file_path, 8) == b"ElfFile\x00"
+            return True, ok, "" if ok else "Invalid event log signature (expected 'ElfFile')"
+        if kind == ArtifactType.SRUM_DATABASE:
+            if not name.endswith((".dat", ".edb")):
+                return False, True, ""
+            ok = self.validate_database_signature(file_path)
+            return True, ok, "" if ok else "Invalid ESE database signature"
+        if kind == ArtifactType.PREFETCH:
+            if not name.endswith(".pf"):
+                return False, True, ""
+            h = self._header(file_path, 8)
+            # SCCA at offset 4, or the Windows 10+ MAM\x04 compressed wrapper.
+            ok = h[4:8] == b"SCCA" or h[:4] == b"MAM\x04"
+            return True, ok, "" if ok else "Invalid Prefetch signature (expected 'SCCA' or 'MAM')"
+        if kind == ArtifactType.JUMPLISTS_LNK:
+            if name.endswith(".lnk"):
+                ok = self._header(file_path, 20) == self._LNK_HEADER
+                return True, ok, "" if ok else "Invalid shortcut header (expected the LNK CLSID)"
+            if name.endswith(".automaticdestinations-ms"):
+                ok = self._header(file_path, 8) == self._CFB_MAGIC
+                return True, ok, "" if ok else "Invalid Jump List (expected an OLE compound file)"
+            return False, True, ""
+        if kind == ArtifactType.RECYCLE_BIN:
+            if not name.startswith("$i"):
+                return False, True, ""
+            h = self._header(file_path, 8)
+            ok = len(h) == 8 and int.from_bytes(h, "little") in (1, 2)
+            return True, ok, "" if ok else "Invalid $I record (expected version 1 or 2)"
+        if kind == ArtifactType.MFT:
+            if name != "$mft":
+                return False, True, ""
+            ok = self._header(file_path, 4) in (b"FILE", b"BAAD")
+            return True, ok, "" if ok else "Invalid $MFT (expected a FILE record at offset 0)"
+        return False, True, ""
+
     def validate_artifact(
-        self, 
-        file_path: str, 
+        self,
+        file_path: str,
         artifact_type: ArtifactType,
-        source_file_size: Optional[int] = None
+        source_file_size: Optional[int] = None,
+        with_md5: bool = False
     ) -> ValidationResult:
         """Validate a collected artifact.
         
@@ -550,43 +626,39 @@ class ArtifactValidator:
             ValidationResult with all validation details
         """
         result = ValidationResult(file_path=file_path, source_file_size=source_file_size)
-        
+
         try:
-            # Compute hashes
-            result.md5_hash = self.compute_md5(file_path)
+            # SHA-256 is the custody hash. MD5 only on request: it doubles the
+            # read of every file and identifies nothing SHA-256 does not.
+            if with_md5:
+                result.md5_hash = self.compute_md5(file_path)
             result.sha256_hash = self.compute_sha256(file_path)
-            
+
             # Check file size
             result.file_size = os.path.getsize(file_path)
             if result.file_size == 0:
+                # An empty .LOG2 or $R file is normal; there is no header to check.
                 result.add_warning("File size is zero bytes")
-            
+                result.signature_valid = True
+                return result
+
             # Compare source and destination file sizes if source size is provided
             if source_file_size is not None and result.file_size != source_file_size:
                 result.add_warning(
                     f"File size mismatch: source={source_file_size} bytes, "
                     f"destination={result.file_size} bytes"
                 )
-            
-            # Signature validation based on artifact type
-            if artifact_type == ArtifactType.REGISTRY_HIVES:
-                result.signature_valid = self.validate_registry_signature(file_path)
-                if not result.signature_valid:
-                    result.add_error("Invalid registry hive signature (expected 'regf')")
-                    
-            elif artifact_type == ArtifactType.EVENT_LOGS:
-                result.signature_valid = self.validate_evtx_signature(file_path)
-                if not result.signature_valid:
-                    result.add_error("Invalid event log signature (expected 'ElfFile')")
-                    
-            elif artifact_type in [ArtifactType.AMCACHE, ArtifactType.SRUM_DATABASE]:
-                result.signature_valid = self.validate_database_signature(file_path)
-                if not result.signature_valid:
-                    result.add_error("Invalid database signature (expected SQLite or ESE)")
-            else:
-                # For other artifact types, skip signature validation
-                result.signature_valid = True
-                
+
+            applies, ok, problem = self._signature_check(file_path, self._coerce_type(artifact_type))
+            result.signature_valid = ok
+            if applies and not ok:
+                # A transaction log can legitimately be an old-format or
+                # zeroed file; a hive, a .pf or an .evtx cannot.
+                if problem.startswith("transaction log"):
+                    result.add_warning(problem)
+                else:
+                    result.add_error(problem)
+
         except Exception as e:
             result.add_error(f"Validation failed: {str(e)}")
         

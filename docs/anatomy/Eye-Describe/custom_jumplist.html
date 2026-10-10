@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Custom Jump Lists Forensics — How They Work, Explained</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link
+    href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap"
+    rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--tx);
+      font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif;
+      font-size: 15px;
+      line-height: 1.6;
+      min-height: 100vh;
+      overflow-y: auto;
+    }
+
+    .wrap {
+      max-width: 1760px;
+      margin: 0 auto;
+      padding: 40px 24px;
+    }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+
+    header {
+      margin-bottom: 40px;
+    }
+
+    h1 {
+      font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif;
+      font-size: 40px;
+      font-weight: 800;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .header-sub {
+      color: var(--tx2);
+      font-size: 17px;
+      max-width: 700px;
+      margin-bottom: 20px;
+    }
+
+    .dissection-layout {
+      display: grid;
+      grid-template-columns: 1fr 450px;
+      gap: 32px;
+      margin-bottom: 60px;
+      align-items: start;
+    }
+
+    .unified-map {
+      display: grid;
+      grid-template-columns: repeat(16, 1fr);
+      gap: 6px;
+      min-width: 500px;
+    }
+
+    .map-container {  /* card look + overflow-x -> anatomy.css */
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .byte-cell {
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: var(--bg2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-size: 11px;
+      font-family: 'Space Mono', monospace;
+      font-weight: 700;
+      color: var(--tx3);
+      cursor: pointer;
+      transition: all 0.1s;
+    }
+
+    .byte-cell:hover {
+      transform: scale(1.2);
+      border-color: var(--accent);
+      z-index: 10;
+      filter: brightness(1.3);
+    }
+
+    .byte-cell.active {
+      border-color: var(--accent);
+      box-shadow: 0 0 15px var(--accent);
+      z-index: 5;
+      color: var(--tx) !important;
+      background: var(--bg3) !important;
+      filter: brightness(1.2);
+    }
+
+    .byte-cell.reserved {
+      background: var(--bg3);
+      color: var(--tx3);
+      opacity: 0.5;
+    }
+
+    .divider-row {
+      grid-column: 1 / span 16;
+      height: 30px;
+      display: flex;
+      align-items: center;
+      font-family: 'Space Mono', monospace;
+      font-size: 9px;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--tx3);
+      margin: 8px 0 4px;
+    }
+
+    .divider-row::after {
+      content: '';
+      height: 1px;
+      flex: 1;
+      background: var(--border);
+      margin-left: 10px;
+    }
+
+    .dynamic-side {  /* card look -> anatomy.css */
+      position: sticky;
+      top: 20px;
+      box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+      min-height: 500px;
+      overflow-y: auto;
+      max-height: 90vh;
+    }
+
+    .panel-label {
+      font-family: 'Space Mono', monospace;
+      font-size: 11px;
+      color: var(--tx3);
+      text-transform: uppercase;
+      margin-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
+      display: block;
+    }
+
+    .field-name {
+      font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif;
+      font-size: 24px;
+      font-weight: 800;
+      margin-bottom: 12px;
+      color: var(--accent);
+    }
+
+    .field-val {
+      font-family: 'Space Mono', monospace;
+      color: var(--tx);
+      background: var(--bg);
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 14px;
+      border: 1px solid var(--border);
+      word-break: break-all;
+      letter-spacing: 1px;
+      line-height: 1.4;
+    }
+
+    .meta-box {
+      background: var(--bg);
+      padding: 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      margin-bottom: 12px;
+    }
+
+    .meta-lbl {
+      font-size: 10px;
+      color: var(--tx3);
+      text-transform: uppercase;
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    .meta-v {
+      font-weight: 600;
+      color: var(--identity-color);
+      font-size: 14px;
+    }
+
+    .forensic-text {
+      background: var(--accent-dim);
+      border-left: 3px solid var(--accent);
+      padding: 16px;
+      border-radius: 4px;
+      font-size: 14px;
+      line-height: 1.6;
+      margin-top: 20px;
+      color: var(--tx2);
+    }
+
+    .forensic-text strong {
+      color: var(--accent);
+    }
+
+    /* .narrative-section look -> anatomy.css */
+
+    .narrative-title {
+      font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif;
+      font-size: 28px;
+      font-weight: 800;
+      margin-bottom: 16px;
+      color: var(--tx);
+    }
+
+    .narrative-text {
+      font-size: 17px;
+      color: var(--tx2);
+      line-height: 1.8;
+    }
+
+    /* .full-reference look -> anatomy.css */
+
+    .ref-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+      min-width: 800px;
+    }
+
+    .ref-table th {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid var(--border2);
+      color: var(--accent);
+      font-family: 'Space Mono';
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+
+    .ref-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--tx2);
+      vertical-align: top;
+    }
+
+    .ref-table tr:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .ref-section-head {
+      background: var(--bg2);
+      color: var(--tx);
+      font-weight: 800;
+      font-family: 'Space Mono';
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-size: 12px;
+    }
+
+    .kb-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      gap: 32px;
+      margin-bottom: 48px;
+    }
+
+    /* .kb-section look -> anatomy.css */
+
+    .kb-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 14px;
+    }
+
+    .kb-table th {
+      text-align: left;
+      padding: 12px;
+      border-bottom: 1px solid var(--border2);
+      color: var(--accent);
+      font-family: 'Space Mono';
+      text-transform: uppercase;
+      font-size: 11px;
+    }
+
+    .kb-table td {
+      padding: 12px;
+      border-bottom: 1px solid var(--border);
+      color: var(--tx2);
+      vertical-align: top;
+    }
+
+    .kb-table tr:hover {
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    /* h2 header look -> anatomy.css */
+
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: var(--border2);
+      border-radius: 10px;
+    }
+
+    @media (max-width: 900px) {
+      .dissection-layout {
+        grid-template-columns: 1fr;
+        gap: 16px;
+      }
+
+      .dynamic-side {
+        position: relative;
+        top: 0;
+        min-height: auto;
+        max-height: none;
+        margin-top: 20px;
+        padding: 20px 16px;
+      }
+
+      .kb-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .wrap {
+        padding: 80px 16px 20px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+
+      .header-sub {
+        font-size: 15px;
+      }
+
+      .responsive-table-wrap {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        border-radius: 12px;
+        margin: 0 -8px;
+      }
+
+      .ref-table,
+      .kb-table {
+        min-width: 600px;
+      }
+
+      .full-reference,
+      .kb-section,
+      .narrative-section {
+        padding: 24px 16px;
+        border-radius: 16px;
+      }
+
+      .selection-grid-2 {
+        grid-template-columns: 1fr !important;
+      }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How Windows Custom Jump Lists (customDestinations-ms) work: pinned and application-defined tasks, file structure, and what they reveal in a forensic investigation.">
+  <meta name="keywords" content="custom jump list, customDestinations-ms, jump list pinned items, application tasks, windows jump list forensics">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/custom_jumplist">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/custom_jumplist">
+  <meta property="og:title" content="Custom Jump Lists Forensics — How They Work, Explained">
+  <meta property="og:description" content="How Windows Custom Jump Lists (customDestinations-ms) work: pinned and application-defined tasks, file structure, and what they reveal in a forensic investigation.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Custom Jump Lists Forensics — How They Work, Explained">
+  <meta name="twitter:description" content="How Windows Custom Jump Lists (customDestinations-ms) work: pinned and application-defined tasks, file structure, and what they reveal in a forensic investigation.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "The Windows customDestinations-ms Jump List format and its forensic interpretation",
+      "keywords": "custom jump list, customDestinations-ms, jump list pinned items, application tasks, windows jump list forensics",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Custom Jump Lists Forensics — How They Work, Explained",
+      "description": "How Windows Custom Jump Lists (customDestinations-ms) work: pinned and application-defined tasks, file structure, and what they reveal in a forensic investigation.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "Windows Custom Jump Lists",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/custom_jumplist"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Custom Jump Lists",
+          "item": "https://crow-eye.com/Eye-Describe/custom_jumplist"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is the difference between Custom and Automatic Jump Lists?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Automatic Jump Lists are maintained by Windows as a user opens files. Custom Jump Lists are written by the application itself and hold pinned entries and application-defined tasks, so they reflect deliberate user choices and program design rather than passive recent-file history."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Where are Custom Jump Lists stored?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "In the user's Recent folder under AppData, in the CustomDestinations subfolder, named by AppID with a customDestinations-ms extension."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Why do pinned items matter forensically?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Pinning is an intentional act. A pinned file or location shows the user considered it worth keeping to hand, which carries different weight from a file that merely appeared in a recent list once."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Are Custom Jump Lists a series of LNK structures?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Largely yes - the entries are LNK-format blocks concatenated with a footer, so the same target paths, timestamps and volume details a shortcut carries are recoverable from them."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div
+        style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">
+        Eye Describe Anatomy</div>
+      <h1>Custom Jump Lists: structure, contents and evidential limits</h1>
+      <p class="header-sub">Proprietary sequential binary format analysis of the customDestinations-ms Jump List &mdash; user-pinned items and application-defined tasks, and what a pinned entry reveals in a forensic investigation.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#category-headers">Category header definitions</a></li>
+        <li><a href="#lnk-carving">LNK carving and footer</a></li>
+        <li><a href="#appid">AppID hash (application identity)</a></li>
+        <li><a href="#limits">What a custom list entry supports, and what it does not</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <div class="dissection-layout">
+      <div class="map-container">
+        <span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div>
+      </div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);">
+            <p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-file-archive"></i></p>
+            <p>Select any field in the map to reveal a deep forensic dive.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ARTIFACT NARRATIVE -->
+    <div class="narrative-section reveal">
+      <div class="narrative-title">What are Custom Jump Lists?</div>
+      <div class="narrative-text">
+        <p><strong>Custom Jump Lists</strong> (<code>.customDestinations-ms</code>) use a proprietary binary format
+          rather than the OLE Compound File format used by Automatic Destinations. They are essentially a sequential
+          concatenation of Windows Shortcut (LNK) files packaged with a simple framing layer.</p>
+        <p><strong>Binary Layout:</strong> There is no DestList stream, no OLE directory, and no structured index. The
+          parser scans the raw bytes linearly, looking for Category Headers followed by the 20-byte LNK Magic Signature,
+          until it hits the final <code>0xBABFFBAB</code> footer.</p>
+        <p><strong>Forensic Value:</strong> Because they lack a DestList, forensic timelines rely entirely on the
+          payload inside the embedded LNK entries. These entries provide massive value: MAC timestamps, MFT
+          Entry/Sequence numbers (IDList), Volume Serial Numbers & Drive Types (Link Info), Command-Line arguments
+          (String Data), and Tracker NetBIOS/MAC data (ExtraData blocks). <a class="see-also" href="automatic_jumplist.html#destlist">Explained in full: the DestList stream</a></p>
+      </div>
+    </div>
+
+    <!-- FULL LOGICAL DISSECTION TABLE -->
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Offset</th>
+              <th style="width: 60px;">Size</th>
+              <th style="width: 200px;">Field Name</th>
+              <th>Forensic Meaning & Value</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="category-headers">Category header definitions</h2>
+        <span class="cap">Table 2</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead>
+              <tr>
+                <th style="width: 100px;">Identifier</th>
+                <th style="width: 100px;">Category Name</th>
+                <th>Meaning</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="font-family: 'Space Mono';">0x00000000</td>
+                <td style="font-weight: 600; color: var(--tx);">Custom Category</td>
+                <td>App-supplied category. A 2-byte name length and UTF-16LE category name follow (e.g. "Pinned", a project name, "Tasks"), then a 4-byte LNK entry count and the LNK payloads.</td>
+              </tr>
+              <tr>
+                <td style="font-family: 'Space Mono';">0x00000001</td>
+                <td style="font-weight: 600; color: var(--tx);">Known Category</td>
+                <td>Built-in Windows category. A 4-byte <em>KnownCategoryType</em> sub-value follows: <code>1</code> = Frequent, <code>2</code> = Recent, <code>3</code> = Tasks. No name; the OS renders a localised title.</td>
+              </tr>
+              <tr>
+                <td style="font-family: 'Space Mono';">0x00000002</td>
+                <td style="font-weight: 600; color: var(--tx);">Tasks Category (legacy)</td>
+                <td>Older shape kept for back-compat. Skips the name fields &mdash; a 4-byte LNK entry count follows directly, then the LNK payloads.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="lnk-carving">LNK carving and footer</h2>
+        <div class="forensic-text">
+          <p style="margin-bottom:8px;"><strong>LNK Magic Signature (20
+              Bytes):</strong><br><code>4C 00 00 00 01 14 02 00 00 00 00 00 C0 00 00 00 00 00 00 46</code><br>Because
+            LNK entries lack explicit length prefixes, tools scan for this exact sequence to carve out shortcuts.</p>
+          <p><strong>Footer (0xBABFFBAB):</strong><br>Stored as <code>AB FB BF BA</code> in little-endian. Marks the
+            absolute end of the list. If missing, the file was truncated or the system crashed.</p>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="appid">AppID hash (application identity)</h2>
+        <div class="forensic-text" style="margin-top:0; margin-bottom: 16px;">
+          <p>The Application Identity (AppID) is not explicitly stored inside the Custom Destinations binary format.
+            Instead, the <strong>filename itself</strong> is the hex representation of the AppID (e.g.,
+            <code>1b4dd67f29cb1962.customDestinations-ms</code>). <a class="see-also" href="automatic_jumplist.html#appid">Explained in full: the AppID hash</a>
+          </p>
+        </div>
+        <span class="cap">Table 3</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead>
+              <tr>
+                <th style="width: 150px;">AppID Hash</th>
+                <th>Target Application</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td style="font-family: 'Space Mono';">1b4dd67f29cb1962</td>
+                <td style="color: var(--tx);">Windows Explorer</td>
+              </tr>
+              <tr>
+                <td style="font-family: 'Space Mono';">f01b4d95cf55d32a</td>
+                <td style="color: var(--tx);">Command Prompt (cmd.exe)</td>
+              </tr>
+              <tr>
+                <td style="font-family: 'Space Mono';">5d696d521ea23821</td>
+                <td style="color: var(--tx);">Google Chrome</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+
+    const masterFields = [
+      { section: 'Global Header', name: 'Format Version', offset: 0, size: 4, type: 'header-color', val: '0x00000002 (2)', forensic: 'The standard format version for modern Windows Custom Destinations files. Always stored as a 32-bit unsigned integer. Any value other than 2 may indicate corruption or an undocumented future format.' },
+      { section: 'Global Header', name: 'Categories Count', offset: 4, size: 4, type: 'header-color', val: '0x00000001 (1)', forensic: 'A 32-bit integer defining the total number of logical category blocks (e.g., Pinned, Recent, Tasks) contained in this file. Forensically useful to cross-reference against the actual number of Category Headers found during sequential parsing.' },
+      { section: 'Global Header', name: 'Reserved Padding', offset: 8, size: 4, type: 'reserved', val: '0x00000000', forensic: 'Reserved 32-bit padding. In all observed well-formed customDestinations-ms files, these bytes are always zero.' },
+      
+      { section: 'Category Header', name: 'Category Type', offset: 12, size: 4, type: 'identity-color', val: '0x00000000 (Custom)', forensic: 'Crucial field dictating the category\'s shape. <code>0x00</code> = <strong>Custom Category</strong> (app-supplied name follows; this is what holds "Pinned" / "Tasks" / app-defined lists). <code>0x01</code> = <strong>Known Category</strong> (a 4-byte sub-type follows: 1=Frequent, 2=Recent, 3=Tasks). <code>0x02</code> = <strong>Tasks Category</strong> (legacy &mdash; entry count follows directly with no name).' },
+      { section: 'Category Header', name: 'Name Length', offset: 16, size: 2, type: 'identity-color', val: '0x0006 (6 Chars)', forensic: 'A 16-bit integer specifying the number of UTF-16 characters (not bytes) in the category name string that follows immediately after.' },
+      { section: 'Category Header', name: 'Category Name', offset: 18, size: 12, type: 'identity-color', val: '"Pinned"', forensic: 'The actual visible category title stored as a UTF-16LE string. For Category Type 0x00, this is almost always "Pinned", identifying items the user consciously decided to keep on their Taskbar/Jump List permanently.' },
+      { section: 'Category Header', name: 'LNK Entry Count', offset: 30, size: 4, type: 'identity-color', val: '0x00000003 (3)', forensic: 'A 32-bit integer defining how many embedded LNK (Windows Shortcut) files belong to this specific category block. This dictates how many LNK structures follow before the next Category Header or File Footer.' },
+      
+      { section: 'Embedded LNK Header', name: 'LNK Header Size', offset: 34, size: 4, type: 'metrics-color', val: '0x0000004C (76 Bytes)', forensic: 'The start of the 20-byte LNK Magic Signature. The LNK Header size must always be exactly 76 bytes (0x4C). Forensically, scanners search for this exact <code>4C 00 00 00</code> sequence combined with the CLSID to carve LNKs.' },
+      { section: 'Embedded LNK Header', name: 'Link CLSID (GUID)', offset: 38, size: 16, type: 'metrics-color', val: '00021401-0000-0000-C000-000000000046', forensic: 'The standard Windows Shell Link CLSID. This 16-byte GUID confirms the payload is a valid LNK structure. Along with the Header Size, it forms the 20-byte magic carving signature.' },
+      { section: 'Embedded LNK Header', name: 'Link Flags', offset: 54, size: 4, type: 'metrics-color', val: '0x000000FF', forensic: 'A 32-bit bitmask that dictates which optional LNK structures (IDList, LinkInfo, StringData, ExtraData Blocks) are present later in the LNK file. <code>0xFF</code> means bits 0&ndash;7 are set: HasTargetIDList + HasLinkInfo + HasName + HasRelativePath + HasWorkingDir + HasArguments + HasIconLocation + IsUnicode &mdash; matching the IDList, LinkInfo, and four StringData blocks shown below.' },
+      { section: 'Embedded LNK Header', name: 'File Attributes', offset: 58, size: 4, type: 'metrics-color', val: '0x00000020 (Archive)', forensic: 'A 32-bit bitmask representing the target file\'s attributes at the time the LNK was created or updated. <code>0x20</code> is FILE_ATTRIBUTE_ARCHIVE.' },
+      { section: 'Embedded LNK Header', name: 'Creation Time (MAC)', offset: 62, size: 8, type: 'metrics-color', val: 'FILETIME', forensic: 'A 64-bit Windows FILETIME (100-nanosecond intervals since 1601) representing when the target file was created. Since Custom Destinations lack a DestList stream (and its associated timestamps), these embedded MAC times are the primary source for building a forensic timeline of user activity.' },
+      { section: 'Embedded LNK Header', name: 'Access Time (MAC)', offset: 70, size: 8, type: 'metrics-color', val: 'FILETIME', forensic: 'A 64-bit Windows FILETIME representing when the target file was last accessed. Crucial for determining when the user last interacted with the target file.' },
+      { section: 'Embedded LNK Header', name: 'Write Time (MAC)', offset: 78, size: 8, type: 'metrics-color', val: 'FILETIME', forensic: 'A 64-bit Windows FILETIME representing when the target file was last modified.' },
+      { section: 'Embedded LNK Header', name: 'Target File Size', offset: 86, size: 4, type: 'metrics-color', val: '0x00000000 (0 Bytes)', forensic: 'A 32-bit integer specifying the size of the target file in bytes at the time the shortcut was updated.' },
+      { section: 'Embedded LNK Header', name: 'Icon Index', offset: 90, size: 4, type: 'metrics-color', val: '0', forensic: 'A 32-bit integer indicating the index of the icon to use if the Icon Location string points to a file containing multiple icons (like shell32.dll or an executable).' },
+      { section: 'Embedded LNK Header', name: 'Show Command', offset: 94, size: 4, type: 'metrics-color', val: '0x00000001 (SW_NORMAL)', forensic: 'A 32-bit integer specifying the expected window state when the application is launched. <code>1</code> = Normal Window, <code>3</code> = Maximized, <code>7</code> = Minimized.' },
+      { section: 'Embedded LNK Header', name: 'Hot Key & Reserved', offset: 98, size: 12, type: 'reserved', val: 'Empty / Zeroed', forensic: 'Contains a 16-bit HotKey indicating a keyboard shortcut assigned to the LNK, followed by 10 bytes of reserved zero padding to complete the 76-byte header.' },
+      
+      { section: 'LNK IDList', name: 'IDList Total Size', offset: 110, size: 2, type: 'times-color', val: '0x0010 (16 Bytes)', forensic: 'A 16-bit integer defining the total size of the LinkTargetIDList. The IDList contains one or more ItemID structures (Shell Items) that represent the hierarchical path to the target in the Windows Shell namespace.' },
+      { section: 'LNK IDList', name: 'Shell Item (BEEF0004)', offset: 112, size: 14, type: 'times-color', val: 'Shell Item Data', forensic: 'A Shell Item (ItemID). When analyzed, the <code>BEEF0004</code> block inside an IDList reveals massive forensic value: it contains the MFT Entry Number, MFT Sequence Number, and the Shell item\'s own MAC timestamps, which can differ from the LNK header MAC times.' },
+      
+      { section: 'LNK Link Info', name: 'LinkInfo Total Size', offset: 126, size: 4, type: 'volumes-color', val: '0x00000020 (32 Bytes)', forensic: 'A 32-bit integer specifying the total size of the LinkInfo structure. This structure resolves the target location using Volume IDs and Network Shares.' },
+      { section: 'LNK Link Info', name: 'LinkInfo Header Size', offset: 130, size: 4, type: 'volumes-color', val: '0x0000001C (28 Bytes)', forensic: 'Size of the LinkInfo header.' },
+      { section: 'LNK Link Info', name: 'LinkInfo Flags', offset: 134, size: 4, type: 'volumes-color', val: '0x00000003', forensic: 'A 32-bit bitmask indicating which fields are present. Bit 0 (Local Volume) and Bit 1 (Network Share) dictate whether the VolumeID or NetworkShare structures follow.' },
+      { section: 'LNK Link Info', name: 'Volume ID & Local Path', offset: 138, size: 10, type: 'volumes-color', val: 'VolumeID Structure', forensic: 'Highly valuable forensic structure. Contains the <strong>Volume Drive Type</strong> (e.g., Fixed Disk, Removable USB, Network Drive), the <strong>Volume Serial Number</strong>, the <strong>Volume Label</strong>, and the fully resolved local path to the target.' },
+      { section: 'LNK Link Info', name: 'Network Share Info', offset: 148, size: 10, type: 'volumes-color', val: 'NetworkShare Structure', forensic: 'If the target is located on a network share, this structure contains the UNC path (e.g., <code>\\\\server\\share\\file.txt</code>) and the network provider type.' },
+      
+      { section: 'LNK String Data', name: 'Relative Path String', offset: 158, size: 8, type: 'string-color', val: '"Relative Path"', forensic: 'A length-prefixed UTF-16 string representing the relative path from the LNK file to the target file. Useful for reconstructing directory structures.' },
+      { section: 'LNK String Data', name: 'Working Directory', offset: 166, size: 8, type: 'string-color', val: '"Working Dir"', forensic: 'A length-prefixed UTF-16 string representing the working directory to execute the target application within.' },
+      { section: 'LNK String Data', name: 'Command-line Args', offset: 174, size: 8, type: 'string-color', val: '"CLI Args"', forensic: 'A length-prefixed UTF-16 string containing any command-line arguments passed to the target application when launched. This is critical for discovering malicious execution parameters or specific user actions (e.g., <code>-incognito</code>).' },
+      { section: 'LNK String Data', name: 'Icon Location', offset: 182, size: 8, type: 'string-color', val: '"Icon Path"', forensic: 'A length-prefixed UTF-16 string specifying the path to the file containing the icon for this shortcut.' },
+      
+      { section: 'LNK Extra Data', name: 'Environment Variable', offset: 190, size: 8, type: 'trace-color', val: '0xA0000001', forensic: '<strong>EnvironmentVariableDataBlock:</strong> Specifies a path using environment variables (e.g., <code>%APPDATA%\\Microsoft</code>). This provides insight into generalized paths independent of the specific user profile name.' },
+      { section: 'LNK Extra Data', name: 'Console Config', offset: 198, size: 8, type: 'trace-color', val: '0xA0000002', forensic: '<strong>ConsoleDataBlock:</strong> Contains the configuration of the console window (colors, fonts, buffer sizes) if the target is a command-line application.' },
+      { section: 'LNK Extra Data', name: 'Tracker Data Block', offset: 206, size: 16, type: 'trace-color', val: '0xA0000003', forensic: '<strong>TrackerDataBlock:</strong> One of the most forensically significant blocks. It contains the Distributed Link Tracking data, including the <strong>NetBIOS Machine Name</strong> of the system where the LNK was created, the <strong>MAC Address</strong> of the network interface, and Volume/Object Droid GUIDs (UUID v1 timestamps). Highly useful for tracking lateral movement.' },
+      { section: 'LNK Extra Data', name: 'Darwin MSI ID', offset: 222, size: 8, type: 'trace-color', val: '0xA0000006', forensic: '<strong>DarwinDataBlock:</strong> Contains an application identifier (Darwin ID) used by the Windows Installer (MSI) to locate the target component instead of relying solely on the file path.' },
+      { section: 'LNK Extra Data', name: 'Shim Layer Name', offset: 230, size: 8, type: 'trace-color', val: '0xA0000008', forensic: '<strong>ShimDataBlock:</strong> Contains the name of the Windows Compatibility Shim layer applied to the target application. Can indicate legacy software or tampered execution environments.' },
+      { section: 'LNK Extra Data', name: 'Property Store', offset: 238, size: 16, type: 'trace-color', val: '0xA0000009', forensic: '<strong>PropertyStoreDataBlock:</strong> A serialized property store containing rich metadata about the target file. If the target is a document, this can include Author, Title, and Revision numbers. If an image, it may contain EXIF data (camera model, GPS coordinates).' },
+      { section: 'LNK Extra Data', name: 'Known Folder', offset: 254, size: 8, type: 'trace-color', val: '0xA000000B', forensic: '<strong>KnownFolderDataBlock:</strong> Contains a GUID representing a Windows Known Folder (e.g., Downloads, Documents) that the target resides in.' },
+      { section: 'LNK Extra Data', name: 'Terminal Block', offset: 262, size: 4, type: 'trace-color', val: '0x00000000', forensic: 'A 32-bit zero value (0x00000000) that signals the end of the ExtraData blocks. The LNK parser stops reading optional data when it encounters this block.' },
+      
+      { section: 'File Footer', name: 'Terminator Signature', offset: 266, size: 4, type: 'reserved', val: '0xBABFFBAB', forensic: 'The absolute end of a well-formed Custom Destinations file. Stored as <code>AB FB BF BA</code> in little-endian. If this signature is missing, it indicates the file was truncated, incompletely written, or the system crashed before finalization. Forensic tools will still carve LNKs up to the point of corruption.' }
+    ];
+
+    const masterHex = [
+      // Global Header
+      "02", "00", "00", "00", // Version
+      "01", "00", "00", "00", // Categories Count
+      "00", "00", "00", "00", // Reserved
+      // Category Header
+      "00", "00", "00", "00", // Type (0 = Custom/Pinned)
+      "06", "00",           // Name Length (6 characters)
+      "50", "00", "69", "00", "6E", "00", "6E", "00", "65", "00", "64", "00", // Name ("Pinned")
+      "03", "00", "00", "00", // Entry Count
+      // Embedded LNK Header
+      "4C", "00", "00", "00", // Header Size
+      "01", "14", "02", "00", "00", "00", "00", "00", "C0", "00", "00", "00", "00", "00", "00", "46", // Link CLSID
+      "8F", "00", "00", "00", // Link Flags
+      "20", "00", "00", "00", // File Attributes
+      "00", "D5", "A0", "F2", "89", "3B", "D6", "01", // Creation Time
+      "00", "D5", "A0", "F2", "89", "3B", "D6", "01", // Access Time
+      "00", "D5", "A0", "F2", "89", "3B", "D6", "01", // Write Time
+      "00", "00", "00", "00", // File Size
+      "00", "00", "00", "00", // Icon Index
+      "01", "00", "00", "00", // Show Command
+      "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", // Hot Key / Reserved
+      // LNK IDList
+      "10", "00", // IDList Size
+      "0E", "00", "31", "00", "00", "00", "00", "00", "00", "00", "04", "00", "EF", "BE", // Shell Item
+      // LNK Link Info
+      "20", "00", "00", "00", // LinkInfo Size
+      "1C", "00", "00", "00", // LinkInfo Header Size
+      "03", "00", "00", "00", // LinkInfo Flags
+      "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", // Volume & Local Path
+      "00", "00", "00", "00", "00", "00", "00", "00", "00", "00", // Network Share Info
+      // LNK String Data
+      "03", "00", "2E", "00", "5C", "00", "61", "00", // Relative Path String
+      "03", "00", "43", "00", "3A", "00", "5C", "00", // Working Directory String
+      "03", "00", "2D", "00", "68", "00", "00", "00", // Command-line Args String
+      "03", "00", "61", "00", "2E", "00", "69", "00", // Icon Location String
+      // LNK Extra Data
+      "08", "00", "00", "00", "01", "00", "00", "A0", // EnvironmentVariableDataBlock
+      "08", "00", "00", "00", "02", "00", "00", "A0", // ConsoleDataBlock
+      "10", "00", "00", "00", "03", "00", "00", "A0", "00", "00", "00", "00", "00", "00", "00", "00", // TrackerDataBlock
+      "08", "00", "00", "00", "06", "00", "00", "A0", // DarwinDataBlock
+      "08", "00", "00", "00", "08", "00", "00", "A0", // ShimDataBlock
+      "10", "00", "00", "00", "09", "00", "00", "A0", "00", "00", "00", "00", "00", "00", "00", "00", // PropertyStoreDataBlock
+      "08", "00", "00", "00", "0B", "00", "00", "A0", // KnownFolderDataBlock
+      "00", "00", "00", "00", // TerminalBlock
+      // File Footer
+      "AB", "FB", "BF", "BA"  // Terminator Signature (0xBABFFBAB)
+    ];
+
+    function init() {
+      const map = document.getElementById('master-map');
+      const table = document.getElementById('table-body');
+      let curSec = "";
+      let fieldIdx = 0;
+      let curF = null;
+
+      masterHex.forEach((byte, i) => {
+        const f = masterFields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curSec) {
+          const div = document.createElement('div'); div.className = 'divider-row'; div.textContent = f.section; map.appendChild(div);
+          curSec = f.section;
+          fieldIdx = 0;
+        }
+        if (f && f !== curF) { curF = f; fieldIdx++; }
+
+        const cell = document.createElement('div'); cell.className = 'byte-cell'; 
+        if (f) {
+           if (f.type === 'reserved') {
+              cell.classList.add('reserved');
+           } else {
+              const pal = palettes[f.type] || [{bg: 'var(--bg2)', fg: 'var(--tx3)'}];
+              const color = pal[fieldIdx % pal.length];
+              cell.style.backgroundColor = color.bg;
+              cell.style.color = color.fg;
+           }
+        } else {
+           cell.classList.add('reserved');
+        }
+        cell.textContent = byte; cell.dataset.idx = i;
+        cell.onclick = () => selectField(f, i);
+        map.appendChild(cell);
+      });
+
+      // Populate Table
+      let tableSec = "";
+      masterFields.forEach(f => {
+        if (f.section !== tableSec) {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td colspan="4" class="ref-section-head">${f.section}</td>`;
+          table.appendChild(row);
+          tableSec = f.section;
+        }
+        const row = document.createElement('tr');
+        row.style.cursor = "pointer";
+        row.onclick = () => selectField(f, f.offset);
+        row.innerHTML = `
+          <td style="font-family:'Space Mono';">0x${f.offset.toString(16).padStart(2, '0').toUpperCase()}</td>
+          <td>${f.size}B</td>
+          <td style="font-weight:700; color:var(--tx);">${f.name}</td>
+          <td>${f.forensic}</td>
+        `;
+        table.appendChild(row);
+      });
+    }
+
+    function selectField(f, index) {
+      if (!f) return;
+      document.querySelectorAll('.byte-cell').forEach(c => c.classList.remove('active'));
+      const start = f.offset; const end = f.offset + f.size - 1;
+      const fieldBytes = masterHex.slice(start, end + 1);
+      document.querySelectorAll('.byte-cell').forEach(c => {
+        const bIdx = parseInt(c.dataset.idx);
+        if (bIdx >= start && bIdx <= end) c.classList.add('active');
+      });
+
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      document.getElementById('selection-output').innerHTML = `
+        <div class="field-name">${f.name}</div>
+        
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx);">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2);">${asciiString}</div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Decoded Value</span>
+            <div class="meta-v" style="color: var(--accent); font-size: 15px;">${f.val}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Data Type</span>
+            <div class="meta-v" style="color: var(--tx2); font-size: 13px; font-family: 'Space Mono';">Little-Endian Hex</div>
+          </div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Byte Offset Range</span>
+            <div class="meta-v" style="font-family: 'Space Mono'; font-size: 13px;">0x${start.toString(16).toUpperCase().padStart(4, '0')} - 0x${end.toString(16).toUpperCase().padStart(4, '0')}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Section / Size</span>
+            <div class="meta-v" style="font-size: 13px;">${f.section} <span style="color:var(--tx3); margin:0 4px;">|</span> ${f.size} Bytes</div>
+          </div>
+        </div>
+
+        <div class="forensic-text" style="margin-top: 16px;">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+    }
+    window.onload = init;
+  </script>
+  <div class="wrap">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin:8px auto 40px;max-width:820px;">
+      <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">See it in the dashboard</div>
+      <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;margin:0;">The <strong>Charts</strong> button on the LNK and Jump-List tabs opens the
+        <strong>opened-files dashboard</strong> &mdash; LNK shortcuts, automatic and custom jump lists on one timeline, with a per-target profile and a
+        volume/device-history trail. Documented in
+        <a href="lnk_anatomy.html#dashboard">Reading the LNK / Jump-List dashboard</a>.</p>
+    </div>
+  </div>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Surface user intent with Crow-Eye</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">Crow-Eye extracts pinned and custom destinations and decodes their embedded LNK metadata, turning Custom Jump Lists into clear evidence of deliberate, user-driven file access.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- LIMITS -->
+    <section id="limits" style="margin-top:40px;">
+      <h2>What a custom list entry supports, and what it does not</h2>
+      <p class="map-intro">A Custom Jump List is written by the application rather than by Windows,
+      which makes it the closest thing on disk to a statement of what a user deliberately chose to
+      keep. That is also the source of its three limits:</p>
+
+      <div class="myth">
+        <h4>A pin proves a pin, not an opening</h4>
+        <p>A pinned entry records that someone chose to keep this item on the application's list.
+        It carries no time of use and no count of uses. A file can be pinned and never opened
+        again, and a file can be opened a hundred times and never pinned &mdash; those are different
+        acts, and only the first one is what a custom list stores.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The application decides what goes in, so coverage varies by program</h4>
+        <p>Windows does not maintain this file; the program does, through the shell API, and it
+        writes what its developers chose to write. Tasks, categories and entries differ between
+        applications and between versions of the same application. An empty or missing custom list
+        says the program did not write one, which is not evidence about the user at all.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The embedded shortcuts carry the target's times, not the pinning time</h4>
+        <p>Each entry is a LNK stream, and the timestamps inside it are the target file's, captured
+        when the stream was written. They are not when the item was pinned and not when it was last
+        used. The nearest thing to a time of action is the custom list file's own modification time
+        on disk, which moves whenever the application rewrites the list for any reason.</p>
+      </div>
+
+      <p class="map-intro"><strong style="color:var(--tx);">What it is genuinely good for:</strong>
+      intent. Where an Automatic list is a passive record of what passed through an application, a
+      Custom list is a record of what a person decided was worth keeping in front of them &mdash;
+      and because the application writes it, it can hold targets that never appeared in the shell's
+      own recent list at all, including network paths and items from removable media that have long
+      since been disconnected.</p>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is the difference between Custom and Automatic Jump Lists?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Automatic Jump Lists are maintained by Windows as a user opens files. Custom Jump Lists are written by the application itself and hold pinned entries and application-defined tasks, so they reflect deliberate user choices and program design rather than passive recent-file history.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Where are Custom Jump Lists stored?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">In the user's Recent folder under AppData, in the CustomDestinations subfolder, named by AppID with a customDestinations-ms extension.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Why do pinned items matter forensically?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Pinning is an intentional act. A pinned file or location shows the user considered it worth keeping to hand, which carries different weight from a file that merely appeared in a recent list once.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Are Custom Jump Lists a series of LNK structures?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Largely yes - the entries are LNK-format blocks concatenated with a footer, so the same target paths, timestamps and volume details a shortcut carries are recoverable from them.</p>
+      </div>
+    </section>
+  </div>
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+
+</html>

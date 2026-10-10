@@ -146,6 +146,10 @@ def write_eye_ai_settings(settings: Dict[str, object], path: Optional[Path] = No
     token_budget/...). Values are coerced and clamped. Atomic write."""
     path = Path(path) if path else eye_config_path()
     cfg = _load(path)
+    try:
+        before = read_eye_ai_settings(path)
+    except Exception:
+        before = None
 
     cw = cfg.get("context_window")
     if not isinstance(cw, dict):
@@ -249,3 +253,12 @@ def write_eye_ai_settings(settings: Dict[str, object], path: Optional[Path] = No
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
     tmp.replace(path)
+    # The open case's custody ledger gets what changed (never a secret).
+    if before is not None:
+        try:
+            from utils import custody as _custody
+            changes = _custody.settings_changes(before, read_eye_ai_settings(path))
+            if changes:
+                _custody.ledger(None, "settings changed", scope="eye", changes=changes)
+        except Exception:
+            pass

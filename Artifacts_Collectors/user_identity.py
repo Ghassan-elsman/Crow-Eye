@@ -29,12 +29,19 @@ import shutil
 import struct
 import tempfile
 
+# Named, so its records reach parsers.log: the root logger's do not.
+logger = logging.getLogger(__name__)
+
 try:
     from Registry import Registry
+    try:
+        from Artifacts_Collectors.registry_hive_cache import open_hive as _open_hive
+    except ImportError:
+        _open_hive = Registry.Registry
     REGISTRY_AVAILABLE = True
 except ImportError:                                     # pragma: no cover
     REGISTRY_AVAILABLE = False
-    logging.warning("python-registry not available - SAM account data will be skipped")
+    logger.warning("python-registry not available - SAM account data will be skipped")
 
 try:
     from Artifacts_Collectors import registry_transaction_log
@@ -115,10 +122,12 @@ def _open(hive_path):
         return None
     try:
         # Recovered copy when the logs apply, the original otherwise.
-        return Registry.Registry(
+        # One read per parse while the parser's hive cache is on; outside
+        # it, exactly Registry.Registry (registry_hive_cache).
+        return _open_hive(
             registry_transaction_log.hive_for_reading(hive_path))
     except Exception as e:
-        logging.warning("Could not open hive %s: %s", hive_path, e)
+        logger.warning("Could not open hive %s: %s", hive_path, e)
         return None
 
 
@@ -136,7 +145,7 @@ def get_active_controlset_name(system_hive):
             if v.name() == "Current":
                 return "ControlSet%03d" % v.value()
     except Exception as e:
-        logging.debug("Select/Current unreadable: %s", e)
+        logger.debug("Select/Current unreadable: %s", e)
     return "ControlSet001"
 
 
@@ -152,7 +161,7 @@ def get_machine_name(system_hive):
             if v.name() == "ComputerName":
                 return str(v.value())
     except Exception as e:
-        logging.debug("ComputerName unreadable: %s", e)
+        logger.debug("ComputerName unreadable: %s", e)
     return ""
 
 
@@ -174,7 +183,7 @@ def get_machine_sid(sam_hive):
                     a, b, c = struct.unpack("<III", data[-12:])
                     return "S-1-5-21-%d-%d-%d" % (a, b, c)
     except Exception as e:
-        logging.debug("Machine SID unreadable: %s", e)
+        logger.debug("Machine SID unreadable: %s", e)
     return ""
 
 
@@ -187,7 +196,7 @@ def _sam_accounts(sam_hive):
     try:
         users = reg.open(BS.join(["SAM", "Domains", "Account", "Users"]))
     except Exception as e:
-        logging.debug("SAM Users unreadable: %s", e)
+        logger.debug("SAM Users unreadable: %s", e)
         return []
 
     for key in users.subkeys():
@@ -214,7 +223,7 @@ def _sam_accounts(sam_hive):
         f_rid = facts.get("rid", 0)
         trusted = (f_rid == key_rid)
         if f_data and not trusted:
-            logging.warning(
+            logger.warning(
                 "SAM F record for RID %d reports RID %d - offsets do not fit this "
                 "hive; timestamps and counters dropped", key_rid, f_rid)
 
@@ -253,7 +262,7 @@ def _sam_aliases(sam_hive):
         try:
             aliases = reg.open(BS.join(base))
         except Exception as e:
-            logging.debug("SAM %s aliases unreadable: %s", scope, e)
+            logger.debug("SAM %s aliases unreadable: %s", scope, e)
             continue
         for key in aliases.subkeys():
             # Names/ maps a group name to its RID and Members/ is an index; the
@@ -274,7 +283,7 @@ def _sam_aliases(sam_hive):
             if not parsed:
                 continue
             if parsed.get("rid") != key_rid:
-                logging.warning(
+                logger.warning(
                     "SAM alias C record under %s reports RID %s - offsets do "
                     "not fit this hive; skipped", key.name(), parsed.get("rid"))
                 continue
@@ -296,7 +305,7 @@ def _profile_list(software_hive):
     try:
         pl = reg.open(PROFILE_LIST)
     except Exception as e:
-        logging.debug("ProfileList unreadable: %s", e)
+        logger.debug("ProfileList unreadable: %s", e)
         return {}
     for key in pl.subkeys():
         path = ""
@@ -336,7 +345,7 @@ def _profile_list_live():
                 except OSError:
                     out[sid] = ""
     except OSError as e:
-        logging.debug("Live ProfileList unreadable: %s", e)
+        logger.debug("Live ProfileList unreadable: %s", e)
     return out
 
 
@@ -484,7 +493,7 @@ def identify_ntuser_hive(hive_path):
                     if name:
                         return name
         except Exception as e:
-            logging.debug("Shell Folders unreadable in %s: %s", hive_path, e)
+            logger.debug("Shell Folders unreadable in %s: %s", hive_path, e)
 
     # Path fallback, and it must be strict: only when the hive sits DIRECTLY in
     # a profile directory (.../Users/<name>/NTUSER.DAT).
@@ -492,8 +501,15 @@ def identify_ntuser_hive(hive_path):
     # Scanning the whole path for a "Users" component is unsafe - a hive staged
     # under C:\Users\<analyst>\AppData\Local\Temp\<case>\ matches the ANALYST,
     # and evidence gets attributed to the examiner. Observed doing exactly that.
+    # A replayed hive is a temp copy; its owner is in the path it was
+    # collected under, so ask for that one. Service accounts keep theirs
+    # under ServiceProfiles\<account>.
+    try:
+        hive_path = registry_transaction_log.source_path_for(hive_path)
+    except Exception:
+        pass
     parts = os.path.normpath(hive_path or "").split(os.sep)
-    if len(parts) >= 3 and parts[-3].lower() == "users":
+    if len(parts) >= 3 and parts[-3].lower() in ("users", "serviceprofiles"):
         return parts[-2]
     return ""
 
@@ -616,7 +632,7 @@ def identify_usrclass_hive(hive_path):
         if root and root.endswith("_Classes"):
             return root[:-len("_Classes")]
     except Exception as e:
-        logging.debug("UsrClass root unreadable in %s: %s", hive_path, e)
+        logger.debug("UsrClass root unreadable in %s: %s", hive_path, e)
     return ""
 
 
@@ -751,7 +767,7 @@ def row_exists_for_sid(cursor, table, other_cols, other_vals, sid_col, sid):
         cursor.execute(sql, tuple(other_vals) + params(sid))
         return cursor.fetchone() is not None
     except Exception as e:
-        logging.debug("row_exists_for_sid(%s): %s", table, e)
+        logger.debug("row_exists_for_sid(%s): %s", table, e)
         return False
 
 
@@ -886,7 +902,7 @@ def apply_identity(cursor, sam_hive=None, software_hive=None, system_hive=None,
         if groups:
             write_local_groups(cursor, groups, sid_to_name, stamp)
     except Exception as e:
-        logging.warning("local group membership unavailable: %s", e)
+        logger.warning("local group membership unavailable: %s", e)
 
     enriched = 0
     for table, column in SID_COLUMNS:
@@ -928,6 +944,32 @@ def apply_identity(cursor, sam_hive=None, software_hive=None, system_hive=None,
     return written, enriched
 
 
+def _custody_export(reg_path, dest, error=None):
+    """The export in the run's chain-of-custody record: how a hive that
+    cannot be read in place WAS read (NtSaveKeyEx under SeBackupPrivilege),
+    the SHA-256 of the exported copy, and that the copy is deleted after the
+    parse. Without it the record listed SAM / SECURITY as "PermissionError"
+    and nothing said how their rows were obtained."""
+    try:
+        from utils import custody
+        rec = custody.active()
+        if rec is None:
+            return
+        if error is not None:
+            rec.add_failure(reg_path, "live-hive export failed: %s" % error,
+                            method="live-hive export (NtSaveKeyEx)")
+            return
+        rec.add_source(reg_path, copy=dest, method="live-hive export (NtSaveKeyEx)",
+                       times={"size": os.path.getsize(dest)}, hash_source=False,
+                       note="exported to a temporary folder, parsed, then deleted")
+    except Exception as e:
+        logger.debug("custody entry for %s not recorded: %s", reg_path, e)
+
+
+# The decorator belongs HERE. _custody_export was once added between it and
+# this function, so live_hive_export became a bare generator and every
+# `with live_sam_hive()` raised TypeError - the SAM / SECURITY export failed
+# on every elevated live parse (found 2026-10-09 by test_live_sam_export).
 @contextlib.contextmanager
 def live_hive_export(reg_path, hive_name, validate_key, prefix):
     r"""Yield a path to a temporary copy of a live registry hive, or ''.
@@ -971,11 +1013,11 @@ def live_hive_export(reg_path, hive_name, validate_key, prefix):
         try:
             import ctypes
             if not ctypes.windll.shell32.IsUserAnAdmin():
-                logging.info("%s export skipped: not elevated", hive_name)
+                logger.info("%s export skipped: not elevated", hive_name)
                 yield ""
                 return
         except Exception as e:
-            logging.debug("elevation check failed: %s", e)
+            logger.debug("elevation check failed: %s", e)
             yield ""
             return
 
@@ -997,18 +1039,20 @@ def live_hive_export(reg_path, hive_name, validate_key, prefix):
         try:
             handle.close()
         except Exception as e:
-            logging.debug("%s export handle close: %s", hive_name, e)
+            logger.debug("%s export handle close: %s", hive_name, e)
 
         if not REGISTRY_AVAILABLE:
             raise RuntimeError("python-registry unavailable to validate the export")
         Registry.Registry(dest).open(BS.join(validate_key))
 
-        logging.info("%s exported to %s (%d bytes)", hive_name, dest,
+        logger.info("%s exported to %s (%d bytes)", hive_name, dest,
                      os.path.getsize(dest))
+        _custody_export(reg_path, dest)
         yield dest
 
     except Exception as e:
-        logging.warning("%s export failed: %s", hive_name, e)
+        logger.warning("%s export failed: %s", hive_name, e)
+        _custody_export(reg_path, None, error=e)
         yield ""
 
     finally:

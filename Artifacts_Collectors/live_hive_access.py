@@ -151,8 +151,24 @@ def _try_file_ladder(source, dest, allow_snapshot_creation):
         if not allow_snapshot_creation:
             _forbid_snapshot_creation(accessor)
 
+        times = None
+        try:
+            from utils import custody as _custody
+        except Exception:
+            _custody = None
+        if _custody is not None and _custody.active() is not None:
+            times = _custody.file_times(source)
         result = accessor.access_file_with_retry(source, dest, "Registry Hives")
         if getattr(result, "success", False) and os.path.exists(dest):
+            if times is not None and _custody.active() is not None:
+                # The copy is temporary; its hash in the record is what remains.
+                _custody.active().add_source(
+                    source, copy=dest,
+                    method=(getattr(result, "strategy_used", "") or "standard").lower(),
+                    times=times, read_from=getattr(result, "read_path", None),
+                    shadow_copy_id=getattr(result, "vss_shadow_copy_id", None),
+                    shadow_copy_created_utc=getattr(result, "vss_shadow_copy_created", None),
+                    note="acquired for the live registry parse; the copy was temporary")
             return dest, ROUTE_FILE % (getattr(result, "strategy_used", "") or "unknown")
     except Exception as exc:
         logger.debug("file ladder failed for %s: %s", source, exc)

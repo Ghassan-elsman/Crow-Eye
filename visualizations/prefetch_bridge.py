@@ -101,7 +101,17 @@ def _classify(exe_path: str, removable_drive: bool) -> str:
     return "other"
 
 
-class PrefetchBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class PrefetchBridge(AsyncBridge):
     def __init__(self, case_directory: str, parent=None):
         super().__init__(parent)
         self.case_dir = case_directory or ""

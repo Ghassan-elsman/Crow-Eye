@@ -133,7 +133,7 @@ class TheModalOpensWithTheRangeThatCountedIt(unittest.TestCase):
     def test_the_app_modal_prefers_the_range_the_tile_used(self):
         app = _jsx("App.jsx")
         self.assertIn("const scope = appRange || { start: selectedDay, end: selectedDay }", app)
-        self.assertIn("call('getSrumAppDetail', JSON.stringify({ app: selectedApp, ...scope", app)
+        self.assertIn("latest('getSrumAppDetail', JSON.stringify({ app: selectedApp, ...scope", app)
         # An insight sets the filter's own range before opening the app.
         self.assertIn("setAppRange({ start: range.start, end: range.end })", app)
 

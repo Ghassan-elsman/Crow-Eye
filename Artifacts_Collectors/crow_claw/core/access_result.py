@@ -38,3 +38,9 @@ class AccessResult:
     vss_shadow_copy_id: Optional[str] = None
     duration_seconds: float = 0.0
     status: str = "pending"  # "success", "failed", "partial"
+    # Where the bytes were really read from (the shadow-copy path for VSS), and
+    # when that snapshot was taken (UTC). The chain of custody needs both: the
+    # source hash is taken from read_path, because the live file is the one
+    # that was locked.
+    read_path: Optional[str] = None
+    vss_shadow_copy_created: Optional[str] = None

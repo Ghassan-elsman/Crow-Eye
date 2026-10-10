@@ -65,7 +65,8 @@ try:
         FILE_ID_128,
     )
     _HAS_USN_CLAW = True
-except ImportError as e:
+except Exception as e:     # not only ImportError: a Windows-only line at
+                           # USN_Claw's module level raises AttributeError on Linux
     print(f"Warning: Could not import from USN_Claw: {e}")
     _HAS_USN_CLAW = False
     BUFFER_SIZE = 65536
@@ -264,7 +265,24 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
         raise
 
 
-def run_offline_usn(case_path, usn_file_path=None):
+def usn_read_path(path):
+    """The path to READ a collected journal from.
+
+    A Crow-Claw collection made before round 20 wrote the journal into an NTFS
+    alternate data stream: "$UsnJrnl" is 0 bytes and the data is in
+    "$UsnJrnl:$J". Returns that stream when the file itself is empty and the
+    stream holds data; the path itself otherwise."""
+    try:
+        if path and os.path.getsize(path) == 0 and os.name == "nt":
+            stream = str(path) + ":$J"
+            if os.path.getsize(stream) > 0:
+                return stream
+    except OSError:
+        pass
+    return path
+
+
+def run_offline_usn(case_path, usn_file_path=None, correlate=True):
     """
     Run USN Journal analysis in offline mode.
     
@@ -278,29 +296,11 @@ def run_offline_usn(case_path, usn_file_path=None):
     """
     print(f"[Offline USN] Starting analysis for case: {case_path}")
     
-    # First check if USN database already exists from live collection
-    existing_db = os.path.join(case_path, 'Target_Artifacts', 'USN_journal.db')
-    if os.path.exists(existing_db):
-        print(f"[Offline USN] Found existing USN database: {existing_db}")
-        
-        # Count records in existing database
-        try:
-            import sqlite3
-            conn = sqlite3.connect(existing_db)
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM journal_events")
-            count = cursor.fetchone()[0]
-            conn.close()
-            
-            print(f"[Offline USN] Using existing database with {count:,} records")
-            return {
-                "success": True,
-                "records": count,
-                "output_path": existing_db
-            }
-        except Exception as e:
-            print(f"[Offline USN] Error reading existing database: {e}")
-    
+    # An existing USN_journal.db - even a live parse's - used to stop offline
+    # evidence from being parsed at all; then a volume already in it was
+    # skipped whole. Neither now: the (volume_letter, usn) key adds only the
+    # entries not stored yet (below).
+
     try:
         # Import USN parser functions (already imported at module level)
         if not _HAS_USN_CLAW:
@@ -314,6 +314,10 @@ def run_offline_usn(case_path, usn_file_path=None):
         if not usn_file_path:
             # Search for $UsnJrnl file in standard locations (input from live_acquisition)
             possible_paths = [
+                # Crow-Claw's layout: live_acquisition\USN\$UsnJrnl_$J (and,
+                # before round 20, a $UsnJrnl holding the journal in :$J)
+                os.path.join(case_path, 'live_acquisition', 'USN', '$UsnJrnl_$J'),
+                os.path.join(case_path, 'live_acquisition', 'USN', '$UsnJrnl'),
                 os.path.join(case_path, 'live_acquisition', 'usn_journal', '$UsnJrnl'),
                 os.path.join(case_path, 'live_acquisition', 'MFT_USN', '$UsnJrnl'),
                 os.path.join(case_path, 'live_acquisition', 'MFT_USN', '$J'),
@@ -345,7 +349,12 @@ def run_offline_usn(case_path, usn_file_path=None):
                 "records": 0
             }
         
-        file_size = os.path.getsize(usn_file_path)
+        # The volume label comes from the file's own name; the bytes may be in
+        # its alternate data stream (a collection made before round 20)
+        read_path = usn_read_path(usn_file_path)
+        if read_path != usn_file_path:
+            print(f"[Offline USN] Reading the journal from its NTFS stream: {read_path}")
+        file_size = os.path.getsize(read_path)
         if file_size == 0:
             print(f"[Offline USN] USN file is empty (0 bytes)")
             return {
@@ -355,7 +364,20 @@ def run_offline_usn(case_path, usn_file_path=None):
             }
         
         print(f"[Offline USN] Using USN file: {usn_file_path}")
-        
+
+        # The volume its $MFT is stored under (volume_identity), so the
+        # correlator pairs the two: Crow-Claw's copy of C:'s journal is 'C'.
+        # No "already parsed -> skip" either: journal_events is keyed on
+        # (volume_letter, usn), so a journal already in the case adds only the
+        # entries it did not have, and a later capture's new entries go in.
+        _here = os.path.dirname(os.path.abspath(__file__))
+        if _here not in sys.path:
+            sys.path.insert(0, _here)
+        from volume_identity import resolve_usn_volume
+        mft_db = os.path.join(case_path, 'Target_Artifacts', 'mft_claw_analysis.db')
+        volume_label, how = resolve_usn_volume(usn_file_path, case_path, mft_db)
+        print(f"[Offline USN] Volume: {volume_label} (from {how})")
+
         # Configure output directory - use Target_Artifacts for parsed databases (flat structure)
         output_dir = os.path.join(case_path, 'Target_Artifacts')
         os.makedirs(output_dir, exist_ok=True)
@@ -368,10 +390,15 @@ def run_offline_usn(case_path, usn_file_path=None):
         
         # Parse the USN journal file
         try:
-            record_count = read_journal_file(usn_file_path, cursor, conn, volume_letter="OFFLINE")
+            changes_before = conn.total_changes
+            record_count = read_journal_file(read_path, cursor, conn, volume_letter=volume_label)
+            inserted = conn.total_changes - changes_before
             conn.close()
-            
+
             print(f"[Offline USN] Successfully parsed {record_count:,} records")
+            # What this run added vs what the database already held.
+            print(f"[Offline USN] Rows read: {record_count:,} - new: {inserted:,}, "
+                  f"already in the database: {max(record_count - inserted, 0):,}")
             
             # After successful USN parsing, check if we should run correlation
             print(f"[Offline USN] Checking for MFT database to run correlation...")
@@ -386,7 +413,9 @@ def run_offline_usn(case_path, usn_file_path=None):
                     mft_db_path = test_path
                     break
             
-            if mft_db_path:
+            if not correlate:
+                print(f"[Offline USN] Correlation is left to the caller (once per batch)")
+            elif mft_db_path:
                 print(f"[Offline USN] MFT database found - running correlation...")
                 try:
                     # Import and run the offline correlator
@@ -410,6 +439,9 @@ def run_offline_usn(case_path, usn_file_path=None):
             return {
                 "success": True,
                 "records": record_count,
+                "inserted": inserted,
+                "duplicates": max(record_count - inserted, 0),
+                "volume": volume_label,
                 "output_path": db_path
             }
         except Exception as e:

@@ -16,7 +16,7 @@ export default function DaySection({ day, detail, loading, activity, onOpenItem,
       <section className="day-section empty">
         <div className="day-empty">
           <span className="day-empty-icon"><IconCalendar size={40} /></span>
-          Click a day in the activity strip to see the shell items recorded that day &mdash; which source,
+          Click a day in the activity strip to see the items recorded that day &mdash; which source,
           where they pointed, at what hour, and in what MRU order.
         </div>
       </section>
@@ -48,7 +48,7 @@ export default function DaySection({ day, detail, loading, activity, onOpenItem,
       <div className="day-head">
         <div>
           <div className="day-title">Recorded on {fmtDay(day)}</div>
-          <div className="day-sub">{fmtInt(events.length)} shell items &mdash; click a row for the item's full profile.</div>
+          <div className="day-sub">{fmtInt(events.length)} items &mdash; click a row for the item's full profile.</div>
         </div>
         <SourceLegend />
       </div>
@@ -70,7 +70,7 @@ export default function DaySection({ day, detail, loading, activity, onOpenItem,
       </div>
 
       <div className="detail-card" style={{ marginTop: 14 }}>
-        <div className="detail-card-title">Shell items ({fmtInt(events.length)})</div>
+        <div className="detail-card-title">Items ({fmtInt(events.length)})</div>
         <div className="evt-table">
           <div className="evt-row si-row evt-head"><span>Time</span><span>Src</span><span>Target</span><span>Path</span><span>MRU</span></div>
           {events.slice(0, 400).map((e, i) => (

@@ -141,6 +141,12 @@ class EYEWindowManager:
                         # down the caller's instant splash so it doesn't linger.
                         cls._instance = None
                         cls._destroy_external_splash(parent_splash)
+                        # Said, not silent: the Eye simply not opening read as a crash.
+                        QtWidgets.QMessageBox.information(
+                            main_window, "Eye AI",
+                            "The Eye needs a language model to answer questions, so it "
+                            "was not opened.\n\nOpen the Eye again to finish the setup, "
+                            "or use Settings -> Eye AI -> Change backend.")
                         return None
 
                 finally:

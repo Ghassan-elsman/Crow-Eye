@@ -68,7 +68,7 @@ class ErrorHandler:
             max_retries: Maximum number of retry attempts for transient errors
         """
         self.max_retries = max_retries
-        self.logger = logging.getLogger(__name__)
+        self.logger = logging.getLogger("image_parsing.error_handler")
     
     def classify_error(self, exception: Exception, context: str = "") -> ErrorClassification:
         """

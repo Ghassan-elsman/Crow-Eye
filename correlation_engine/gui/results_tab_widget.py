@@ -5,7 +5,8 @@ Multi-tab result management with semantic mapping and scoring support.
 Ensures semantic mapping information and scoring data are preserved across tabs.
 
 Provides engine-specific column configurations for time-window and identity-based engines.
-Includes integrated tab close button styling with theme support.
+Styled by the window's site look (ui/site_theme.py); pages built after the
+window was themed are re-themed with retheme_page().
 """
 
 import json
@@ -27,121 +28,24 @@ from ..engine.correlation_result import CorrelationResult, CorrelationMatch
 from .scoring_breakdown_widget import ScoringBreakdownWidget
 from .semantic_info_display_widget import SemanticInfoDisplayWidget
 from .crow_eye_icons import CrowEyeIcons
+from ui.site_theme import set_card, set_role, set_status, set_variant, STATUS_COLORS
 
 
-# ============================================================================
-# Tab Close Button Styling - Integrated
-# ============================================================================
-
-def apply_tab_close_button_styling(tab_widget: QTabWidget, theme: str = "dark"):
-    """
-    Apply enhanced styling to tab close buttons with theme support.
-    
-    This function applies comprehensive styling to QTabWidget close buttons,
-    ensuring they are visible, properly sized, and have appropriate hover effects.
-    
-    Args:
-        tab_widget: QTabWidget to apply styling to
-        theme: Theme to use ("dark" or "light"), defaults to "dark"
-    
-    Features:
-        - Properly sized and positioned close buttons
-        - Visible close button indicators (×)
-        - Hover effects for better UX
-        - Theme-aware colors
-        - Consistent styling across tabs
-    """
-    if theme == "light":
-        # Light theme colors
-        pane_bg = "#f5f5f5"
-        tab_bg = "#e0e0e0"
-        tab_selected_bg = "#ffffff"
-        tab_hover_bg = "#eeeeee"
-        tab_text = "#333333"
-        tab_selected_text = "#000000"
-        close_btn_hover_bg = "#ff5252"
-        border_color = "#cccccc"
-    else:
-        # Dark theme colors (default)
-        pane_bg = "#1a1a2e"
-        tab_bg = "#2a2a3e"
-        tab_selected_bg = "#3a3a4e"
-        tab_hover_bg = "#3a3a4e"
-        tab_text = "#aaaaaa"
-        tab_selected_text = "#ffffff"
-        close_btn_hover_bg = "#f44336"
-        border_color = "#444444"
-    
-    # Comprehensive stylesheet for tab widget and close buttons
-    stylesheet = f"""
-        QTabWidget::pane {{
-            border: 1px solid {border_color};
-            background-color: {pane_bg};
-            border-radius: 4px;
-            top: -1px;
-        }}
-        
-        QTabBar::tab {{
-            background-color: {tab_bg};
-            color: {tab_text};
-            padding: 6px 12px;
-            padding-right: 25px;
-            margin-right: 2px;
-            border: 1px solid {border_color};
-            border-bottom: none;
-            border-top-left-radius: 4px;
-            border-top-right-radius: 4px;
-            min-width: 80px;
-        }}
-        
-        QTabBar::tab:selected {{
-            background-color: {tab_selected_bg};
-            color: {tab_selected_text};
-            border-bottom: 2px solid #2196F3;
-            font-weight: bold;
-        }}
-        
-        QTabBar::tab:hover:!selected {{
-            background-color: {tab_hover_bg};
-        }}
-        
-        QTabBar::tab:!selected {{
-            margin-top: 2px;
-        }}
-        
-        QTabBar::close-button {{
-            image: none;
-            subcontrol-position: right;
-            subcontrol-origin: padding;
-            background-color: transparent;
-            border: none;
-            border-radius: 2px;
-            padding: 2px;
-            margin: 2px;
-            width: 16px;
-            height: 16px;
-        }}
-        
-        QTabBar::close-button:hover {{
-            background-color: {close_btn_hover_bg};
-            border-radius: 3px;
-        }}
-        
-        QTabBar::close-button:pressed {{
-            background-color: #d32f2f;
-        }}
-    """
-    
-    tab_widget.setStyleSheet(stylesheet)
-    
-    if not tab_widget.tabsClosable():
-        tab_widget.setTabsClosable(True)
-    
-    tab_bar = tab_widget.tabBar()
-    if tab_bar:
-        tab_bar.setMouseTracking(True)
-        tab_bar.setElideMode(Qt.ElideRight)
-        tab_bar.setExpanding(False)
+def retheme_page(owner, page):
+    """The site look on ``page``, built after ``owner``'s window was themed
+    (result tabs are rebuilt on every run and every load). Walks only the
+    page: the engine window's _apply_site_look(root=page), or the site theme
+    directly on any other themed window."""
+    try:
+        win = owner.window()
+        look = getattr(win, "_apply_site_look", None)
+        if look is not None:
+            look(root=page)
+        elif win.property("siteTheme"):
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(win, root=page)
+    except Exception as e:
+        print(f"[Results] site look not applied to the page: {e}")
 
 
 # ============================================================================
@@ -368,8 +272,29 @@ class SimpleResultsTableWidget(QTableWidget):
         self.setItem(row, 9, QTableWidgetItem(match.matched_application or "-"))
     
     def apply_filters(self, filters):
-        """Apply filters (simplified)."""
-        pass
+        """Hide the rows the tab's filter controls exclude: application and
+        file path (case-insensitive substring) and a minimum score. It used to
+        be `pass`, so typing in the filters or moving the slider did nothing."""
+        filters = filters or {}
+        app = str(filters.get('application') or '').strip().lower()
+        path = str(filters.get('file_path') or '').strip().lower()
+        try:
+            score_min = float(filters.get('score_min') or 0.0)
+        except (TypeError, ValueError):
+            score_min = 0.0
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            match = item.data(Qt.UserRole) if item else None
+            if match is None:
+                continue
+            hide = False
+            if app and app not in str(match.matched_application or '').lower():
+                hide = True
+            elif path and path not in str(match.matched_file_path or '').lower():
+                hide = True
+            elif score_min > 0 and self._get_score_display(match)[0] < score_min:
+                hide = True
+            self.setRowHidden(row, hide)
     
     def _on_selection_changed(self):
         """Handle selection change."""
@@ -559,13 +484,7 @@ class ResultTab(QWidget):
         """Create the top section with summary and filters."""
         frame = QFrame()
         frame.setMaximumHeight(80)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 6px;
-            }
-        """)
+        set_card(frame)
         layout = QVBoxLayout(frame)
         layout.setContentsMargins(8, 5, 8, 5)
         layout.setSpacing(2)
@@ -588,28 +507,28 @@ class ResultTab(QWidget):
         
         # Summary labels
         wing_label = QLabel(f"Wing: {self.tab_state.wing_name}")
-        wing_label.setStyleSheet("font-weight: bold; color: #00FFFF; font-size: 10pt;")
+        set_role(wing_label, "label")
         summary_layout.addWidget(wing_label)
         
         matches_label = QLabel(f"Matches: {total_matches:,}")
-        matches_label.setStyleSheet("font-weight: bold; color: #4CAF50; font-size: 9pt;")
+        set_status(matches_label, "ok")
         summary_layout.addWidget(matches_label)
         
         score_label = QLabel(score_text)
-        score_label.setStyleSheet("color: #FF9800; font-size: 9pt;")
+        set_status(score_label, "warn")
         summary_layout.addWidget(score_label)
         
         # Semantic mapping status
         semantic_count = len(self.tab_state.semantic_mappings)
         if semantic_count > 0:
             semantic_label = QLabel(f"Semantic: {semantic_count} mappings")
-            semantic_label.setStyleSheet("color: #9C27B0; font-size: 9pt;")
+            set_status(semantic_label, "accent")
             summary_layout.addWidget(semantic_label)
         
         # Scoring configuration status
         if self.tab_state.scoring_configuration:
             scoring_label = QLabel("Scoring: Configured")
-            scoring_label.setStyleSheet("color: #94A3B8; font-size: 9pt;")
+            set_status(scoring_label, "neutral")
             summary_layout.addWidget(scoring_label)
         
         summary_layout.addStretch()
@@ -620,40 +539,16 @@ class ResultTab(QWidget):
         export_btn = QPushButton("Export")
         export_btn.setIcon(CrowEyeIcons.download())
         export_btn.setMaximumWidth(80)
-        export_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 3px 8px;
-                font-size: 8pt;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        set_variant(export_btn, "ghost")
+        export_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         export_btn.clicked.connect(self._export_tab_data)
         actions_layout.addWidget(export_btn)
         
         refresh_btn = QPushButton("Refresh")
         refresh_btn.setIcon(CrowEyeIcons.refresh())
         refresh_btn.setMaximumWidth(80)
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 3px 8px;
-                font-size: 8pt;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        set_variant(refresh_btn, "ghost")
+        refresh_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         refresh_btn.clicked.connect(self._refresh_tab)
         actions_layout.addWidget(refresh_btn)
         
@@ -683,12 +578,14 @@ class ResultTab(QWidget):
         filter_layout.addWidget(self.score_slider)
         
         self.score_min_label = QLabel("Min: 0.00")
-        self.score_min_label.setStyleSheet("font-size: 8pt;")
+        set_role(self.score_min_label, "muted")
         filter_layout.addWidget(self.score_min_label)
         
         reset_btn = QPushButton("Reset")
         reset_btn.setIcon(CrowEyeIcons.refresh())
         reset_btn.setMaximumWidth(65)
+        set_variant(reset_btn, "ghost")
+        reset_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         reset_btn.clicked.connect(self._reset_filters)
         filter_layout.addWidget(reset_btn)
         
@@ -707,7 +604,7 @@ class ResultTab(QWidget):
         match_details_layout.setContentsMargins(2, 2, 2, 2)
         
         match_details_label = QLabel("Match Details")
-        match_details_label.setStyleSheet("font-weight: bold; color: #2196F3;")
+        set_role(match_details_label, "section")
         match_details_layout.addWidget(match_details_label)
         
         self.match_detail_viewer = SimpleMatchDetailViewer()
@@ -721,7 +618,7 @@ class ResultTab(QWidget):
         scoring_layout.setContentsMargins(2, 2, 2, 2)
         
         scoring_label = QLabel("Scoring Breakdown")
-        scoring_label.setStyleSheet("font-weight: bold; color: #FF9800;")
+        set_role(scoring_label, "section")
         scoring_layout.addWidget(scoring_label)
         
         self.scoring_widget = ScoringBreakdownWidget()
@@ -735,7 +632,7 @@ class ResultTab(QWidget):
         semantic_layout.setContentsMargins(2, 2, 2, 2)
         
         semantic_label = QLabel("Semantic Information")
-        semantic_label.setStyleSheet("font-weight: bold; color: #9C27B0;")
+        set_role(semantic_label, "section")
         semantic_layout.addWidget(semantic_label)
         
         self.semantic_info_widget = SemanticInfoDisplayWidget()
@@ -807,7 +704,7 @@ class ResultTab(QWidget):
         for row in range(self.results_table.rowCount()):
             item = self.results_table.item(row, 0)
             if item:
-                stored_match = item.data(Qt.UserRole + 1)
+                stored_match = item.data(Qt.UserRole)
                 if stored_match and stored_match.match_id == match_id:
                     self.results_table.selectRow(row)
                     break
@@ -826,9 +723,11 @@ class ResultTab(QWidget):
         # Update scoring breakdown with semantic information
         if self.scoring_widget:
             try:
+                # display_scoring takes the weighted score only: passing the
+                # semantic mappings as well raised a TypeError that the except
+                # below swallowed, so the breakdown never updated.
                 weighted_score = match_data.get('weighted_score')
-                semantic_info = self.tab_state.semantic_mappings
-                self.scoring_widget.display_scoring(weighted_score, semantic_info)
+                self.scoring_widget.display_scoring(weighted_score)
             except Exception as e:
                 print(f"[ResultTab] Error updating scoring widget: {e}")
         
@@ -926,7 +825,7 @@ class ResultTab(QWidget):
             current_selection = self.results_table.selectedItems()
             if current_selection:
                 row = current_selection[0].row()
-                match = self.results_table.item(row, 0).data(Qt.UserRole + 1)
+                match = self.results_table.item(row, 0).data(Qt.UserRole)
                 if match:
                     self._on_match_selected(match.to_dict())
         
@@ -941,10 +840,10 @@ class ResultTab(QWidget):
             current_selection = self.results_table.selectedItems()
             if current_selection:
                 row = current_selection[0].row()
-                match = self.results_table.item(row, 0).data(Qt.UserRole + 1)
+                match = self.results_table.item(row, 0).data(Qt.UserRole)
                 if match:
                     weighted_score = match.to_dict().get('weighted_score')
-                    self.scoring_widget.display_scoring(weighted_score, self.tab_state.semantic_mappings)
+                    self.scoring_widget.display_scoring(weighted_score)
         
         self._emit_state_changed()
     
@@ -1038,39 +937,7 @@ class ResultsTabWidget(QWidget):
         self.tab_widget.setMovable(True)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         
-        # Style the tab widget to match Crow-Eye main window
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #334155;
-                background: #1E293B;
-                border-radius: 8px;
-            }
-            
-            QTabBar::tab {
-                background: #1E293B;
-                color: #94A3B8;
-                border: 1px solid #334155;
-                padding: 4px 10px;
-                font-weight: 600;
-                font-size: 5pt;
-                min-height: 14px;
-                min-width: 100px;
-                max-width: 180px;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-            }
-            
-            QTabBar::tab:selected {
-                background-color: #0B1220;
-                color: #00FFFF;
-                border-bottom: 2px solid #00FFFF;
-            }
-            
-            QTabBar::tab:hover:!selected {
-                background-color: #334155;
-                color: #FFFFFF;
-            }
-        """)
+        # Tabs: the window's site look (the 5pt sheet here made labels unreadable)
         
         layout.addWidget(self.tab_widget)
         
@@ -1335,7 +1202,7 @@ class ResultsTabWidget(QWidget):
             invalid = stats.get('identities_filtered', stats.get('invalid_identities', 0))
             invalid_item = QTableWidgetItem(f"{invalid:,}")
             if invalid > 0:
-                invalid_item.setForeground(QColor("#F44336")) # Red for invalid
+                invalid_item.setForeground(QColor(STATUS_COLORS["bad"])) # Red for invalid
             self.feather_stats_table.setItem(row, 3, invalid_item)
             total_invalid += invalid
             
@@ -1460,6 +1327,7 @@ class ResultsTabWidget(QWidget):
         
         # Create tab widget with engine type for proper column configuration
         tab_widget = ResultTab(tab_state, engine_type=self.engine_type)
+        retheme_page(self, tab_widget)
         tab_widget.tab_state_changed.connect(self._on_tab_state_changed)
         tab_widget.match_selected.connect(self.match_selected)
         tab_widget.export_requested.connect(self.export_requested)
@@ -1576,17 +1444,17 @@ class ResultsTabWidget(QWidget):
         semantic_count = len(self.global_semantic_mappings)
         if semantic_count > 0:
             self.semantic_status_label.setText(f"Active ({semantic_count} mappings)")
-            self.semantic_status_label.setStyleSheet("color: #4CAF50;")
+            set_status(self.semantic_status_label, "ok")
         else:
             self.semantic_status_label.setText("Not configured")
-            self.semantic_status_label.setStyleSheet("color: #9E9E9E;")
+            set_status(self.semantic_status_label, "neutral")
         
         if self.global_scoring_configuration:
             self.scoring_status_label.setText("Active")
-            self.scoring_status_label.setStyleSheet("color: #4CAF50;")
+            set_status(self.scoring_status_label, "ok")
         else:
             self.scoring_status_label.setText("Not configured")
-            self.scoring_status_label.setStyleSheet("color: #9E9E9E;")
+            set_status(self.scoring_status_label, "neutral")
         
         # Update feather statistics table
         self._update_feather_stats_table()

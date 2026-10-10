@@ -173,6 +173,9 @@ class AnimatedProgressBar(QtWidgets.QProgressBar):
         self._busy = False
         self._animated = True
         self._accent = QtGui.QColor(accent)
+        # How far the motion sits inside the bar's edge: 2 px clears the
+        # 2 px border most bars draw; a borderless pill uses 0 (setInset).
+        self._inset = 2
         self._t0 = time.monotonic()
         self._target = super().value()
         self._from = self._target
@@ -187,6 +190,12 @@ class AnimatedProgressBar(QtWidgets.QProgressBar):
 
     def accent(self):
         return QtGui.QColor(self._accent)
+
+    def setInset(self, px):
+        """0 for a borderless pill: the sweep then fills it edge to edge,
+        with fully rounded ends."""
+        self._inset = max(0, int(px))
+        self.update()
 
     def setAnimated(self, on):
         self._animated = bool(on)
@@ -284,10 +293,14 @@ class AnimatedProgressBar(QtWidgets.QProgressBar):
         if finished:
             return
 
-        inner = self.rect().adjusted(2, 2, -2, -2)
+        i = self._inset
+        inner = self.rect().adjusted(i, i, -i, -i)
         if inner.width() <= 4 or inner.height() <= 2:
             return
-        radius = max(2.0, min(6.0, inner.height() / 2.0 - 1))
+        if i:
+            radius = max(2.0, min(6.0, inner.height() / 2.0 - 1))
+        else:
+            radius = inner.height() / 2.0
         clip = QtGui.QPainterPath()
         clip.addRoundedRect(QtCore.QRectF(inner), radius, radius)
 

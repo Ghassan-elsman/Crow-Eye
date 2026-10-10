@@ -10,7 +10,7 @@ export default function ItemDetailPanel({ detail, loading, onClose }) {
       <div className="detail empty">
         <div className="detail-empty-inner">
           <div className="detail-empty-icon"><IconSearch size={44} /></div>
-          Click a shell item to see its full profile &mdash; where it pointed, its MRU order, and every
+          Click an item to see its full profile &mdash; where it pointed, its MRU order, and every
           timestamp the record carries.
         </div>
       </div>

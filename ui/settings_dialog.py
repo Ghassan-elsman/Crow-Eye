@@ -19,6 +19,8 @@ from pathlib import Path
 
 # Import styles
 from styles import CrowEyeStyles
+from ui.site_theme import (apply_site_theme, begin_site_theme, set_role, set_variant, set_card, keep_style,
+                           level_pill, log_view_sheet, font as site_font)
 
 # Eye AI settings persistence (pure JSON helpers, no Qt)
 try:
@@ -87,6 +89,62 @@ def _tip_label(text):
     return lbl
 
 
+class _CheckLabel(QtWidgets.QLabel):
+    """The text of a wrapping checkbox: clicking it toggles the box, and it
+    greys out whenever the box is disabled (an event filter on the box)."""
+    clicked = QtCore.pyqtSignal()
+
+    def eventFilter(self, obj, event):
+        if event.type() == QtCore.QEvent.EnabledChange:
+            self.setEnabled(obj.isEnabled())
+        return False
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
+def _wrap_checkbox_text(cb, text_style):
+    """Let a QCheckBox's text wrap, which QCheckBox itself cannot do.
+
+    A long checkbox label set the width of the whole Eye AI page: the
+    longest one is ~620 px, so at the 900 px minimum window the right side
+    of every row (and the Test / Change backend buttons) was cut off with
+    no horizontal scroll bar. The text moves into a word-wrapped label next
+    to an empty box; clicking the label toggles the box, the label greys out
+    with it, and the box keeps every signal and its checked state.
+    """
+    text = cb.text()
+    holder = cb.parentWidget()
+    lay = holder.layout() if holder is not None else None
+    if not text or lay is None:
+        return None
+    row = QtWidgets.QWidget(holder)
+    h = QtWidgets.QHBoxLayout(row)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(10)
+    if lay.replaceWidget(cb, row) is None:
+        row.deleteLater()
+        return None
+    label = _CheckLabel(text)
+    label.setWordWrap(True)
+    label.setStyleSheet(text_style)
+    label.setToolTip(cb.toolTip())
+    label.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+    label.setMinimumWidth(0)
+    label.setCursor(Qt.PointingHandCursor)
+    label.setEnabled(cb.isEnabled())
+    cb.installEventFilter(label)
+    label.clicked.connect(lambda: cb.isEnabled() and cb.toggle())
+    cb.setText("")
+    cb.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+    h.addWidget(cb, 0, Qt.AlignTop)
+    h.addWidget(label, 1)
+    cb._wrapped_label = label
+    return label
+
+
 class SettingsDialog(QtWidgets.QDialog):
     """Centralized settings dialog for Crow Eye."""
     
@@ -120,6 +178,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.semantic_manager = SemanticMappingManager()
             self._load_semantic_mappings()
         
+        begin_site_theme(self)
         self.setup_ui()
         self.apply_styles()
         self.load_settings()
@@ -190,29 +249,17 @@ class SettingsDialog(QtWidgets.QDialog):
         buttons_layout.setContentsMargins(20, 10, 20, 20)
         buttons_layout.setSpacing(15)
         
-        save_button = QtWidgets.QPushButton("SAVE")
-        save_button.setFixedHeight(45)
+        save_button = QtWidgets.QPushButton("Save")
+        save_button.setFixedHeight(36)
         save_button.setMinimumWidth(140)
         save_button.clicked.connect(self.save_settings)
-        save_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON + """
-            QPushButton {
-                font-size: 13px;
-                font-weight: 700;
-                padding: 12px 24px;
-            }
-        """)
-        
-        cancel_button = QtWidgets.QPushButton("CANCEL")
-        cancel_button.setFixedHeight(45)
+        set_variant(save_button, "primary")
+
+        cancel_button = QtWidgets.QPushButton("Cancel")
+        cancel_button.setFixedHeight(36)
         cancel_button.setMinimumWidth(140)
         cancel_button.clicked.connect(self.reject)
-        cancel_button.setStyleSheet(CrowEyeStyles.CLEAR_BUTTON_STYLE + """
-            QPushButton {
-                font-size: 13px;
-                font-weight: 700;
-                padding: 12px 24px;
-            }
-        """)
+        set_variant(cancel_button, "ghost")
         
         buttons_layout.addStretch()
         buttons_layout.addWidget(save_button)
@@ -225,36 +272,25 @@ class SettingsDialog(QtWidgets.QDialog):
         main_widget_layout.setSpacing(0)
         main_widget_layout.addWidget(self.content_stack, 1)
         main_widget_layout.addLayout(buttons_layout)
-        
+
         main_layout.addWidget(main_widget, 1)
     
     def create_sidebar(self):
         """Create the sidebar navigation."""
         sidebar = QtWidgets.QWidget()
-        sidebar.setFixedWidth(200)
-        sidebar.setStyleSheet("""
-            QWidget {
-                background-color: #1E293B;
-                border-right: 1px solid #334155;
-            }
-        """)
-        
+        sidebar.setObjectName("siteRail")
+        sidebar.setAttribute(Qt.WA_StyledBackground, True)
+        sidebar.setFixedWidth(210)
+
         sidebar_layout = QtWidgets.QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(0, 20, 0, 20)
-        sidebar_layout.setSpacing(5)
-        
-        # Title
-        title_label = QtWidgets.QLabel("SETTINGS")
-        title_label.setAlignment(Qt.AlignCenter)
-        title_label.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 18px;
-                font-weight: 800;
-                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                padding: 15px 0;
-            }
-        """)
+        sidebar_layout.setContentsMargins(0, 26, 0, 20)
+        sidebar_layout.setSpacing(2)
+
+        # Title: the loading dialog's heading, smaller.
+        title_label = QtWidgets.QLabel("Settings")
+        title_label.setContentsMargins(19, 0, 0, 18)
+        set_role(title_label, "title")
+        title_label.setFont(site_font("ui", 22, QtGui.QFont.ExtraBold, upper=True, spacing=104))
         sidebar_layout.addWidget(title_label)
         
         # Navigation buttons
@@ -323,31 +359,10 @@ class SettingsDialog(QtWidgets.QDialog):
         if icon_name:
             button.setIcon(_ce_icon(icon_name))
             button.setIconSize(QtCore.QSize(16, 16))
-        button.setFixedHeight(50)
+        button.setFixedHeight(42)
         button.setCursor(Qt.PointingHandCursor)
         button.clicked.connect(lambda: self.switch_panel(index))
-        button.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                color: #94A3B8;
-                border: none;
-                border-left: 3px solid transparent;
-                text-align: left;
-                padding-left: 20px;
-                font-size: 13px;
-                font-weight: 600;
-                font-family: 'Segoe UI', sans-serif;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                color: #E2E8F0;
-            }
-            QPushButton[active="true"] {
-                background-color: #0F172A;
-                color: #00FFFF;
-                border-left: 3px solid #00FFFF;
-            }
-        """)
+        set_variant(button, "nav")
         return button
     
     def switch_panel(self, index):
@@ -550,7 +565,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 padding: 8px 12px;
             }
         """)
-        self.default_dir_input.setPlaceholderText("C:/Cases")
+        from config.data_models import default_cases_dir
+        self.default_dir_input.setPlaceholderText(default_cases_dir())
         
         browse_btn = QtWidgets.QPushButton("Browse")
         browse_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
@@ -1209,11 +1225,13 @@ class SettingsDialog(QtWidgets.QDialog):
             }
         """)
         layout.addWidget(info_label)
-        
+
+        layout.addWidget(self._create_semantic_engine_group())
+
         # Toolbar
         toolbar = QtWidgets.QHBoxLayout()
         toolbar.setSpacing(10)
-        
+
         add_btn = _mk_btn("Add Mapping", "add")
         add_btn.setFixedHeight(40)
         add_btn.setStyleSheet(CrowEyeStyles.BUTTON_STYLE + """
@@ -1290,6 +1308,11 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         reset_btn.clicked.connect(self.reset_semantic_mappings)
         
+        # Six buttons in one row: the site's dense size, so the uppercase
+        # labels fit the 830px page instead of being squeezed and clipped.
+        from ui.site_theme import set_dense
+        for b in (add_btn, edit_btn, delete_btn, import_btn, export_btn, reset_btn):
+            set_dense(b)
         toolbar.addWidget(add_btn)
         toolbar.addWidget(edit_btn)
         toolbar.addWidget(delete_btn)
@@ -1360,6 +1383,76 @@ class SettingsDialog(QtWidgets.QDialog):
         
         return panel
     
+    def _create_semantic_engine_group(self):
+        """How the semantic phase runs (GlobalConfig semantic_* fields, read by
+        correlation_engine/identity_semantic_phase/sql_semantic_mapper.py).
+        Every run writes the values it used to <case>/logs/semantic_mapping.log."""
+        group = QtWidgets.QGroupBox("Semantic mapping engine")
+        group.setStyleSheet("""
+            QGroupBox {
+                color: #E2E8F0;
+                font-size: 14px;
+                font-weight: 700;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                margin-top: 12px;
+                padding: 18px;
+            }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
+        """)
+        form = QtWidgets.QFormLayout(group)
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        form.setSpacing(10)
+
+        def spin(lo, hi, step, suffix, tip):
+            box = QtWidgets.QSpinBox()
+            box.setRange(lo, hi)
+            box.setSingleStep(step)
+            if suffix:
+                box.setSuffix(suffix)
+            box.setMaximumWidth(220)
+            box.setToolTip(tip)
+            return box
+
+        def row_label(text, tip):
+            lbl = QtWidgets.QLabel(text)
+            lbl.setStyleSheet("QLabel { color: #CBD5E1; font-size: 13px; font-weight: 600; }")
+            lbl.setToolTip(tip)
+            return lbl
+
+        tip = "Threads that test the rules against the matches."
+        self.semantic_workers_spin = spin(1, 16, 1, "", tip)
+        form.addRow(row_label("Worker threads", tip), self.semantic_workers_spin)
+
+        tip = ("When a sample shows the FTS5 prefilter would keep at least this share of the "
+               "matches, it is skipped and every match is scanned - building it then costs "
+               "more than it saves. Skipping never loses a label.")
+        self.semantic_fts_skip_spin = spin(0, 100, 5, " %", tip)
+        form.addRow(row_label("Skip the FTS5 prefilter above", tip), self.semantic_fts_skip_spin)
+
+        tip = ("Matches read and tested at a time. Lower uses less memory on a large run; "
+               "Stop takes effect between chunks.")
+        self.semantic_chunk_spin = spin(1000, 200000, 1000, "", tip)
+        form.addRow(row_label("Candidates per chunk", tip), self.semantic_chunk_spin)
+
+        self.semantic_debug_checkbox = QtWidgets.QCheckBox(
+            "Write the detailed debug log (one line per rule match)")
+        self.semantic_debug_checkbox.setStyleSheet(
+            "QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600; }")
+        self.semantic_debug_checkbox.setToolTip(
+            "Written to <case>/logs/semantic_mapping_debug.log. Large on a big run.")
+        form.addRow(self.semantic_debug_checkbox)
+
+        note = QtWidgets.QLabel(
+            "Each run records the settings it used, the prefilter decision and its progress "
+            "in the case's semantic_mapping.log (Settings -> Logs -> Semantic mapping).")
+        note.setWordWrap(True)
+        note.setStyleSheet("QLabel { color: #94A3B8; font-size: 12px; }")
+        form.addRow(note)
+        return group
+
     def create_pipeline_management_panel(self):
         """Create the pipeline management panel."""
         panel = QtWidgets.QWidget()
@@ -1384,6 +1477,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     f"⚠ Failed to load Pipeline Management:\n{str(e)}"
                 )
                 error_label.setAlignment(Qt.AlignCenter)
+                keep_style(error_label)
                 error_label.setStyleSheet("""
                     QLabel {
                         color: #F59E0B;
@@ -1492,6 +1586,35 @@ class SettingsDialog(QtWidgets.QDialog):
         group_layout.addWidget(explain)
 
         layout.addWidget(group)
+
+        # The same frame for the second group.
+        auto_group = QtWidgets.QGroupBox("After a collection")
+        auto_group.setStyleSheet(group.styleSheet())
+        auto_layout = QtWidgets.QVBoxLayout(auto_group)
+        auto_layout.setSpacing(12)
+
+        self.auto_parse_checkbox = QtWidgets.QCheckBox(
+            "Parse automatically after collection")
+        self.auto_parse_checkbox.setStyleSheet(
+            "QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600; }")
+        auto_layout.addWidget(self.auto_parse_checkbox)
+
+        auto_explain = QtWidgets.QLabel(
+            "On, what is collected is parsed straight away and loaded into the "
+            "tabs:\n"
+            "  •  Offline Importer - after COLLECT, the collected artifacts "
+            "are parsed (SCAN only lists them, and still waits for Parse).\n"
+            "  •  Parse Offline Artifacts - when the case has acquired files "
+            "that were never scanned, they are scanned and parsed without asking.\n"
+            "  •  Image Parsing - \"Parse automatically after extraction\" "
+            "starts ticked (it can still be changed for one run).\n\n"
+            "Off, each of them stops with the Parse button ready, so you can "
+            "review what was collected and choose what to parse.")
+        auto_explain.setWordWrap(True)
+        auto_explain.setStyleSheet("QLabel { color: #94A3B8; font-size: 12px; }")
+        auto_layout.addWidget(auto_explain)
+
+        layout.addWidget(auto_group)
         layout.addStretch()
         return panel
 
@@ -1515,6 +1638,8 @@ class SettingsDialog(QtWidgets.QDialog):
             "timeline.log": "Timeline",
             "visualizations.log": "Visualizations",
             "correlation.log": "Correlation Engine",
+            "semantic_mapping.log": "Semantic mapping",
+            "semantic_mapping_debug.log": "Semantic mapping",
             "eye.log": "Eye AI",
             "uba.log": "UBA",
             "dynamic_linking.log": "Dynamic Linking",
@@ -1524,9 +1649,26 @@ class SettingsDialog(QtWidgets.QDialog):
             "case_data.log": "Case data",
             "parse_status.log": "Parse status",
             "parse_status.json": "Parse status",
+            # The three ways evidence arrives from outside a live parse.
+            "offline_importer.log": "Offline Importer",
+            "import_results.json": "Offline Importer",
+            "artifact_hashes.json": "Offline Importer",
+            ".artifact_scan_index.json": "Offline Importer",
+            "offline_parsing_logs.txt": "Offline Importer",
+            "crow_claw.log": "Crow-Claw",
+            "collection_manifest.json": "Crow-Claw",
+            "image_parsing.log": "Image parsing",
+            "parsing_errors.log": "Image parsing",
+            "partition_info.json": "Image parsing",
+            "app.log": "Application (before a case)",
         }
         if f in exact:
             return exact[f]
+        # A rotated backup (crow_eye.log.1, crow_claw.log.3) belongs with its file.
+        import re as _re
+        base = _re.sub(r"\.\d+$", "", f)
+        if base in exact:
+            return exact[base]
         if f.startswith("parse_status.log"):
             return "Parse status"
         if f.startswith("mft_usn"):
@@ -1538,7 +1680,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if f.startswith("regclaw_errors"):
             return "Registry"
         if f.startswith("offline") or f.startswith("import_"):
-            return "Offline parsing"
+            return "Offline Importer"
         if f.startswith("failed_prefetch"):
             return "Prefetch"
         return "Other"
@@ -1548,9 +1690,6 @@ class SettingsDialog(QtWidgets.QDialog):
         import glob
         groups = {}
         root = self.current_case_path
-        if not root or not os.path.isdir(root):
-            return groups
-
         seen = set()
 
         def add(path, comp=None):
@@ -1560,6 +1699,18 @@ class SettingsDialog(QtWidgets.QDialog):
             seen.add(path)
             label = comp or self._log_component(os.path.basename(path))
             groups.setdefault(label, []).append((os.path.basename(path), path))
+
+        if not root or not os.path.isdir(root):
+            # No case: the application log still holds startup, the tools opened
+            # without a case, and any crash on the way - show it rather than an
+            # empty panel.
+            try:
+                from utils.logging_setup import app_logs_dir
+                for p in glob.glob(os.path.join(app_logs_dir(), "app.log*")):
+                    add(p, "Application (before a case)")
+            except Exception:
+                pass
+            return groups
 
         # <case>/logs  - the centralized case logs.
         # "*.log.*" catches the rotated backups: logging_setup rotates at 5 MB
@@ -1572,14 +1723,27 @@ class SettingsDialog(QtWidgets.QDialog):
         # The machine-readable parse status (latest outcome per artifact) -
         # the only .json kept in <case>/logs, so it is named, not globbed.
         add(os.path.join(root, "logs", "parse_status.json"), "Parse status")
+        # One chain-of-custody record per live collection or live parse
+        # (utils/custody.py), each with a .sha256 beside it.
+        for p in sorted(glob.glob(os.path.join(root, "logs", "custody_*.json")), reverse=True):
+            add(p, "Chain of custody")
         # Target_Artifacts - the per-parser logs written during parsing
         ta = os.path.join(root, "Target_Artifacts")
         for pat in ("*.log", "*.txt", "*.log.*"):
             for p in glob.glob(os.path.join(ta, pat)):
                 add(p)
         # Known logs/reports at the case root
-        for name in ("offline_parsing_logs.txt", "mft_usn_forensic_report.txt"):
+        for name in ("offline_parsing_logs.txt", "mft_usn_forensic_report.txt",
+                     "parsing_errors.log", "import_results.json", "artifact_hashes.json",
+                     ".artifact_scan_index.json", "partition_info.json"):
             add(os.path.join(root, name))
+        # What Crow-Claw and image parsing leave beside the collected artifacts:
+        # the collection manifest (every file with its hashes) and the partition
+        # table an image was read with.
+        la = os.path.join(root, "live_acquisition")
+        add(os.path.join(la, "collection_manifest.json"), "Crow-Claw")
+        for p in glob.glob(os.path.join(la, "PartitionInfo", "*.json")):
+            add(p, "Image parsing")
         for p in glob.glob(os.path.join(root, "*.log")):
             add(p)
         # Eye AI keeps its audit trail under EYE_Logs/
@@ -1599,10 +1763,11 @@ class SettingsDialog(QtWidgets.QDialog):
             flt = (self._logs_filter.text() or "").strip().lower()
         groups = self._scan_case_logs()
         if not groups:
-            msg = ("Open a case to view its logs."
+            msg = ("Open a case to view its logs (no application log was found either)."
                    if not self.current_case_path
                    else "No logs for this case yet - they appear as parsers run.")
             tree.addTopLevelItem(QtWidgets.QTreeWidgetItem([msg]))
+            self._logs_raw = ""
             self._logs_view.setPlainText("")
             self._logs_meta.setText("")
             return
@@ -1633,6 +1798,24 @@ class SettingsDialog(QtWidgets.QDialog):
         path = item.data(0, Qt.UserRole)
         if path:
             self._load_log_file(path)
+            # A custody record reads better as what it is than as JSON: open
+            # the viewer beside the raw text.
+            base = os.path.basename(path)
+            if base.startswith("custody_") and base.endswith(".json"):
+                self._open_custody_viewer(path)
+
+    def _open_custody_viewer(self, path):
+        try:
+            from ui.custody_viewer import CustodyViewerDialog
+        except Exception:
+            return
+        try:
+            dlg = CustodyViewerDialog(path, self)
+            dlg.show()
+            self._custody_windows = getattr(self, "_custody_windows", [])
+            self._custody_windows.append(dlg)
+        except Exception as exc:
+            QMessageBox.warning(self, "Chain of custody", "Could not open the record:\n%s" % exc)
 
     def _open_full_log(self):
         """Open the selected section in full, in its own window.
@@ -1698,9 +1881,32 @@ class SettingsDialog(QtWidgets.QDialog):
             text = data.decode("utf-8", errors="replace")
         except Exception as exc:
             text = "Could not read this log:\n%s" % exc
-        self._logs_view.setPlainText(text)
+        self._logs_raw = text
+        self._logs_note = path + note
+        # JSON (custody records, parse status, manifests) gets key colouring.
+        self._logs_hl.json_mode = path.lower().endswith((".json", ".jsonl"))
+        self._apply_log_level()
+
+    def _apply_log_level(self, level=None):
+        """Show the loaded log at the chosen level: all, warnings+errors, errors."""
+        from ui.log_highlighter import filter_lines
+        if level is not None:
+            self._logs_level = level
+            for key, btn in self._log_level_btns.items():
+                btn.setChecked(key == level)
+        raw = getattr(self, "_logs_raw", "") or ""
+        shown = filter_lines(raw, getattr(self, "_logs_level", "ALL"))
+        self._logs_view.setPlainText(shown)
         self._logs_view.moveCursor(QtGui.QTextCursor.End)
-        self._logs_meta.setText(path + note)
+        note = getattr(self, "_logs_note", "")
+        if getattr(self, "_logs_level", "ALL") != "ALL" and raw:
+            note += "   |   %d of %d line(s) at this level" % (
+                len(shown.splitlines()) if shown else 0, len(raw.splitlines()))
+        self._logs_meta.setText(note)
+
+    def _toggle_log_wrap(self, on):
+        self._logs_view.setLineWrapMode(QtWidgets.QPlainTextEdit.WidgetWidth if on
+                                        else QtWidgets.QPlainTextEdit.NoWrap)
 
     def _refresh_logs(self):
         self._populate_logs_tree()
@@ -1794,16 +2000,50 @@ class SettingsDialog(QtWidgets.QDialog):
         """ + self._LOGS_SCROLLBAR_QSS)
         self._logs_tree.itemClicked.connect(self._on_log_selected)
 
-        self._logs_view = QtWidgets.QTextEdit()
+        # Plain text with an IDE-style highlighter (ui/log_highlighter.py):
+        # levels, timestamps, loggers, paths, numbers and hashes each in a colour.
+        self._logs_view = QtWidgets.QPlainTextEdit()
         self._logs_view.setReadOnly(True)
-        self._logs_view.setLineWrapMode(QtWidgets.QTextEdit.NoWrap)
-        self._logs_view.setStyleSheet("""
-            QTextEdit { background-color: #0B1226; color: #E2E8F0; border: 1px solid #334155;
-                        border-radius: 6px; font-family: 'JetBrains Mono','Consolas',monospace;
-                        font-size: 13.5px; }
-        """ + self._LOGS_SCROLLBAR_QSS)
+        self._logs_view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        # The loading dialog's log well; kept through the window theme.
+        self._logs_view.setStyleSheet(log_view_sheet())
+        keep_style(self._logs_view)
+        from ui.log_highlighter import LogHighlighter
+        self._logs_hl = LogHighlighter(self._logs_view.document())
+        self._logs_raw, self._logs_note, self._logs_level = "", "", "ALL"
+
+        # Level filter + wrap, above the viewer.
+        right = QtWidgets.QWidget()
+        rlay = QtWidgets.QVBoxLayout(right)
+        rlay.setContentsMargins(0, 0, 0, 0)
+        rlay.setSpacing(6)
+        lvl_bar = QtWidgets.QHBoxLayout()
+        lvl_bar.setSpacing(6)
+        show_lbl = QtWidgets.QLabel("Show:")
+        show_lbl.setStyleSheet("QLabel { color: #94A3B8; font-size: 13px; }")
+        lvl_bar.addWidget(show_lbl)
+        self._log_level_btns = {}
+        for key, label, color in (("ALL", "All lines", "#00FFFF"),
+                                  ("WARNING", "Warnings + errors", "#FBBF24"),
+                                  ("ERROR", "Errors only", "#F87171")):
+            b = QtWidgets.QPushButton(label)
+            b.setCheckable(True)
+            b.setChecked(key == "ALL")
+            b.setCursor(Qt.PointingHandCursor)
+            level_pill(b, key)
+            b.clicked.connect(lambda _c=False, k=key: self._apply_log_level(k))
+            self._log_level_btns[key] = b
+            lvl_bar.addWidget(b)
+        lvl_bar.addStretch(1)
+        wrap = QtWidgets.QCheckBox("Wrap lines")
+        wrap.setStyleSheet("QCheckBox { color: #CBD5E1; font-size: 13px; }")
+        wrap.toggled.connect(self._toggle_log_wrap)
+        lvl_bar.addWidget(wrap)
+        rlay.addLayout(lvl_bar)
+        rlay.addWidget(self._logs_view, 1)
+
         split.addWidget(self._logs_tree)
-        split.addWidget(self._logs_view)
+        split.addWidget(right)
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
         split.setSizes([260, 600])
@@ -1832,8 +2072,11 @@ class SettingsDialog(QtWidgets.QDialog):
         title_row = QtWidgets.QHBoxLayout()
         title_row.setSpacing(10)
         title_icon = QtWidgets.QLabel()
+        # From the install, not the working directory: relative, the icon was
+        # missing whenever Crow-Eye was started from another folder.
+        _res = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         title_icon.setPixmap(
-            QtGui.QPixmap("GUI Resources/the Eye AI agent transparent.png").scaled(
+            QtGui.QPixmap(os.path.join(_res, "GUI Resources", "the Eye AI agent transparent.png")).scaled(
                 28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title = QtWidgets.QLabel("Eye AI")
         title.setStyleSheet("""
@@ -1850,7 +2093,7 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addLayout(title_row)
 
         info = QtWidgets.QLabel(
-            "Chain-of-custody storage for what the Eye sent to the model. "
+            "The model the Eye uses, and how it reasons, remembers and records. "
             "Changes apply the next time the Eye is opened."
         )
         info.setWordWrap(True)
@@ -1862,18 +2105,52 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
         layout.addWidget(info)
 
-        # Backend / model display + buttons that launch the existing Eye dialogs.
+        # The connection, as a card: what is configured, whether its key is
+        # stored, a live test, and the way to change it (the setup wizard,
+        # opened on its Backend step).
         btn_style = CrowEyeStyles.BUTTON_STYLE + " QPushButton { font-size: 12px; padding: 8px 16px; min-height: 35px; }"
+        conn_card = QtWidgets.QFrame()
+        conn_card.setObjectName("eyeConnCard")
+        conn_card.setStyleSheet(
+            "QFrame#eyeConnCard { background-color: #1E293B; border: 1px solid #334155; border-radius: 8px; }"
+            "QFrame#eyeConnCard QLabel { background: transparent; border: none; }")
+        conn_layout = QtWidgets.QVBoxLayout(conn_card)
+        conn_layout.setContentsMargins(16, 14, 16, 14)
+        conn_layout.setSpacing(8)
+        conn_head = QtWidgets.QLabel("Model connection")
+        conn_head.setStyleSheet("QLabel { color: #00FFFF; font-size: 14px; font-weight: 700; }")
+        conn_layout.addWidget(conn_head)
         backend_row = QtWidgets.QHBoxLayout()
         self.eye_backend_label = QtWidgets.QLabel("Backend: —")
+        self.eye_backend_label.setWordWrap(True)
+        self.eye_backend_label.setTextFormat(Qt.RichText)
         self.eye_backend_label.setStyleSheet(
-            "QLabel { color: #E2E8F0; font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif; }")
-        self.eye_configure_btn = QtWidgets.QPushButton("Configure Backend, Model & API Key…")
+            "QLabel { color: #E2E8F0; font-size: 13px; font-family: 'Segoe UI', sans-serif; }")
+        self.eye_test_btn = QtWidgets.QPushButton("Test connection")
+        self.eye_test_btn.setStyleSheet(btn_style)
+        self.eye_test_btn.setToolTip("Send one short request to the configured model")
+        self.eye_test_btn.clicked.connect(self._test_eye_connection)
+        self.eye_configure_btn = QtWidgets.QPushButton("Change backend…")
         self.eye_configure_btn.setStyleSheet(btn_style)
+        self.eye_configure_btn.setToolTip("Connection type, provider, API key and model")
         self.eye_configure_btn.clicked.connect(self._open_eye_onboarding)
+        # The buttons sit under the description, not beside it: beside it
+        # they pushed the card wider than the page at the minimum window size.
         backend_row.addWidget(self.eye_backend_label, 1)
-        backend_row.addWidget(self.eye_configure_btn)
-        layout.addLayout(backend_row)
+        conn_layout.addLayout(backend_row)
+        conn_buttons = QtWidgets.QHBoxLayout()
+        conn_buttons.setSpacing(10)
+        conn_buttons.addWidget(self.eye_test_btn)
+        conn_buttons.addWidget(self.eye_configure_btn)
+        conn_buttons.addStretch(1)
+        conn_layout.addLayout(conn_buttons)
+        self.eye_test_status = QtWidgets.QLabel("")
+        keep_style(self.eye_test_status)        # green / red after a test
+        self.eye_test_status.setWordWrap(True)
+        self.eye_test_status.setTextFormat(Qt.RichText)
+        self.eye_test_status.setStyleSheet("QLabel { color: #94A3B8; font-size: 12.5px; }")
+        conn_layout.addWidget(self.eye_test_status)
+        layout.addWidget(conn_card)
 
         # Tool-calling capability. The Eye is agentic, so whether the active model
         # can call tools natively is the most consequential fact about it — and it
@@ -1881,6 +2158,7 @@ class SettingsDialog(QtWidgets.QDialog):
         # "assumed because we recognise the name" are very different claims.
         capability_row = QtWidgets.QHBoxLayout()
         self.eye_capability_label = QtWidgets.QLabel("Tool calling: —")
+        keep_style(self.eye_capability_label)   # its colour is the verdict
         self.eye_capability_label.setWordWrap(True)
         self.eye_capability_label.setStyleSheet(
             "QLabel { color: #E2E8F0; font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif; }")
@@ -1909,8 +2187,8 @@ class SettingsDialog(QtWidgets.QDialog):
         spin_style = """
             QSpinBox, QDoubleSpinBox {
                 background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
-                border-radius: 6px; padding: 8px 12px; min-height: 35px;
-                font-size: 14px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
+                border-radius: 6px; padding: 6px 10px; min-height: 30px;
+                font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
             }
             QSpinBox:hover, QSpinBox:focus,
             QDoubleSpinBox:hover, QDoubleSpinBox:focus {
@@ -1957,8 +2235,8 @@ class SettingsDialog(QtWidgets.QDialog):
         input_style = """
             QLineEdit {
                 background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
-                border-radius: 6px; padding: 8px 12px; min-height: 35px;
-                font-size: 14px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
+                border-radius: 6px; padding: 6px 10px; min-height: 30px;
+                font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
             }
             QLineEdit:hover, QLineEdit:focus { border: 2px solid #00FFFF; background-color: #263449; }
             QLineEdit:disabled { background-color: #1E293B; color: #64748B; border: 2px solid #334155; }
@@ -1977,7 +2255,9 @@ class SettingsDialog(QtWidgets.QDialog):
         form_layout.setSpacing(20)
         form_layout.setLabelAlignment(Qt.AlignRight)
         form_layout.setContentsMargins(20, 20, 20, 20)
-        label_style = "QLabel { color: #E2E8F0; font-size: 14px; font-weight: 600; padding-right: 15px; }"
+        form_layout.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        form_layout.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
+        label_style = "QLabel { color: #E2E8F0; font-size: 14px; font-weight: 600; padding-right: 8px; }"
 
         # Store full payload toggle
         store_label = QtWidgets.QLabel("Save Full Sent Payload:")
@@ -2572,6 +2852,17 @@ class SettingsDialog(QtWidgets.QDialog):
                 w.setEnabled(False)
             info.setText("Eye AI settings module unavailable (config.eye_ai_settings could not be imported).")
 
+        # Long checkbox texts wrap (see _wrap_checkbox_text), so the page is
+        # never wider than the window.
+        check_text_style = ("QLabel { color: #E2E8F0; font-size: 13px; font-weight: 600;"
+                            " font-family: 'Segoe UI', sans-serif; background: transparent; }"
+                            " QLabel:disabled { color: #64748B; }")
+        for cb in form_widget.findChildren(QtWidgets.QCheckBox):
+            _wrap_checkbox_text(cb, check_text_style)
+        # A number does not need the full width of a wide window.
+        for sb in form_widget.findChildren(QtWidgets.QAbstractSpinBox):
+            sb.setMaximumWidth(360)
+
         # Wrap the (tall) settings stack in a scroll area so every setting stays
         # reachable on short windows instead of being clipped/collapsed.
         scroll = QtWidgets.QScrollArea()
@@ -2579,17 +2870,8 @@ class SettingsDialog(QtWidgets.QDialog):
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setWidget(panel)
-        scroll.setStyleSheet(
-            "QScrollArea{border:none;background:#0F172A;} "
-            "QScrollBar:vertical{background:#0F172A;width:10px;margin:0;border:none;} "
-            "QScrollBar::handle:vertical{background:#334155;border-radius:5px;min-height:30px;} "
-            "QScrollBar::handle:vertical:hover{background:#475569;} "
-            "QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical{height:0;background:none;} "
-            # Without explicit add-page/sub-page (the groove above & below the handle)
-            # PyQt5 reverts the track to the pale native painting once the bar is styled.
-            "QScrollBar::add-page:vertical,QScrollBar::sub-page:vertical{background:#0F172A;} "
-            "QScrollBar::corner{background:#0F172A;}"
-        )
+        # Scroll bars: the app-wide CrowEyeStyles.SCROLLBAR_STYLE.
+        scroll.setStyleSheet("QScrollArea{border:none;background:#0F172A;}")
         scroll.viewport().setStyleSheet("background:#0F172A;")
         return scroll
 
@@ -2603,7 +2885,9 @@ class SettingsDialog(QtWidgets.QDialog):
             QMessageBox.warning(self, "Eye AI", f"Eye onboarding is unavailable:\n{e}")
             return
         try:
-            wizard = OnboardingWizard(ConfigManager(), CredentialManager(), None, self)
+            cm = ConfigManager()
+            start = "backend" if cm.is_configured() else None
+            wizard = OnboardingWizard(cm, CredentialManager(), None, self, start_step=start)
             wizard.exec_()
             self.load_settings()  # refresh backend label + any changed values
         except Exception as e:
@@ -3022,7 +3306,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setIcon(QMessageBox.Question)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        apply_site_theme(msg_box)
         
         if msg_box.exec_() == QMessageBox.Yes:
             if item_type == "advanced":
@@ -3107,7 +3391,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        apply_site_theme(msg_box)
         
         if msg_box.exec_() == QMessageBox.Yes:
             # Clear all global mappings
@@ -3191,7 +3475,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setDefaultButton(QMessageBox.No)
         
         # Apply cyberpunk styling
-        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        apply_site_theme(msg_box)
         
         reply = msg_box.exec_()
         
@@ -3205,7 +3489,7 @@ class SettingsDialog(QtWidgets.QDialog):
         directory = QFileDialog.getExistingDirectory(
             self,
             "Select Default Case Directory",
-            self.default_dir_input.text() or "C:/"
+            self.default_dir_input.text() or os.path.expanduser("~")
         )
         if directory:
             self.default_dir_input.setText(directory)
@@ -3230,6 +3514,15 @@ class SettingsDialog(QtWidgets.QDialog):
         # Parsing: may a parse create a shadow copy to reach a locked hive.
         self.snapshot_creation_checkbox.setChecked(
             getattr(config, 'parser_allow_snapshot_creation', True))
+        # Parsing: parse straight after a collection (Offline Importer, image).
+        self.auto_parse_checkbox.setChecked(
+            getattr(config, 'auto_parse_after_collection', True))
+        # Semantic Mappings: the semantic mapping engine's options.
+        if hasattr(self, 'semantic_workers_spin'):
+            self.semantic_workers_spin.setValue(int(getattr(config, 'semantic_worker_count', 4)))
+            self.semantic_fts_skip_spin.setValue(int(getattr(config, 'semantic_fts_skip_coverage', 50)))
+            self.semantic_chunk_spin.setValue(int(getattr(config, 'semantic_candidate_chunk_size', 20000)))
+            self.semantic_debug_checkbox.setChecked(bool(getattr(config, 'semantic_debug_log', False)))
 
         # Load Eye AI settings from configs/eye_config.json
         if read_eye_ai_settings is not None:
@@ -3271,10 +3564,79 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.eye_embedding_index_evidence_checkbox.setChecked(bool(eye_ai.get("embedding_index_evidence", False)))
                 backend = eye_ai.get("backend") or "—"
                 model = eye_ai.get("model_name") or "—"
-                self.eye_backend_label.setText(f"Backend: {backend} / {model}")
+                self.eye_backend_label.setText(self._eye_connection_text(eye_ai))
                 self._refresh_tool_capability_label(backend, model)
             except Exception as e:
                 print(f"[Settings] Could not load Eye AI settings: {e}")
+
+    def _eye_connection_text(self, eye_ai):
+        """The connection card's summary: type, provider, model, key state."""
+        try:
+            from eye.ui.onboarding_wizard import provider_label, INTEGRATIONS
+            kinds = {v: t for v, t, _d, _s in INTEGRATIONS}
+        except Exception:
+            provider_label, kinds = (lambda b: b), {}
+        try:
+            from eye.services.config_manager import ConfigManager
+            eye_ai = dict(ConfigManager().load_config() or {}, **{k: v for k, v in eye_ai.items() if v})
+        except Exception:
+            pass
+        backend = eye_ai.get("backend")
+        if not backend:
+            return "<span style='color:#F59E0B'>Not set up yet - click Change backend.</span>"
+        kind = eye_ai.get("integration_type")
+        parts = ["<b>%s</b>" % provider_label(backend),
+                 kinds.get(kind, kind or ""),
+                 "model <b>%s</b>" % (eye_ai.get("model_name") or "default")]
+        if kind == "cloud_api":
+            try:
+                from eye.services.credential_manager import CredentialManager
+                from eye.ui.onboarding_wizard import stored_key_exists
+                stored = stored_key_exists(CredentialManager(), backend)
+            except Exception:
+                stored = None
+            parts.append("API key stored" if stored else
+                         ("<span style='color:#F59E0B'>no API key stored</span>" if stored is False
+                          else "API key: unknown"))
+        if eye_ai.get("last_validated"):
+            parts.append("last tested %s" % eye_ai.get("last_validated"))
+        return " &middot; ".join(p for p in parts if p)
+
+    def _test_eye_connection(self):
+        """One short request to the configured model, off the GUI thread."""
+        if getattr(self, "_eye_test_worker", None) is not None:
+            return
+        try:
+            from eye.services.config_manager import ConfigManager
+            from eye.services.credential_manager import CredentialManager
+            from eye.ui.onboarding_wizard import _WizardConnectivityWorker, explain_failure, provider_label
+        except Exception as e:
+            self.eye_test_status.setText("The test is unavailable: %s" % e)
+            return
+        config = ConfigManager().load_config() or {}
+        if not config.get("backend"):
+            self.eye_test_status.setText("<span style='color:#F59E0B'>Nothing to test - set up a "
+                                         "backend first.</span>")
+            return
+        self.eye_test_btn.setEnabled(False)
+        self.eye_test_status.setText("Testing the connection to %s..." % provider_label(config["backend"]))
+        worker = _WizardConnectivityWorker(dict(config), CredentialManager())
+        self._eye_test_worker = worker
+
+        def done(ok, detail, ms):
+            self._eye_test_worker = None
+            self.eye_test_btn.setEnabled(True)
+            if ok:
+                self.eye_test_status.setText(
+                    "<span style='color:#10B981'><b>&#10003; Connected</b> - %s answered in %.1f s.</span>"
+                    % (config.get("model_name") or "the model", ms / 1000.0))
+            else:
+                self.eye_test_status.setText(
+                    "<span style='color:#EF4444'><b>&#10007; Could not connect.</b> %s</span>"
+                    % explain_failure(detail, config.get("integration_type")))
+        worker.done.connect(done)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
 
     def _refresh_tool_capability_label(self, backend=None, model=None):
         """Show the cached tool-calling verdict for the configured model.
@@ -3359,6 +3721,18 @@ class SettingsDialog(QtWidgets.QDialog):
         worker.done.connect(_finished)
         worker.start()
     
+    def _semantic_engine_values(self):
+        """The Semantic mapping engine group's values, as GlobalConfig fields
+        ({} when the page was not built)."""
+        if not hasattr(self, 'semantic_workers_spin'):
+            return {}
+        return {
+            'semantic_worker_count': self.semantic_workers_spin.value(),
+            'semantic_fts_skip_coverage': self.semantic_fts_skip_spin.value(),
+            'semantic_candidate_chunk_size': self.semantic_chunk_spin.value(),
+            'semantic_debug_log': self.semantic_debug_checkbox.isChecked(),
+        }
+
     def save_settings(self):
         """Save settings and close dialog."""
         try:
@@ -3370,7 +3744,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 identity_semantic_phase_enabled=self.identity_semantic_phase_checkbox.isChecked(),
                 wings_semantic_mapping_enabled=self.wings_semantic_mapping_checkbox.isChecked(),
                 cascade_tree_expansion_enabled=self.cascade_expansion_checkbox.isChecked(),
-                parser_allow_snapshot_creation=self.snapshot_creation_checkbox.isChecked()
+                parser_allow_snapshot_creation=self.snapshot_creation_checkbox.isChecked(),
+                auto_parse_after_collection=self.auto_parse_checkbox.isChecked(),
+                **self._semantic_engine_values()
             )
 
             # Persist Eye AI settings to configs/eye_config.json
@@ -3431,7 +3807,7 @@ class SettingsDialog(QtWidgets.QDialog):
             msg_box.setText("Settings have been saved successfully.")
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setStandardButtons(QMessageBox.Ok)
-            msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+            apply_site_theme(msg_box)
             msg_box.exec_()
             
             self.accept()
@@ -3443,12 +3819,12 @@ class SettingsDialog(QtWidgets.QDialog):
             msg_box.setText(f"Failed to save settings:\n{str(e)}")
             msg_box.setIcon(QMessageBox.Critical)
             msg_box.setStandardButtons(QMessageBox.Ok)
-            msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+            apply_site_theme(msg_box)
             msg_box.exec_()
     
     def apply_styles(self):
-        """Apply cyberpunk styles to the dialog."""
-        self.setStyleSheet(CrowEyeStyles.DIALOG_STYLE)
+        """The site's look (ui/site_theme.py), as the loading dialog has."""
+        apply_site_theme(self)
     
     def _format_datetime(self, dt):
         """Format datetime for display."""
@@ -3476,8 +3852,10 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
         """
         super().__init__(parent)
         self.mapping = mapping
+        begin_site_theme(self)
         self.setup_ui()
-        
+        apply_site_theme(self)
+
         if mapping:
             self.load_mapping(mapping)
     
@@ -3606,9 +3984,8 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
         button_layout.addWidget(cancel_btn)
         
         layout.addLayout(button_layout)
-        
-        # Apply dialog style
-        self.setStyleSheet(CrowEyeStyles.DIALOG_STYLE)
+        set_variant(save_btn, "primary")
+        set_variant(cancel_btn, "ghost")
     
     def load_mapping(self, mapping):
         """Load existing mapping into form."""

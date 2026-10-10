@@ -33,8 +33,8 @@ MUICACHE_PROPERTY_SUFFIXES = (
 
 # Shell items store localised folder names as a resource reference into a DLL
 # rather than as text, so a decoded path reads
-# "C:\shell32.dll,-21813\Ghass\shell32.dll,-21798" instead of
-# "C:\Users\Ghass\Desktop".
+# "C:\shell32.dll,-21813\Alice\shell32.dll,-21798" instead of
+# "C:\Users\Alice\Desktop".
 #
 # Resolved from a table, not through SHLoadIndirectString: the API answers about
 # the machine running Crow-Eye, in its language, which is the same mistake
@@ -1094,8 +1094,8 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
         version = struct.unpack('<I', binary_data[0:4])[0]
         
         # Log full binary data for debugging
-        logger.info(f"UserAssist entry {program_path}: version={version}, data_length={len(binary_data)}")
-        logger.info(f"  First 72 bytes (hex): {binary_data[:72].hex() if len(binary_data) >= 72 else binary_data.hex()}")
+        logger.debug(f"UserAssist entry {program_path}: version={version}, data_length={len(binary_data)}")
+        logger.debug(f"  First 72 bytes (hex): {binary_data[:72].hex() if len(binary_data) >= 72 else binary_data.hex()}")
         
         if version == 5:
             # Windows 7/8/10/11 format (72 bytes total)
@@ -1112,7 +1112,7 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
                 # Last execution time is at offset 60 (0x3C) for Version 5, not offset 16
                 result['last_execution'] = parse_filetime(binary_data[60:68])
                 
-                logger.info(f"  Parsed V5: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
+                logger.debug(f"  Parsed V5: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
             else:
                 logger.warning(f"UserAssist Version 5 data too short: expected 72 bytes, got {len(binary_data)}")
         
@@ -1121,7 +1121,7 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
             if len(binary_data) >= 16:
                 result['run_count'] = struct.unpack('<I', binary_data[4:8])[0]
                 result['last_execution'] = parse_filetime(binary_data[8:16])
-                logger.info(f"  Parsed V3: count={result['run_count']}, last_exec={result['last_execution']}")
+                logger.debug(f"  Parsed V3: count={result['run_count']}, last_exec={result['last_execution']}")
             else:
                 logger.warning(f"UserAssist Version 3 data too short: expected 16 bytes, got {len(binary_data)}")
         
@@ -1141,7 +1141,7 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
                 # Last execution time is at offset 60 (0x3C) for Version 63
                 result['last_execution'] = parse_filetime(binary_data[60:68])
                 
-                logger.info(f"  Parsed V63: count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
+                logger.debug(f"  Parsed V63: count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
             else:
                 logger.warning(f"UserAssist Version 63 data too short: expected 68 bytes, got {len(binary_data)}")
         
@@ -1164,7 +1164,7 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
                 # Last execution time is at offset 60 (0x3C) for Version 6
                 result['last_execution'] = parse_filetime(binary_data[60:68])
                 
-                logger.info(f"  Parsed V6: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
+                logger.debug(f"  Parsed V6: raw_count={raw_run_count}, adjusted_count={result['run_count']}, focus_count={result['focus_count']}, focus_time={result['focus_time']}, last_exec={result['last_execution']}")
             else:
                 logger.warning(f"UserAssist Version 6 data too short: expected 72 bytes, got {len(binary_data)}")
         
@@ -1187,7 +1187,7 @@ def parse_userassist_entry(value_name: str, binary_data: bytes) -> dict:
             result['focus_count'] = struct.unpack('<I', binary_data[8:12])[0]
             result['focus_time'] = struct.unpack('<I', binary_data[12:16])[0]
             result['last_execution'] = parse_filetime(binary_data[60:68])
-            logger.info(
+            logger.debug(
                 f"  Parsed UserAssist version {version} using the 72-byte "
                 f"layout: count={result['run_count']}, "
                 f"focus_count={result['focus_count']}, "

@@ -118,6 +118,45 @@ function waitForBridge(attempt = 1) {
   return bridgePromise;
 }
 
+// Data getters run off Crow-Eye's GUI thread when the bridge offers callAsync
+// (visualizations/async_bridge.py): the answer comes back on asyncResult, so
+// the window and the loading overlay keep painting during a long query.
+// Anything else (dialog openers), the mock, and an older bridge stay plain
+// synchronous calls. Same block in every dashboard and react-timeline.
+let asyncSeq = 0
+const asyncPending = new Map()
+let asyncHooked = null
+
+function canCallAsync(bridge, method) {
+  return !!(bridge && bridge.callAsync && bridge.asyncResult && /^get/.test(method))
+}
+
+function callViaAsync(bridge, method, args) {
+  if (asyncHooked !== bridge) {
+    asyncHooked = bridge
+    bridge.asyncResult.connect((id, payload) => {
+      const done = asyncPending.get(id)
+      if (done) { asyncPending.delete(id); done(payload) }
+    })
+  }
+  const id = `${method}#${++asyncSeq}`
+  return new Promise((resolve) => {
+    asyncPending.set(id, resolve)
+    bridge.callAsync(method, id, JSON.stringify(args))
+  })
+}
+
+// A slot that raised answers {"__asyncError": ...}: logged, and null to the
+// caller - what the synchronous call gave when its slot raised.
+function parseAnswer(method, raw) {
+  const out = JSON.parse(raw || 'null')
+  if (out && typeof out === 'object' && out.__asyncError) {
+    console.error(`[bridge] ${method}: ${out.__asyncError}`)
+    return null
+  }
+  return out
+}
+
 /**
  * Hook to access the QWebChannel bridge.
  * Returns { bridge, isLoading, isDev } 
@@ -144,6 +183,9 @@ export function useBridge() {
    */
   const callBridge = useCallback(async (method, ...args) => {
     if (!bridge) return null;
+    if (canCallAsync(bridge, method)) {
+      return parseAnswer(method, await callViaAsync(bridge, method, args));
+    }
 
     return new Promise((resolve, reject) => {
       try {

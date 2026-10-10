@@ -15,7 +15,42 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
-from ...gui.ui_styling import CorrelationEngineStyles
+
+# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
+
+def _look(widget, role=None, status=None, variant=None):
+    """A role / meaning colour / button variant through the window sheet."""
+    if _site is None:
+        return widget
+    widget.setStyleSheet("")
+    if role:
+        _site.set_role(widget, role)
+    if status:
+        _site.set_status(widget, status)
+    if variant:
+        _site.set_variant(widget, variant)
+    return widget
+
+
+# Item colours by meaning (site tones): rule kinds, AND / OR, severities.
+_SIMPLE = "#4ADE80"
+_ADVANCED = "#22D3EE"
+_MUTED = "#64748B"
+_LOGIC = {"AND": "#4ADE80", "OR": "#FBBF24"}
+_SEVERITY = {"info": "#22D3EE", "low": "#4ADE80", "medium": "#FBBF24",
+             "high": "#FDA4AF", "critical": "#FDA4AF"}
+
+# The window's own rules on top of the site sheet: editors inside table cells
+# (weight / tier / minimum score) are dense, or their digits clip.
+_WINGS_EXTRA = """
+QTableWidget QSpinBox, QTableWidget QDoubleSpinBox { padding: 0 4px; border-radius: 6px;
+    min-height: 0; font-size: 12px; }
+"""
 
 
 from ..core.wing_model import Wing, FeatherSpec, CorrelationRules
@@ -45,8 +80,14 @@ class WingsCreatorWindow(QMainWindow):
         self.current_config = None # Store current wing config
         self.config_manager = ConfigManager() if CONFIG_AVAILABLE else None
         self.case_directory = None # Store case directory for feather path resolution
+        # Freed when closed: the opener (pipeline_builder) only holds it
+        # until it is destroyed, and nothing reads it after it closes.
+        self.setAttribute(Qt.WA_DeleteOnClose)
+        # The site sheet BEFORE the children exist, the roles once built.
+        if _site is not None:
+            _site.begin_site_theme(self, extra=_WINGS_EXTRA)
         self.init_ui()
-        self.load_stylesheet()
+        self._apply_site_look()
     
     def set_case_directory(self, case_directory: str):
         """Set the case directory for feather path resolution"""
@@ -97,8 +138,10 @@ class WingsCreatorWindow(QMainWindow):
         
         # Title
         title_label = QLabel("WINGS CREATOR")
-        title_font = QFont("Consolas", 12, QFont.Bold)
-        title_label.setFont(title_font)
+        if _site is not None:
+            _site.set_role(title_label, "title")
+        else:
+            title_label.setFont(QFont("Consolas", 12, QFont.Bold))
         title_label.setAlignment(Qt.AlignLeft)
         header_layout.addWidget(title_label)
         
@@ -107,15 +150,19 @@ class WingsCreatorWindow(QMainWindow):
         # Action buttons
         self.view_json_btn = QPushButton("View JSON")
         self.view_json_btn.clicked.connect(self.view_json)
+        _look(self.view_json_btn, variant="ghost")
         header_layout.addWidget(self.view_json_btn)
         
         self.save_btn = QPushButton("Save Wing")
-        CorrelationEngineStyles.add_button_icon(self.save_btn, "save", "#FFFFFF")
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        self.save_btn.setIcon(CrowEyeIcons.save())
+        _look(self.save_btn, variant="primary")
         self.save_btn.clicked.connect(self.save_wing)
         header_layout.addWidget(self.save_btn)
         
         self.test_btn = QPushButton("Test Wing")
-        CorrelationEngineStyles.add_button_icon(self.test_btn, "execute", "#FFFFFF")
+        self.test_btn.setIcon(CrowEyeIcons.play())
+        _look(self.test_btn, variant="ghost")
         self.test_btn.clicked.connect(self.test_wing)
         header_layout.addWidget(self.test_btn)
         
@@ -193,7 +240,7 @@ class WingsCreatorWindow(QMainWindow):
         id_label = QLabel("Wing ID:")
         id_label.setMinimumWidth(120)
         self.wing_id_label = QLabel(self.wing.wing_id)
-        self.wing_id_label.setStyleSheet("color: #00d9ff; font-family: 'Consolas'; font-size: 8pt;")
+        _look(self.wing_id_label, role="mono", status="info")
         id_layout.addWidget(id_label)
         id_layout.addWidget(self.wing_id_label)
         id_layout.addStretch()
@@ -236,6 +283,7 @@ class WingsCreatorWindow(QMainWindow):
         # Add feather button
         add_btn = QPushButton("+ Add Feather")
         add_btn.clicked.connect(self.add_feather)
+        _look(add_btn, variant="primary")
         layout.addWidget(add_btn)
         
         group.setLayout(layout)
@@ -248,7 +296,7 @@ class WingsCreatorWindow(QMainWindow):
         
         # Target Application Filter (Wing-level)
         filter_label = QLabel("Target Application (applies to ALL feathers):")
-        filter_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        _look(filter_label, role="subtitle")
         layout.addWidget(filter_label)
         
         filter_help = QLabel(
@@ -256,7 +304,7 @@ class WingsCreatorWindow(QMainWindow):
             "Leave empty or use '*' to correlate all applications."
         )
         filter_help.setWordWrap(True)
-        filter_help.setStyleSheet("color: #888; font-size: 8pt; margin-bottom: 5px;")
+        _look(filter_help, role="muted").setContentsMargins(0, 0, 0, 5)
         layout.addWidget(filter_help)
         
         # Apply to selection
@@ -315,7 +363,7 @@ class WingsCreatorWindow(QMainWindow):
         self.target_event_input.setPlaceholderText("e.g., 4688, 4624, or 4688,4624,4625 for multiple")
         self.target_event_input.textChanged.connect(self.on_target_event_changed)
         event_help = QLabel("(comma-separated)")
-        event_help.setStyleSheet("color: #888; font-size: 8pt;")
+        _look(event_help, role="muted")
         event_layout.addWidget(event_label)
         event_layout.addWidget(self.target_event_input)
         event_layout.addWidget(event_help)
@@ -400,7 +448,8 @@ class WingsCreatorWindow(QMainWindow):
         
         # Enable weighted scoring checkbox
         self.enable_weighted_scoring_cb = QCheckBox("Enable Weighted Scoring")
-        self.enable_weighted_scoring_cb.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        if _site is not None:
+            self.enable_weighted_scoring_cb.setFont(_site.font("ui", 13, QFont.Bold))
         self.enable_weighted_scoring_cb.stateChanged.connect(self.on_weighted_scoring_toggled)
         layout.addWidget(self.enable_weighted_scoring_cb)
         
@@ -410,12 +459,12 @@ class WingsCreatorWindow(QMainWindow):
             "Assign weights (0.0-1.0) to each Feather based on its evidential value."
         )
         help_text.setWordWrap(True)
-        help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        _look(help_text, role="muted").setContentsMargins(0, 0, 0, 10)
         layout.addWidget(help_text)
         
         # Feather weights table
         table_label = QLabel("Feather Weights:")
-        table_label.setStyleSheet("font-weight: bold; margin-top: 10px;")
+        _look(table_label, role="label").setContentsMargins(0, 10, 0, 0)
         layout.addWidget(table_label)
         
         self.weights_table = QTableWidget()
@@ -433,9 +482,9 @@ class WingsCreatorWindow(QMainWindow):
         # Total weight display
         total_layout = QHBoxLayout()
         total_label = QLabel("Total Weight:")
-        total_label.setStyleSheet("font-weight: bold;")
+        _look(total_label, role="label")
         self.total_weight_label = QLabel("0.00")
-        self.total_weight_label.setStyleSheet("color: #00d9ff; font-size: 11pt; font-weight: bold;")
+        _look(self.total_weight_label, role="label", status="info")
         total_layout.addWidget(total_label)
         total_layout.addWidget(self.total_weight_label)
         total_layout.addStretch()
@@ -443,7 +492,7 @@ class WingsCreatorWindow(QMainWindow):
         
         # Warning label
         self.weight_warning_label = QLabel("")
-        self.weight_warning_label.setStyleSheet("color: #ff6b6b; font-weight: bold;")
+        _look(self.weight_warning_label, role="muted", status="bad")
         self.weight_warning_label.setVisible(False)
         layout.addWidget(self.weight_warning_label)
         
@@ -461,7 +510,7 @@ class WingsCreatorWindow(QMainWindow):
             "from matched Feathers. Set minimum thresholds for each interpretation level."
         )
         help_text.setWordWrap(True)
-        help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        _look(help_text, role="muted").setContentsMargins(0, 0, 0, 10)
         layout.addWidget(help_text)
         
         # Interpretation table
@@ -491,67 +540,19 @@ class WingsCreatorWindow(QMainWindow):
         self.add_level_btn = QPushButton("+ Add Level")
         self.add_level_btn.clicked.connect(self.add_interpretation_level)
         self.add_level_btn.setEnabled(False)
-        self.add_level_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #10B981;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:disabled {
-                background-color: #374151;
-                color: #6B7280;
-            }
-        """)
+        _look(self.add_level_btn, variant="primary")
         
         self.remove_level_btn = QPushButton("− Remove Level")
         self.remove_level_btn.clicked.connect(self.remove_interpretation_level)
         self.remove_level_btn.setEnabled(False)
-        self.remove_level_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #EF4444;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #DC2626;
-            }
-            QPushButton:disabled {
-                background-color: #374151;
-                color: #6B7280;
-            }
-        """)
+        _look(self.remove_level_btn, variant="danger")
         
         from ...gui.crow_eye_icons import CrowEyeIcons
         self.reset_levels_btn = QPushButton("Reset to Defaults")
         self.reset_levels_btn.setIcon(CrowEyeIcons.refresh())
         self.reset_levels_btn.clicked.connect(self.reset_interpretation_levels)
         self.reset_levels_btn.setEnabled(False)
-        self.reset_levels_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3B82F6;
-                color: white;
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2563EB;
-            }
-            QPushButton:disabled {
-                background-color: #374151;
-                color: #6B7280;
-            }
-        """)
+        _look(self.reset_levels_btn, variant="ghost")
         
         button_layout.addWidget(self.add_level_btn)
         button_layout.addWidget(self.remove_level_btn)
@@ -585,7 +586,7 @@ class WingsCreatorWindow(QMainWindow):
     
     def create_semantic_mappings_section(self):
         """Create semantic mappings configuration section - unified table for Simple and Advanced rules"""
-        group = QGroupBox("Semantic Mappings (Simple & Advanced Rules)")
+        group = QGroupBox("Semantic Mappings (Simple && Advanced Rules)")
         layout = QVBoxLayout()
         
         # Help text
@@ -594,7 +595,7 @@ class WingsCreatorWindow(QMainWindow):
             "Advanced rules use AND/OR logic with multiple conditions. Global mappings are loaded automatically."
         )
         help_text.setWordWrap(True)
-        help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        _look(help_text, role="muted").setContentsMargins(0, 0, 0, 10)
         layout.addWidget(help_text)
 
         # Opt-in: advanced rule capabilities. New wings default to Simple.
@@ -606,7 +607,8 @@ class WingsCreatorWindow(QMainWindow):
             "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
         )
         self.advanced_rules_checkbox.setChecked(False)
-        self.advanced_rules_checkbox.setStyleSheet("color: #F8FAFC; font-weight: bold;")
+        if _site is not None:
+            self.advanced_rules_checkbox.setFont(_site.font("ui", 13, QFont.Bold))
         self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
         layout.addWidget(self.advanced_rules_checkbox)
 
@@ -620,13 +622,13 @@ class WingsCreatorWindow(QMainWindow):
             size_px=12,
         ))
         self.advanced_rules_note.setWordWrap(True)
-        self.advanced_rules_note.setStyleSheet("color: #FBBF24; font-size: 9pt; margin: 2px 0 6px 0;")
+        _look(self.advanced_rules_note, role="note", status="warn").setContentsMargins(0, 2, 0, 6)
         self.advanced_rules_note.setVisible(False)
         layout.addWidget(self.advanced_rules_note)
 
         # Semantic mappings table - unified table showing both Simple and Advanced rules
         table_label = QLabel("All Semantic Rules (Simple + Advanced):")
-        table_label.setStyleSheet("font-weight: bold; margin-top: 10px; color: #00d9ff;")
+        _look(table_label, role="subtitle").setContentsMargins(0, 10, 0, 0)
         layout.addWidget(table_label)
         
         self.semantic_mappings_table = QTableWidget()
@@ -660,16 +662,19 @@ class WingsCreatorWindow(QMainWindow):
         self.load_global_mappings_btn.setIcon(CrowEyeIcons.download())
         self.load_global_mappings_btn.setToolTip("Load semantic mappings from global configuration")
         self.load_global_mappings_btn.clicked.connect(self.load_global_semantic_mappings)
-        self.load_global_mappings_btn.setStyleSheet("background-color: #10B981;")
+        _look(self.load_global_mappings_btn, variant="ghost")
         
         self.add_mapping_btn = QPushButton("Add Mapping")
         self.add_mapping_btn.clicked.connect(self.add_semantic_mapping)
+        _look(self.add_mapping_btn, variant="primary")
         
         self.edit_mapping_btn = QPushButton("Edit Mapping")
         self.edit_mapping_btn.clicked.connect(self.edit_semantic_mapping)
+        _look(self.edit_mapping_btn, variant="ghost")
         
         self.delete_mapping_btn = QPushButton("Delete Mapping")
         self.delete_mapping_btn.clicked.connect(self.delete_semantic_mapping)
+        _look(self.delete_mapping_btn, variant="danger")
         
         button_layout.addWidget(self.load_global_mappings_btn)
         button_layout.addWidget(self.add_mapping_btn)
@@ -685,7 +690,7 @@ class WingsCreatorWindow(QMainWindow):
             "All 36 default rules are loaded automatically. Wing-specific rules take priority over global rules."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #00d9ff; font-size: 8pt; margin-top: 10px;")
+        _look(info_label, role="muted", status="info").setContentsMargins(0, 10, 0, 0)
         layout.addWidget(info_label)
         
         # Initialize wing_semantic_mappings list and wing_semantic_rules, then load global mappings by default
@@ -700,7 +705,7 @@ class WingsCreatorWindow(QMainWindow):
                 "or use 'Add Mapping' to create wing-specific mappings."
             )
             info_msg.setWordWrap(True)
-            info_msg.setStyleSheet("color: #60A5FA; font-size: 8pt; padding: 5px; background-color: #1E293B; border-radius: 4px;")
+            _look(info_msg, role="note")
             layout.addWidget(info_msg)
         
         group.setLayout(layout)
@@ -719,7 +724,7 @@ class WingsCreatorWindow(QMainWindow):
             "These rules allow complex matching patterns for identity-level semantic classification."
         )
         help_text.setWordWrap(True)
-        help_text.setStyleSheet("color: #888; font-size: 9pt; margin-bottom: 10px;")
+        _look(help_text, role="muted").setContentsMargins(0, 0, 0, 10)
         layout.addWidget(help_text)
 
         # Opt-in: advanced rule capabilities. New wings default to Simple —
@@ -730,7 +735,8 @@ class WingsCreatorWindow(QMainWindow):
             "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
         )
         self.advanced_rules_checkbox.setChecked(False)
-        self.advanced_rules_checkbox.setStyleSheet("color: #F8FAFC; font-weight: bold;")
+        if _site is not None:
+            self.advanced_rules_checkbox.setFont(_site.font("ui", 13, QFont.Bold))
         self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
         layout.addWidget(self.advanced_rules_checkbox)
 
@@ -744,13 +750,13 @@ class WingsCreatorWindow(QMainWindow):
             size_px=12,
         ))
         self.advanced_rules_note.setWordWrap(True)
-        self.advanced_rules_note.setStyleSheet("color: #FBBF24; font-size: 9pt; margin: 2px 0 6px 0;")
+        _look(self.advanced_rules_note, role="note", status="warn").setContentsMargins(0, 2, 0, 6)
         self.advanced_rules_note.setVisible(False)
         layout.addWidget(self.advanced_rules_note)
         
         # Semantic rules list
         rules_label = QLabel("Wing Semantic Rules:")
-        rules_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        _look(rules_label, role="subtitle")
         layout.addWidget(rules_label)
         
         self.semantic_rules_list = QListWidget()
@@ -766,18 +772,21 @@ class WingsCreatorWindow(QMainWindow):
         self.add_semantic_rule_btn = QPushButton("+ Add Rule")
         self.add_semantic_rule_btn.clicked.connect(self._add_semantic_rule)
         self.add_semantic_rule_btn.setToolTip("Add a new advanced semantic rule")
+        _look(self.add_semantic_rule_btn, variant="primary")
         button_layout.addWidget(self.add_semantic_rule_btn)
         
         self.edit_semantic_rule_btn = QPushButton("Edit")
         self.edit_semantic_rule_btn.clicked.connect(self._edit_semantic_rule)
         self.edit_semantic_rule_btn.setEnabled(False)
         self.edit_semantic_rule_btn.setToolTip("Edit the selected semantic rule")
+        _look(self.edit_semantic_rule_btn, variant="ghost")
         button_layout.addWidget(self.edit_semantic_rule_btn)
         
         self.remove_semantic_rule_btn = QPushButton("Remove")
         self.remove_semantic_rule_btn.clicked.connect(self._remove_semantic_rule)
         self.remove_semantic_rule_btn.setEnabled(False)
         self.remove_semantic_rule_btn.setToolTip("Remove the selected semantic rule")
+        _look(self.remove_semantic_rule_btn, variant="danger")
         button_layout.addWidget(self.remove_semantic_rule_btn)
         
         button_layout.addStretch()
@@ -789,7 +798,7 @@ class WingsCreatorWindow(QMainWindow):
             "and multi-value conditions. Wing rules take priority over global rules."
         )
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #00d9ff; font-size: 8pt; margin-top: 10px;")
+        _look(info_label, role="muted", status="info").setContentsMargins(0, 10, 0, 0)
         layout.addWidget(info_label)
         
         # Note: wing_semantic_rules is already initialized in create_semantic_mappings_section()
@@ -1091,129 +1100,15 @@ class WingsCreatorWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
-    def load_stylesheet(self):
-        """Load Wings Creator dark theme stylesheet"""
-        style_path = os.path.join(
-            os.path.dirname(__file__),
-            "wings_styles.qss"
-        )
-        try:
-            with open(style_path, 'r') as f:
-                stylesheet = f.read()
-                self.setStyleSheet(stylesheet)
-        except FileNotFoundError:
-            print(f"Warning: Stylesheet not found at {style_path}")
-            # Fallback to basic dark theme with proper table header styling
-            self.setStyleSheet("""
-                QMainWindow, QWidget {
-                    background-color: #0B1220;
-                    color: #E5E7EB;
-                }
-                QGroupBox {
-                    background-color: #1a1f2e;
-                    border: 2px solid #334155;
-                    border-radius: 8px;
-                    color: #00d9ff;
-                    font-weight: bold;
-                    padding-top: 15px;
-                    margin-top: 10px;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    subcontrol-position: top left;
-                    padding: 5px 10px;
-                    color: #00d9ff;
-                }
-                QPushButton {
-                    background-color: #3B82F6;
-                    color: white;
-                    border-radius: 6px;
-                    padding: 10px 20px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #2563EB;
-                }
-                QPushButton:pressed {
-                    background-color: #1E40AF;
-                }
-                QTableWidget {
-                    background-color: #1a1f2e;
-                    alternate-background-color: #151a27;
-                    gridline-color: #334155;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                }
-                QTableWidget::item {
-                    padding: 5px;
-                    color: #E5E7EB;
-                }
-                QTableWidget::item:selected {
-                    background-color: #3B82F6;
-                    color: white;
-                }
-                QHeaderView::section {
-                    background-color: #1E293B;
-                    color: #00d9ff;
-                    padding: 8px;
-                    border: 1px solid #334155;
-                    font-weight: bold;
-                    font-size: 9pt;
-                }
-                QHeaderView::section:horizontal {
-                    border-top: none;
-                }
-                QHeaderView::section:vertical {
-                    border-left: none;
-                }
-                QLineEdit, QTextEdit, QSpinBox, QDoubleSpinBox {
-                    background-color: #1a1f2e;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 5px;
-                    color: #E5E7EB;
-                }
-                QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus {
-                    border: 1px solid #3B82F6;
-                }
-                QCheckBox {
-                    color: #E5E7EB;
-                    spacing: 5px;
-                }
-                QCheckBox::indicator {
-                    width: 18px;
-                    height: 18px;
-                    border: 2px solid #334155;
-                    border-radius: 3px;
-                    background-color: #1a1f2e;
-                }
-                QCheckBox::indicator:checked {
-                    background-color: #3B82F6;
-                    border-color: #3B82F6;
-                }
-                QTabWidget::pane {
-                    border: 1px solid #334155;
-                    background-color: #0B1220;
-                    border-radius: 4px;
-                }
-                QTabBar::tab {
-                    background-color: #1a1f2e;
-                    color: #94A3B8;
-                    padding: 10px 20px;
-                    margin-right: 2px;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                }
-                QTabBar::tab:selected {
-                    background-color: #3B82F6;
-                    color: white;
-                }
-                QTabBar::tab:hover:!selected {
-                    background-color: #2563EB;
-                    color: white;
-                }
-            """)
-    
+    def _apply_site_look(self, root=None):
+        """The site look (ui/site_theme.py) - one sheet, the site fonts.
+
+        It used to load wings/ui/wings_styles.qss (and an inline fallback
+        theme when the file was missing). ``root``: a part built later (a
+        feather row added with + Add Feather) is themed on its own."""
+        if _site is not None:
+            _site.apply_site_theme(self, root=root, extra=_WINGS_EXTRA)
+
     # Event handlers
     def on_wing_name_changed(self, text):
         """Handle wing name change"""
@@ -1286,6 +1181,7 @@ class WingsCreatorWindow(QMainWindow):
         
         self.feather_widgets.append(feather_widget)
         self.feathers_container.addWidget(feather_widget)
+        self._apply_site_look(root=feather_widget)
         
         self.update_status()
         self.update_event_id_visibility()
@@ -1425,11 +1321,11 @@ class WingsCreatorWindow(QMainWindow):
         
         # Update total weight label color based on value
         if total > 1.0:
-            self.total_weight_label.setStyleSheet("color: #F59E0B; font-size: 11pt; font-weight: bold;") # Amber
+            _look(self.total_weight_label, status="warn")
         elif total >= 0.8:
-            self.total_weight_label.setStyleSheet("color: #10B981; font-size: 11pt; font-weight: bold;") # Green
+            _look(self.total_weight_label, status="ok")
         else:
-            self.total_weight_label.setStyleSheet("color: #00d9ff; font-size: 11pt; font-weight: bold;") # Cyan
+            _look(self.total_weight_label, status="info")
         
         # Show informative message based on total weight
         if total > 1.0:
@@ -1437,13 +1333,13 @@ class WingsCreatorWindow(QMainWindow):
                 f"[INFO] Total weight ({total:.2f}) exceeds 1.0 - Scores will be normalized. "
                 "This is valid for relative scoring where feather importance is compared."
             )
-            self.weight_warning_label.setStyleSheet("color: #F59E0B; font-weight: bold; font-size: 9pt;") # Amber
+            _look(self.weight_warning_label, status="warn")
             self.weight_warning_label.show()
         elif total < 0.5:
             self.weight_warning_label.setText(
-                f"Tip: Tip: Total weight ({total:.2f}) is low. Consider increasing weights for more meaningful scores."
+                f"Tip: Total weight ({total:.2f}) is low. Consider increasing weights for more meaningful scores."
             )
-            self.weight_warning_label.setStyleSheet("color: #60A5FA; font-weight: bold; font-size: 9pt;") # Blue
+            _look(self.weight_warning_label, status="info")
             self.weight_warning_label.show()
         else:
             self.weight_warning_label.hide()
@@ -2092,7 +1988,7 @@ class WingsCreatorWindow(QMainWindow):
             # Type (Simple - green)
             type_item = QTableWidgetItem("Simple")
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
-            type_item.setForeground(QColor("#10B981"))
+            type_item.setForeground(QColor(_SIMPLE))
             self.semantic_mappings_table.setItem(row, 0, type_item)
             
             # Name (Source.Field)
@@ -2103,7 +1999,7 @@ class WingsCreatorWindow(QMainWindow):
             # Logic (N/A for simple)
             logic_item = QTableWidgetItem("-")
             logic_item.setFlags(logic_item.flags() & ~Qt.ItemIsEditable)
-            logic_item.setForeground(QColor("#64748B"))
+            logic_item.setForeground(QColor(_MUTED))
             self.semantic_mappings_table.setItem(row, 2, logic_item)
             
             # Conditions/Value
@@ -2114,15 +2010,14 @@ class WingsCreatorWindow(QMainWindow):
             # Semantic Value (cyan)
             semantic_item = QTableWidgetItem(mapping.get('semantic_value', ''))
             semantic_item.setFlags(semantic_item.flags() & ~Qt.ItemIsEditable)
-            semantic_item.setForeground(QColor("#00FFFF"))
+            semantic_item.setForeground(QColor(_ADVANCED))
             self.semantic_mappings_table.setItem(row, 4, semantic_item)
             
             # Severity
             severity = mapping.get('severity', 'info')
             severity_item = QTableWidgetItem(severity)
             severity_item.setFlags(severity_item.flags() & ~Qt.ItemIsEditable)
-            severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
-            severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+            severity_item.setForeground(QColor(_SEVERITY.get(severity, _MUTED)))
             self.semantic_mappings_table.setItem(row, 5, severity_item)
             
             # Feathers
@@ -2156,7 +2051,7 @@ class WingsCreatorWindow(QMainWindow):
                 # Type — shows the actual rule type (Absence/Threshold/Sequence)
                 type_item = QTableWidgetItem(self._advanced_type_label(rule_type))
                 type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
-                type_item.setForeground(QColor("#00FFFF"))
+                type_item.setForeground(QColor(_ADVANCED))
                 font = type_item.font()
                 font.setBold(True)
                 type_item.setFont(font)
@@ -2171,10 +2066,10 @@ class WingsCreatorWindow(QMainWindow):
                 # Logic (AND/OR with color) — for spec rules show the type
                 if rule_type == 'match':
                     logic_op = rd.get('logic_operator', 'AND')
-                    logic_color = "#10B981" if logic_op == "AND" else "#F59E0B"
+                    logic_color = _LOGIC["AND"] if logic_op == "AND" else _LOGIC["OR"]
                 else:
                     logic_op = rule_type.upper()
-                    logic_color = "#00FFFF"
+                    logic_color = _ADVANCED
                 logic_item = QTableWidgetItem(logic_op)
                 logic_item.setFlags(logic_item.flags() & ~Qt.ItemIsEditable)
                 logic_item.setForeground(QColor(logic_color))
@@ -2192,7 +2087,7 @@ class WingsCreatorWindow(QMainWindow):
                 # Semantic Value (cyan bold)
                 semantic_item = QTableWidgetItem(rd.get('semantic_value', ''))
                 semantic_item.setFlags(semantic_item.flags() & ~Qt.ItemIsEditable)
-                semantic_item.setForeground(QColor("#00FFFF"))
+                semantic_item.setForeground(QColor(_ADVANCED))
                 semantic_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 4, semantic_item)
 
@@ -2200,8 +2095,7 @@ class WingsCreatorWindow(QMainWindow):
                 severity = rd.get('severity', 'info')
                 severity_item = QTableWidgetItem(severity)
                 severity_item.setFlags(severity_item.flags() & ~Qt.ItemIsEditable)
-                severity_colors = {"info": "#3B82F6", "low": "#10B981", "medium": "#F59E0B", "high": "#EF4444", "critical": "#DC2626"}
-                severity_item.setForeground(QColor(severity_colors.get(severity, "#64748B")))
+                severity_item.setForeground(QColor(_SEVERITY.get(severity, _MUTED)))
                 severity_item.setFont(font)
                 self.semantic_mappings_table.setItem(row, 5, severity_item)
 
@@ -2486,6 +2380,7 @@ class WingsCreatorWindow(QMainWindow):
             
             self.feather_widgets.append(feather_widget)
             self.feathers_container.addWidget(feather_widget)
+            self._apply_site_look(root=feather_widget)
             feather_widget.show() # Explicitly show the widget
             print(f"[Wing Creator] - Widget added and shown")
         
@@ -2897,6 +2792,7 @@ class WingsCreatorWindow(QMainWindow):
                     # Add to container
                     self.feather_widgets.append(feather_widget)
                     self.feathers_container.addWidget(feather_widget)
+                    self._apply_site_look(root=feather_widget)
                     
                     loaded_count += 1
                     print(f"[Wings Creator] Loaded feather {i+1}: {feather_ref.feather_id}")

@@ -56,7 +56,17 @@ def _real_time(t: str) -> bool:
     return bool(t) and t >= "2000-01-01"
 
 
-class LnkJlBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class LnkJlBridge(AsyncBridge):
     """Read-only data source for the LNK/Jump-List dashboard."""
 
     def __init__(self, case_directory: str, parent=None):

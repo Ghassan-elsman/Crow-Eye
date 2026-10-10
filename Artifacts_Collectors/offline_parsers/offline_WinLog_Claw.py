@@ -54,7 +54,8 @@ SYSTEM_LOGS_SCHEMA = """CREATE TABLE IF NOT EXISTS SystemLogs (
     ComputerName TEXT,
     User TEXT,
     Keywords TEXT,
-    EventDescription TEXT
+    EventDescription TEXT,
+    RecordNumber INTEGER
 )"""
 
 APPLICATION_LOGS_SCHEMA = """CREATE TABLE IF NOT EXISTS ApplicationLogs (
@@ -66,7 +67,8 @@ APPLICATION_LOGS_SCHEMA = """CREATE TABLE IF NOT EXISTS ApplicationLogs (
     ComputerName TEXT,
     User TEXT,
     Keywords TEXT,
-    EventDescription TEXT
+    EventDescription TEXT,
+    RecordNumber INTEGER
 )"""
 
 SECURITY_LOGS_SCHEMA = """CREATE TABLE IF NOT EXISTS SecurityLogs (
@@ -79,7 +81,8 @@ SECURITY_LOGS_SCHEMA = """CREATE TABLE IF NOT EXISTS SecurityLogs (
     User TEXT,
     Keywords TEXT,
     TaskCategory TEXT,
-    EventDescription TEXT
+    EventDescription TEXT,
+    RecordNumber INTEGER
 )"""
 
 # Table name mapping for different log types
@@ -106,6 +109,10 @@ class EVTXParser:
             evtx_path: Path to the .evtx file to parse
         """
         self.evtx_path = evtx_path
+        # False when the file name does not say which log this is; then each
+        # event is routed by the Channel recorded inside it (an unknown name
+        # used to send every event to SystemLogs).
+        self.log_type_known = True
         self.log_type = self._determine_log_type()
         logger.debug(f"Initialized EVTXParser for {evtx_path} (type: {self.log_type})")
     
@@ -125,8 +132,9 @@ class EVTXParser:
         elif 'security' in filename:
             return 'security'
         else:
-            # Default to system if type cannot be determined
-            logger.warning(f"Could not determine log type from filename: {filename}, defaulting to 'system'")
+            # Routed per event by its Channel (see channel_table).
+            self.log_type_known = False
+            logger.info("Log type not in the file name %s; routing events by their channel", filename)
             return 'system'
     
     def parse_events(self) -> Iterator[Dict[str, Any]]:
@@ -234,8 +242,38 @@ class EVTXParser:
             keywords_elem = system.find('evt:Keywords', ns)
             keywords = keywords_elem.text if keywords_elem is not None else None
             
-            # Extract EventData for description
-            event_description = self._extract_event_description(root, ns)
+            # Extract EventData for description: the catalogue's sentence for
+            # (provider, ID), with its %n filled from the EventData values,
+            # followed by the payload itself - kept so `LIKE '%LogonType%'`
+            # queries over EventDescription (Eye, UBA) still match.
+            payload = self._extract_event_description(root, ns)
+            inserts = None
+            event_data_elem = root.find('evt:EventData', ns)
+            if event_data_elem is not None:
+                inserts = []
+                for d in event_data_elem.findall('evt:Data', ns):
+                    # Classic events keep their inserts as <string> children
+                    # of one unnamed Data element.
+                    inserts.extend(_data_values(d))
+            try:
+                from utils.event_descriptions import describe, has_text
+                if has_text(source, event_id):
+                    text = describe(source, event_id, inserts)
+                    event_description = "%s | %s" % (text, payload) if payload else text
+                else:
+                    event_description = payload or describe(source, event_id, inserts)
+            except Exception as exc:
+                logger.debug("No catalogue description for %s/%s: %s", source, event_id, exc)
+                event_description = payload
+
+            record_elem = system.find('evt:EventRecordID', ns)
+            try:
+                record_number = int(record_elem.text) if record_elem is not None else None
+            except (TypeError, ValueError):
+                record_number = None
+
+            channel_elem = system.find('evt:Channel', ns)
+            channel = channel_elem.text if channel_elem is not None else None
             
             # Build event data dictionary
             event_data = {
@@ -247,7 +285,9 @@ class EVTXParser:
                 'ComputerName': computer_name,
                 'User': user,
                 'Keywords': keywords,
-                'EventDescription': event_description
+                'EventDescription': event_description,
+                'RecordNumber': record_number,
+                '_channel': channel,
             }
             
             # Validate the extracted data (Requirements 9.1, 9.3)
@@ -418,7 +458,7 @@ class EVTXParser:
                 data_items = []
                 for data_elem in event_data.findall('evt:Data', ns):
                     name = data_elem.get('Name', '')
-                    value = data_elem.text or ''
+                    value = _data_text(data_elem)
                     if name:
                         data_items.append(f"{name}: {value}")
                     else:
@@ -457,7 +497,11 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
     
     if case_path:
         artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
-        if os.path.exists(artifacts_dir):
+        # Created, not merely checked: in a new case whose first parse was
+        # this one, Target_Artifacts did not exist yet and the database
+        # went to the current working folder instead of the case.
+        os.makedirs(artifacts_dir, exist_ok=True)
+        if os.path.isdir(artifacts_dir):
             db_path = os.path.join(artifacts_dir, 'Log_Claw.db')
         else:
             logger.warning(f"Target_Artifacts directory not found in {case_path}, using current directory")
@@ -470,11 +514,9 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         conn = sqlite3.connect(db_path)
         cursor = conn.cursor()
         
-        # Drop existing tables to ensure clean state
-        cursor.execute('DROP TABLE IF EXISTS SystemLogs')
-        cursor.execute('DROP TABLE IF EXISTS ApplicationLogs')
-        cursor.execute('DROP TABLE IF EXISTS SecurityLogs')
-        
+        # Never dropped: an earlier parse's events stay, and a re-parse adds
+        # only the events not stored yet (see insert_event / the live
+        # parser's prepare_event_tables).
         # Create tables with exact schema from live parser
         cursor.execute(SYSTEM_LOGS_SCHEMA)
         cursor.execute(APPLICATION_LOGS_SCHEMA)
@@ -529,6 +571,39 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
                 logger.warning(f"Failed to clean up partial database file: {cleanup_error}")
         
         raise
+
+
+def _data_text(elem) -> str:
+    """A Data element's value; nested <string> children joined with ', '.
+
+    python-evtx renders a classic event's inserts as <string> children, and
+    serialising the element put raw XML tags into the description.
+    """
+    return ", ".join(v for v in _data_values(elem) if v)
+
+
+def _data_values(elem):
+    """The insert values of one Data element, in order."""
+    import re
+    children = list(elem)
+    if children:
+        return [(c.text or '').strip() for c in children]
+    text = (elem.text or '').strip()
+    # The same nesting, when python-evtx escaped it into the element's text.
+    found = re.findall(r"<string>(.*?)</string>", text, re.S)
+    if found:
+        return [f.strip() for f in found]
+    return [text]
+
+
+def channel_table(channel: Optional[str]) -> str:
+    """The Log_Claw table for an event's Channel ('Security' -> SecurityLogs)."""
+    low = (channel or '').strip().lower()
+    if low == 'security':
+        return 'SecurityLogs'
+    if low == 'application':
+        return 'ApplicationLogs'
+    return 'SystemLogs'
 
 
 def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.Cursor) -> Dict[str, int]:
@@ -607,6 +682,8 @@ def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.
             # Parse events and insert into database
             event_count = 0
             for event_data in parser.parse_events():
+                if not parser.log_type_known:
+                    table_name = channel_table(event_data.get('_channel'))
                 try:
                     # Insert event into appropriate table
                     insert_event(cursor, table_name, event_data)
@@ -658,6 +735,20 @@ def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.
     return stats
 
 
+# Per-run state for insert_event: rows written vs already present, and
+# which tables hold rows from before RecordNumber was recorded.
+_RUN = {"tally": None, "legacy": {}}
+
+
+def begin_event_run(conn):
+    """Prepare the tables for a parse (keep earlier events) and reset counts."""
+    from Artifacts_Collectors.WinLog_Claw import prepare_event_tables
+    from utils.dedupe_insert import Tally
+    _RUN["tally"] = Tally()   # first: it lists the identity indexes created below
+    _RUN["legacy"] = prepare_event_tables(conn)
+    return _RUN["tally"]
+
+
 def insert_event(cursor: sqlite3.Cursor, table_name: str, event_data: Dict[str, Any]):
     """
     Insert a single event record into the specified table with error handling.
@@ -672,6 +763,17 @@ def insert_event(cursor: sqlite3.Cursor, table_name: str, event_data: Dict[str, 
     
     Requirements: 1.2, 1.3, 1.4, 1.5, 7.5
     """
+    if _RUN["tally"] is not None:
+        # The same insert-if-new the live parser uses: a re-parse adds only
+        # events that are not stored yet.
+        from Artifacts_Collectors.WinLog_Claw import EVENT_TABLE_COLUMNS, insert_event_rows
+        cols = EVENT_TABLE_COLUMNS[table_name]
+        data = dict(event_data)
+        if table_name == 'SecurityLogs':
+            data['TaskCategory'] = event_data.get('Category')
+        insert_event_rows(cursor.connection, table_name, [tuple(data.get(c) for c in cols)],
+                          _RUN["tally"], _RUN["legacy"].get(table_name, False))
+        return
     try:
         # Handle SecurityLogs table which has TaskCategory instead of Category
         if table_name == 'SecurityLogs':
@@ -764,7 +866,12 @@ def main(evtx_dir: Optional[str] = None, case_path: Optional[str] = None):
                 conn.close()
                 return {'success': False, 'records': 0, 'error': f"EVTX path is not a directory: {evtx_dir}"}
             
+            tally = begin_event_run(conn)
             stats = process_evtx_files(evtx_dir, conn, cursor)
+            stats['counts'] = tally.as_result()
+            logger.info("Events read: %d - new: %d, already in the database: %d"
+                        % (stats['counts']['records'], stats['counts']['inserted'],
+                           stats['counts']['duplicates']))
             
             # Increment counter with total events from all EVTX files
             total_events = stats['total_events']
@@ -799,7 +906,13 @@ def main(evtx_dir: Optional[str] = None, case_path: Optional[str] = None):
         logger.info(f"Event log parsing completed. Database created at: {db_path}")
         
         # Return success dict with total events and database path
-        return {'success': True, 'records': total_events, 'output_path': db_path}
+        counts = (stats or {}).get('counts') if 'stats' in locals() else None
+        result = {'success': True, 'records': total_events, 'output_path': db_path}
+        if counts:
+            result.update(inserted=counts['inserted'], duplicates=counts['duplicates'],
+                          tables=counts['tables'])
+        _RUN["tally"] = None
+        return result
         
     except Exception as e:
         # Catch all exceptions and return error dict

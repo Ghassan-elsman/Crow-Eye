@@ -84,6 +84,12 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
 # Configure module-level logger
 logger = logging.getLogger(__name__)
 
+# Update-sequence fixups and the $MFT's own data runs live in utils/ntfs_runs,
+# shared with the raw-disk $MFT copier so a live parse and an offline import of
+# the copy read the same bytes. apply_fixups stays importable from here.
+from utils.ntfs_runs import apply_fixups, mft_layout, read_stream, RunMap, nonresident_header
+
+
 class MFTClawError(Exception):
     """Base exception for MFT Claw errors"""
     pass
@@ -470,17 +476,24 @@ class DataAttributeParser(MFTAttributeParser):
             'content': attr_data if resident else None
         }
         
-        # For non-resident data, we would need to parse run lists
-        # This is a simplified implementation
+        # attr_data starts 0x10 into the attribute, so the non-resident header
+        # fields sit 0x10 earlier than their documented offsets: first/last
+        # VCN 0x00/0x08, allocated size 0x18, data (real) size 0x20. The size
+        # is only meaningful on the segment that starts at VCN 0 - a stream
+        # split across extension records repeats the header with zeros. It
+        # used to be 0 for every non-resident stream (Amcache.hve, 9 MB, read
+        # as an empty file), which was 122,682 of 152,131 files on one drive.
         if not resident and len(attr_data) >= 16:
             try:
-                # Parse non-resident attribute header
                 starting_vcn = struct.unpack('<Q', attr_data[0:8])[0]
                 ending_vcn = struct.unpack('<Q', attr_data[8:16])[0]
                 data.update({
                     'starting_vcn': starting_vcn,
                     'ending_vcn': ending_vcn
                 })
+                if starting_vcn == 0 and len(attr_data) >= 40:
+                    data['allocated_size'] = struct.unpack('<Q', attr_data[24:32])[0]
+                    data['size'] = struct.unpack('<Q', attr_data[32:40])[0]
             except struct.error:
                 pass
         
@@ -850,6 +863,29 @@ class AttributeParserRegistry:
                 return parser
         return None
 
+try:
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new
+except ImportError:                                    # run as a script
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new
+
+# What the last main() run added, read by the live collector (it only gets
+# main()'s exit code back) - see utils/concurrency/standalone_parsers.py.
+LAST_COUNTS = None
+
+# Columns of the three child tables, in insert order (identity = all of them).
+_CHILD_COLUMNS = {
+    "mft_standard_info": ["record_number", "file_name", "volume_letter", "created", "modified",
+                          "accessed", "mft_modified", "flags", "max_versions", "version_number",
+                          "class_id", "owner_id", "security_id", "quota_charged", "usn"],
+    "mft_file_names": ["record_number", "file_name", "volume_letter", "parent_record",
+                       "parent_sequence", "namespace", "flags", "created", "modified", "accessed",
+                       "mft_modified", "allocated_size", "real_size"],
+    "mft_data_attributes": ["record_number", "file_name", "volume_letter", "attribute_name",
+                            "resident", "size", "data_type"],
+}
+
+
 class DatabaseManager:
     """Manages database operations for MFT Claw"""
     
@@ -857,6 +893,18 @@ class DatabaseManager:
         self.config = config
         self.db_path = os.path.join(config.output_directory, config.database_name)
         self.connection: Optional[sqlite3.Connection] = None
+        # Rows written vs already in the database for this run. A re-parse of
+        # the same volume adds what is new: the child tables were a plain
+        # INSERT, so every run stored every attribute again.
+        self.tally = Tally()
+        self.child_start_rowid = {}
+        self.child_empty_at_start = {}
+        # (table, volume) -> the volume had no rows in the table when this run
+        # first wrote to it. A case already holding another volume (the live
+        # C: beside an offline $MFT) sent EVERY row of the new volume through
+        # the NOT EXISTS guard - correct, but the slowest path, for rows that
+        # cannot already be there.
+        self._volume_empty = {}
         self._setup_database()
     
     def _setup_database(self):
@@ -871,18 +919,140 @@ class DatabaseManager:
             )
             self._configure_database()
             self._create_schema()
+            self._prepare_identity()
             logger.info(f"Database initialized: {self.db_path}")
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to initialize database: {e}")
     
+    def _prepare_identity(self):
+        """Index the child tables on their record and note where this run's
+        rows begin (the merge's clean-up only ever touches rows after it)."""
+        for table in _CHILD_COLUMNS:
+            ensure_identity_index(self.connection, table, ["record_number", "volume_letter"])
+            top = self.connection.execute("SELECT MAX(rowid) FROM %s" % table).fetchone()[0]
+            self.child_start_rowid[table] = top or 0
+            self.child_empty_at_start[table] = top is None
+        self.connection.commit()
+
+    def _hold_write_lock(self):
+        """Make sure this connection holds the database's write lock.
+
+        In sqlite3's default (deferred) mode a transaction is only open once a
+        statement has written, so an open one already holds the lock; otherwise
+        BEGIN IMMEDIATE takes it now, waiting for another writer to commit."""
+        if not self.connection.in_transaction:
+            self.connection.execute("BEGIN IMMEDIATE")
+
+    def _plain_insert_allowed(self, table, volume):
+        """True while ``volume`` may take the plain INSERT into ``table``.
+
+        Decided under the write lock, every batch. The first time: the volume
+        has no row in the table (re-checked inside the lock - two parses of the
+        same disk started together both used to find it empty and both
+        plain-inserted every row). After that: no other writer has added a
+        row of the volume since this run's last insert; if one has, the rest of
+        the run goes through insert_new."""
+        key = (table, volume)
+        state = self._volume_empty.get(key)
+        if state is False:
+            return False
+        self._hold_write_lock()
+        if state is None:
+            if self.child_empty_at_start.get(table):
+                # Empty when the run began: only rows added since can be there.
+                after = self.child_start_rowid.get(table) or 0
+            else:
+                after = None
+        else:
+            after = state                 # the rowid of this run's last insert
+        if after is None:
+            found = self.connection.execute(
+                "SELECT 1 FROM %s WHERE volume_letter IS ? LIMIT 1" % table,
+                (volume,)).fetchone()
+        else:
+            found = self.connection.execute(
+                "SELECT 1 FROM %s WHERE rowid > ? AND volume_letter IS ? LIMIT 1" % table,
+                (after, volume)).fetchone()
+        if found is not None:
+            self._volume_empty[key] = False
+            return False
+        return True
+
+    def _volume_empty_at_start(self, table, volume):
+        """True when ``volume`` still takes the plain insert into ``table``
+        (kept for callers of the round-20 name; see _plain_insert_allowed)."""
+        return self._plain_insert_allowed(table, volume)
+
+    def _insert_children(self, table, rows):
+        """A volume with no rows in the table takes the plain insert (a first
+        parse of that volume costs nothing extra); otherwise only rows not
+        stored yet (insert_new). The plain path runs under the write lock."""
+        if not rows:
+            return
+        cols = _CHILD_COLUMNS[table]
+        vol_at = cols.index("volume_letter")
+        by_volume = {}
+        for r in rows:
+            by_volume.setdefault(r[vol_at], []).append(r)
+        for volume, vrows in by_volume.items():
+            if self._plain_insert_allowed(table, volume):
+                self.connection.executemany(
+                    "INSERT INTO %s (%s) VALUES (%s)" % (table, ", ".join(cols), ", ".join("?" * len(cols))),
+                    vrows)
+                self.tally.add(table, len(vrows), len(vrows))
+                # Still under the lock: where this run's rows end, so the next
+                # batch can tell another writer's rows from its own.
+                self._volume_empty[(table, volume)] = self.connection.execute(
+                    "SELECT MAX(rowid) FROM %s" % table).fetchone()[0] or 0
+            else:
+                insert_new(self.connection, table, cols, vrows, cols, self.tally)
+
+    # Secondary indexes the parse itself never reads (the record existence
+    # check uses the primary key, the re-parse guard the identity indexes).
+    # Maintained row by row they cost more than building them once at the end.
+    SECONDARY_INDEXES = {
+        "idx_mft_records_filename": "CREATE INDEX IF NOT EXISTS idx_mft_records_filename ON mft_records(file_name)",
+        "idx_mft_records_extension": "CREATE INDEX IF NOT EXISTS idx_mft_records_extension ON mft_records(extension)",
+        "idx_mft_filenames_parent": "CREATE INDEX IF NOT EXISTS idx_mft_filenames_parent ON mft_file_names(parent_record)",
+    }
+
+    def suspend_secondary_indexes(self):
+        """Drop the secondary indexes for a bulk load; restore with
+        restore_secondary_indexes(). Returns the names dropped."""
+        dropped = []
+        for name in self.SECONDARY_INDEXES:
+            if self.connection.execute("SELECT 1 FROM sqlite_master WHERE type='index' AND name=?",
+                                       (name,)).fetchone():
+                self.connection.execute("DROP INDEX %s" % name)
+                dropped.append(name)
+        self.connection.commit()
+        return dropped
+
+    def restore_secondary_indexes(self):
+        """(Re)create every secondary index - built once over the loaded rows."""
+        for sql in self.SECONDARY_INDEXES.values():
+            self.connection.execute(sql)
+        self.connection.commit()
+
     @staticmethod
     def _configure_datetime_handling():
         """Configure proper datetime handling for Python 3.12+ compatibility"""
         # Register custom datetime adapters to avoid deprecation warnings
+        _zero = datetime.timedelta(0)
+
         def adapt_datetime(dt):
-            """Convert datetime to ISO format string"""
+            """Convert datetime to ISO format string.
+
+            UTC (or naive, read as UTC) values from year 1000 on are formatted
+            directly - the same 'YYYY-MM-DD HH:MM:SS' format_forensic_timestamp
+            produces, without a strftime and an astimezone per value (14 per
+            MFT record: a fifth of the parse). Anything else goes through
+            format_forensic_timestamp as before."""
             if dt is None:
                 return None
+            if dt.year >= 1000 and (dt.tzinfo is None or dt.utcoffset() == _zero):
+                return "%04d-%02d-%02d %02d:%02d:%02d" % (
+                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
             return format_forensic_timestamp(dt)
         
         def convert_datetime(val):
@@ -908,6 +1078,9 @@ class DatabaseManager:
         try:
             # Performance optimizations
             self.connection.execute("PRAGMA foreign_keys = ON")
+            # A second writer (another parse of the same database) waits for
+            # the write lock instead of failing its batch after 5 seconds.
+            self.connection.execute("PRAGMA busy_timeout = 60000")
             if self.config.enable_wal_mode:
                 self.connection.execute("PRAGMA journal_mode = WAL")
             self.connection.execute("PRAGMA synchronous = NORMAL")
@@ -1100,11 +1273,20 @@ class DatabaseManager:
             out.append((rn, fn, vl, stream_name, 1, d.get('size', 0),
                         'LoggedUtilStream'))
 
-        # Hard-link count >1 is rare and forensically interesting; only persist
-        # when non-trivial so we don't fill the DB with hardlinks=1 rows.
-        if record.hard_link_count and record.hard_link_count > 1:
-            out.append((rn, fn, vl, f"hardlinks={record.hard_link_count}",
-                        1, record.hard_link_count, 'Hardlinks'))
+        # More than one real name is rare and forensically interesting; only
+        # persist it then. The header's link count also counts the 8.3 DOS
+        # alias of a long name (Win32 + DOS = 2), so it was ">1" for every
+        # file with a short name: 2.1 M of one case's 2.2 M Hardlinks rows. A
+        # Win32-only (1) or DOS-only (2) name means that pair is present -
+        # even when its partner sits in an extension record - and it is one
+        # link, not two. A directory cannot be hard-linked (its count is its
+        # name pair), and an extension record's header count is not the
+        # file's (65535 on one case): neither gets a row.
+        links = 0 if (record.is_directory or record.base_record_ref) else (record.hard_link_count or 0)
+        if links > 1 and any((f.data or {}).get('namespace') in (1, 2) for f in record.file_names):
+            links -= 1
+        if links > 1:
+            out.append((rn, fn, vl, f"hardlinks={links}", 1, links, 'Hardlinks'))
 
         # Surface base-record reference so extension records can be traced.
         if record.base_record_ref:
@@ -1226,7 +1408,7 @@ class DatabaseManager:
                         fn_data.get('allocated_size', 0), fn_data.get('real_size', 0)
                     ))
                 
-                # Data attributes data — write each $DATA stream with a
+                # Data attributes data - write each $DATA stream with a
                 # properly-classified data_type so the bulk path matches the
                 # single-row insert behaviour.
                 for data_attr in record.data_attributes:
@@ -1244,8 +1426,16 @@ class DatabaseManager:
                 # 7-column shape as $DATA so we extend the same list.
                 data_attributes_data.extend(self._extra_attr_rows(record))
             
-            # Bulk insert main records
+            # Bulk insert main records. A record already stored is replaced
+            # by the current occupant (the key holds no sequence number); it is
+            # counted as already present, not as new.
             if main_records_data:
+                vol = main_records_data[0][2]
+                nums = [r[0] for r in main_records_data]
+                known = {row[0] for row in self.connection.execute(
+                    "SELECT record_number FROM mft_records WHERE volume_letter = ? AND record_number IN (%s)"
+                    % ",".join("?" * len(nums)), [vol] + nums)}
+                self.tally.add("mft_records", len(nums), sum(1 for n in nums if n not in known))
                 self.connection.executemany("""
                     INSERT OR REPLACE INTO mft_records (
                         record_number, file_name, volume_letter, extension,
@@ -1254,34 +1444,12 @@ class DatabaseManager:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, main_records_data)
             
-            # Bulk insert standard information
-            if standard_info_data:
-                self.connection.executemany("""
-                    INSERT INTO mft_standard_info (
-                        record_number, file_name, volume_letter, created, modified, accessed, mft_modified,
-                        flags, max_versions, version_number, class_id, owner_id, security_id,
-                        quota_charged, usn
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, standard_info_data)
-            
-            # Bulk insert file names
-            if file_names_data:
-                self.connection.executemany("""
-                    INSERT INTO mft_file_names (
-                        record_number, file_name, volume_letter, parent_record, parent_sequence,
-                        namespace, flags, created, modified, accessed, mft_modified,
-                        allocated_size, real_size
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, file_names_data)
-            
-            # Bulk insert data attributes + synthesized non-$DATA attribute rows
-            if data_attributes_data:
-                self.connection.executemany("""
-                    INSERT INTO mft_data_attributes (
-                        record_number, file_name, volume_letter,
-                        attribute_name, resident, size, data_type
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                """, data_attributes_data)
+            # Child tables: only the rows not stored yet (identity = the whole
+            # row). Plain INSERT when the table was empty at the start.
+            self._insert_children("mft_standard_info", standard_info_data)
+            self._insert_children("mft_file_names", file_names_data)
+            # data attributes + synthesized non-$DATA attribute rows
+            self._insert_children("mft_data_attributes", data_attributes_data)
             
             # Commit the transaction to ensure records are saved before anomaly flushing
             self.connection.commit()
@@ -1381,6 +1549,170 @@ class DatabaseManager:
             self.connection.close()
             self.connection = None
 
+# Extension records whose base reference was not a record of this volume
+# (filled by merge_extension_records; read by the parser's report).
+LAST_MERGE_SKIPPED = []
+
+
+def merge_extension_records(conn, volume_letter: str, run_start_rowid=None, tally=None) -> int:
+    """Give a base record the attributes that NTFS moved into its extension
+    records.
+
+    A file with many names (WinSxS hard links) or a long attribute list keeps
+    some $FILE_NAME / $DATA attributes in other FILE records, each pointing
+    back with a base-record reference (stored as an 'ExtensionOf' row). Parsed
+    on their own, the base record had no name and size 0, and the extension
+    showed up as a nameless "file" - 4,762 of them on one drive. Only in-use
+    extension records are merged: a deleted one may belong to an earlier
+    occupant of the base record number. Returns the number merged.
+    """
+    global LAST_MERGE_SKIPPED
+    LAST_MERGE_SKIPPED = []
+    if conn is None:
+        return 0
+    cur = conn.cursor()
+    # The merge rewrites record numbers of child rows; with foreign keys on, one
+    # bad base reference failed the whole merge ("FOREIGN KEY constraint
+    # failed") and 53,223 extension records stayed unmerged. Bad references are
+    # now left out (below), and the check is off for the statement only.
+    fk_was = cur.execute("PRAGMA foreign_keys").fetchone()[0]
+    cur.execute("PRAGMA foreign_keys = OFF")
+    try:
+        return _merge_extension_records(cur, conn, volume_letter, run_start_rowid, tally)
+    finally:
+        cur.execute("DROP TABLE IF EXISTS temp._ext")
+        cur.execute("DROP TABLE IF EXISTS temp._bases")
+        if fk_was:
+            cur.execute("PRAGMA foreign_keys = ON")
+
+
+def _merge_extension_records(cur, conn, volume_letter, run_start_rowid, tally):
+    global LAST_MERGE_SKIPPED
+    cur.execute("DROP TABLE IF EXISTS temp._ext")
+    # Only a base that IS a record of this volume. On one live C: 24 extension
+    # records carried "base" references that were file content ("js.org",
+    # six spaces) - torn or reused records - and pointed nowhere.
+    cur.execute("""
+        CREATE TEMP TABLE _ext AS
+        SELECT d.record_number AS ext, d.size AS base
+        FROM mft_data_attributes d
+        JOIN mft_records r ON r.record_number = d.record_number
+                          AND r.volume_letter = d.volume_letter
+        WHERE d.data_type = 'ExtensionOf' AND d.volume_letter = ? AND r.in_use = 1
+          AND d.size <> d.record_number
+          AND EXISTS (SELECT 1 FROM mft_records b
+                      WHERE b.record_number = d.size AND b.volume_letter = d.volume_letter)
+    """, (volume_letter,))
+    LAST_MERGE_SKIPPED = cur.execute("""
+        SELECT d.record_number, d.size
+        FROM mft_data_attributes d
+        JOIN mft_records r ON r.record_number = d.record_number
+                          AND r.volume_letter = d.volume_letter
+        WHERE d.data_type = 'ExtensionOf' AND d.volume_letter = ? AND r.in_use = 1
+          AND d.size <> d.record_number
+          AND NOT EXISTS (SELECT 1 FROM mft_records b
+                          WHERE b.record_number = d.size AND b.volume_letter = d.volume_letter)
+    """, (volume_letter,)).fetchall()
+    if LAST_MERGE_SKIPPED:
+        logger.warning("%d extension record(s) on %s point at a base record that does not exist "
+                       "(torn or reused records) - left unmerged: %s",
+                       len(LAST_MERGE_SKIPPED), volume_letter,
+                       ", ".join("%d->0x%x" % (e, b if isinstance(b, int) and b >= 0 else 0)
+                                 for e, b in LAST_MERGE_SKIPPED[:10]))
+    n = cur.execute("SELECT COUNT(*) FROM _ext").fetchone()[0]
+    if not n:
+        return 0
+    cur.execute("CREATE INDEX temp._ext_i ON _ext(ext)")
+    cur.execute("""
+        UPDATE mft_file_names
+        SET record_number = (SELECT base FROM _ext WHERE ext = mft_file_names.record_number)
+        WHERE volume_letter = ? AND record_number IN (SELECT ext FROM _ext)
+    """, (volume_letter,))
+    cur.execute("""
+        UPDATE mft_data_attributes
+        SET record_number = (SELECT base FROM _ext WHERE ext = mft_data_attributes.record_number)
+        WHERE volume_letter = ? AND data_type <> 'ExtensionOf'
+          AND record_number IN (SELECT ext FROM _ext)
+    """, (volume_letter,))
+    # Set-based: one pass over each table joined to the (small) set of base
+    # records. A lookup per base scanned every $FILE_NAME row each time - on a
+    # drive with 47,860 extension records that was hours, not seconds.
+    cur.execute("DROP TABLE IF EXISTS temp._bases")
+    cur.execute("CREATE TEMP TABLE _bases (base INTEGER PRIMARY KEY)")
+    cur.execute("INSERT OR IGNORE INTO _bases SELECT DISTINCT base FROM _ext")
+    # A re-parse inserted the extension's rows again under the EXTENSION's
+    # number (the earlier run's copies had already been moved to the base), so
+    # the move above made them duplicates of what was stored. Removed again -
+    # from THIS run's rows only, never from earlier ones.
+    if run_start_rowid:
+        for table, cols in _CHILD_COLUMNS.items():
+            start = run_start_rowid.get(table) or 0
+            if not start or table == "mft_standard_info":
+                continue
+            same = " AND ".join("o.%s IS %s.%s" % (c, table, c) for c in cols)
+            cur.execute("""
+                DELETE FROM %s
+                WHERE rowid > ? AND volume_letter = ? AND record_number IN (SELECT base FROM _bases)
+                  AND EXISTS (SELECT 1 FROM %s o WHERE o.rowid <= ? AND o.record_number = %s.record_number
+                              AND %s)""" % (table, table, table, same), (start, volume_letter, start))
+            removed = cur.rowcount or 0
+            if removed and tally is not None and table in tally.tables:
+                t = tally.tables[table]
+                t["inserted"] -= removed
+                t["duplicates"] += removed
+    rank = {3: 0, 1: 1, 0: 2}
+    best = {}
+    for base, name, ns in cur.execute("""
+            SELECT f.record_number, f.file_name, f.namespace
+            FROM mft_file_names f JOIN _bases b ON b.base = f.record_number
+            WHERE f.volume_letter = ? AND f.file_name <> ''""", (volume_letter,)):
+        try:
+            r = rank.get(int(ns), 3)
+        except (TypeError, ValueError):
+            r = 3
+        if base not in best or r < best[base][0]:
+            best[base] = (r, name)
+    sizes = dict(cur.execute("""
+            SELECT d.record_number, MAX(d.size)
+            FROM mft_data_attributes d JOIN _bases b ON b.base = d.record_number
+            WHERE d.volume_letter = ? AND d.data_type = 'Default'
+            GROUP BY d.record_number""", (volume_letter,)).fetchall())
+    cur.executemany("""
+        UPDATE mft_records SET file_name = ?, extension = ?
+        WHERE record_number = ? AND volume_letter = ? AND (file_name IS NULL OR file_name = '')
+    """, [(name, os.path.splitext(name)[1].lower().lstrip('.'), base, volume_letter)
+          for base, (_r, name) in best.items()])
+    cur.executemany("""
+        UPDATE mft_records SET file_size = ?
+        WHERE record_number = ? AND volume_letter = ? AND is_directory = 0
+          AND COALESCE(file_size, 0) < ?
+    """, [(size, base, volume_letter, size) for base, size in sizes.items() if size])
+    conn.commit()
+    return n
+
+
+def _custody_raw_read(volume_letter, reader, records, allocated_bytes):
+    """The $MFT read off the raw volume, in the run's chain-of-custody record.
+
+    There is no file to copy or hash - the bytes come from the volume device
+    through the $MFT's own data runs - so the entry says how it was read and
+    how much, rather than claiming a hash it does not have.
+    """
+    try:
+        from utils import custody
+        rec = custody.active()
+        if rec is None:
+            return
+        letter = str(volume_letter).strip(":\\/")
+        runs = len(getattr(getattr(reader, "runmap", None), "runs", None) or [])
+        rec.add_source(r"\\.\%s:\$MFT" % letter, method="raw_disk", times={"size": allocated_bytes},
+                       hash_source=False,
+                       note="read from the raw volume through %d data run(s): %s records, %s bytes"
+                            % (runs, format(records, ","), format(allocated_bytes, ",")))
+    except Exception:
+        pass
+
+
 class VolumeReader:
     """Handles raw volume access for MFT reading"""
     
@@ -1411,6 +1743,7 @@ class VolumeReader:
             
             # Read boot sector to get MFT location
             self._parse_boot_sector()
+            self._load_mft_runs()
             logger.info(f"Opened volume {self.volume_letter}: successfully")
             
         except Exception as e:
@@ -1465,23 +1798,53 @@ class VolumeReader:
         except Exception as e:
             raise VolumeAccessError(f"Failed to read sectors {sector}-{sector+count-1}: {e}")
     
+    def _read_at(self, disk_offset: int, length: int) -> bytes:
+        """Read ``length`` bytes at a byte offset of the volume. Both are
+        sector multiples here (cluster starts, record-aligned offsets)."""
+        win32file.SetFilePointer(self.handle, disk_offset, win32con.FILE_BEGIN)
+        _, data = win32file.ReadFile(self.handle, length)
+        return data
+
+    def _load_mft_runs(self):
+        """Map the whole $MFT through its own data runs (record 0's $DATA).
+
+        The $MFT is fragmented on any volume that has been used for a while;
+        record N is NOT at ``mft_lcn*cluster + N*record_size`` once N passes
+        the first fragment. Without this, 3.1 of 3.3 million records on one
+        C: drive read unrelated clusters and were dropped as "not FILE".
+        """
+        cluster = self.sectors_per_cluster * self.bytes_per_sector
+        self.runmap = None
+        self.mft_data_size = 0
+        self.mft_allocated_size = 0
+        try:
+            self.runmap, self.mft_data_size, self.mft_allocated_size = mft_layout(
+                self._read_at, self.mft_lcn, cluster, self.mft_record_size)
+            logger.info(f"$MFT on {self.volume_letter}: {len(self.runmap.runs)} data run(s), "
+                        f"{self.mft_data_size:,} bytes "
+                        f"({self.mft_data_size // self.mft_record_size:,} records)")
+        except Exception as e:
+            # Fall back to one contiguous run from mft_lcn: right for the first
+            # fragment, and said out loud so a short parse is explained.
+            logger.warning(f"Could not read the $MFT's data runs on {self.volume_letter}: ({e}); "
+                           f"reading it as one contiguous run - records past the first "
+                           f"fragment will be missing")
+            self.runmap = RunMap([(0, self.mft_lcn, 1 << 40)], cluster)
+
+    def read_mft_records(self, first_record: int, count: int) -> bytes:
+        """Read ``count`` consecutive MFT records in as few reads as the runs
+        allow (one per fragment touched). Holes read as zeros."""
+        try:
+            return read_stream(self._read_at, self.runmap,
+                               first_record * self.mft_record_size,
+                               count * self.mft_record_size)
+        except Exception as e:
+            raise VolumeAccessError(
+                f"Failed to read MFT records {first_record}-{first_record + count - 1}: {e}")
+
     def read_mft_record(self, record_number: int) -> bytes:
         """Read a specific MFT record"""
-        try:
-            # Calculate record offset
-            bytes_per_cluster = self.sectors_per_cluster * self.bytes_per_sector
-            mft_offset = self.mft_lcn * bytes_per_cluster
-            record_offset = mft_offset + (record_number * self.mft_record_size)
-            
-            # Read record
-            sector_offset = record_offset // self.bytes_per_sector
-            sectors_needed = (self.mft_record_size + self.bytes_per_sector - 1) // self.bytes_per_sector
-            
-            data = self._read_sectors(sector_offset, sectors_needed)
-            return data[:self.mft_record_size]
-            
-        except Exception as e:
-            raise VolumeAccessError(f"Failed to read MFT record {record_number}: {e}")
+        return self.read_mft_records(record_number, 1)
     
     def is_valid_file_record(self, record_data: bytes) -> bool:
         """Validate if record data contains a valid FILE record signature
@@ -1560,11 +1923,18 @@ class VolumeReader:
             - allocated_*: Full allocated clusters (may contain slack space records)
         """
         try:
+            # The sizes come with the data runs when those were read.
+            if getattr(self, 'mft_data_size', 0):
+                rs = self.mft_record_size
+                return (self.mft_data_size // rs, self.mft_data_size,
+                        self.mft_allocated_size // rs, self.mft_allocated_size)
             # Try to read MFT record 0 (MFT itself) if volume is opened
             if hasattr(self, 'handle') and self.handle:
                 mft_record = self.read_mft_record(0)
                 
-                # Parse MFT record to find DATA attribute
+                # Parse MFT record to find DATA attribute (its data runs
+                # can cross a fixup position like anything else in a record)
+                mft_record, _ok = apply_fixups(mft_record)
                 if len(mft_record) >= 48:
                     # Verify record signature
                     if mft_record[0:4] == NTFSConstants.MFT_RECORD_SIGNATURE:
@@ -1690,8 +2060,23 @@ class MFTParser:
         self._setup_logging()
     
     def _setup_logging(self):
-        """Configure logging for the parser"""
+        """Configure logging for the parser.
+
+        Every parser instance used to add a fresh file handler (and console
+        handler) to the module logger and never remove them, so the second
+        parse in one session wrote each line twice, the third three times,
+        and the first run's file was never closed. The previous instance's
+        handlers are taken off first.
+        """
         log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        for old in getattr(MFTParser, "_installed_handlers", []):
+            for lg in (logger, logging.getLogger(__name__ + ".file_only")):
+                lg.removeHandler(old)
+            try:
+                old.close()
+            except Exception:
+                pass
+        MFTParser._installed_handlers = []
         
         # Configure file logging
         file_handler = logging.FileHandler(
@@ -1709,6 +2094,9 @@ class MFTParser:
         
         logger.addHandler(file_handler)
         logger.setLevel(self.config.log_level.value)
+        MFTParser._installed_handlers.append(file_handler)
+        if self.config.enable_console_logging:
+            MFTParser._installed_handlers.append(console_handler)
         
         # A quieter channel for errors raised mid-parse, so they do not shred the
         # progress bar on the console. It keeps its own file handler and now
@@ -1768,6 +2156,7 @@ class MFTParser:
             self.stats['total_records'] = allocated_records
             self.stats['total_mft_size_bytes'] = allocated_bytes
             self.stats['estimated_file_count'] = file_count_estimate
+            _custody_raw_read(volume_letter, volume_reader, logical_records, allocated_bytes)
             
 
             
@@ -1804,49 +2193,112 @@ class MFTParser:
                 self._path_cache = {}
             
             batch_records = []
-            batch_size = min(self.config.batch_size, 1000)  # Optimize batch size
-            
-            for i, record_num in enumerate(records_to_parse):
-                try:
-                    # Read and parse record
-                    raw_record = volume_reader.read_mft_record(record_num)
-                    mft_record = self._parse_mft_record(record_num, volume_letter, raw_record)
-                    
-                    if mft_record:
-                        # Add to batch for bulk processing
-                        batch_records.append(mft_record)
-                        
-                        # Update statistics
-                        self._update_statistics(mft_record)
-                    
-                    self.stats['processed_records'] += 1
-                    self.state['last_processed_record'] = record_num
-                    
-                    # Process batch when full
-                    if len(batch_records) >= batch_size:
-                        self._process_record_batch(batch_records)
-                        batch_records.clear()
-                        self.db_manager.commit()
-                    
-                    # Less frequent progress reporting for better performance
-                    if self.stats['processed_records'] % 500 == 0:
-                        progress_pct = (i + 1) / total_records_to_parse * 100
-                        self._report_progress(progress_pct, record_num, total_records_to_parse)
-                    
-                except Exception as e:
-                    self.file_logger.error(f"Error processing record {record_num}: {e}")
-                    self.stats['errors'] += 1
-                    continue
-            
-            # Process remaining records in batch
-            if batch_records:
-                self._process_record_batch(batch_records)
-            
-            # Final commit and progress report
-            self.db_manager.commit()
+            # One insert + commit per batch: the 1,000 cap made a commit per
+            # 1,000 records a tenth of the parse (the offline path uses 10,000).
+            batch_size = self.config.batch_size
+
+            # A load large next to what the tables already hold builds the
+            # secondary indexes once at the end instead of row by row - kept
+            # up per row they made each batch slower than the last (9m47s for
+            # 3.3 M records; the same rows load in about half the insert time
+            # with them suspended). The same rule as the offline path.
+            db = self.db_manager
+            try:
+                existing = db.connection.execute("SELECT MAX(rowid) FROM mft_records").fetchone()[0] or 0
+            except Exception:
+                existing = 0
+            suspended = []
+            if total_records_to_parse >= 50000 and total_records_to_parse * 2 >= existing:
+                suspended = db.suspend_secondary_indexes()
+
+            # Read in 1 MB chunks of consecutive records (one read per fragment
+            # touched) instead of one 1 KB read per record: a raw volume read
+            # costs about the same for 1 KB as for 1 MB.
+            rec_size = volume_reader.mft_record_size
+            chunk_records = max(1, (1 << 20) // rec_size)
+            chunk_first, chunk_data = -1, b''
+            self.stats['not_file_records'] = 0
+
+            try:
+                for i, record_num in enumerate(records_to_parse):
+                    try:
+                        # Read and parse record
+                        if not (chunk_first <= record_num < chunk_first + len(chunk_data) // rec_size):
+                            if record_num < logical_records:
+                                n = min(chunk_records, logical_records - record_num)
+                            else:
+                                n = 1
+                            chunk_first = record_num
+                            chunk_data = volume_reader.read_mft_records(record_num, n)
+                        pos = (record_num - chunk_first) * rec_size
+                        raw_record = chunk_data[pos:pos + rec_size]
+                        if raw_record[:4] not in (b'FILE', b'BAAD'):
+                            # Never-used slot (zeros) or a hole: nothing to parse.
+                            self.stats['not_file_records'] += 1
+                        mft_record = self._parse_mft_record(record_num, volume_letter, raw_record)
+
+                        if mft_record:
+                            # Add to batch for bulk processing
+                            batch_records.append(mft_record)
+
+                            # Update statistics
+                            self._update_statistics(mft_record)
+
+                        self.stats['processed_records'] += 1
+                        self.state['last_processed_record'] = record_num
+
+                        # Process batch when full
+                        if len(batch_records) >= batch_size:
+                            self._process_record_batch(batch_records)
+                            batch_records.clear()
+                            self.db_manager.commit()
+
+                        # Less frequent progress reporting for better performance
+                        if self.stats['processed_records'] % 500 == 0:
+                            progress_pct = (i + 1) / total_records_to_parse * 100
+                            self._report_progress(progress_pct, record_num, total_records_to_parse)
+
+                    except Exception as e:
+                        self.file_logger.error(f"Error processing record {record_num}: {e}")
+                        self.stats['errors'] += 1
+                        continue
+
+                # Process remaining records in batch
+                if batch_records:
+                    self._process_record_batch(batch_records)
+
+                # Final commit and progress report
+                self.db_manager.commit()
+            finally:
+                # Always - a failed parse too: indexes dropped for the bulk
+                # load must not stay dropped (the merge below and the
+                # correlator read through them).
+                if suspended:
+                    logger.info(f"Building indexes ({', '.join(suspended)})...")
+                    try:
+                        db.connection.rollback()        # nothing half-written holds the lock
+                        db.restore_secondary_indexes()
+                    except Exception as e:
+                        logger.error(f"Could not rebuild the MFT indexes: {e}")
             self._report_progress()  # Final progress update
             print()  # Add newline after progress bar
-            
+            logger.info(f"{self.stats.get('not_file_records', 0):,} of {total_records_to_parse:,} "
+                        f"MFT slots hold no FILE record (never used, or zeroed)")
+            merged = merge_extension_records(self.db_manager.connection, volume_letter,
+                                             self.db_manager.child_start_rowid, self.db_manager.tally)
+            if merged:
+                logger.info(f"Merged {merged:,} extension record(s) into their base records")
+            if LAST_MERGE_SKIPPED:
+                self.stats.setdefault('extension_records_skipped', 0)
+                self.stats['extension_records_skipped'] += len(LAST_MERGE_SKIPPED)
+                try:
+                    from utils import custody as _custody
+                    _custody.warn("MFT %s: %d extension record(s) point at a base record that does "
+                                  "not exist (torn or reused records) and were left unmerged."
+                                  % (volume_letter, len(LAST_MERGE_SKIPPED)))
+                except Exception:
+                    pass
+
 
             
             # Mark volume as processed
@@ -1858,6 +2310,7 @@ class MFTParser:
             return True
             
         except Exception as e:
+            self.stats['errors'] += 1
             logger.error(f"Failed to parse volume {volume_letter}: {e}")
             print(f"{COLOR_ERROR}ERROR: Failed to parse volume {volume_letter}: {e}{COLOR_RESET}")
             import traceback
@@ -1876,8 +2329,14 @@ class MFTParser:
             # Verify record signature
             if raw_data[0:4] != NTFSConstants.MFT_RECORD_SIGNATURE:
                 return None
-            
-            # Parse record header.  Layout per libfsntfs / flatcap NTFS docs:
+
+            # The two bytes at the end of each 512-byte stride are the update
+            # sequence number until the fixup array puts the real ones back.
+            raw_data, fixups_ok = apply_fixups(raw_data)
+            if not fixups_ok:
+                logger.debug(f"MFT record {record_number}: update sequence mismatch (torn write)")
+
+            # Parse record header.Layout per libfsntfs / flatcap NTFS docs:
             #   0x08 LSN (8 B), 0x10 sequence (2 B), 0x12 hardlink count (2 B),
             #   0x14 first attr offset, 0x16 flags, 0x20 base record file ref.
             lsn = struct.unpack('<Q', raw_data[8:16])[0]
@@ -1909,14 +2368,13 @@ class MFTParser:
             record.primary_filename = record.get_primary_filename()
             record.file_extension = os.path.splitext(record.primary_filename)[1].lower().lstrip('.')
 
-            # Calculate file size from data attributes - consider both resident and non-resident.
-            # The default unnamed $DATA stream now has attr_name == "" thanks to the stream-name
-            # extraction in _parse_single_attribute.
+            # The file's size is its unnamed $DATA stream, resident or not. Named
+            # streams (Zone.Identifier and other ADS) have their own rows in
+            # mft_data_attributes; adding them in made a 0-byte download with a
+            # Zone.Identifier look 100 bytes long.
             for data_attr in record.data_attributes:
-                if data_attr.data.get('resident'):
-                    record.file_size += data_attr.data.get('size', 0)
-                elif not data_attr.attr_name:
-                    record.file_size = data_attr.data.get('size', 0)
+                if not data_attr.attr_name:
+                    record.file_size = max(record.file_size, data_attr.data.get('size', 0) or 0)
 
             # Detect Alternate Data Streams: $DATA attrs whose stream name is non-empty.
             ads_count = 0
@@ -2021,7 +2479,7 @@ class MFTParser:
                 )
 
             # Carry the stream name into the parsed attribute. For $DATA this is
-            # the ADS name (or empty for the default stream) — overriding
+            # the ADS name (or empty for the default stream) - overriding
             # attr_name lets the ADS detection in _parse_mft_record count only
             # truly named streams. For $INDEX_ROOT / $LOGGED_UTILITY_STREAM the
             # stream name is useful diagnostic data ($I30, $EFS, $TXF_DATA).
@@ -2085,14 +2543,18 @@ class MFTParser:
         # Track parsed data size (approximate 1KB per record)
         self.stats['parsed_data_size_bytes'] += 1024
         
-        if record.in_use:
-            self.stats['in_use_records'] += 1
-        
+        if not record.in_use:
+            # A deleted entry: counted on its own, not as a file or directory
+            # (the summary said 2.66 M files for 1.70 M records in use).
+            self.stats['deleted_records'] = self.stats.get('deleted_records', 0) + 1
+            return
+        self.stats['in_use_records'] += 1
+
         if record.is_directory:
             self.stats['directory_records'] += 1
         else:
             self.stats['file_records'] += 1
-        
+
         if record.has_ads:
             self.stats['ads_records'] += 1
     
@@ -2157,7 +2619,7 @@ class MFTParser:
             # Full format for wide terminals
             bar_width = 30
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:5.1f}% | "
                 f"Records: {processed:,}{slack_indicator} | "
@@ -2170,7 +2632,7 @@ class MFTParser:
             # Medium format - shorter progress bar
             bar_width = 20
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:4.1f}% | "
                 f"Rec: {processed:,}{slack_indicator} | "
@@ -2183,7 +2645,7 @@ class MFTParser:
             # Compact format - minimal progress bar
             bar_width = 15
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = (
                 f"[{bar}] {percentage:4.1f}% | "
                 f"Rec: {processed:,} | "
@@ -2196,7 +2658,7 @@ class MFTParser:
             # Minimal format for very small terminals
             bar_width = 10
             filled = int(bar_width * percentage / 100)
-            bar = '█' * filled + '░' * (bar_width - filled)
+            bar = '#' * filled + '-' * (bar_width - filled)
             progress_msg = f"[{bar}] {percentage:4.1f}% | {processed:,} rec | MFT: {total_data_mb:.0f}MB | {elapsed_time}"
         
         # Ensure message doesn't exceed terminal width
@@ -2311,29 +2773,36 @@ def get_available_volumes() -> List[str]:
 
 def main():
     """Main entry point for MFT Claw - Automatic Analysis Mode"""
-    
+    # This run's counts only: a run that fails early must not hand on the
+    # previous run's (the module stays loaded between parses).
+    global LAST_COUNTS
+    LAST_COUNTS = None
+
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
     print(f"{COLOR_HEADER}MFT CLAW - AUTOMATIC FORENSIC ANALYSIS{COLOR_RESET}")
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
-    
+
+    # Raw volume reads need elevation. Checked first, and reported with its own
+    # exit code (5, utils.parse_status.EXIT_ACCESS_DENIED): without rights the
+    # volume list comes back empty, and that used to be reported as a failure
+    # to find NTFS volumes rather than as a refusal.
+    if not check_admin_privileges():
+        print(f"{COLOR_ERROR}ERROR: Administrator privileges are required to read the MFT.{COLOR_RESET}")
+        print(f"{COLOR_ERROR}Restart Crow-Eye as Administrator and parse again.{COLOR_RESET}")
+        return 5
+
     # Auto-detect all NTFS volumes
     volumes = get_available_volumes()
     if not volumes:
-        print(f"{COLOR_ERROR}ERROR: No NTFS volumes found or insufficient privileges{COLOR_RESET}")
-        print(f"{COLOR_ERROR}Please run as Administrator{COLOR_RESET}")
+        print(f"{COLOR_ERROR}ERROR: No NTFS volumes found{COLOR_RESET}")
         return 1
     
     print(f"{COLOR_INFO}Available NTFS volumes detected:{COLOR_RESET}")
     for vol in volumes:
-        print(f"{COLOR_SUCCESS}  ✓ {vol}:{COLOR_RESET}")
+        print(f"{COLOR_SUCCESS}  [OK] {vol}:{COLOR_RESET}")
     
     print(f"\n{COLOR_INFO}Starting automatic analysis of {len(volumes)} volume(s)...{COLOR_RESET}")
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
-    
-    # Check admin privileges
-    if not check_admin_privileges():
-        print(f"{COLOR_WARNING}WARNING: Administrator privileges required for raw disk access.{COLOR_RESET}")
-        print(f"{COLOR_WARNING}Some features may not work correctly.{COLOR_RESET}")
     
     # Check win32 availability
     if not HAS_WIN32:
@@ -2349,7 +2818,7 @@ def main():
         config = MFTClawConfig(
             output_format=OutputFormat.SQLITE,  # SQLite for best performance
             output_directory=target_artifacts_dir,  # Target_Artifacts subdirectory
-            batch_size=1000,                   # Optimal batch size
+            batch_size=10000,                  # records per insert + commit (as offline)
             log_level=LogLevel.INFO           # INFO logging for normal operation
         )
         
@@ -2394,7 +2863,16 @@ def main():
         logger.info(f"Directory records: {stats['directory_records']}")
         logger.info(f"File records: {stats['file_records']}")
         logger.info(f"Records with ADS: {stats['ads_records']}")
+        logger.info(f"Deleted records: {stats.get('deleted_records', 0)}")
         logger.info(f"Parsing errors: {stats['errors']}")
+        LAST_COUNTS = mft_parser.db_manager.tally.as_result(
+            primary="mft_records",
+            volumes=len(volumes), volumes_processed=success_count,
+            extension_records_skipped=stats.get('extension_records_skipped', 0))
+        _t = LAST_COUNTS
+        logger.info(f"MFT records: {_t['records']:,} - new: {_t['inserted']:,}, "
+                    f"already in the database: {_t['duplicates']:,} "
+                    f"(rows written across the MFT tables: {_t['rows']:,})")
         
         # Cleanup
         mft_parser.cleanup()

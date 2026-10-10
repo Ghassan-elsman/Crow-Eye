@@ -11,6 +11,7 @@ This module provides the core identity correlation functionality:
 - Semantic rule evaluation for identity-level semantic results
 """
 
+import logging
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
@@ -20,6 +21,10 @@ from dataclasses import dataclass
 from .data_structures import Identity, Anchor, EvidenceRow, CorrelationResults, CorrelationStatistics
 from .cancellation_support import EnhancedCancellationManager
 from .semantic_rule_evaluator import SemanticRuleEvaluator
+
+# Used 142 times in this module and never defined: every debug_mode path and
+# the legacy methods raised NameError.
+logger = logging.getLogger(__name__)
 
 
 class IdentityCorrelationEngine:
@@ -3393,7 +3398,9 @@ class IdentityBasedEngineAdapter:
             # Build feather metadata from loaded records and extraction stats
             # Requirements: 7.1, 7.2
             feather_metadata = {}
-            extraction_stats = getattr(correlation_results, 'feather_extraction_stats', {})
+            # `correlation_results` was never defined in this method (NameError).
+            extraction_stats = getattr(getattr(self, 'correlation_results', None),
+                                       'feather_extraction_stats', None) or {}
             
             # Calculate unique identities per feather
             # This is needed because extraction_stats['extracted'] counts records, not unique identities

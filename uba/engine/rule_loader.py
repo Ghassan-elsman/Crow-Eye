@@ -54,6 +54,14 @@ def load_rules(path: str = None) -> dict:
             raise RuleValidationError(
                 "rule {!r}: 'requires' must be an object".format(rule["id"]))
 
+    # The browser rules read curated site categories; a broken categories file
+    # would make every category rule silently match nothing.
+    if any(r.get("extractor", "").startswith("browser_") for r in rules):
+        from uba.engine import site_categories
+        problems = site_categories.validate(site_categories.load())
+        if problems:
+            raise RuleValidationError("site_categories.json: " + "; ".join(problems[:10]))
+
     logger.info("UBA: loaded %d behavior rules from %s", len(rules), path)
     return {
         "rules": rules,

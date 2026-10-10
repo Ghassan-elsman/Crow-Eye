@@ -52,13 +52,22 @@ def _normalize_path(path: str) -> str:
     return "/".join(parts)
 
 
+UNKNOWN_FOLDER = "an unknown folder"
+
+
 def folder_label(path: Optional[str]) -> str:
     """Map a filesystem path onto the folder the reader should see.
 
     Prefers a friendly known-folder name; otherwise returns the **real**
     folder path (8.3-expanded, truncated) rather than 'unknown location'.
     """
-    if not path or str(path).strip() in (".", "", "/"):
+    # "The drive root" only for the root itself. A missing path, a bare file
+    # name, or a folder the MFT and journal could not name is "an unknown
+    # folder": on one case 141,398 records were said to be created in the
+    # drive root because their folder had simply not been read.
+    if not path or str(path).strip() == "" or str(path).startswith("["):
+        return UNKNOWN_FOLDER
+    if str(path).strip() in (".", "/", "./"):
         return "the drive root"
     raw = str(path)
     if _NTFS_META_RE.search(raw) or raw.lstrip("./").startswith("$"):
@@ -71,7 +80,9 @@ def folder_label(path: Optional[str]) -> str:
     # Fallback: show the actual folder (drop the filename, cap depth ~4).
     parts = norm.split("/")
     if len(parts) <= 1:
-        return "the drive root"          # bare filename — folder not recorded
+        if str(path).startswith(("./", "/", ".\\", "\\")):
+            return "the drive root"      # a file directly in the root
+        return UNKNOWN_FOLDER            # bare filename - folder not recorded
     parts = parts[:-1]                    # directory portion
     if len(parts) > 4:
         parts = parts[-4:]

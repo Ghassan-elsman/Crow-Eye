@@ -62,7 +62,12 @@ from typing import List, Optional, Dict, Tuple
 from pathlib import Path
 import binascii
 import ctypes
-from ctypes import wintypes, WinDLL, WinError
+try:
+    from ctypes import wintypes, WinDLL, WinError
+except (ImportError, ValueError):
+    # Linux: no WinDLL. The offline / image path reads $I files from disk
+    # and never calls the Windows API; only _init_windows_api needs it.
+    wintypes = WinDLL = WinError = None
 
 # Configure logging for forensic analysis
 # Deliberately no logging.basicConfig() here. This module is imported into the
@@ -956,15 +961,11 @@ class RecycleBinParser:
         # Check if database already exists
         db_exists = os.path.exists(self.db_path)
         if db_exists:
+            # Appended to, never rewritten. A full copy of the database used to
+            # be written beside it on EVERY run (recyclebin_analysis.db.bak_<time>),
+            # piling up in Target_Artifacts; a re-parse only ever adds rows, so
+            # there is nothing a backup would protect.
             logger.info(f"Database already exists at {self.db_path} - appending new data")
-            # Create a backup of the existing file for safety
-            backup_path = f"{self.db_path}.bak_{get_current_utc().strftime('%Y%m%d_%H%M%S')}"
-            try:
-                import shutil
-                shutil.copy2(self.db_path, backup_path)
-                logger.info(f"Created backup of existing database at {backup_path}")
-            except Exception as e:
-                logger.warning(f"Failed to create database backup: {e}")
         else:
             logger.info(f"Creating new database at {self.db_path}")
         
@@ -997,18 +998,20 @@ class RecycleBinParser:
         skipped_count = 0
         
         for entry in entries:
-            # Check if entry already exists (excluding parsed_at timestamp)
+            # Check if entry already exists (excluding parsed_at timestamp).
+            # `IS`, not `=`: `=` never matches NULL, so an entry with no user
+            # SID, no $R file or no deletion time was stored again every run.
             cursor.execute("""
-                SELECT COUNT(*) FROM recycle_bin_entries 
-                WHERE original_filename = ? 
-                AND original_path = ? 
-                AND deletion_time = ? 
-                AND formatted_file_size = ?
-                AND user_sid = ?
-                AND recycle_bin_path = ?
-                AND r_file_path = ?
-                AND random_i_filename = ?
-                AND random_r_filename = ?
+                SELECT COUNT(*) FROM recycle_bin_entries
+                WHERE original_filename IS ?
+                AND original_path IS ?
+                AND deletion_time IS ?
+                AND formatted_file_size IS ?
+                AND user_sid IS ?
+                AND recycle_bin_path IS ?
+                AND r_file_path IS ?
+                AND random_i_filename IS ?
+                AND random_r_filename IS ?
             """, (
                 entry.original_filename,
                 entry.original_path,
@@ -1054,7 +1057,9 @@ class RecycleBinParser:
         
         conn.commit()
         conn.close()
-        
+        self.last_counts = {"records": len(entries), "inserted": inserted_count,
+                            "duplicates": skipped_count}
+
         return self.db_path
     
 
@@ -1195,8 +1200,10 @@ def parse_recycle_bin(case_path: Optional[str] = None, offline_mode: bool = Fals
     if entries:
         # Save to database only
         result_path = parser.save_to_database(entries)
+        counts = getattr(parser, "last_counts", {}) or {}
         logger.info(f"Analysis complete: {len(entries)} entries saved to database: {result_path}")
-        return {'success': True, 'records': len(entries), 'output_path': result_path}
+        return {'success': True, 'records': len(entries), 'output_path': result_path,
+                'inserted': counts.get('inserted'), 'duplicates': counts.get('duplicates')}
     else:
         logger.warning("No Recycle Bin entries found")
         return {'success': True, 'records': 0, 'output_path': ""}

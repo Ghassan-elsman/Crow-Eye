@@ -589,7 +589,9 @@ class PrefetchFile:
         except Exception as e:
             print(f"Error parsing prefetch file: {e}")
             instance.parsing_error = True
-            
+            # Kept so the run can say WHY this file is only partly parsed.
+            instance.parsing_error_message = "%s: %s" % (type(e).__name__, e)
+
         return instance
     
     def _parse_version17(self):
@@ -993,11 +995,18 @@ class PrefetchFile:
         
         return formatted_paths
 
+    # Databases already checked in this process. The check reads the whole
+    # database and ran before EVERY file's save - quadratic over a run.
+    _checked_dbs = set()
+
     def save_to_sqlite(self, db_path: str):
         try:
-            conn = sqlite3.connect(db_path)
-            conn.execute("PRAGMA integrity_check")
-            conn.close()
+            key = os.path.normcase(os.path.abspath(db_path))
+            if key not in PrefetchFile._checked_dbs:
+                conn = sqlite3.connect(db_path)
+                conn.execute("PRAGMA integrity_check")
+                conn.close()
+                PrefetchFile._checked_dbs.add(key)
         except sqlite3.DatabaseError:
             print(f"Database at {db_path} is malformed. Recreating database...")
             try:
@@ -1437,8 +1446,14 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
                 prefetch = PrefetchFile.open(file_path)
                 prefetch.save_to_sqlite(db_path)
                 parsed_files.append(filename)
+                if getattr(prefetch, "parsing_error", False):
+                    # Saved, but the body did not parse: say so, with the reason.
+                    failed_files.append((filename, "partly parsed - %s" % (
+                        getattr(prefetch, "parsing_error_message", "") or "body unreadable")))
             except Exception as e:
-                failed_files.append(filename)
+                # The reason used to be thrown away; it is what the analyst
+                # needs to judge whether one skipped file matters.
+                failed_files.append((filename, "%s: %s" % (type(e).__name__, e)))
             
             processed_count += 1
             
@@ -1465,10 +1480,14 @@ def process_prefetch_files(case_path: str = None, offline_mode: bool = False, wi
         
         if failed_files:
             failed_log_path = os.path.join(os.path.dirname(db_path), 'failed_prefetch_files.txt')
-            with open(failed_log_path, 'w') as f:
-                for file in failed_files:
-                    f.write(f"{file}\n")
-            print(f"Failed to process {len(failed_files)} files. List saved to {failed_log_path}")
+            # name <TAB> reason, one per line (utils/parse_status reads both
+            # this and the old name-only form).
+            with open(failed_log_path, 'w', encoding='utf-8') as f:
+                for name, reason in failed_files:
+                    f.write("%s\t%s\n" % (name, " ".join(str(reason).split())[:300]))
+            whole = sum(1 for _n, r in failed_files if not r.startswith("partly parsed"))
+            print(f"[Prefetch] {whole} file(s) could not be parsed and "
+                  f"{len(failed_files) - whole} only partly - list saved to {failed_log_path}")
         
         print(f"\033[92mPrefetch forensic analysis completed! Database saved to: {db_path}\033[0m")
         

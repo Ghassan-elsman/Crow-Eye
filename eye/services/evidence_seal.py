@@ -276,6 +276,37 @@ class EvidenceSeal:
                         EvidenceSeal._extract_row_metadata(events)[:100],
                 })
             
+            elif name == "query_user_behavior":
+                # Behaviour events are interpretations of artifact rows, so the
+                # sealed record keeps what the analysis looked at (the window
+                # and filters), what it could not look for, and the rows behind
+                # every event returned - "nothing suspicious that day" is a
+                # claim about which rules ran.
+                events = inner.get("events") or []
+                pointers = []
+                for e in events:
+                    if not isinstance(e, dict):
+                        continue
+                    for ev in e.get("evidence") or []:
+                        if isinstance(ev, dict):
+                            pointers.append({"database": ev.get("database"),
+                                             "table": ev.get("table"),
+                                             "rowids": (ev.get("rowids") or [])[:10],
+                                             "rowid_range": ev.get("rowid_range"),
+                                             "rule": e.get("rule"), "time": e.get("time")})
+                unavailable = inner.get("rules_unavailable") or {}
+                refs.append({
+                    "tool": "query_user_behavior",
+                    "window": inner.get("window"),
+                    "filters": inner.get("filters"),
+                    "row_count": len(events),
+                    "total_matching": inner.get("total_matching"),
+                    "rules_fired": sorted({e.get("rule") for e in events
+                                           if isinstance(e, dict) and e.get("rule")}),
+                    "rules_unavailable": unavailable.get("count", 0),
+                    "evidence_pointers": pointers[:200],
+                })
+
             else:
                 # Generic fallback for other investigative tools: scan result text for artifacts
                 result_str = str(inner)

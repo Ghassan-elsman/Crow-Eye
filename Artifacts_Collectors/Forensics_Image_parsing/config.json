@@ -8,7 +8,8 @@
     "AmCache",
     "RecycleBin",
     "EVTX",
-    "SRUM"
+    "SRUM",
+    "Browser"
   ],
   "calculate_hashes": true,
   "verify_integrity": true,

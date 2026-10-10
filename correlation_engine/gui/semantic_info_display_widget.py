@@ -8,7 +8,8 @@ This is a minimal implementation for Task 11.1 testing.
 from typing import Dict, Any
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QColor
+from ui.site_theme import font, set_role, STATUS_COLORS
 
 
 class SemanticInfoDisplayWidget(QWidget):
@@ -37,7 +38,7 @@ class SemanticInfoDisplayWidget(QWidget):
         
         # Header
         title_label = QLabel("Semantic Information")
-        title_label.setFont(QFont("Arial", 10, QFont.Bold))
+        title_label.setFont(font("ui", 13, QFont.Bold))
         layout.addWidget(title_label)
         
         # Semantic info table
@@ -57,7 +58,7 @@ class SemanticInfoDisplayWidget(QWidget):
         
         # Summary section
         self.summary_label = QLabel("No semantic information available")
-        self.summary_label.setStyleSheet("color: #666; font-style: italic;")
+        set_role(self.summary_label, "muted")
         layout.addWidget(self.summary_label)
     
     def display_semantic_info(self, record: Dict[str, Any], semantic_data: Dict[str, Any]):
@@ -104,7 +105,7 @@ class SemanticInfoDisplayWidget(QWidget):
             # Field name
             field_item = QTableWidgetItem(field_name)
             if has_mapping:
-                field_item.setFont(QFont("Arial", 9, QFont.Bold))
+                field_item.setFont(font("ui", 12, QFont.Bold))
             
             self.semantic_table.setItem(row, 0, field_item)
             
@@ -118,12 +119,18 @@ class SemanticInfoDisplayWidget(QWidget):
                 # Semantic value
                 semantic_value = mapping_info.get('semantic_value', str(field_value))
                 semantic_item = QTableWidgetItem(semantic_value)
-                semantic_item.setFont(QFont("Arial", 9, QFont.Bold))
+                semantic_item.setFont(font("ui", 12, QFont.Bold))
                 self.semantic_table.setItem(row, 2, semantic_item)
             else:
                 # No mapping available
                 no_mapping_item = QTableWidgetItem("(no mapping)")
-                no_mapping_item.setStyleSheet("color: #999; font-style: italic;")
+                # A table item has no style sheet (setStyleSheet raised
+                # AttributeError here, so a record with one unmapped field
+                # showed no semantic table at all): colour and italic font.
+                no_mapping_item.setForeground(QColor(STATUS_COLORS["neutral"]))
+                italic = font("ui", 12)
+                italic.setItalic(True)
+                no_mapping_item.setFont(italic)
                 self.semantic_table.setItem(row, 2, no_mapping_item)
         
         # Update summary

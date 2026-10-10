@@ -6,7 +6,7 @@ import {
   LineElement, LineController, PointElement, RadarController, RadialLinearScale,
   Filler, Tooltip, Legend,
 } from 'chart.js'
-import { fmtBytes, fmtInt, fmtDuration, fmtDay } from './format.js'
+import { fmtBytes, fmtInt, fmtCompact, fmtDuration, fmtDay } from './format.js'
 import { IconSearch } from './Icons.jsx'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, BarController, LineElement,
@@ -113,7 +113,7 @@ export default function AppDetailPanel({ app, detail, loading, onClose }) {
         <div className="totals-strip">
           <div className="tot"><span>{fmtBytes(totals.bytesSent)}</span><label>sent</label></div>
           <div className="tot"><span>{fmtBytes(totals.bytesReceived)}</span><label>received</label></div>
-          <div className="tot"><span>{fmtInt(totals.cpu)}</span><label>CPU cycles</label></div>
+          <div className="tot" title={fmtInt(totals.cpu)}><span>{fmtCompact(totals.cpu)}</span><label>CPU cycles</label></div>
           <div className="tot"><span>{fmtDuration(totals.focusS)}</span><label>in focus</label></div>
         </div>
 

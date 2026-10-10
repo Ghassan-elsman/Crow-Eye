@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { call } from './bridge.js'
+import { latest } from './bridge.js'
 import { SOURCE_COLOR, SOURCE_LABEL, TYPE_LABEL, fmtInt } from './format.js'
 
 const PAGE = 500
@@ -24,7 +24,7 @@ export default function AllItemsSection({ filterArgs, onOpenItem }) {
   function load(offset, replace) {
     setLoading(true)
     setErr('')
-    call('getShellItemsAll', JSON.stringify({ ...filterArgs, order, offset, limit: PAGE }))
+    latest('getShellItemsAll', JSON.stringify({ ...filterArgs, order, offset, limit: PAGE }))
       .then((r) => {
         setTotal(r?.total || 0)
         setDays(r?.days || 0)

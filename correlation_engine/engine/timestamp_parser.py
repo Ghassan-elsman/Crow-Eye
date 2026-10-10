@@ -17,7 +17,7 @@ import re
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Dict, Any, Tuple, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import calendar
 
@@ -62,6 +62,16 @@ class TimestampValidationRule:
     max_future_days: int = 365
 
 
+_DIGITS = re.compile(r"\d")
+# 'YYYY-MM-DDTHH:MM:SS[.f{1,6}]' then a literal Z, a '+HH:MM' offset, or
+# nothing - what the strptime formats below accept, minus '+HHMM' (left to
+# them). Group 1 is the local part, group 2 the suffix.
+_ISO_PLAIN = re.compile(
+    r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)(Z|[+-]\d{2}:\d{2})?$")
+# 'YYYY-MM-DD HH:MM', '... HH:MM:SS', '... HH:MM:SS.f{1,6}'.
+_DT_PLAIN = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?$")
+
+
 class ResilientTimestampParser:
     """
     Robust timestamp parser with multiple format support and error resilience.
@@ -95,7 +105,15 @@ class ResilientTimestampParser:
         self.parse_attempts = 0
         self.successful_parses = 0
         self.failed_parses = 0
+        # Keyed by the value's SHAPE (digits folded), not the value: keyed by
+        # value it held one entry per distinct timestamp - hundreds of
+        # thousands on an MFT feather, never evicted. Bounded either way.
         self.format_detection_cache: Dict[str, TimestampFormat] = {}
+        # Whole-result cache by value. The time-window engine asks for the
+        # same raw value once per window it falls in; strptime is the cost.
+        from collections import OrderedDict
+        self._result_cache = OrderedDict()
+        self._result_cache_max = 200000
 
         # Setup logging
         self.logger = logging.getLogger(__name__)
@@ -175,6 +193,25 @@ class ResilientTimestampParser:
         """
         self.parse_attempts += 1
 
+        key = None
+        if isinstance(value, (str, int, float)) and not isinstance(value, bool):
+            key = (type(value).__name__, value, hint_format, self.source_timezone)
+            hit = self._result_cache.get(key)
+            if hit is not None:
+                if hit.success:
+                    self.successful_parses += 1
+                else:
+                    self.failed_parses += 1
+                # A copy: callers adjust fields (confidence) on what they get.
+                return replace(hit)
+        result = self._parse_uncached(value, hint_format, column_name)
+        if key is not None:
+            self._result_cache[key] = replace(result)
+            if len(self._result_cache) > self._result_cache_max:
+                self._result_cache.popitem(last=False)
+        return result
+
+    def _parse_uncached(self, value, hint_format, column_name):
         # Handle None/null values
         if value is None or (isinstance(value, str) and value.strip() == ''):
             return TimestampParseResult(
@@ -247,10 +284,15 @@ class ResilientTimestampParser:
         Returns:
             Detected TimestampFormat
         """
-        # Cache key for format detection
-        cache_key = str(type(value).__name__) + "_" + str(value)[:50]
-        if cache_key in self.format_detection_cache:
-            return self.format_detection_cache[cache_key]
+        # Numbers are classified by magnitude - cheap, not cached. Strings by
+        # shape: every digit folded to '0', which every pattern below treats
+        # exactly as it treats the original digit.
+        if isinstance(value, str):
+            cache_key = "str_" + _DIGITS.sub("0", value.strip())
+            if cache_key in self.format_detection_cache:
+                return self.format_detection_cache[cache_key]
+        else:
+            cache_key = None
         
         detected_format = TimestampFormat.UNKNOWN
         
@@ -289,7 +331,10 @@ class ResilientTimestampParser:
                     break
         
         # Cache the result
-        self.format_detection_cache[cache_key] = detected_format
+        if cache_key is not None:
+            if len(self.format_detection_cache) > 4096:
+                self.format_detection_cache.clear()
+            self.format_detection_cache[cache_key] = detected_format
         return detected_format
     
     def _try_parse_format(self, 
@@ -462,6 +507,24 @@ class ResilientTimestampParser:
         """Parse ISO8601 timestamp"""
         try:
             value_str = str(value).strip()
+
+            # Fast path for the shapes the first four strptime formats accept
+            # (no offset): fromisoformat gives the same naive value without a
+            # failed strptime raising first. A trailing Z is a literal there,
+            # so it is dropped here too - the result stays naive, as before.
+            m = _ISO_PLAIN.match(value_str)
+            if m:
+                # 'Z' is a literal in the strptime formats (naive result); an
+                # offset goes through %z (aware result). fromisoformat gives the
+                # same two answers.
+                suffix = m.group(2) or ""
+                dt = datetime.fromisoformat(m.group(1) + ("" if suffix == "Z" else suffix))
+                dt = self._normalize_to_utc(dt)
+                if self._validate_datetime(dt):
+                    return TimestampParseResult(
+                        success=True, datetime_value=dt, original_value=value,
+                        detected_format=TimestampFormat.ISO8601, confidence=0.9,
+                        timezone_info=str(dt.tzinfo))
             
             # Handle various ISO8601 formats
             formats = [
@@ -577,6 +640,16 @@ class ResilientTimestampParser:
         """Parse common datetime string formats"""
         try:
             value_str = str(value).strip()
+
+            # Fast path for 'YYYY-MM-DD HH:MM[:SS[.ffffff]]' - the first three
+            # formats below, and nearly every value Crow-Eye writes. Same
+            # result, without strptime failing on '.%f' first.
+            if _DT_PLAIN.match(value_str):
+                dt = self._normalize_to_utc(datetime.fromisoformat(value_str))
+                if self._validate_datetime(dt):
+                    return TimestampParseResult(
+                        success=True, datetime_value=dt, original_value=value,
+                        detected_format=TimestampFormat.DATETIME_STRING, confidence=0.8)
             
             formats = [
                 '%Y-%m-%d %H:%M:%S.%f',

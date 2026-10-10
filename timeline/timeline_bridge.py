@@ -95,6 +95,11 @@ class UniversalTimestampParser:
         
         if dt is None:
             return None
+
+        # An offset is converted to UTC, not dropped: '09:25+03:00' is
+        # 06:25 UTC, and strftime alone printed 09:25.
+        if getattr(dt, 'tzinfo', None) is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
         
         # Validate bounds — silently discard corrupted data
         try:
@@ -111,6 +116,15 @@ class UniversalTimestampParser:
     @classmethod
     def _parse_string(cls, value: str) -> Optional[datetime]:
         """Try all string parsing strategies."""
+        # Fast path: the stored form ('YYYY-MM-DD HH:MM:SS', and the other
+        # ISO shapes in ISO_FORMATS) parses in one call. Trying strptime
+        # format by format first cost ~6 failed calls per value: 15 of the
+        # 18 s of a timeline day click went there.
+        if len(value) >= 10 and value[4:5] == '-' and value[7:8] == '-':
+            try:
+                return datetime.fromisoformat(value.replace('Z', '+00:00'))
+            except (ValueError, OverflowError):
+                pass
         # Try ISO formats
         for fmt in cls.ISO_FORMATS:
             try:
@@ -197,7 +211,17 @@ class UniversalDurationParser:
         return ValueParser.parse_to_num(value)
 
 
-class TimelineBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class TimelineBridge(AsyncBridge):
     """
     QWebChannel bridge exposing forensic data to React frontend.
     
@@ -390,7 +414,8 @@ class TimelineBridge(QObject):
     
     def _query_time_sliced(self, db_name: str, sql: str, params: tuple, 
                          ts_col: str, limit_per_slice: int = 1000, 
-                         slices: int = 10, start_idx: int = 0, end_idx: int = 1) -> List[Dict]:
+                         slices: int = 10, start_idx: int = 0, end_idx: int = 1,
+                         pairs: int = 1) -> List[Dict]:
         """
         Fetch data in multiple time-slices to ensure even coverage across the time range.
         
@@ -418,6 +443,11 @@ class TimelineBridge(QObject):
             slices: Number of time slices to divide the range into
             start_idx: Index of start timestamp in params tuple (default: 0)
             end_idx: Index of end timestamp in params tuple (default: 1)
+            pairs: How many consecutive (start, end) pairs the WHERE holds -
+                a mapped query ORs one BETWEEN per time column. EVERY pair is
+                narrowed to the slice: narrowing only the first left the
+                other eight at the full window, so all ten slices of the
+                MFT/USN lane returned the same first 1,000 rows.
             
         Returns:
             List of row dictionaries with duplicates removed
@@ -507,7 +537,10 @@ class TimelineBridge(QObject):
                 # ALWAYS use _substitute_slice_params for safe positional replacement
                 # Use positional parameter replacement instead of value matching
                 try:
-                    slice_params = self._substitute_slice_params(params, ss, se, start_idx, end_idx)
+                    slice_params = params
+                    for k in range(max(1, pairs)):
+                        slice_params = self._substitute_slice_params(
+                            slice_params, ss, se, start_idx + 2 * k, end_idx + 2 * k)
                     logger.debug(f"_query_time_sliced: Slice {i+1}/{slices} params: {slice_params}")
                 except ValueError as e:
                     logger.error(f"_query_time_sliced: Parameter substitution error: {e}")
@@ -1093,18 +1126,62 @@ class TimelineBridge(QObject):
                             "reason as usn_reason,"),
                 order_by="timestamp"))
 
-        base_sql, n_pairs, ts_cols = self._mapped_query(
-            "MftUsn", "mft_usn_correlated",
-            extra_cols="fn_filename, reconstructed_path, usn_reason, is_deleted,")
-        if not base_sql:
+        ts_cols = self._mapped_time_columns("MftUsn", "mft_usn_correlated")
+        if not ts_cols:
             return json.dumps([])
-        # Time slicing needs one column to drive coverage; the USN entry is the
-        # one that actually spreads across the window.
-        rows = self._query_time_sliced(
-            "mft_usn_correlated_analysis.db", base_sql,
-            tuple([start, end] * n_pairs), "usn_timestamp", 1000)
+        rows = self._window_rows_by_column(
+            "mft_usn_correlated_analysis.db", "mft_usn_correlated", ts_cols,
+            "fn_filename, reconstructed_path, usn_reason, is_deleted", start, end)
         rows = self._parse_timestamps_in_rows(rows, ts_cols)
         return json.dumps(rows)
+
+    @staticmethod
+    def _text_bound(value, upper=False):
+        """'2026-10-08T23:59:59.999Z' -> '2026-10-08 23:59:59' (the stored
+        form); an upper bound becomes the next second, used with `<`."""
+        import datetime as _dt
+        text = str(value or "").strip().replace("T", " ").rstrip("Z")
+        try:
+            when = _dt.datetime.fromisoformat(text[:19])
+        except ValueError:
+            return None
+        if upper:
+            when += _dt.timedelta(seconds=1)
+        return when.strftime("%Y-%m-%d %H:%M:%S")
+
+    def _window_rows_by_column(self, db_name, table, ts_cols, extra_cols, start, end,
+                               budget=24000):
+        """Records with ANY of their time columns in [start, end], evenly sampled.
+
+        The window used to be one query ORing `datetime(col) BETWEEN ...` over
+        nine columns, run as 24 time slices: every slice was a full scan of a
+        3.8-million-row table (one day click: 42-70 s). Now each column is a
+        plain range on its raw text (stored as 'YYYY-MM-DD HH:MM:SS', so text
+        order is time order and an index on the column is used), the matching
+        row ids are merged, sampled evenly down to the same 24,000-row budget
+        the slices had, and those rows are read by id.
+        """
+        lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+        if not lo or not hi:
+            return []
+        # One pass with every column compared as raw text: 1.6 s over 3.8 M
+        # rows, against 8.4 s for a query per column (six of the nine have no
+        # index) and 42 s for the datetime()-wrapped slices.
+        where = " OR ".join('("%s" >= ? AND "%s" < ?)' % (c, c) for c in ts_cols)
+        ids = sorted(r["i"] for r in self._query_db(
+            db_name, "SELECT rowid AS i FROM %s WHERE %s" % (table, where),
+            tuple(v for _c in ts_cols for v in (lo, hi))))
+        if len(ids) > budget:
+            step = len(ids) / float(budget)
+            ids = [ids[int(k * step)] for k in range(budget)]
+        selected = ", ".join('"%s"' % c for c in ts_cols)
+        out = []
+        for k in range(0, len(ids), 900):
+            chunk = ids[k:k + 900]
+            out.extend(self._query_db(
+                db_name, "SELECT rowid AS id, %s, %s FROM %s WHERE rowid IN (%s) ORDER BY rowid"
+                % (extra_cols, selected, table, ",".join("?" * len(chunk))), tuple(chunk)))
+        return out
     
     # ──────────────────────────────────────────────
     # SLOT: Lane 5 — Execution Artifacts
@@ -1149,7 +1226,7 @@ class TimelineBridge(QObject):
         lnk_sql = """
             SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
                    Local_Path, Common_Path, File_Attributes_Flags AS File_Attributes, 
-                   FileSize, Artifact, LNK_Class_ID, Hot_Key_Value, IconIndex, Description
+                   FileSize, Target_Source, LNK_Class_ID, Hot_Key_Value, IconIndex, Description
             FROM LNK_Files
             WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
@@ -1164,7 +1241,7 @@ class TimelineBridge(QObject):
         # Automatic_JumpLists table
         ajl_sql = """
             SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
-                   AppType, AppID, Artifact, Local_Path, Common_Path, 
+                   AppType, AppID, Target_Source, Local_Path, Common_Path, 
                    File_Attributes_Flags AS File_Attributes, FileSize,
                    DestList_Access_Counter, DestList_Pin_Status, Birth_Volume_ID, Birth_Object_ID,
                    DestList_Total_Current_Entries, DestList_Total_Pinned_Entries
@@ -1182,7 +1259,7 @@ class TimelineBridge(QObject):
         # Custom_JumpLists table 
         cjl_sql = """
             SELECT rowid as id, Source_Name, Source_Path, Time_Access, Time_Creation, Time_Modification,
-                   AppType, AppID, Artifact, Local_Path, FileSize, Category, Footer_Signature_Valid
+                   AppType, AppID, Target_Source, Local_Path, FileSize, Category, Footer_Signature_Valid
             FROM Custom_JumpLists
             WHERE (datetime(Time_Access) BETWEEN datetime(?) AND datetime(?))
                OR (datetime(Time_Creation) BETWEEN datetime(?) AND datetime(?))
@@ -2066,9 +2143,9 @@ class TimelineBridge(QObject):
         def fetch_amcache():
             return self._query_db("amcache.db", """
                 SELECT day, hour, SUM(c) as count FROM (
-                    SELECT DATE(link_date) as day, STRFTIME('%H', link_date) as hour, COUNT(*) as c FROM InventoryApplicationFile GROUP BY day, hour
+                    SELECT DATE(link_date_utc) as day, STRFTIME('%H', link_date_utc) as hour, COUNT(*) as c FROM InventoryApplicationFile GROUP BY day, hour
                     UNION ALL
-                    SELECT DATE(install_date) as day, STRFTIME('%H', install_date) as hour, COUNT(*) as c FROM InventoryApplication GROUP BY day, hour
+                    SELECT DATE(install_date_utc) as day, STRFTIME('%H', install_date_utc) as hour, COUNT(*) as c FROM InventoryApplication GROUP BY day, hour
                 ) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day
             """, (start, end))
 

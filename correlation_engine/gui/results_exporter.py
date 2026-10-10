@@ -93,8 +93,12 @@ class ExportOptionsDialog(QDialog):
         
         self.setWindowTitle("Export Results with Metadata")
         self.setMinimumSize(600, 500)
-        
+
+        from ui.site_theme import begin_site_theme, apply_site_theme, set_variant
+        begin_site_theme(self)
         self._init_ui()
+        set_variant(self.export_button, "primary")
+        apply_site_theme(self)
     
     def _init_ui(self):
         """Initialize the UI."""
@@ -131,6 +135,8 @@ class ExportOptionsDialog(QDialog):
         
         cancel_button = QPushButton("Cancel")
         cancel_button.clicked.connect(self.reject)
+        from ui.site_theme import set_variant
+        set_variant(cancel_button, "ghost")
         button_layout.addWidget(cancel_button)
         
         layout.addLayout(button_layout)
@@ -172,6 +178,8 @@ class ExportOptionsDialog(QDialog):
         
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_output_path)
+        from ui.site_theme import set_variant
+        set_variant(browse_button, "ghost")
         path_layout.addWidget(browse_button)
         
         output_layout.addRow("Output Path:", path_layout)
@@ -344,13 +352,15 @@ class ExportOptionsDialog(QDialog):
         controls_layout = QHBoxLayout()
         
         preview_label = QLabel("Export Preview:")
-        preview_label.setFont(QFont("Arial", 10, QFont.Bold))
+        from ui.site_theme import font as site_font, set_role, set_variant
+        preview_label.setFont(site_font("ui", 13, QFont.Bold))
         controls_layout.addWidget(preview_label)
         
         controls_layout.addStretch()
         
         refresh_button = QPushButton("Refresh Preview")
         refresh_button.clicked.connect(self._update_preview)
+        set_variant(refresh_button, "ghost")
         controls_layout.addWidget(refresh_button)
         
         layout.addLayout(controls_layout)
@@ -358,14 +368,14 @@ class ExportOptionsDialog(QDialog):
         # Preview content
         self.preview_text = QTextEdit()
         self.preview_text.setReadOnly(True)
-        self.preview_text.setFont(QFont("Consolas", 9))
+        self.preview_text.setFont(site_font("mono", 12))
         layout.addWidget(self.preview_text)
         
         # Statistics
         stats_layout = QHBoxLayout()
         
         self.stats_label = QLabel("Statistics will appear here...")
-        self.stats_label.setStyleSheet("color: #666; font-style: italic;")
+        set_role(self.stats_label, "muted")
         stats_layout.addWidget(self.stats_label)
         
         stats_layout.addStretch()

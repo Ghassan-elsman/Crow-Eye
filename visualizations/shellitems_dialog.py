@@ -48,7 +48,7 @@ class ShellItemsDialog(QDialog):
         return ""
 
     def _init_ui(self):
-        self.setWindowTitle("Shell Items - User Navigation & MRU")
+        self.setWindowTitle("User Activity - Shell Items & Registry")
         self.setMinimumSize(1100, 720)
         self.setWindowFlags(
             Qt.Window | Qt.WindowMinimizeButtonHint
@@ -69,6 +69,26 @@ class ShellItemsDialog(QDialog):
         self.web_view = QWebEngineView(self)
         self.web_view.setContextMenuPolicy(Qt.NoContextMenu)
         layout.addWidget(self.web_view)
+
+    def set_focus(self, source: str):
+        """Re-focus this window on another source (a second Charts click).
+
+        The dashboard is one window: every user-activity source on one
+        timeline, the clicked one highlighted. Clicking another table's Charts
+        button used to open a second window filtered to that table alone.
+        """
+        import json as _json
+        self.focus_source = source or ""
+        if self.bridge is not None:
+            from visualizations.shellitems_bridge import SOURCES
+            self.bridge.focus_source = self.focus_source if self.focus_source in SOURCES else ""
+        if self.web_view is not None:
+            self.web_view.page().runJavaScript(
+                "window.__crowFocus && window.__crowFocus(%s)" % _json.dumps(self.focus_source))
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def _setup_bridge(self):
         self.web_channel = QWebChannel(self.web_view.page())

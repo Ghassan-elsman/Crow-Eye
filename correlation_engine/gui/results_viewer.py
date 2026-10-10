@@ -4,6 +4,7 @@ Display, filter, and analyze correlation results.
 """
 
 import json
+import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
@@ -79,6 +80,171 @@ def _json_list(value) -> list:
     return [parsed] if parsed else []
 
 
+def _feather_databases(cursor, execution_id, database_path) -> dict:
+    """{feather_id: feather database path} for one execution, from the wing
+    and pipeline configuration it stored (feather_id -> feather_config_name ->
+    the pipeline's output_database), else <case>/Correlation/feathers/<name>.db."""
+    found = {}
+    try:
+        cursor.execute("SELECT wing_config_json, pipeline_config_json FROM executions "
+                       "WHERE execution_id = ?", (execution_id,))
+        row = cursor.fetchone()
+    except Exception:
+        return found
+    if not row:
+        return found
+    wing = json.loads(row[0]) if row[0] else {}
+    pipeline = json.loads(row[1]) if row[1] else {}
+    outputs = {}
+    for fc in pipeline.get('feather_configs') or []:
+        for key in (fc.get('feather_name'), fc.get('config_name')):
+            if key and fc.get('output_database'):
+                outputs[str(key).lower()] = fc['output_database']
+    feathers_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(database_path))),
+                                "feathers")
+    for spec in wing.get('feathers') or []:
+        fid = spec.get('feather_id')
+        name = spec.get('feather_config_name') or ''
+        if not fid:
+            continue
+        path = spec.get('database_path') or outputs.get(name.lower()) or \
+            os.path.join(feathers_dir, name + ".db")
+        if path and os.path.exists(path):
+            found[fid] = path
+    return found
+
+
+def _feather_record_count(path):
+    """Rows in a feather database's data table (the one that is not its
+    feather_metadata), read-only; None when it cannot be read."""
+    import sqlite3 as _sqlite3
+    try:
+        con = _sqlite3.connect("file:%s?mode=ro" % path.replace("\\", "/"), uri=True)
+    except Exception:
+        return None
+    try:
+        tables = [t for (t,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")
+                  if t != 'feather_metadata' and not t.startswith('sqlite_')]
+        return sum(con.execute('SELECT COUNT(*) FROM "%s"' % t.replace('"', '""')).fetchone()[0]
+                   for t in tables)
+    except Exception:
+        return None
+    finally:
+        con.close()
+
+
+def _counted_feather_metadata(cursor, result_id, execution_id=None, database_path=None) -> dict:
+    """Per-feather statistics counted from what a run left behind.
+
+    For a run that never wrote its feather_metadata - stopped, killed, or
+    still inside the semantic phase - so its Summary still has its statistics
+    and charts. From the stored matches: matches per feather, and the
+    identities (matched applications) each feather took part in. From the
+    feather databases the wing read: records per feather. How many records
+    yielded an identity is not stored anywhere, so there is no extraction
+    rate; `_counted` marks the entry as such."""
+    from ..engine.identity_based_engine_adapter import _feathers_of_match
+    counts, identities = {}, {}
+    cursor.execute("SELECT feather_records, matched_application FROM matches WHERE result_id = ?",
+                   (result_id,))
+    while True:
+        rows = cursor.fetchmany(10000)
+        if not rows:
+            break
+        for records_json, app in rows:
+            for feather_id in _feathers_of_match(records_json):
+                counts[feather_id] = counts.get(feather_id, 0) + 1
+                if app:
+                    identities.setdefault(feather_id, set()).add(app)
+    records = {}
+    if execution_id is not None and database_path:
+        for fid, path in _feather_databases(cursor, execution_id, database_path).items():
+            n = _feather_record_count(path)
+            if n is not None:
+                records[fid] = n
+    all_identities = set()
+    for apps in identities.values():
+        all_identities |= apps
+    out = {'_counted_totals': {'identities': len(all_identities)}}
+    for fid in set(counts) | set(records):
+        out[fid] = {'feather_name': fid,
+                    'matches_created': counts.get(fid, 0),
+                    'identities_found': len(identities.get(fid, ())),
+                    'records_processed': records.get(fid, 0),
+                    '_counted': True}
+    return out
+
+
+def _run_state(wing_summaries):
+    """'cancelled', 'incomplete' or None for the run these wings belong to."""
+    wings = wing_summaries or []
+    if any(w.get('cancelled') for w in wings):
+        return 'cancelled'
+    if any(w.get('incomplete') for w in wings):
+        return 'incomplete'
+    return None
+
+
+def _unfinished_chip(wing_summaries):
+    """A small amber NOT FINISHED / CANCELLED label for the Summary's stats
+    line, the explanation in its tooltip; None for a run that finished."""
+    state = _run_state(wing_summaries)
+    if state is None:
+        return None
+    counted = any(isinstance(m, dict) and m.get('_counted')
+                  for w in (wing_summaries or [])
+                  for m in (w.get('feather_metadata') or {}).values())
+    source = ("The statistics were counted from the matches and feathers it saved."
+              if counted else "The statistics are the ones it saved before it stopped.")
+    if state == 'cancelled':
+        chip = QLabel("CANCELLED")
+        chip.setToolTip("This run was stopped before it finished. " + source +
+                        " Semantic labels may be missing.")
+    else:
+        chip = QLabel("NOT FINISHED")
+        chip.setToolTip("This run did not finish - it stopped during semantic mapping, "
+                        "or is still running. " + source + " Semantic labels may be missing.")
+    chip.setObjectName("runStateChip")
+    # Amber by status only: a role (caption) brings its own colour, and it won.
+    set_status(chip, "warn")
+    f = chip.font()
+    f.setBold(True)
+    chip.setFont(f)
+    return chip
+
+
+def _run_identities(wing_summaries):
+    """Identities the run formed, summed over its wings, or None: the engine's
+    own count when it saved one, else the one counted from the matches."""
+    total, known = 0, False
+    for w in wing_summaries or []:
+        fm = w.get('feather_metadata') or {}
+        if not fm and w.get('results'):
+            # A live run's wing summary carries it inside its result dict.
+            first = w['results'][0] if isinstance(w['results'][0], dict) else {}
+            fm = first.get('feather_metadata') or {}
+        n = (fm.get('_engine_metadata') or {}).get('identities_processed')
+        if n is None:
+            n = (fm.get('_counted_totals') or {}).get('identities')
+        if n is not None:
+            total += int(n)
+            known = True
+    return total if known else None
+
+
+def _stats_line_extra(wing_summaries, total_time):
+    """(time text, identities html) for a Summary's stats line. An unfinished
+    run never wrote its duration, so its time is unknown, not 0 s."""
+    if not total_time and _run_state(wing_summaries) == 'incomplete':
+        time_text = "unknown"
+    else:
+        time_text = None
+    n = _run_identities(wing_summaries)
+    ident = (f" | Identities: <span style='color:#4ADE80;font-weight:bold;'>{n:,}</span>"
+             if n is not None else "")
+    return time_text, ident
+
+
 def _matches_by_feather(feather_statistics, limit=10):
     """What a chart titled "Matches by Feather" should plot.
 
@@ -116,185 +282,206 @@ def _matches_by_feather(feather_statistics, limit=10):
     return dict(sorted(data.items(), key=lambda kv: kv[1], reverse=True)[:limit])
 
 
+from ui.site_theme import (font as _site_font, chart_color, CHART_PALETTE, STATUS_COLORS,
+                           SCORE_COLORS, severity_kind, set_card, set_role, set_status, set_variant,
+                           keep_style, apply_site_theme)
+
+# Chart surfaces in the site's tokens (ui/site_theme.py): the card behind,
+# light text, hairline grid. Series colours come from chart_color(), so one
+# feather keeps one colour in every chart.
+_CHART_BG = "#0F172A"           # the card the charts sit on
+_CHART_TEXT = "#F8FAFC"
+_CHART_BODY = "#E2E8F0"
+_CHART_MUTED = "#94A3B8"
+_CHART_GRID = QColor(255, 255, 255, 15)
+_CHART_AXIS = "#334155"
+_CHART_ACCENT = "#A5B4FC"       # the site's section colour
+
+
+def _series_color(label, order=None) -> QColor:
+    """The series colour for ``label``: chart_color over the chart's full key
+    list (``order``), so the bar and pie of one Summary agree."""
+    return QColor(chart_color(label, order))
+
+
+def _feather_order(feather_statistics) -> list:
+    """Every feather of a run, the key list both Summary charts colour by."""
+    return [fid for fid in (feather_statistics or {}) if not str(fid).startswith('_')]
+
+
 class PyQt5BarChart(QWidget):
     """
     A simple bar chart widget using pure PyQt5.
     No external dependencies required.
     """
-    
-    # Color palette for bars
-    COLORS = [
-        QColor("#2196F3"), # Blue
-        QColor("#4CAF50"), # Green
-        QColor("#FF9800"), # Orange
-        QColor("#9C27B0"), # Purple
-        QColor("#F44336"), # Red
-        QColor("#00BCD4"), # Cyan
-        QColor("#FFEB3B"), # Yellow
-        QColor("#795548"), # Brown
-        QColor("#607D8B"), # Blue Grey
-        QColor("#E91E63"), # Pink
-        QColor("#3F51B5"), # Indigo
-        QColor("#009688"), # Teal
-    ]
-    
+
+    # Color palette for bars (the site's chart palette)
+    COLORS = [QColor(c) for c in CHART_PALETTE]
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.data = {} # {label: value}
         self.title = "Bar Chart"
         self.ylabel = "Count"
+        self.color_order = None # the key list series colours are assigned over
         self.setMinimumHeight(250)
         self.setMinimumWidth(400)
         self.hovered_bar = -1
         self.setMouseTracking(True)
-        
+
         # Store bar rectangles for hover detection
         self.bar_rects = []
-        
-    def set_data(self, data: Dict[str, float], title: str = "Bar Chart", ylabel: str = "Count"):
-        """Set chart data and labels."""
+
+    def set_data(self, data: Dict[str, float], title: str = "Bar Chart", ylabel: str = "Count",
+                 order=None):
+        """Set chart data and labels. ``order``: the full key list colours are
+        assigned over (pass the same one to every chart of a view)."""
         self.data = data
         self.title = title
         self.ylabel = ylabel
+        self.color_order = list(order) if order else None
         self.update()
-    
+
+    def color_for(self, label) -> QColor:
+        """The colour this chart paints ``label`` in."""
+        return _series_color(label, self.color_order or list(self.data))
+
     def paintEvent(self, event):
         """Draw the bar chart."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         # Get widget dimensions
         width = self.width()
         height = self.height()
-        
+
         # Margins
         left_margin = 80
         right_margin = 20
         top_margin = 40
         bottom_margin = 80
-        
+
         # Chart area
         chart_width = width - left_margin - right_margin
         chart_height = height - top_margin - bottom_margin
-        
+
+        # Draw background
+        painter.fillRect(self.rect(), QColor(_CHART_BG))
+
         if not self.data or chart_width <= 0 or chart_height <= 0:
+            painter.setPen(QPen(QColor(_CHART_MUTED)))
+            painter.setFont(_site_font("ui", 13))
             painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
             return
-        
+
         # Calculate max value for scaling
         max_value = max(self.data.values()) if self.data.values() else 1
         if max_value == 0:
             max_value = 1
-        
-        # Draw background
-        painter.fillRect(self.rect(), QColor("#1a1a2e"))
-        
+
         # Draw title
-        painter.setPen(QPen(QColor("#ffffff")))
-        title_font = QFont()
-        title_font.setPointSize(12)
-        title_font.setBold(True)
-        painter.setFont(title_font)
+        painter.setPen(QPen(QColor(_CHART_TEXT)))
+        painter.setFont(_site_font("ui", 15, QFont.Bold))
         painter.drawText(QRect(0, 5, width, 30), Qt.AlignCenter, self.title)
-        
+
         # Draw Y-axis label
         painter.save()
         painter.translate(15, height // 2)
         painter.rotate(-90)
-        label_font = QFont()
-        label_font.setPointSize(9)
-        painter.setFont(label_font)
+        painter.setPen(QPen(QColor(_CHART_MUTED)))
+        painter.setFont(_site_font("ui", 12, QFont.DemiBold))
         painter.drawText(QRect(-50, -10, 100, 20), Qt.AlignCenter, self.ylabel)
         painter.restore()
-        
+
         # Draw Y-axis grid lines and labels
         num_grid_lines = 5
-        painter.setPen(QPen(QColor("#444444")))
-        small_font = QFont()
-        small_font.setPointSize(8)
-        painter.setFont(small_font)
-        
+        painter.setFont(_site_font("mono", 11))
+
         for i in range(num_grid_lines + 1):
             y = top_margin + chart_height - (i * chart_height // num_grid_lines)
             value = int(max_value * i / num_grid_lines)
-            
+
             # Grid line
-            painter.setPen(QPen(QColor("#333333")))
+            painter.setPen(QPen(_CHART_GRID))
             painter.drawLine(left_margin, y, width - right_margin, y)
-            
+
             # Y-axis label
-            painter.setPen(QPen(QColor("#aaaaaa")))
-            painter.drawText(QRect(5, y - 10, left_margin - 10, 20), 
+            painter.setPen(QPen(QColor(_CHART_MUTED)))
+            painter.drawText(QRect(5, y - 10, left_margin - 10, 20),
                            Qt.AlignRight | Qt.AlignVCenter, f"{value:,}")
-        
+
         # Calculate bar dimensions
         num_bars = len(self.data)
         if num_bars == 0:
             return
-            
+
         bar_spacing = 10
         total_spacing = bar_spacing * (num_bars + 1)
         bar_width = max(20, (chart_width - total_spacing) // num_bars)
-        
+
         # Clear bar rectangles
         self.bar_rects = []
-        
+        value_font = _site_font("mono", 11, QFont.DemiBold)
+        label_font = _site_font("ui", 12)
+
         # Draw bars
         for i, (label, value) in enumerate(self.data.items()):
             # Calculate bar position and size
             x = left_margin + bar_spacing + i * (bar_width + bar_spacing)
             bar_height = int((value / max_value) * chart_height) if max_value > 0 else 0
             y = top_margin + chart_height - bar_height
-            
+
             # Store bar rectangle for hover detection
             bar_rect = QRect(x, y, bar_width, bar_height)
             self.bar_rects.append((bar_rect, label, value))
-            
+
             # Get color
-            color = self.COLORS[i % len(self.COLORS)]
-            
+            color = self.color_for(label)
+
             # Highlight hovered bar
             if i == self.hovered_bar:
                 color = color.lighter(130)
-            
+
             # Draw bar
             painter.setBrush(QBrush(color))
             painter.setPen(QPen(color.darker(120), 1))
             painter.drawRect(bar_rect)
-            
+
             # Draw value on top of bar
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(_CHART_BODY)))
+            painter.setFont(value_font)
             value_text = f"{int(value):,}"
-            painter.drawText(QRect(x, y - 20, bar_width, 20), 
+            painter.drawText(QRect(x - 10, y - 20, bar_width + 20, 20),
                            Qt.AlignCenter, value_text)
-            
+
             # Draw label below bar (rotated if needed)
             painter.save()
             label_x = x + bar_width // 2
             label_y = top_margin + chart_height + 5
-            
+
             # Truncate long labels
             display_label = label if len(label) <= 12 else label[:10] + "..."
-            
+
             painter.translate(label_x, label_y)
             painter.rotate(45)
-            painter.setPen(QPen(QColor("#cccccc")))
+            painter.setPen(QPen(QColor(_CHART_MUTED)))
+            painter.setFont(label_font)
             painter.drawText(QRect(0, 0, 100, 20), Qt.AlignLeft, display_label)
             painter.restore()
-        
+
         # Draw axes
-        painter.setPen(QPen(QColor("#666666"), 2))
+        painter.setPen(QPen(QColor(_CHART_AXIS), 1))
         # Y-axis
         painter.drawLine(left_margin, top_margin, left_margin, top_margin + chart_height)
         # X-axis
-        painter.drawLine(left_margin, top_margin + chart_height, 
+        painter.drawLine(left_margin, top_margin + chart_height,
                         width - right_margin, top_margin + chart_height)
-    
+
     def mouseMoveEvent(self, event):
         """Handle mouse movement for hover effects."""
         pos = event.pos()
         new_hovered = -1
-        
+
         for i, (rect, label, value) in enumerate(self.bar_rects):
             if rect.contains(pos):
                 new_hovered = i
@@ -306,11 +493,11 @@ class PyQt5BarChart(QWidget):
                     f"{label}\nCount: {int(value):,}\nPercentage: {percentage:.1f}%"
                 )
                 break
-        
+
         if new_hovered != self.hovered_bar:
             self.hovered_bar = new_hovered
             self.update()
-    
+
     def leaveEvent(self, event):
         """Handle mouse leaving widget."""
         self.hovered_bar = -1
@@ -322,132 +509,128 @@ class PyQt5PieChart(QWidget):
     A simple pie chart widget using pure PyQt5.
     No external dependencies required.
     """
-    
-    # Color palette for slices
-    COLORS = [
-        QColor("#2196F3"), # Blue
-        QColor("#4CAF50"), # Green
-        QColor("#FF9800"), # Orange
-        QColor("#9C27B0"), # Purple
-        QColor("#F44336"), # Red
-        QColor("#00BCD4"), # Cyan
-        QColor("#FFEB3B"), # Yellow
-        QColor("#795548"), # Brown
-        QColor("#607D8B"), # Blue Grey
-        QColor("#E91E63"), # Pink
-        QColor("#3F51B5"), # Indigo
-        QColor("#009688"), # Teal
-    ]
-    
+
+    # Color palette for slices (the site's chart palette)
+    COLORS = [QColor(c) for c in CHART_PALETTE]
+
     def __init__(self, parent=None, show_legend=True):
         super().__init__(parent)
         self.data = {} # {label: value}
         self.title = "Pie Chart"
+        self.color_order = None # the key list series colours are assigned over
         self.setMinimumHeight(200)
         self.setMinimumWidth(200)
         self.hovered_slice = -1
         self.setMouseTracking(True)
         self.slice_angles = [] # Store slice info for hover detection
         self.show_legend = show_legend # Control whether to show built-in legend
-        
-    def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
-        """Set chart data and labels."""
+
+    def set_data(self, data: Dict[str, float], title: str = "Pie Chart", order=None):
+        """Set chart data and labels. ``order``: the full key list colours are
+        assigned over (pass the same one to every chart of a view)."""
         self.data = data
         self.title = title
+        self.color_order = list(order) if order else None
         self.update()
-    
+
+    def color_for(self, label) -> QColor:
+        """The colour this chart paints ``label`` in."""
+        return _series_color(label, self.color_order or list(self.data))
+
+    def _pie_rect(self) -> QRect:
+        """Where the pie is drawn - ONE geometry for paint and hover. Hover
+        used to compute its own (a 120px legend where paint reserved 200 or
+        400), so the slice under the cursor was not the slice highlighted."""
+        width = self.width()
+        height = self.height()
+        top_margin = 30
+        # Reserve space for legend on the right - more space if we have many items
+        legend_width = 400 if len(self.data) > 8 else 200 # Double width for two columns
+        pie_size = max(0, min(width - legend_width - 30, height - top_margin - 10))
+        pie_x = 10
+        pie_y = top_margin + (height - top_margin - pie_size) // 2
+        return QRect(pie_x, pie_y, pie_size, pie_size)
+
     def paintEvent(self, event):
         """Draw the pie chart."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
-        
+
         width = self.width()
         height = self.height()
-        
+
         # Draw background
-        painter.fillRect(self.rect(), QColor("#1a1a2e"))
-        
+        painter.fillRect(self.rect(), QColor(_CHART_BG))
+
         if not self.data:
-            painter.setPen(QPen(QColor("#ffffff")))
+            painter.setPen(QPen(QColor(_CHART_MUTED)))
+            painter.setFont(_site_font("ui", 13))
             painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
             return
-        
+
         # Draw title
-        painter.setPen(QPen(QColor("#ffffff")))
-        title_font = QFont()
-        title_font.setPointSize(10)
-        title_font.setBold(True)
-        painter.setFont(title_font)
+        painter.setPen(QPen(QColor(_CHART_TEXT)))
+        painter.setFont(_site_font("ui", 14, QFont.Bold))
         painter.drawText(QRect(0, 5, width, 25), Qt.AlignCenter, self.title)
-        
+
         # Calculate pie dimensions
         top_margin = 30
-        # Reserve space for legend on the right - more space if we have many items
-        legend_items_count = len(self.data)
-        use_two_columns = legend_items_count > 8
-        legend_width = 400 if use_two_columns else 200 # Double width for two columns
-        pie_size = min(width - legend_width - 30, height - top_margin - 10)
-        pie_x = 10
-        pie_y = top_margin + (height - top_margin - pie_size) // 2
-        
+        pie_rect = self._pie_rect()
+        pie_x, pie_size = pie_rect.x(), pie_rect.width()
+
         # Calculate total
         total = sum(self.data.values())
         if total == 0:
             return
-        
+
         # Clear slice angles
         self.slice_angles = []
-        
+
         # Draw pie slices
         start_angle = 90 * 16 # Start from top (in 1/16th degrees)
-        pie_rect = QRect(pie_x, pie_y, pie_size, pie_size)
-        
+
         for i, (label, value) in enumerate(self.data.items()):
             span_angle = int((value / total) * 360 * 16)
-            
-            color = self.COLORS[i % len(self.COLORS)]
+
+            color = self.color_for(label)
             if i == self.hovered_slice:
                 color = color.lighter(130)
-            
+
             painter.setBrush(QBrush(color))
-            painter.setPen(QPen(QColor("#1a1a2e"), 1))
+            painter.setPen(QPen(QColor(_CHART_BG), 1))
             painter.drawPie(pie_rect, start_angle, span_angle)
-            
+
             # Store slice info for hover
             self.slice_angles.append((start_angle, span_angle, label, value))
-            
+
             start_angle += span_angle
-        
+
         # Draw legend as text labels next to pie chart (always visible)
         if self.show_legend:
             # Legend positioned to the right of pie chart
             legend_x = pie_x + pie_size + 20
             legend_y = top_margin + 10
-            
+
             # Draw "Feathers:" title
-            painter.setPen(QPen(QColor("#00FFFF")))
-            title_font = QFont()
-            title_font.setPointSize(8)
-            title_font.setBold(True)
-            painter.setFont(title_font)
+            painter.setPen(QPen(QColor(_CHART_ACCENT)))
+            painter.setFont(_site_font("ui", 12, QFont.Bold, upper=True, spacing=106))
             painter.drawText(legend_x, legend_y, "Feathers:")
             legend_y += 20
-            
+
             # Draw legend items
-            small_font = QFont()
-            small_font.setPointSize(7)
-            painter.setFont(small_font)
-            
+            name_font = _site_font("ui", 12)
+            stats_font = _site_font("ui", 12)
+
             legend_items = list(self.data.items())
-            
+
             # Determine if we need two columns (more than 8 items)
             use_two_columns = len(legend_items) > 8
             items_per_column = (len(legend_items) + 1) // 2 if use_two_columns else len(legend_items)
             column_width = 200 # Width of each column
-            
+
             for i, (label, value) in enumerate(legend_items):
-                color = self.COLORS[i % len(self.COLORS)]
-                
+                color = self.color_for(label)
+
                 # Calculate position based on column
                 if use_two_columns and i >= items_per_column:
                     # Second column
@@ -457,76 +640,57 @@ class PyQt5PieChart(QWidget):
                     # First column
                     col_x = legend_x
                     row_index = i
-                
+
                 # Color box
                 painter.setBrush(QBrush(color))
                 painter.setPen(Qt.NoPen)
-                painter.drawRect(col_x, legend_y + row_index * 18, 12, 12)
-                
-                # Label with color
-                painter.setPen(QPen(color))
+                painter.drawRoundedRect(col_x, legend_y + row_index * 18, 12, 12, 3, 3)
+
+                # Label
+                painter.setPen(QPen(QColor(_CHART_BODY)))
+                painter.setFont(name_font)
                 display_label = label if len(label) <= 18 else label[:16] + ".."
                 painter.drawText(col_x + 18, legend_y + row_index * 18 + 10, display_label)
-                
+
                 # Count and percentage
                 percentage = (value / total * 100) if total > 0 else 0
                 stats_text = f"{int(value):,} ({percentage:.0f}%)"
-                painter.setPen(QPen(color.lighter(120)))
+                painter.setPen(QPen(QColor(_CHART_MUTED)))
+                painter.setFont(stats_font)
                 painter.drawText(col_x + 120, legend_y + row_index * 18 + 10, stats_text)
-    
+
+    def _slice_at(self, pos) -> int:
+        """Index of the slice under ``pos``, or -1 - in the angles drawPie
+        uses (degrees counter-clockwise from 3 o'clock). Hover used to turn
+        the angle into "clockwise from the top" and compare it with these,
+        which picked the mirror-image slice."""
+        import math
+        rect = self._pie_rect()
+        radius = rect.width() / 2.0
+        if radius <= 0:
+            return -1
+        dx = pos.x() - (rect.x() + radius)
+        dy = pos.y() - (rect.y() + radius)
+        if (dx * dx + dy * dy) ** 0.5 > radius:
+            return -1
+        angle = math.degrees(math.atan2(-dy, dx)) % 360 # y grows downward
+        for i, (start, span, label, value) in enumerate(self.slice_angles):
+            if span > 0 and (angle - start / 16.0) % 360 < span / 16.0:
+                return i
+        return -1
+
     def mouseMoveEvent(self, event):
         """Handle mouse movement for hover effects."""
         if not self.slice_angles:
             return
-            
+
         pos = event.pos()
-        width = self.width()
-        height = self.height()
-        
-        # Calculate pie center
-        top_margin = 30
-        legend_width = min(120, width // 3)
-        pie_size = min(width - legend_width - 20, height - top_margin - 10)
-        center_x = 10 + pie_size // 2
-        center_y = top_margin + (height - top_margin - pie_size) // 2 + pie_size // 2
-        radius = pie_size // 2
-        
-        # Check if mouse is within pie
-        dx = pos.x() - center_x
-        dy = pos.y() - center_y
-        distance = (dx * dx + dy * dy) ** 0.5
-        
-        new_hovered = -1
-        if distance <= radius:
-            # Calculate angle from center
-            import math
-            angle = math.degrees(math.atan2(-dy, dx)) # Negative dy because y increases downward
-            if angle < 0:
-                angle += 360
-            angle = (90 - angle) % 360 # Convert to start from top
-            angle_16 = angle * 16
-            
-            # Find which slice
-            for i, (start, span, label, value) in enumerate(self.slice_angles):
-                start_deg = (start / 16) % 360
-                span_deg = span / 16
-                end_deg = (start_deg + span_deg) % 360
-                
-                # Check if angle is within this slice
-                if span_deg > 0:
-                    if start_deg + span_deg <= 360:
-                        if start_deg <= angle < start_deg + span_deg:
-                            new_hovered = i
-                            break
-                    else:
-                        if angle >= start_deg or angle < end_deg:
-                            new_hovered = i
-                            break
-        
+        new_hovered = self._slice_at(pos)
+
         if new_hovered != self.hovered_slice:
             self.hovered_slice = new_hovered
             self.update()
-            
+
         if new_hovered >= 0:
             _, _, label, value = self.slice_angles[new_hovered]
             total = sum(self.data.values())
@@ -535,7 +699,7 @@ class PyQt5PieChart(QWidget):
                 self.mapToGlobal(pos),
                 f"{label}\nRecords: {int(value):,}\nPercentage: {percentage:.1f}%"
             )
-    
+
     def leaveEvent(self, event):
         """Handle mouse leaving widget."""
         self.hovered_slice = -1
@@ -547,33 +711,33 @@ class PieChartWithBreakdown(QWidget):
     A widget that combines a pie chart with a detailed breakdown table.
     When there are 8+ categories, the breakdown table is shown next to the pie chart.
     """
-    
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.data = {}
         self.title = "Pie Chart"
         self._setup_ui()
-    
+
     def _setup_ui(self):
         """Setup the UI layout."""
         self.main_layout = QHBoxLayout(self)
         self.main_layout.setContentsMargins(0, 0, 0, 0)
         self.main_layout.setSpacing(10)
-        
+
         # Create pie chart without built-in legend
         self.pie_chart = PyQt5PieChart(show_legend=False)
-        
+
         # Create legend widget (grid layout with colored indicators)
         self.legend_widget = QWidget()
         self.legend_main_layout = QVBoxLayout(self.legend_widget)
         self.legend_main_layout.setContentsMargins(5, 5, 5, 5)
         self.legend_main_layout.setSpacing(3)
-        
+
         # Add title for legend
         legend_title = QLabel("Feathers:")
-        legend_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+        set_role(legend_title, "section")
         self.legend_main_layout.addWidget(legend_title)
-        
+
         # Scroll area for legend items
         self.legend_scroll = QScrollArea()
         self.legend_scroll.setWidgetResizable(True)
@@ -581,63 +745,38 @@ class PieChartWithBreakdown(QWidget):
         self.legend_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.legend_scroll.setMinimumWidth(180)
         self.legend_scroll.setMaximumWidth(400) # Wider to accommodate multiple columns
-        self.legend_scroll.setStyleSheet("""
-            QScrollArea {
-                background-color: #1a1a2e;
-                border: 1px solid #334155;
-                border-radius: 4px;
-            }
-            QScrollBar:vertical {
-                background-color: #1E293B;
-                width: 8px;
-                border-radius: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background-color: #475569;
-                border-radius: 4px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background-color: #64748B;
-            }
-        """)
-        
+
         self.legend_content = QWidget()
         self.legend_items_layout = QGridLayout(self.legend_content) # Changed to QGridLayout
         self.legend_items_layout.setContentsMargins(5, 5, 5, 5)
         self.legend_items_layout.setSpacing(4)
         self.legend_items_layout.setColumnStretch(0, 1)
         self.legend_items_layout.setColumnStretch(1, 1)
-        
+
         self.legend_scroll.setWidget(self.legend_content)
         self.legend_main_layout.addWidget(self.legend_scroll)
-        
-        self.legend_widget.setStyleSheet("""
-            QWidget {
-                background-color: #1a1a2e;
-            }
-        """)
+
         self.legend_widget.hide()
-        
+
         # Add widgets to layout
         self.main_layout.addWidget(self.pie_chart, stretch=1)
         self.main_layout.addWidget(self.legend_widget, stretch=0)
-    
-    def set_data(self, data: Dict[str, float], title: str = "Pie Chart"):
+
+    def set_data(self, data: Dict[str, float], title: str = "Pie Chart", order=None):
         """Set chart data and update display."""
         self.data = data
         self.title = title
-        
+
         # Update pie chart
-        self.pie_chart.set_data(data, title)
-        
+        self.pie_chart.set_data(data, title, order=order)
+
         # Show legend if 8+ categories
         if len(data) >= 8:
             self._populate_legend()
             self.legend_widget.show()
         else:
             self.legend_widget.hide()
-    
+
     def _populate_legend(self):
         """Populate the legend with colored indicators in a grid layout."""
         # Clear existing legend items
@@ -645,29 +784,26 @@ class PieChartWithBreakdown(QWidget):
             item = self.legend_items_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
+
         # Calculate total
         total = sum(self.data.values())
-        
+
         # Sort by count descending
         sorted_items = sorted(self.data.items(), key=lambda x: x[1], reverse=True)
-        
-        # Get color palette from PyQt5PieChart
-        colors = PyQt5PieChart.COLORS
-        
+
         # Determine number of columns based on item count
         # If more than 8 items, use 2 columns; otherwise use 1 column
         num_items = len(sorted_items)
         num_columns = 2 if num_items > 8 else 1
         items_per_column = (num_items + num_columns - 1) // num_columns # Ceiling division
-        
+
         # Create legend items in grid layout
         for idx, (feather_name, count) in enumerate(sorted_items):
             percentage = (count / total * 100) if total > 0 else 0
-            
+
             # Get color for this item (same as pie chart)
-            color = colors[idx % len(colors)]
-            
+            color = self.pie_chart.color_for(feather_name)
+
             # Calculate grid position
             if num_columns == 2:
                 # Fill first column, then second column
@@ -677,52 +813,73 @@ class PieChartWithBreakdown(QWidget):
                 # Single column
                 row = idx
                 col = 0
-            
+
             # Create horizontal layout for each legend item
             item_widget = QWidget()
             item_layout = QHBoxLayout(item_widget)
             item_layout.setContentsMargins(0, 0, 0, 0)
             item_layout.setSpacing(6)
-            
-            # Color indicator (square box)
+
+            # Color indicator (square box) - the series colour is data, so
+            # its sheet is kept through theme passes
             color_box = QLabel()
             color_box.setFixedSize(12, 12)
-            color_box.setStyleSheet(f"""
-                QLabel {{
-                    background-color: {color.name()};
-                    border: 1px solid #334155;
-                    border-radius: 2px;
-                }}
-            """)
+            color_box.setStyleSheet(
+                "QLabel { background-color: %s; border: none; border-radius: 3px; }" % color.name())
+            keep_style(color_box)
             item_layout.addWidget(color_box)
-            
+
             # Feather name and stats
             text_label = QLabel(f"{feather_name}")
-            text_label.setStyleSheet(f"color: {color.name()}; font-size: 7pt; font-weight: bold;")
+            text_label.setFont(_site_font("ui", 12, QFont.DemiBold))
             text_label.setWordWrap(False)
             text_label.setToolTip(f"{feather_name}\nRecords: {int(count):,}\nPercentage: {percentage:.1f}%")
             item_layout.addWidget(text_label, stretch=1)
-            
+
             # Count
             count_label = QLabel(f"{int(count):,}")
-            count_label.setStyleSheet(f"color: {color.name()}; font-size: 7pt;")
+            set_role(count_label, "mono")
             count_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             item_layout.addWidget(count_label)
-            
+
             # Percentage
             pct_label = QLabel(f"({percentage:.0f}%)")
-            pct_label.setStyleSheet(f"color: {color.lighter(120).name()}; font-size: 6pt;")
+            set_role(pct_label, "muted")
             pct_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             item_layout.addWidget(pct_label)
-            
+
             # Add to grid layout
             self.legend_items_layout.addWidget(item_widget, row, col)
-    
+
     def setMinimumHeight(self, height: int):
         """Set minimum height for the widget."""
         super().setMinimumHeight(height)
         self.pie_chart.setMinimumHeight(height)
         self.legend_widget.setMinimumHeight(height)
+
+
+def _banner(label: QLabel, kind: str = "warn") -> QLabel:
+    """An error / notice banner in the site look: the note box, coloured by
+    meaning (warn / bad / ok), no per-widget sheet a theme pass would undo."""
+    set_role(label, "note")
+    set_status(label, kind)
+    return label
+
+
+def _retheme(owner, page):
+    """The site look on a page built after the window was themed (results
+    pages are rebuilt on every run and load); walks only ``page``."""
+    from .results_tab_widget import retheme_page
+    retheme_page(owner, page)
+
+
+def _pct(value) -> str:
+    """A 0..1 confidence as a percentage; '-' for None or anything else that
+    is not a number (an f-string :.0% on None raised and lost the row)."""
+    try:
+        return f"{float(value):.0%}"
+    except (TypeError, ValueError):
+        return "-"
 
 
 from .ui_styling import CorrelationEngineStyles
@@ -748,51 +905,10 @@ class LoadingProgressDialog(QProgressDialog):
         self.setMinimumWidth(350)
         self.setMinimumHeight(120)
         
-        # Apply Crow Eye dark theme styling
-        self.setStyleSheet("""
-            QProgressDialog {
-                background-color: #0B1220;
-                border: 2px solid #00FFFF;
-                border-radius: 8px;
-            }
-            QProgressDialog QLabel {
-                color: #E2E8F0;
-                font-size: 10pt;
-                padding: 8px;
-            }
-            QProgressBar {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                text-align: center;
-                color: #E2E8F0;
-                font-size: 9pt;
-                font-weight: bold;
-                min-height: 20px;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00FFFF, stop:0.5 #10B981, stop:1 #00FFFF);
-                border-radius: 3px;
-            }
-            QPushButton {
-                background-color: #1E293B;
-                color: #E2E8F0;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                padding: 6px 16px;
-                font-size: 9pt;
-                min-width: 70px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                border-color: #00FFFF;
-                color: #00FFFF;
-            }
-            QPushButton:pressed {
-                background-color: #0F172A;
-            }
-        """)
+        # The site look: card, gradient bar, ghost Cancel (ui/site_theme.py)
+        apply_site_theme(self)
+        for button in self.findChildren(QPushButton):
+            set_variant(button, "ghost")
     
     def update_progress(self, current: int, total: int, message: str = ""):
         """Update progress bar and message."""
@@ -877,14 +993,12 @@ class ResultsTableWidget(QTableWidget):
                 score_item = QTableWidgetItem(f"{score_value:.2f}")
                 score_item.setData(Qt.UserRole, score_value)
                 
-                # Color code based on interpretation
+                # Color code based on interpretation (the words the engines
+                # emit - Critical / High / ... - not Confirmed / Probable)
                 interpretation = match.weighted_score.get('interpretation', '')
-                if 'Confirmed' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_CONFIRMED)) # Green
-                elif 'Probable' in interpretation or 'Likely' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_PROBABLE)) # Orange
-                elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-                    score_item.setForeground(QColor(CorrelationEngineStyles.SCORE_WEAK)) # Red
+                kind = CorrelationEngineStyles.interpretation_kind(interpretation)
+                if kind != "none":
+                    score_item.setForeground(QColor(SCORE_COLORS[kind]))
             else:
                 score_item = QTableWidgetItem(f"{match.match_score:.2f}")
                 score_item.setData(Qt.UserRole, match.match_score)
@@ -896,12 +1010,9 @@ class ResultsTableWidget(QTableWidget):
                 interpretation = match.weighted_score.get('interpretation', '-')
                 interp_item = QTableWidgetItem(interpretation)
                 # Apply same color coding
-                if 'Confirmed' in interpretation:
-                    interp_item.setForeground(QColor(CorrelationEngineStyles.SCORE_CONFIRMED))
-                elif 'Probable' in interpretation or 'Likely' in interpretation:
-                    interp_item.setForeground(QColor(CorrelationEngineStyles.SCORE_PROBABLE))
-                elif 'Weak' in interpretation or 'Insufficient' in interpretation:
-                    interp_item.setForeground(QColor(CorrelationEngineStyles.SCORE_WEAK))
+                kind = CorrelationEngineStyles.interpretation_kind(interpretation)
+                if kind != "none":
+                    interp_item.setForeground(QColor(SCORE_COLORS[kind]))
                 self.setItem(row, 3, interp_item)
             else:
                 self.setItem(row, 3, QTableWidgetItem('-'))
@@ -1019,10 +1130,7 @@ class MatchDetailViewer(QWidget):
         feather_layout.setSpacing(5)
         
         feather_label = QLabel("Feather Records")
-        feather_label_font = QFont()
-        feather_label_font.setBold(True)
-        feather_label_font.setPointSize(10)
-        feather_label.setFont(feather_label_font)
+        feather_label.setFont(_site_font("ui", 13, QFont.Bold))
         feather_layout.addWidget(feather_label)
         
         # Feather selector label
@@ -1062,10 +1170,7 @@ class MatchDetailViewer(QWidget):
         semantic_icon = QLabel()
         semantic_icon.setPixmap(CrowEyeIcons.settings().pixmap(14, 14))
         semantic_label = QLabel("Semantic Mappings")
-        semantic_label_font = QFont()
-        semantic_label_font.setBold(True)
-        semantic_label_font.setPointSize(10)
-        semantic_label.setFont(semantic_label_font)
+        semantic_label.setFont(_site_font("ui", 13, QFont.Bold))
         semantic_header.addWidget(semantic_icon)
         semantic_header.addWidget(semantic_label)
         semantic_header.addStretch()
@@ -1157,12 +1262,14 @@ class MatchDetailViewer(QWidget):
                             # Confidence
                             confidence = mapping.get('confidence', 0.0)
                             self.semantic_table.setItem(row, 4, QTableWidgetItem(
-                                f"{confidence:.0%}"
+                                _pct(confidence)
                             ))
                             
                             # Severity
-                            severity = mapping.get('severity', 'info').upper()
-                            self.semantic_table.setItem(row, 5, QTableWidgetItem(severity))
+                            severity = str(mapping.get('severity') or 'info').upper()
+                            severity_item = QTableWidgetItem(severity)
+                            severity_item.setForeground(QColor(STATUS_COLORS[severity_kind(severity)]))
+                            self.semantic_table.setItem(row, 5, severity_item)
                             
                             row += 1
         
@@ -1198,9 +1305,7 @@ class MatchDetailViewer(QWidget):
                 
                 # Field column (bold)
                 field_item = QTableWidgetItem(key)
-                field_font = QFont()
-                field_font.setBold(True)
-                field_item.setFont(field_font)
+                field_item.setFont(_site_font("ui", 12, QFont.Bold))
                 self.feather_table.setItem(row, 0, field_item)
                 
                 # Value column
@@ -1288,6 +1393,7 @@ class FilterPanelWidget(QWidget):
         
         # Reset button
         reset_btn = QPushButton("Reset Filters")
+        set_variant(reset_btn, "ghost")
         reset_btn.clicked.connect(self.reset_filters)
         layout.addWidget(reset_btn)
         
@@ -1369,16 +1475,8 @@ class DynamicResultsTabWidget(QWidget):
         
         # Placeholder message
         placeholder_label = QLabel("Summary\n\nAggregate statistics will appear here after wing execution completes.")
-        placeholder_label.setStyleSheet("""
-            QLabel {
-                color: #94A3B8;
-                font-size: 12pt;
-                padding: 40px;
-                background-color: #1E293B;
-                border: 2px dashed #334155;
-                border-radius: 8px;
-            }
-        """)
+        set_role(placeholder_label, "note")
+        set_status(placeholder_label, "neutral")
         placeholder_label.setAlignment(Qt.AlignCenter)
         placeholder_label.setWordWrap(True)
         summary_layout.addWidget(placeholder_label)
@@ -1554,20 +1652,13 @@ class DynamicResultsTabWidget(QWidget):
             
             # Title
             title_label = QLabel(f"{engine_name} - Feather Statistics")
-            title_label.setStyleSheet("""
-                QLabel {
-                    font-size: 14pt;
-                    font-weight: bold;
-                    color: #2196F3;
-                    padding: 10px;
-                }
-            """)
+            set_role(title_label, "subtitle")
             layout.addWidget(title_label)
             
             # Note about charts
             note_label = QLabel()
             apply_status_to_label(note_label, "INFO", "Charts unavailable (matplotlib Qt5Agg backend not loaded)")
-            note_label.setStyleSheet("color: #ff9800; font-style: italic; padding: 5px;")
+            _banner(note_label, "warn")
             layout.addWidget(note_label)
             
             # Create table for feather statistics
@@ -1576,22 +1667,7 @@ class DynamicResultsTabWidget(QWidget):
             table.setHorizontalHeaderLabels(["Feather", "Count", "Percentage"])
             table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
             table.setAlternatingRowColors(True)
-            table.setStyleSheet("""
-                QTableWidget {
-                    background-color: #2a2a2a;
-                    gridline-color: #444;
-                    color: white;
-                }
-                QTableWidget::item {
-                    padding: 5px;
-                }
-                QHeaderView::section {
-                    background-color: #3a3a3a;
-                    color: white;
-                    padding: 5px;
-                    font-weight: bold;
-                }
-            """)
+            # The table takes the window's site look
             
             # Extract and sort data
             sorted_data = []
@@ -1623,7 +1699,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Total summary
             total_label = QLabel(f"Total: {total_count:,} items across {len(sorted_data)} feathers")
-            total_label.setStyleSheet("font-weight: bold; padding: 10px; color: #4CAF50;")
+            set_status(total_label, "ok")
             layout.addWidget(total_label)
             
             print(f"[DynamicResultsTabWidget] Text summary created for {len(sorted_data)} feathers")
@@ -1707,17 +1783,7 @@ class DynamicResultsTabWidget(QWidget):
         # Error message
         error_label = QLabel()
         apply_status_to_label(error_label, "WARN", message)
-        error_label.setStyleSheet("""
-            QLabel {
-                color: #ff9800;
-                font-size: 14pt;
-                padding: 20px;
-                font-weight: bold;
-                background-color: #2a2a2a;
-                border: 2px solid #ff9800;
-                border-radius: 5px;
-            }
-        """)
+        _banner(error_label, "warn")
         error_label.setAlignment(Qt.AlignCenter)
         error_label.setWordWrap(True)
         error_layout.addWidget(error_label)
@@ -1725,40 +1791,36 @@ class DynamicResultsTabWidget(QWidget):
         # Retry button
         retry_btn = QPushButton("Retry Loading")
         retry_btn.clicked.connect(self._retry_load_results)
-        retry_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #ff9800;
-                color: white;
-                padding: 10px 20px;
-                font-size: 12pt;
-                border-radius: 5px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #f57c00;
-            }
-        """)
+        set_variant(retry_btn, "warning")
         retry_btn.setMaximumWidth(200)
+        retry_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         error_layout.addWidget(retry_btn, alignment=Qt.AlignCenter)
         
         error_layout.addStretch()
         
-        # Add to main layout
+        # Add to main layout, and remember it so a retry can take it down
         self.layout().insertWidget(0, error_widget)
+        if not hasattr(self, '_error_banners'):
+            self._error_banners = []
+        self._error_banners.append(error_widget)
         print(f"[DynamicResultsTabWidget] Error message displayed: {message}")
     
     def _retry_load_results(self):
         """Retry loading results."""
         print("[DynamicResultsTabWidget] Retrying result load...")
         if hasattr(self, 'output_dir') and self.output_dir:
-            # Clear any existing error widgets
-            for i in reversed(range(self.layout().count())):
-                widget = self.layout().itemAt(i).widget()
-                if widget and isinstance(widget, QWidget):
-                    # Check if it's an error widget (has the warning style)
-                    if "[WARN]" in widget.findChild(QLabel).text() if widget.findChild(QLabel) else False:
-                        widget.setParent(None)
-                        widget.deleteLater()
+            # Clear the error banners shown so far. They used to be found by
+            # looking for "[WARN]" in their label text, which the status icon
+            # replaced long ago - so nothing was removed and every retry
+            # stacked another banner on top of the last.
+            for widget in getattr(self, '_error_banners', []):
+                try:
+                    self.layout().removeWidget(widget)
+                    widget.setParent(None)
+                    widget.deleteLater()
+                except RuntimeError:
+                    pass                    # already deleted with its parent
+            self._error_banners = []
             
             # Retry loading
             self.load_results(self.output_dir)
@@ -1907,7 +1969,7 @@ class DynamicResultsTabWidget(QWidget):
                 # Add engine type label
                 engine_display = self.engine_type.replace('_', ' ').title()
                 engine_label = QLabel(f"{engine_display} - Feather Statistics")
-                engine_label.setStyleSheet("font-weight: bold; font-size: 12pt; color: #2196F3; padding: 5px;")
+                set_role(engine_label, "subtitle")
                 chart_layout.addWidget(engine_label)
                 
                 # Add the chart widget
@@ -1925,6 +1987,7 @@ class DynamicResultsTabWidget(QWidget):
                     if summary_layout:
                         # Insert chart at the beginning of the summary tab
                         summary_layout.insertWidget(0, self.chart_container)
+                        _retheme(self, self.chart_container)
                         print("[DynamicResultsTabWidget] [OK] Chart added to Summary tab (Requirements 1.1, 1.2)")
                     else:
                         print("[DynamicResultsTabWidget] ERROR: Summary tab has no layout!")
@@ -2269,16 +2332,7 @@ class DynamicResultsTabWidget(QWidget):
                 print(f"[Error] Cannot create wing tab: missing fields {missing}")
                 # Create error tab with message
                 error_widget = QLabel(f"Error: Missing data for wing results\nMissing: {', '.join(missing)}")
-                error_widget.setStyleSheet("""
-                    QLabel {
-                        color: #ff9800;
-                        font-size: 12pt;
-                        padding: 20px;
-                        background-color: #2a2a2a;
-                        border: 2px solid #ff9800;
-                        border-radius: 5px;
-                    }
-                """)
+                _banner(error_widget, "warn")
                 error_widget.setAlignment(Qt.AlignCenter)
                 error_widget.setWordWrap(True)
                 tab_name = wing_summary.get('wing_name', 'Unknown Wing')
@@ -2317,16 +2371,7 @@ class DynamicResultsTabWidget(QWidget):
                 # Unknown engine type - create error widget
                 print(f"[Error] Unknown engine type: {engine_type}")
                 error_widget = QLabel(f"Error: Unknown engine type '{engine_type}'\nCannot display results.\n\nSupported types: identity_based, time_window_scanning")
-                error_widget.setStyleSheet("""
-                    QLabel {
-                        color: #ff9800;
-                        font-size: 11pt;
-                        padding: 20px;
-                        background-color: #2a2a2a;
-                        border: 2px solid #ff9800;
-                        border-radius: 5px;
-                    }
-                """)
+                _banner(error_widget, "warn")
                 error_widget.setAlignment(Qt.AlignCenter)
                 error_widget.setWordWrap(True)
                 viewer = error_widget
@@ -2336,6 +2381,7 @@ class DynamicResultsTabWidget(QWidget):
 
             # Add tab to ResultsTabWidget with wing name
             tab_index = self.enhanced_tab_widget.tab_widget.addTab(tab_container, wing_name)
+            _retheme(self, tab_container)
 
             print(f"[DynamicResultsTabWidget] [OK] Wing tab created: {wing_name}")
             return tab_index
@@ -2347,16 +2393,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create error tab
             error_widget = QLabel(f"Error creating wing tab:\n{str(e)}")
-            error_widget.setStyleSheet("""
-                QLabel {
-                    color: #ff9800;
-                    font-size: 11pt;
-                    padding: 20px;
-                    background-color: #2a2a2a;
-                    border: 2px solid #ff9800;
-                    border-radius: 5px;
-                }
-            """)
+            _banner(error_widget, "bad")
             error_widget.setAlignment(Qt.AlignCenter)
             error_widget.setWordWrap(True)
             tab_name = wing_summary.get('wing_name', 'Error')
@@ -2424,6 +2461,7 @@ class DynamicResultsTabWidget(QWidget):
                 self._identity_tab_container = container
                 self._identity_tab_viewer = viewer
                 tab_index = tab_widget.addTab(container, tab_title)
+                _retheme(self, container)
                 print(f"[DynamicResultsTabWidget] [OK] Unified identity tab created: {tab_title}")
                 return tab_index
 
@@ -2435,6 +2473,7 @@ class DynamicResultsTabWidget(QWidget):
                 self._identity_tab_viewer.deleteLater()
             layout.addWidget(viewer)
             self._identity_tab_viewer = viewer
+            _retheme(self, self._identity_tab_container)
             tab_widget.setTabText(existing_index, tab_title)
             print(f"[DynamicResultsTabWidget] [OK] Unified identity tab updated: {tab_title}")
             return existing_index
@@ -2531,6 +2570,7 @@ class DynamicResultsTabWidget(QWidget):
                         self._identity_tab_container = container
                         self._identity_tab_viewer = viewer
                         show_index = tab_widget.addTab(container, tab_title)
+                        _retheme(self, container)
                     else:
                         layout = self._identity_tab_container.layout()
                         if self._identity_tab_viewer is not None:
@@ -2539,6 +2579,7 @@ class DynamicResultsTabWidget(QWidget):
                             self._identity_tab_viewer.deleteLater()
                         layout.addWidget(viewer)
                         self._identity_tab_viewer = viewer
+                        _retheme(self, self._identity_tab_container)
                         tab_widget.setTabText(existing_index, tab_title)
                         show_index = existing_index
 
@@ -2573,13 +2614,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Wing header with metadata
             header_frame = QFrame()
-            header_frame.setStyleSheet("""
-                QFrame {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 6px;
-                }
-            """)
+            set_card(header_frame)
             header_layout = QHBoxLayout(header_frame)
             header_layout.setContentsMargins(10, 5, 10, 5)
             
@@ -2589,11 +2624,11 @@ class DynamicResultsTabWidget(QWidget):
             engine_display = engine_type.replace('_', ' ').title()
             
             title_label = QLabel(f"{wing_name}")
-            title_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00FFFF;")
+            set_role(title_label, "subtitle")
             header_layout.addWidget(title_label)
             
             engine_label = QLabel(f"Engine: {engine_display}")
-            engine_label.setStyleSheet("font-size: 9pt; color: #94A3B8;")
+            set_role(engine_label, "muted")
             header_layout.addWidget(engine_label)
             
             header_layout.addStretch()
@@ -2601,13 +2636,14 @@ class DynamicResultsTabWidget(QWidget):
             # Statistics
             total_matches = wing_summary.get('total_matches', 0)
             matches_label = QLabel(f"Matches: {total_matches:,}")
-            matches_label.setStyleSheet("font-size: 9pt; color: #4CAF50; font-weight: bold;")
+            set_status(matches_label, "ok")
+            matches_label.setFont(_site_font("ui", 13, QFont.Bold))
             header_layout.addWidget(matches_label)
             
             execution_time = wing_summary.get('execution_time', 0)
             time_display = format_time_duration(execution_time)
             time_label = QLabel(f"Time: {time_display}")
-            time_label.setStyleSheet("font-size: 9pt; color: #94A3B8;")
+            set_role(time_label, "muted")
             header_layout.addWidget(time_label)
             
             # Execution ID (truncated)
@@ -2616,7 +2652,7 @@ class DynamicResultsTabWidget(QWidget):
             exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id
             exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
             exec_label = QLabel(f"ID: {exec_id_display}")
-            exec_label.setStyleSheet("font-size: 8pt; color: #64748B;")
+            set_role(exec_label, "mono")
             exec_label.setToolTip(f"Execution ID: {exec_id_str}")
             header_layout.addWidget(exec_label)
             
@@ -2703,16 +2739,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create error message widget
             error_label = QLabel(f"Failed to load identity results:\n{str(e)}")
-            error_label.setStyleSheet("""
-                QLabel {
-                    color: #ff9800;
-                    font-size: 10pt;
-                    padding: 15px;
-                    background-color: #2a2a2a;
-                    border: 2px solid #ff9800;
-                    border-radius: 5px;
-                }
-            """)
+            _banner(error_label, "bad")
             error_label.setAlignment(Qt.AlignCenter)
             error_label.setWordWrap(True)
             
@@ -2965,16 +2992,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create error message widget
             error_label = QLabel(f"Failed to load time-based results:\n{str(e)}")
-            error_label.setStyleSheet("""
-                QLabel {
-                    color: #ff9800;
-                    font-size: 10pt;
-                    padding: 15px;
-                    background-color: #2a2a2a;
-                    border: 2px solid #ff9800;
-                    border-radius: 5px;
-                }
-            """)
+            _banner(error_label, "bad")
             error_label.setAlignment(Qt.AlignCenter)
             error_label.setWordWrap(True)
             
@@ -3307,25 +3325,6 @@ class DynamicResultsTabWidget(QWidget):
             scroll_area = QScrollArea()
             scroll_area.setWidgetResizable(True)
             scroll_area.setFrameShape(QFrame.NoFrame)
-            scroll_area.setStyleSheet("""
-                QScrollArea {
-                    background-color: #0B1220;
-                    border: none;
-                }
-                QScrollBar:vertical {
-                    background-color: #1E293B;
-                    width: 12px;
-                    border-radius: 6px;
-                }
-                QScrollBar::handle:vertical {
-                    background-color: #475569;
-                    border-radius: 6px;
-                    min-height: 20px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background-color: #64748B;
-                }
-            """)
             
             # Create container widget for scroll area
             scroll_content = QWidget()
@@ -3335,21 +3334,14 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create aggregate statistics section - compact horizontal layout with execution ID
             stats_frame = QFrame()
-            stats_frame.setStyleSheet("""
-                QFrame {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 4px;
-                }
-            """)
+            set_card(stats_frame)
             stats_layout = QHBoxLayout(stats_frame)
             stats_layout.setContentsMargins(6, 4, 6, 4)
             stats_layout.setSpacing(4)
             
             # Title
             title_label = QLabel("Stats:")
-            title_label.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+            set_role(title_label, "section")
             stats_layout.addWidget(title_label)
             
             # All stats in one horizontal line including execution ID
@@ -3361,39 +3353,40 @@ class DynamicResultsTabWidget(QWidget):
             
             # Format time for display
             time_display = format_time_duration(total_time)
+            _time_text, _identities_html = _stats_line_extra(wing_summaries, total_time)
+            if _time_text:
+                time_display = _time_text
             
-            stats_text = QLabel(f"Exec ID: <span style='color:#00FFFF;font-weight:bold;'>{exec_id_display}</span> | "
-                               f"Wings: <span style='color:#4CAF50;font-weight:bold;'>{total_wings}</span> | "
-                               f"Matches: <span style='color:#4CAF50;font-weight:bold;'>{total_matches:,}</span> | "
-                               f"Time: <span style='color:#00FFFF;font-weight:bold;'>{time_display}</span> | "
-                               f"Avg: <span style='color:#FF9800;font-weight:bold;'>{avg_matches:.0f}</span>")
-            stats_text.setStyleSheet("color: #94A3B8; font-size: 8pt;")
+            stats_text = QLabel(f"Exec ID: <span style='color:#22D3EE;font-weight:bold;'>{exec_id_display}</span> | "
+                               f"Wings: <span style='color:#4ADE80;font-weight:bold;'>{total_wings}</span> | "
+                               f"Matches: <span style='color:#4ADE80;font-weight:bold;'>{total_matches:,}</span> | "
+                               f"Time: <span style='color:#22D3EE;font-weight:bold;'>{time_display}</span> | "
+                               f"Avg: <span style='color:#FBBF24;font-weight:bold;'>{avg_matches:.0f}</span>"
+                               f"{_identities_html}")
+            set_status(stats_text, "neutral")
             stats_text.setTextFormat(Qt.RichText)
             stats_text.setToolTip(f"Full Execution ID: {exec_id_str}")
             stats_layout.addWidget(stats_text)
             stats_layout.addStretch()
-            
+
             scroll_layout.addWidget(stats_frame)
-            
+            chip = _unfinished_chip(wing_summaries)
+            if chip is not None:
+                stats_layout.insertWidget(stats_layout.count() - 1, chip)   # before the stretch
+
             # Add charts if feather statistics available
             feather_statistics = aggregate_stats.get('feather_statistics', {})
             if feather_statistics:
                 # Create charts frame
                 charts_frame = QFrame()
-                charts_frame.setStyleSheet("""
-                    QFrame {
-                        background-color: #0B1220;
-                        border: 1px solid #334155;
-                        border-radius: 4px;
-                    }
-                """)
+                set_card(charts_frame)
                 charts_layout = QVBoxLayout(charts_frame)
                 charts_layout.setContentsMargins(8, 8, 8, 8)
                 charts_layout.setSpacing(8)
                 
                 # Title
                 charts_title = QLabel("Feather Statistics Charts")
-                charts_title.setStyleSheet("color: #00FFFF; font-size: 9pt; font-weight: bold;")
+                set_role(charts_title, "section")
                 charts_layout.addWidget(charts_title)
                 
                 # Create horizontal layout for charts
@@ -3402,11 +3395,14 @@ class DynamicResultsTabWidget(QWidget):
                 
                 # Chart 1: Matches by Feather (Bar Chart)
                 matches_data = _matches_by_feather(feather_statistics)
+                # One colour per feather in both charts: colours are assigned
+                # over the run's whole feather list, not each chart's own top 10
+                feather_order = _feather_order(feather_statistics)
 
                 if matches_data:
                     sorted_data = matches_data        # already sorted and capped
                     chart1 = PyQt5BarChart()
-                    chart1.set_data(sorted_data, "Matches by Feather", "Matches")
+                    chart1.set_data(sorted_data, "Matches by Feather", "Matches", order=feather_order)
                     chart1.setMinimumHeight(180)
                     chart1.show() # Ensure chart is visible
                     charts_row.addWidget(chart1, stretch=1)
@@ -3424,7 +3420,7 @@ class DynamicResultsTabWidget(QWidget):
                     sorted_data = dict(sorted(records_data.items(), key=lambda x: x[1], reverse=True)[:10])
                     # Always use PyQt5PieChart with legend displayed as text labels
                     chart2 = PyQt5PieChart(show_legend=True)
-                    chart2.set_data(sorted_data, "Records by Feather")
+                    chart2.set_data(sorted_data, "Records by Feather", order=feather_order)
                     chart2.setMinimumHeight(200)
                     chart2.setMinimumWidth(700) # Ensure enough width for pie + two-column legend
                     chart2.show() # Ensure chart is visible
@@ -3444,20 +3440,15 @@ class DynamicResultsTabWidget(QWidget):
             # QTableWidget inside it (a QTableWidget is a QFrame) and clips the
             # table's own header.
             wing_frame.setObjectName("wingBreakdownFrameLast")
-            wing_frame.setStyleSheet("""
-                QFrame#wingBreakdownFrameLast {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 4px;
-                }
-            """)
+            # (The card rule matches the frame by its property, so nothing
+            # cascades into the table - a QTableWidget is a QFrame too.)
+            set_card(wing_frame)
             wing_layout = QVBoxLayout(wing_frame)
             wing_layout.setContentsMargins(6, 4, 6, 4)
             wing_layout.setSpacing(4)
             
             wing_title = QLabel(f"Wing Breakdown ({total_wings} wings):")
-            wing_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+            set_role(wing_title, "section")
             wing_layout.addWidget(wing_title)
             
             # The same builder the Summary tab uses. This table used to be a
@@ -3492,15 +3483,20 @@ class DynamicResultsTabWidget(QWidget):
                     while existing_layout.count():
                         item = existing_layout.takeAt(0)
                         if item.widget():
+                            # hidden now: deletion is deferred, and until it
+                            # runs the old page would paint behind the new one
+                            item.widget().hide()
                             item.widget().deleteLater()
                     # Add new summary content
                     existing_layout.addWidget(scroll_area)
+                    _retheme(self, existing_summary_tab)
                     print(f"[DynamicResultsTabWidget] [OK] Updated existing Summary tab (index 0)")
                 else:
                     # No layout, create one and add content
                     new_layout = QVBoxLayout(existing_summary_tab)
                     new_layout.setContentsMargins(0, 0, 0, 0)
                     new_layout.addWidget(scroll_area)
+                    _retheme(self, existing_summary_tab)
                     print(f"[DynamicResultsTabWidget] [OK] Created layout and updated Summary tab (index 0)")
                 
                 # Update tab title
@@ -3508,6 +3504,7 @@ class DynamicResultsTabWidget(QWidget):
             else:
                 # No existing Summary tab, add a new one (shouldn't happen)
                 summary_tab_index = tab_widget.addTab(summary_widget, f"Summary - Exec {exec_id_display}")
+                _retheme(self, summary_widget)
                 print(f"[DynamicResultsTabWidget] [OK] Summary tab created at index {summary_tab_index}")
             
             # Create single combined Results tab for all wings from this execution (Requirements 5.1, 5.3, 5.4)
@@ -3516,31 +3513,7 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create a tabbed widget to hold all wing viewers from this execution
             from PyQt5.QtWidgets import QTabWidget
-            combined_viewer = QTabWidget()
-            combined_viewer.setStyleSheet("""
-                QTabWidget::pane {
-                    border: 1px solid #334155;
-                    background-color: #0B1220;
-                }
-                QTabBar::tab {
-                    background-color: #1E293B;
-                    color: #94A3B8;
-                    padding: 6px 12px;
-                    margin-right: 2px;
-                    border: 1px solid #334155;
-                    border-bottom: none;
-                    border-top-left-radius: 4px;
-                    border-top-right-radius: 4px;
-                }
-                QTabBar::tab:selected {
-                    background-color: #0B1220;
-                    color: #00FFFF;
-                    border-bottom: 2px solid #00FFFF;
-                }
-                QTabBar::tab:hover {
-                    background-color: #334155;
-                }
-            """)
+            combined_viewer = QTabWidget()      # the window's site tabs
             
             # Identity wings share ONE unified sub-tab (with per-identity wing
             # attribution); time-window wings keep one sub-tab per wing
@@ -3592,6 +3565,7 @@ class DynamicResultsTabWidget(QWidget):
             # Add the combined viewer as a single Results tab (Requirements 5.1, 5.3)
             # This keeps all wings from the same execution together
             tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
+            _retheme(self, combined_viewer)
             print(f"[DynamicResultsTabWidget] [OK] Results tab created with {len(wing_summaries)} wings combined")
             
             update_progress("Loading complete!", 100)
@@ -3652,7 +3626,9 @@ class DynamicResultsTabWidget(QWidget):
                     r.execution_duration_seconds,
                     r.feather_metadata,
                     e.errors,
-                    e.warnings
+                    e.warnings,
+                    e.execution_duration_seconds,
+                    e.total_matches
                 FROM results r
                 JOIN executions e ON r.execution_id = e.execution_id
                 WHERE r.execution_id = ?
@@ -3675,7 +3651,16 @@ class DynamicResultsTabWidget(QWidget):
             for row in cursor.fetchall():
                 result_id, wing_id, wing_name, engine_type, exec_id, \
                 total_matches, execution_duration, feather_metadata_json, \
-                errors_json, warnings_json = row
+                errors_json, warnings_json, exec_duration, exec_matches = row
+
+                # A run the pipeline never finalized: its execution row still
+                # reads 0 s / 0 matches while the result row holds the matches
+                # streamed into it. Stopped, killed, or still running.
+                incomplete = bool(total_matches) and not exec_duration and not exec_matches
+                # A run stopped on request: the pipeline stores the cancel in the
+                # execution's warnings (pipeline_executor.CANCELLED_WARNING).
+                cancelled = any('cancelled' in str(m).lower()
+                                for m in _json_list(errors_json) + _json_list(warnings_json))
 
                 signature = (exec_id, wing_id, wing_name, total_matches,
                              execution_duration)
@@ -3698,7 +3683,19 @@ class DynamicResultsTabWidget(QWidget):
                             print(f"[DynamicResultsTabWidget] Feather IDs: {feather_ids[:5]}{'...' if len(feather_ids) > 5 else ''}")
                     except Exception as e:
                         print(f"[DynamicResultsTabWidget] Warning: Failed to parse feather_metadata for wing {wing_name}: {e}")
-                
+
+                # No feather_metadata on a result that has matches (a run that
+                # stopped before writing it): count the matches per feather, so
+                # the Summary still has its statistics and chart.
+                if not feather_metadata and total_matches:
+                    try:
+                        feather_metadata = _counted_feather_metadata(conn.cursor(), result_id,
+                                                                     exec_id, database_path)
+                        print(f"[DynamicResultsTabWidget] '{wing_name}' has no feather_metadata - "
+                              f"counted matches for {len(feather_metadata)} feathers")
+                    except Exception as e:
+                        print(f"[DynamicResultsTabWidget] Warning: could not count matches per feather: {e}")
+
                 # Create wing summary dict
                 wing_summary = {
                     'wing_name': wing_name or f"Wing {wing_index}",
@@ -3721,6 +3718,8 @@ class DynamicResultsTabWidget(QWidget):
                     'errors': _json_list(errors_json),
                     'warnings': _json_list(warnings_json),
                     'feather_metadata': feather_metadata,
+                    'incomplete': incomplete,
+                    'cancelled': cancelled,
                     # No 'timestamp' key: this dict used to carry
                     # `'timestamp': execution_duration`, a duration in seconds
                     # under a name that means a point in time. Nothing read it,
@@ -3756,12 +3755,11 @@ class DynamicResultsTabWidget(QWidget):
         """The Wing Breakdown table, built once and used by both Summary paths.
 
         Header height is derived from the header's own font rather than fixed.
-        Qt sizes a header from its section size hint, and each of these tables
-        sets its OWN stylesheet - which beats the application sheet in
-        `crow_eye_styles.qss` and dropped the section padding from 8px to 4px.
-        The result was a header strip too short for its own text, and it got
-        worse when a fifth column was added. A hardcoded pixel height would
-        fix today's font and break the next one, so the floor is computed.
+        Qt sizes a header from its section size hint, and a table that set its
+        OWN stylesheet dropped the section padding from 8px to 4px - a header
+        strip too short for its own text, worse when a fifth column was added.
+        The table now takes the window's site look; a hardcoded pixel height
+        would fix today's font and break the next one, so the floor is computed.
         """
         from PyQt5.QtWidgets import QTableWidget, QTableWidgetItem, QHeaderView
 
@@ -3789,36 +3787,9 @@ class DynamicResultsTabWidget(QWidget):
         table.setAlternatingRowColors(True)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionBehavior(QTableWidget.SelectRows)
-        table.setStyleSheet("""
-            QTableWidget {
-                background-color: #0B1220;
-                gridline-color: #334155;
-                color: #E2E8F0;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                font-size: 9pt;
-            }
-            QTableWidget::item {
-                padding: 4px;
-                border-bottom: 1px solid #334155;
-            }
-            QTableWidget::item:selected {
-                background-color: #334155;
-                color: #00FFFF;
-            }
-            QHeaderView::section {
-                background-color: #1E293B;
-                color: #00FFFF;
-                padding: 8px 6px;
-                font-weight: bold;
-                font-size: 9pt;
-                border: none;
-                border-bottom: 2px solid #00FFFF;
-            }
-        """)
 
         # Reserve room for the text plus the 8px of padding above and below it
-        # that the sheet above draws. Derived, so a larger system font still
+        # that the site sheet's header sections draw. Derived, so a larger system font still
         # fits; floored so the band never looks cramped at the default one.
         header = table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -3834,6 +3805,8 @@ class DynamicResultsTabWidget(QWidget):
             matches = wing_summary.get('total_matches', 0)
             exec_time = self._wing_seconds(wing_summary)
             time_formatted = format_time(exec_time)
+            if not exec_time and wing_summary.get('incomplete'):
+                time_formatted = "unknown"      # never written, not 0 s
             status, reason = self._wing_status(wing_summary)
 
             print(f"[DynamicResultsTabWidget] Row {row}: {wing_name} | {engine_type} | "
@@ -3843,22 +3816,22 @@ class DynamicResultsTabWidget(QWidget):
             table.setItem(row, 1, QTableWidgetItem(engine_type))
 
             matches_item = QTableWidgetItem(f"{matches:,}")
-            matches_item.setForeground(QColor("#4CAF50"))
+            matches_item.setForeground(QColor(STATUS_COLORS["ok"]))
             table.setItem(row, 2, matches_item)
 
             time_item = QTableWidgetItem(time_formatted)
-            time_item.setForeground(QColor("#00FFFF"))
+            time_item.setForeground(QColor(STATUS_COLORS["info"]))
             table.setItem(row, 3, time_item)
 
             status_item = QTableWidgetItem(status)
             if reason:
                 status_item.setToolTip(reason)
             if status == "Failed":
-                status_item.setForeground(QColor("#F87171"))
-            elif status == "Skipped":
-                status_item.setForeground(QColor("#FBBF24"))
+                status_item.setForeground(QColor(STATUS_COLORS["bad"]))
+            elif status in ("Skipped", "Not finished", "Stopped"):
+                status_item.setForeground(QColor(STATUS_COLORS["warn"]))
             else:
-                status_item.setForeground(QColor("#4ADE80"))
+                status_item.setForeground(QColor(STATUS_COLORS["ok"]))
             table.setItem(row, 4, status_item)
 
         # Row height for the body; the header is sized above and separately,
@@ -3905,6 +3878,13 @@ class DynamicResultsTabWidget(QWidget):
 
         if errors:
             return "Failed", str(errors[0])
+
+        # Stopped, killed, or still running: the run never wrote its totals.
+        if wing_summary.get('incomplete'):
+            return "Not finished", ("The run did not finish - it stopped during semantic "
+                                    "mapping, or is still running")
+        if wing_summary.get('cancelled'):
+            return "Stopped", "Stopped on request before the run finished"
 
         if matches == 0:
             skip_reason = next(
@@ -3956,23 +3936,13 @@ class DynamicResultsTabWidget(QWidget):
             while summary_layout.count():
                 item = summary_layout.takeAt(0)
                 if item.widget():
+                    item.widget().hide()  # deletion is deferred; don't paint meanwhile
                     item.widget().deleteLater()
             
-            # Apply Crow-Eye styling to summary tab
-            summary_tab.setStyleSheet("""
-                QWidget {
-                    background-color: #0B1220;
-                    color: #E2E8F0;
-                }
-                QLabel {
-                    color: #E2E8F0;
-                }
-                QFrame {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 8px;
-                }
-            """)
+            # The page takes the window's site look (re-themed at the end). The
+            # sheet that sat here carried a bare QFrame rule that every table
+            # inside inherited (a QTableWidget is a QFrame).
+            summary_tab.setStyleSheet("")
             
             # Add Execution ID header (Requirements 3.1, 3.3)
             # Extract execution_id from wing_summaries
@@ -3985,25 +3955,6 @@ class DynamicResultsTabWidget(QWidget):
             scroll_area = QScrollArea()
             scroll_area.setWidgetResizable(True)
             scroll_area.setFrameShape(QFrame.NoFrame)
-            scroll_area.setStyleSheet("""
-                QScrollArea {
-                    background-color: #0B1220;
-                    border: none;
-                }
-                QScrollBar:vertical {
-                    background-color: #1E293B;
-                    width: 12px;
-                    border-radius: 6px;
-                }
-                QScrollBar::handle:vertical {
-                    background-color: #475569;
-                    border-radius: 6px;
-                    min-height: 20px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background-color: #64748B;
-                }
-            """)
             
             # Create container widget for scroll area
             scroll_content = QWidget()
@@ -4013,21 +3964,14 @@ class DynamicResultsTabWidget(QWidget):
             
             # Create aggregate statistics section - compact horizontal layout
             stats_frame = QFrame()
-            stats_frame.setStyleSheet("""
-                QFrame {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 4px;
-                }
-            """)
+            set_card(stats_frame)
             stats_layout = QHBoxLayout(stats_frame)
             stats_layout.setContentsMargins(6, 4, 6, 4)
             stats_layout.setSpacing(4)
             
             # Title
             title_label = QLabel("Stats:")
-            title_label.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold;")
+            set_role(title_label, "section")
             stats_layout.addWidget(title_label)
             
             # All stats in one horizontal line including execution ID
@@ -4039,17 +3983,21 @@ class DynamicResultsTabWidget(QWidget):
             
             # Format time for display
             time_display = format_time_duration(total_time)
+            _time_text, _identities_html = _stats_line_extra(wing_summaries, total_time)
+            if _time_text:
+                time_display = _time_text
             
             # Format execution ID
             exec_id_str = str(execution_id) if isinstance(execution_id, int) else execution_id if execution_id else "N/A"
             exec_id_display = exec_id_str[:8] if len(exec_id_str) > 8 else exec_id_str
             
-            stats_text = QLabel(f"Exec ID: <span style='color:#00FFFF;font-weight:bold;'>{exec_id_display}</span> | "
-                               f"Wings: <span style='color:#4CAF50;font-weight:bold;'>{total_wings}</span> | "
-                               f"Matches: <span style='color:#4CAF50;font-weight:bold;'>{total_matches:,}</span> | "
-                               f"Time: <span style='color:#00FFFF;font-weight:bold;'>{time_display}</span> | "
-                               f"Avg: <span style='color:#FF9800;font-weight:bold;'>{avg_matches:.0f}</span>")
-            stats_text.setStyleSheet("color: #94A3B8; font-size: 8pt;")
+            stats_text = QLabel(f"Exec ID: <span style='color:#22D3EE;font-weight:bold;'>{exec_id_display}</span> | "
+                               f"Wings: <span style='color:#4ADE80;font-weight:bold;'>{total_wings}</span> | "
+                               f"Matches: <span style='color:#4ADE80;font-weight:bold;'>{total_matches:,}</span> | "
+                               f"Time: <span style='color:#22D3EE;font-weight:bold;'>{time_display}</span> | "
+                               f"Avg: <span style='color:#FBBF24;font-weight:bold;'>{avg_matches:.0f}</span>"
+                               f"{_identities_html}")
+            set_status(stats_text, "neutral")
             stats_text.setTextFormat(Qt.RichText)
             if execution_id:
                 stats_text.setToolTip(f"Full Execution ID: {exec_id_str}")
@@ -4058,6 +4006,9 @@ class DynamicResultsTabWidget(QWidget):
             
             scroll_layout.addWidget(stats_frame)
             print(f"[DynamicResultsTabWidget] [OK] Stats with Execution ID added to Summary tab: {exec_id_str}")
+            chip = _unfinished_chip(wing_summaries)
+            if chip is not None:
+                stats_layout.insertWidget(stats_layout.count() - 1, chip)   # before the stretch
             
             # Combine feather statistics from all wings
             feather_statistics = aggregate_stats.get('feather_statistics', {})
@@ -4125,27 +4076,13 @@ class DynamicResultsTabWidget(QWidget):
                 print(f"[DynamicResultsTabWidget] [OK] Creating charts for {len(feather_statistics)} feathers...")
                 try:
                     charts_frame = QFrame()
-                    charts_frame.setStyleSheet("""
-                        QFrame {
-                            background-color: #1E293B;
-                            border: 1px solid #334155;
-                            border-radius: 8px;
-                            padding: 8px;
-                        }
-                    """)
+                    set_card(charts_frame)
                     charts_layout = QVBoxLayout(charts_frame)
                     charts_layout.setContentsMargins(8, 8, 8, 8)
                     charts_layout.setSpacing(10)
                     
                     charts_title = QLabel("Feather Statistics Charts")
-                    charts_title.setStyleSheet("""
-                        QLabel {
-                            font-weight: bold;
-                            font-size: 10pt;
-                            color: #00FFFF;
-                            padding: 2px;
-                        }
-                    """)
+                    set_role(charts_title, "section")
                     charts_layout.addWidget(charts_title)
                     
                     # Create horizontal layout for Chart 1 and Chart 2 side by side
@@ -4158,11 +4095,13 @@ class DynamicResultsTabWidget(QWidget):
                     # apart again - this one carried the bug for a
                     # release after the other was fixed.
                     matches_data = _matches_by_feather(feather_statistics)
+                    # One colour per feather in both charts (see load_last_results)
+                    feather_order = _feather_order(feather_statistics)
 
                     if matches_data:
                         sorted_data = matches_data    # already sorted and capped
                         chart1 = PyQt5BarChart()
-                        chart1.set_data(sorted_data, "Matches by Feather", "Matches")
+                        chart1.set_data(sorted_data, "Matches by Feather", "Matches", order=feather_order)
                         chart1.setMinimumHeight(180)
                         charts_row.addWidget(chart1, stretch=1)
                         print(f"[DynamicResultsTabWidget] [OK] Chart 1 added: Matches Found ({len(sorted_data)} feathers)")
@@ -4179,7 +4118,7 @@ class DynamicResultsTabWidget(QWidget):
                         sorted_data = dict(sorted(records_data.items(), key=lambda x: x[1], reverse=True)[:10])
                         # Always use PyQt5PieChart with legend displayed as text labels
                         chart2 = PyQt5PieChart(show_legend=True)
-                        chart2.set_data(sorted_data, "Records by Feather")
+                        chart2.set_data(sorted_data, "Records by Feather", order=feather_order)
                         chart2.setMinimumHeight(200)
                         chart2.setMinimumWidth(700) # Ensure enough width for pie + two-column legend
                         charts_row.addWidget(chart2, stretch=1)
@@ -4190,19 +4129,13 @@ class DynamicResultsTabWidget(QWidget):
                     
                     # Chart 3: Feather Extraction Summary - Compact Grid Layout (4 per row)
                     extraction_frame = QFrame()
-                    extraction_frame.setStyleSheet("""
-                        QFrame {
-                            background-color: #0B1220;
-                            border: 1px solid #334155;
-                            border-radius: 4px;
-                        }
-                    """)
+                    set_card(extraction_frame)
                     extraction_layout = QVBoxLayout(extraction_frame)
                     extraction_layout.setContentsMargins(4, 4, 4, 4)
                     extraction_layout.setSpacing(2)
                     
                     extraction_title = QLabel("Evidence Extracted By Feathers")
-                    extraction_title.setStyleSheet("color: #00FFFF; font-size: 8pt; font-weight: bold; padding: 1px;")
+                    set_role(extraction_title, "section")
                     extraction_layout.addWidget(extraction_title)
                     
                     # Build extraction data with percentages
@@ -4259,20 +4192,14 @@ class DynamicResultsTabWidget(QWidget):
                         card = QFrame()
                         # Color border based on PRIMARY extraction percentage
                         if extraction_percentage >= 50:
-                            border_color = "#10B981" # green
+                            rate_status = "ok"      # green
                         elif extraction_percentage >= 20:
-                            border_color = "#F59E0B" # yellow
+                            rate_status = "warn"    # amber
                         else:
-                            border_color = "#EF4444" # red
-                        
-                        card.setStyleSheet(f"""
-                            QFrame {{
-                                background-color: #1E293B;
-                                border: 1px solid {border_color};
-                                border-radius: 3px;
-                                padding: 2px;
-                            }}
-                        """)
+                            rate_status = "bad"     # rose
+
+                        set_card(card)
+                        set_status(card, rate_status)
                         card_layout = QVBoxLayout(card)
                         card_layout.setContentsMargins(4, 2, 4, 2)
                         card_layout.setSpacing(1)
@@ -4280,19 +4207,20 @@ class DynamicResultsTabWidget(QWidget):
                         # Feather name (truncated if too long) - smaller font
                         display_name = feather_id if len(feather_id) <= 18 else feather_id[:15] + "..."
                         name_label = QLabel(display_name)
-                        name_label.setStyleSheet("color: #E2E8F0; font-size: 7pt; font-weight: bold;")
+                        name_label.setFont(_site_font("ui", 13, QFont.Bold))
                         name_label.setToolTip(feather_id)
                         card_layout.addWidget(name_label)
                         
                         # Stats line: Extracted / Records - smaller font
                         stats_label = QLabel(f"{extracted:,} / {records:,}")
-                        stats_label.setStyleSheet("color: #94A3B8; font-size: 6pt;")
+                        set_role(stats_label, "mono")
                         stats_label.setToolTip(f"Evidence Extracted: {extracted:,} | Total Records: {records:,}")
                         card_layout.addWidget(stats_label)
                         
                         # PRIMARY Percentage (Extraction Rate) - larger, bold, colored
                         pct_label = QLabel(f"{extraction_percentage:.1f}%")
-                        pct_label.setStyleSheet(f"color: {border_color}; font-size: 8pt; font-weight: bold;")
+                        set_status(pct_label, rate_status)
+                        pct_label.setFont(_site_font("ui", 13, QFont.Bold))
                         pct_label.setToolTip(f"Extraction Rate: {extraction_percentage:.1f}% of records had evidence extracted")
                         card_layout.addWidget(pct_label)
                         
@@ -4303,14 +4231,24 @@ class DynamicResultsTabWidget(QWidget):
                             f'<img src="{CrowEyeIcons.icon_path("subarrow")}" width="9" height="9"> '
                             f'{correlation_percentage:.1f}% correlated'
                         )
-                        corr_label.setStyleSheet("color: #64748B; font-size: 5pt;")
+                        set_role(corr_label, "muted")
                         corr_label.setToolTip(f"Correlation Rate: {correlation_percentage:.1f}% of extracted evidence resulted in correlations ({correlated:,} / {extracted:,})")
                         card_layout.addWidget(corr_label)
                         
                         grid_layout.addWidget(card, row, col)
                     
                     extraction_layout.addWidget(grid_widget)
-                    charts_layout.addWidget(extraction_frame)
+                    # Only with real extraction counts. Statistics counted from
+                    # an unfinished run's matches and feathers have records but
+                    # not how many of them yielded an identity, so a rate drawn
+                    # from them would be invented.
+                    counted = any(isinstance(m, dict) and m.get('_counted')
+                                  for ws in (wing_summaries or [])
+                                  for m in (ws.get('feather_metadata') or {}).values())
+                    if any(item[2] for item in extraction_data) and not counted:
+                        charts_layout.addWidget(extraction_frame)
+                    else:
+                        extraction_frame.deleteLater()
                     print(f"[DynamicResultsTabWidget] [OK] Chart 3 added: Extraction grid with {len(extraction_data)} feathers")
                     
                     scroll_layout.addWidget(charts_frame)
@@ -4328,7 +4266,7 @@ class DynamicResultsTabWidget(QWidget):
                 # Add a message to the summary tab
                 no_charts_label = QLabel()
                 apply_status_to_label(no_charts_label, "WARN", "No feather statistics available for charts")
-                no_charts_label.setStyleSheet("color: #FF9800; font-size: 10pt; padding: 20px;")
+                _banner(no_charts_label, "warn")
                 no_charts_label.setAlignment(Qt.AlignCenter)
                 scroll_layout.addWidget(no_charts_label)
             
@@ -4344,27 +4282,15 @@ class DynamicResultsTabWidget(QWidget):
                 # inherited by the breakdown table, pushing its header 8px into
                 # its own frame and slicing the top off every header label.
                 breakdown_frame.setObjectName("wingBreakdownFrame")
-                breakdown_frame.setStyleSheet("""
-                    QFrame#wingBreakdownFrame {
-                        background-color: #1E293B;
-                        border: 1px solid #334155;
-                        border-radius: 8px;
-                        padding: 8px;
-                    }
-                """)
+                # (The card rule matches the frame by its property, not every
+                # QFrame below it.)
+                set_card(breakdown_frame)
                 breakdown_layout = QVBoxLayout(breakdown_frame)
                 breakdown_layout.setContentsMargins(8, 8, 8, 8)
                 breakdown_layout.setSpacing(6)
                 
                 breakdown_title = QLabel(f"Wing Breakdown ({len(wing_summaries)} wings)")
-                breakdown_title.setStyleSheet("""
-                    QLabel {
-                        font-weight: bold;
-                        font-size: 10pt;
-                        color: #00FFFF;
-                        padding: 2px;
-                    }
-                """)
+                set_role(breakdown_title, "section")
                 breakdown_layout.addWidget(breakdown_title)
                 
                 # One builder, shared with the Summary built by
@@ -4384,6 +4310,7 @@ class DynamicResultsTabWidget(QWidget):
             # Set scroll content
             scroll_area.setWidget(scroll_content)
             summary_layout.addWidget(scroll_area)
+            _retheme(self, summary_tab)
             
             print(f"[DynamicResultsTabWidget] [OK] Summary tab updated with aggregate statistics")
             print(f" - Execution ID: {execution_id if execution_id else 'N/A'}")
@@ -4446,73 +4373,43 @@ class ResultsViewer(QWidget):
         
         # Status bar
         self.status_label = QLabel("Ready to load results")
-        self.status_label.setStyleSheet("color: #666; font-size: 9pt; padding: 2px;")
+        set_role(self.status_label, "muted")
         layout.addWidget(self.status_label)
     
     def _create_header_section(self) -> QFrame:
         """Create the header section with controls"""
         frame = QFrame()
         frame.setMaximumHeight(50)
-        frame.setStyleSheet("""
-            QFrame {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 6px;
-            }
-        """)
+        set_card(frame)
         
         layout = QHBoxLayout(frame)
         layout.setContentsMargins(10, 5, 10, 5)
         
         # Title
         title_label = QLabel("Correlation Results Viewer")
-        title_label.setStyleSheet("font-weight: bold; font-size: 11pt; color: #00FFFF;")
+        set_role(title_label, "subtitle")
         layout.addWidget(title_label)
         
         layout.addStretch()
         
         # Engine type indicator
         self.engine_label = QLabel("Engine: Time-Based")
-        self.engine_label.setStyleSheet("color: #94A3B8; font-size: 9pt;")
+        set_role(self.engine_label, "muted")
         layout.addWidget(self.engine_label)
         
         # Load results button
         load_btn = QPushButton("Load Results")
         load_btn.setMaximumWidth(100)
-        load_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 4px 8px;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        set_variant(load_btn, "ghost")
+        load_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         load_btn.clicked.connect(self._load_results_dialog)
         layout.addWidget(load_btn)
         
         # Refresh button
         refresh_btn = QPushButton("Refresh")
         refresh_btn.setMaximumWidth(70)
-        refresh_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 4px 8px;
-                font-size: 9pt;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        set_variant(refresh_btn, "ghost")
+        refresh_btn.setMaximumWidth(16777215)  # the cap fit the old 8pt label, not the site button font
         refresh_btn.clicked.connect(self._refresh_results)
         layout.addWidget(refresh_btn)
         

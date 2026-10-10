@@ -76,6 +76,7 @@ import sys
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.raw_file_copy import copy_locked_file_raw
+from utils.dedupe_insert import Tally, ensure_identity_index, insert_new, table_is_empty
 from utils.time_utils import (format_forensic_timestamp, get_current_forensic_timestamp,
                               get_current_utc, filetime_to_datetime, ensure_utc)
 
@@ -92,6 +93,91 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 # FORMATTING HELPER FUNCTIONS
 # ============================================================================
+
+def _custody_sha256(path):
+    """SHA-256 of a file when a custody record is open (else None, no read)."""
+    try:
+        from utils import custody
+        if custody.active() is None:
+            return None
+        return custody.sha256_file(path)[0]
+    except Exception:
+        return None
+
+
+def _custody_repair_note(path, before, ok):
+    """esentutl /p rewrites the working copy before it is parsed and can
+    discard pages it cannot recover: the parsed rows come from the repaired
+    file, so the record says so, with the copy's hash before and after."""
+    try:
+        from utils import custody
+        rec = custody.active()
+        if rec is None:
+            return
+        after = custody.sha256_file(path)[0]
+        rec.warn("SRUDB.dat working copy %s was repaired with esentutl /p (%s), which can discard "
+                 "unrecoverable pages; the rows come from the repaired copy. SHA-256 before %s, "
+                 "after %s." % (path, "succeeded" if ok else "failed", before, after))
+    except Exception:
+        pass
+
+
+# Columns a run derives from another stored column rather than reads from
+# SRUDB.dat; never part of a row's identity (see insert_srum_rows).
+SRUM_DERIVED_COLUMNS = frozenset(("user_name",))
+
+_INSERT_RE = re.compile(r"INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES", re.S | re.I)
+
+
+def insert_srum_rows(conn, sql, rows, tally, state):
+    """Write the rows of one INSERT that are not in the table yet.
+
+    A second parse of the same SRUDB.dat stored every row again: dedupe_exact
+    only removes duplicates INSIDE one run's batch, so the database held 2x
+    every usage, network and timeline row (457,593 rows, 230,848 distinct).
+    Identity is the whole row (what dedupe_exact already compares), looked up
+    through an index on (timestamp, app_name). A table that was empty when the
+    run began takes the plain insert - dedupe_exact has already removed the
+    batch's own duplicates - so a first parse costs nothing extra.
+
+    ``state`` is a per-run dict: table -> was it empty when the run began.
+
+    The identity is every stored column except ``user_name`` (the per-run
+    ``id`` is never written by the INSERT). ``user_name`` is not evidence: it
+    is this run's lookup of ``user_sid``, and the live parse resolves it
+    (CROW-PC\\Ghass) where the offline parse of the same SRUDB.dat - Crow-Claw's
+    collected copy - can only show the SID. With it in the identity a live
+    parse followed by the offline import of the same database stored about
+    half of every usage and timeline table again.
+    """
+    m = _INSERT_RE.search(sql)
+    table = m.group(1)
+    cols = [c.strip() for c in m.group(2).split(",") if c.strip()]
+    ident_cols = [c for c in cols if c not in SRUM_DERIVED_COLUMNS]
+    if table not in state:
+        ident = [c for c in ("timestamp", "app_name") if c in cols] or cols[:2]
+        ensure_identity_index(conn, table, ident)
+        state[table] = table_is_empty(conn, table)
+    # All or nothing: executemany is not atomic, and a caller that retries a
+    # failed batch row by row (offline_SRUM_Claw._save_rows) stored the rows
+    # before the bad one twice on a first parse. A savepoint undoes them.
+    conn.execute("SAVEPOINT srum_batch")
+    try:
+        if state[table]:
+            before = conn.total_changes
+            conn.executemany(sql, rows)
+            changed = conn.total_changes - before
+        else:
+            changed = None
+            insert_new(conn, table, cols, rows, ident_cols, tally)
+    except Exception:
+        conn.execute("ROLLBACK TO srum_batch")
+        conn.execute("RELEASE srum_batch")
+        raise
+    conn.execute("RELEASE srum_batch")
+    if changed is not None:
+        tally.add(table, len(rows), changed)
+
 
 def dedupe_exact(rows):
     """Drop byte-for-byte identical row tuples, preserving order.
@@ -999,6 +1085,29 @@ class ESETable:
             logger.debug(f"Error closing table: {e}")
 
 
+def _parser_allows_snapshot_creation():
+    """The analyst's Settings -> Parsing choice: may a parse CREATE a shadow copy?
+
+    Same reading as Regclaw._parser_allows_snapshot_creation (config/
+    global_config.json, defaulting to on); existing snapshots are used either way.
+    """
+    # From the file Settings actually writes (config.case_history_manager:
+    # %APPDATA%\CrowEye\config, ~/.config/crow-eye). This used to open
+    # <source>/config/global_config.json, which nothing writes - so the
+    # setting always read as on, and switching it off changed nothing.
+    try:
+        from config.case_history_manager import read_global_setting
+    except Exception:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from config.case_history_manager import read_global_setting
+        except Exception as exc:
+            logger.debug("could not read the snapshot setting, defaulting to on: %s", exc)
+            return True
+    return bool(read_global_setting("parser_allow_snapshot_creation", True))
+
+
 class SRUMParser:
     """Main parser class for SRUM database extraction and analysis.
     
@@ -1206,8 +1315,24 @@ class SRUMParser:
             raise SRUMDatabaseCorruptError(f"JetCreateInstance failed: {ret}")
 
         # Set parameters for read-only access
-        esent.JetSetSystemParameterW(byref(self.instance), 0, 64, 0, None)  # JET_paramRecovery = "Off"
-        esent.JetSetSystemParameterW(byref(self.instance), 0, 0, 8192, None)  # JET_paramDatabasePageSize
+        esent.JetSetSystemParameterW(byref(self.instance), 0, 64, 0, None)  # JET_paramDatabasePageSize (0: from the file)
+        esent.JetSetSystemParameterW(byref(self.instance), 0, 0, 8192, None)  # JET_paramSystemPath, no string: no effect
+        # ESE writes a checkpoint (edb.chk), a log (edb.log), reserve logs
+        # (edbres*.jrs) and a temp database (edbtmp.log) into its system, log
+        # and temp paths - which default to the CURRENT WORKING FOLDER. They
+        # were landing beside Crow Eye.py, or on the examined machine wherever
+        # Crow-Eye was started. Point all three at the working copy's folder,
+        # which is removed with it. The comments above said Recovery was being
+        # turned off; parameter 64 is the page size, and Recovery is 34.
+        work = os.path.dirname(self.working_copy) if self.working_copy else None
+        if not work:
+            if not self.temp_dir:
+                self.temp_dir = tempfile.mkdtemp(prefix="srum_parse_")
+            work = self.temp_dir
+        work = work.rstrip("\\/") + "\\"
+        for _param in (0, 1, 2):        # JET_paramSystemPath, TempPath, LogFilePath
+            esent.JetSetSystemParameterW(byref(self.instance), 0, _param, 0, c_wchar_p(work))
+        esent.JetSetSystemParameterW(byref(self.instance), 0, 34, 0, c_wchar_p("Off"))  # JET_paramRecovery
 
         # Initialize instance
         ret = esent.JetInit(byref(self.instance))
@@ -1498,6 +1623,13 @@ class SRUMParser:
             if self._file_accessor is None:
                 from Artifacts_Collectors.crow_claw.core.file_accessor import FileAccessor
                 self._file_accessor = FileAccessor(is_admin=self._is_admin())
+                # Settings -> Parsing "allow snapshot creation" governs SRUM
+                # too. The registry parse honoured it; this copy created a
+                # shadow copy on the target whatever the analyst had chosen.
+                if not _parser_allows_snapshot_creation():
+                    for strategy in getattr(self._file_accessor, "strategies", []):
+                        if type(strategy).__name__ == "VSSAccessStrategy":
+                            strategy.allow_snapshot_creation = False
             result = self._file_accessor.access_file_with_retry(src, dst, "SRUM")
             if getattr(result, "success", False) and os.path.exists(dst):
                 return True
@@ -1637,11 +1769,13 @@ class SRUMParser:
         if not self.working_copy:
             return False
         try:
+            before = _custody_sha256(self.working_copy)
             result = subprocess.run(['esentutl', '/p', self.working_copy, '/o'],
                                     capture_output=True, text=True, timeout=180)
             ok = result.returncode == 0
             logger.info("esentutl repair %s (rc=%s)",
                         "succeeded" if ok else "failed", result.returncode)
+            _custody_repair_note(self.working_copy, before, ok)
             return ok
         except Exception as e:
             logger.warning(f"esentutl repair error: {e}")
@@ -2413,6 +2547,10 @@ class SRUMParser:
             
             # Track total records for metadata
             total_records = 0
+            # Rows written vs already in the database, per table (a re-parse
+            # adds only what is new).
+            self.tally = Tally()
+            empty_at_start = {}
             
             # Save application resource usage records
             if 'application_usage' in parsed_data:
@@ -2458,7 +2596,7 @@ class SRUMParser:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for i in range(0, len(rows), 1000):
-                    cursor.executemany(sql, rows[i:i + 1000])
+                    insert_srum_rows(conn, sql, rows[i:i + 1000], self.tally, empty_at_start)
                     conn.commit()
 
             # Save network connectivity records
@@ -2490,7 +2628,7 @@ class SRUMParser:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 for i in range(0, len(rows), 1000):
-                    cursor.executemany(sql, rows[i:i + 1000])
+                    insert_srum_rows(conn, sql, rows[i:i + 1000], self.tally, empty_at_start)
                     conn.commit()
 
             # Save network data usage records
@@ -2516,7 +2654,7 @@ class SRUMParser:
                 if removed:
                     logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
                 for i in range(0, len(rows), 1000):
-                    cursor.executemany(NET_DATA_INSERT, rows[i:i + 1000])
+                    insert_srum_rows(conn, NET_DATA_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
                     conn.commit()
 
             # Save energy usage records
@@ -2545,7 +2683,7 @@ class SRUMParser:
                 if removed:
                     logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
                 for i in range(0, len(rows), 1000):
-                    cursor.executemany(ENERGY_INSERT, rows[i:i + 1000])
+                    insert_srum_rows(conn, ENERGY_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
                     conn.commit()
 
             # Save application timeline records
@@ -2612,7 +2750,7 @@ class SRUMParser:
                 if removed:
                     logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
                 for i in range(0, len(rows), 1000):
-                    cursor.executemany(APP_TIMELINE_INSERT, rows[i:i + 1000])
+                    insert_srum_rows(conn, APP_TIMELINE_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
                     conn.commit()
 
             # Save parsing metadata
@@ -2981,7 +3119,15 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         parser.save_to_database(parsed_data, metadata)
         
         result['success'] = True
-        
+        # What this run read, and of that what was new / already stored.
+        _tot = parser.tally.totals()
+        result['records'] = _tot['parsed']
+        result['inserted'] = _tot['inserted']
+        result['duplicates'] = _tot['duplicates']
+        result['tables'] = parser.tally.tables
+        logger.info("[SRUM] %d rows read: %d new, %d already in the database",
+                    _tot['parsed'], _tot['inserted'], _tot['duplicates'])
+
         # Create detailed success message
         success_msg = f"SRUM parsing completed successfully! Parsed {total_records:,} total records in {duration:.2f} seconds."
         logger.info(success_msg)

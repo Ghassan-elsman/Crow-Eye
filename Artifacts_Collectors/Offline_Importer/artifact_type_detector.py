@@ -12,6 +12,16 @@ from dataclasses import dataclass
 from typing import Optional, Tuple
 
 
+try:
+    from Artifacts_Collectors.browser_paths import browser_relative_path
+except ImportError:  # run with Artifacts_Collectors itself on sys.path
+    import sys as _sys
+    _ac = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if _ac not in _sys.path:
+        _sys.path.insert(0, _ac)
+    from browser_paths import browser_relative_path
+
+
 @dataclass
 class ArtifactDetectionResult:
     """
@@ -56,6 +66,11 @@ class ArtifactTypeDetector:
             r'^DEFAULT',     # Starts with DEFAULT
             r'^COMPONENTS',  # Starts with COMPONENTS
             r'^BCD',         # Starts with BCD
+            # The other hives Crow-Claw collects (and their .LOG1 / .LOG2):
+            # they were imported as Unknown and never parsed
+            r'^DRIVERS',
+            r'^BBI',
+            r'^ELAM',
             r'Amcache\.hve'  # Contains Amcache.hve
         ]
         
@@ -166,6 +181,18 @@ class ArtifactTypeDetector:
         except Exception:
             file_size = 0
         
+        # Browser profile trees first: identified by location, before the
+        # filename rules (which would call a profile's .url / SRU* / *.pf-like
+        # files something else).
+        if browser_relative_path(file_path):
+            return ArtifactDetectionResult(
+                file_path=file_path,
+                artifact_type='Browser',
+                confidence=0.9,
+                detection_method='path',
+                file_size=file_size
+            )
+
         # ONLY use filename pattern matching - no signature detection
         # This prevents false positives with log files and other non-artifacts
         filename_result = self._check_filename(file_path)
@@ -249,6 +276,16 @@ class ArtifactTypeDetector:
             if re.search(pattern, filename, re.IGNORECASE):
                 return 'AmCache', 0.9
         
+        # An extension says what a file is before a hive-like name does:
+        # "System Information.lnk" matched ^SYSTEM and was typed a Registry
+        # hive (8 shortcuts in one collection), and a Prefetch file of
+        # SYSTEMSETTINGS.EXE would have been too.
+        if re.search(self.prefetch_pattern, filename, re.IGNORECASE):
+            return 'Prefetch', 0.9
+        for pattern in self.jumplist_patterns:
+            if re.search(pattern, filename, re.IGNORECASE):
+                return 'link_jumplist', 0.9
+
         # Check Registry patterns
         for pattern in self.registry_patterns:
             if re.search(pattern, filename, re.IGNORECASE):

@@ -26,6 +26,7 @@ from .results_viewer import DynamicResultsTabWidget
 from ..integration.auto_feather_generator import AutoFeatherGenerator
 from ..integration.default_wings_loader import DefaultWingsLoader
 from .crow_eye_icons import apply_status_to_label
+from ui.site_theme import set_status, set_role, font as site_font
 
 
 class PipelineManagerTab(QWidget):
@@ -47,13 +48,14 @@ class PipelineManagerTab(QWidget):
         info_layout.setContentsMargins(0, 0, 0, 10)
         
         info_label = QLabel("Tip: Feathers are auto-generated from Crow-Eye artifacts on first case load. This may take a few moments.")
-        info_label.setStyleSheet("color: #888; font-size: 9pt;")
+        set_role(info_label, "muted")
         info_label.setWordWrap(True)
         info_layout.addWidget(info_label)
         
         # Add status indicator
         self.feather_status_label = QLabel("Checking feathers...")
-        self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+        self.feather_status_label.setFont(site_font("ui", 12, 63))     # DemiBold
+        set_status(self.feather_status_label, "warn")
         info_layout.addWidget(self.feather_status_label)
         self.feather_status_label.hide() # Hidden by default
         
@@ -182,7 +184,7 @@ class PipelineManagerTab(QWidget):
             if hasattr(self, 'feather_status_label'):
                 self.feather_status_label.show()
                 self.feather_status_label.setText("Checking feathers...")
-                self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+                set_status(self.feather_status_label, "warn")
                 QApplication.processEvents()
             
             # Check if Correlation/feathers directory exists
@@ -191,7 +193,7 @@ class PipelineManagerTab(QWidget):
             if not feathers_dir.exists():
                 if hasattr(self, 'feather_status_label'):
                     apply_status_to_label(self.feather_status_label, "WARN", "Feathers not found")
-                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
+                    set_status(self.feather_status_label, "bad")
                 return (True, "Feathers directory does not exist")
             
             # Check if there are any .json feather config files
@@ -200,7 +202,7 @@ class PipelineManagerTab(QWidget):
             if len(json_files) == 0:
                 if hasattr(self, 'feather_status_label'):
                     apply_status_to_label(self.feather_status_label, "WARN", "No feathers configured")
-                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
+                    set_status(self.feather_status_label, "bad")
                 return (True, "No feather configuration files found")
             
             # Get expected feather count from mappings
@@ -212,7 +214,7 @@ class PipelineManagerTab(QWidget):
             if len(json_files) < expected_count:
                 if hasattr(self, 'feather_status_label'):
                     apply_status_to_label(self.feather_status_label, "WARN", f"Missing feathers ({len(json_files)}/{expected_count})")
-                    self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+                    set_status(self.feather_status_label, "warn")
                 return (True, f"Missing feathers: found {len(json_files)}, expected {expected_count}")
             
             # Check if corresponding .db files exist for each .json config
@@ -225,20 +227,20 @@ class PipelineManagerTab(QWidget):
             if missing_dbs:
                 if hasattr(self, 'feather_status_label'):
                     apply_status_to_label(self.feather_status_label, "WARN", f"Generating databases... ({len(missing_dbs)} remaining)")
-                    self.feather_status_label.setStyleSheet("color: #FFA500; font-size: 9pt; font-weight: bold;")
+                    set_status(self.feather_status_label, "warn")
                 return (True, f"Missing database files for: {', '.join(missing_dbs[:3])}")
             
             # All checks passed
             if hasattr(self, 'feather_status_label'):
                 apply_status_to_label(self.feather_status_label, "OK", "Feathers ready")
-                self.feather_status_label.setStyleSheet("color: #4CAF50; font-size: 9pt; font-weight: bold;")
+                set_status(self.feather_status_label, "ok")
             return (False, "All feathers present and complete")
             
         except Exception as e:
             print(f"[Auto-Generation] Error checking feather status: {e}")
             if hasattr(self, 'feather_status_label'):
                 apply_status_to_label(self.feather_status_label, "ERROR", "Error checking feathers")
-                self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
+                set_status(self.feather_status_label, "bad")
             # If we can't check, assume we need to generate
             return (True, f"Error checking status: {e}")
     
@@ -252,7 +254,7 @@ class PipelineManagerTab(QWidget):
             if hasattr(self, 'feather_status_label'):
                 self.feather_status_label.show()
                 self.feather_status_label.setText("Generating feathers...")
-                self.feather_status_label.setStyleSheet("color: #00BFFF; font-size: 9pt; font-weight: bold;")
+                set_status(self.feather_status_label, "info")
                 QApplication.processEvents()
             
             # Check if Target_Artifacts or live_acquisition directory exists
@@ -265,7 +267,7 @@ class PipelineManagerTab(QWidget):
                 print(f"[Auto-Generation] Neither Target_Artifacts nor live_acquisition found")
                 if hasattr(self, 'feather_status_label'):
                     apply_status_to_label(self.feather_status_label, "WARN", "No artifact directories found")
-                    self.feather_status_label.setStyleSheet("color: #FF6B6B; font-size: 9pt; font-weight: bold;")
+                    set_status(self.feather_status_label, "bad")
                 return
             
             # Create progress dialog
@@ -671,58 +673,6 @@ class MainWindow(QMainWindow):
         
         # Create tab widget
         self.tab_widget = QTabWidget()
-        # Apply unified Crow-Eye tab style with smaller, compact tabs
-        self.tab_widget.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #334155;
-                border-radius: 8px;
-                background: #1E293B;
-                margin: 0px;
-                padding: 0px;
-            }
-            QTabBar::tab {
-                background: #1E293B;
-                color: #94A3B8;
-                border: 1px solid #334155;
-                border-bottom: none;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                padding: 4px 10px;
-                margin: 0px 2px 0px 2px;
-                min-width: 100px;
-                max-width: 180px;
-                min-height: 14px;
-                font-weight: 600;
-                font-family: 'Segoe UI', sans-serif;
-                font-size: 9px;
-            }
-            QTabBar::tab:selected {
-                background-color: #0B1220;
-                color: #00FFFF;
-                border-bottom: 2px solid #00FFFF;
-                font-weight: bold;
-            }
-            QTabBar::tab:hover:!selected {
-                background-color: #334155;
-                color: #FFFFFF;
-            }
-            QTabBar::tab:disabled {
-                color: #64748B;
-                background-color: #64748B;
-            }
-            QTabBar::scroller {
-                width: 24px;
-            }
-            QTabBar QToolButton {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 3px;
-            }
-            QTabBar QToolButton:hover {
-                background-color: #334155;
-                border: 1px solid #00FFFF;
-            }
-        """)
         self.tab_widget.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tab_widget)
         
@@ -771,24 +721,35 @@ class MainWindow(QMainWindow):
         
         # Create status bar
         self._create_status_bar()
-    
-    def _load_styles(self):
-        """Load and apply Crow-Eye stylesheet"""
+
+        # The site look (ui/site_theme.py): the per-widget sheets the tabs set
+        # while they were built become roles; the window keeps ONE sheet.
+        self._apply_site_look()
+
+    def _apply_site_look(self, root=None):
+        """One sheet for the engine window, or re-theme a page built later
+        (results tabs are rebuilt on every run and load)."""
         try:
-            # Get the directory where this file is located
-            current_dir = Path(__file__).parent
-            style_file = current_dir / "crow_eye_styles.qss"
-            
-            if style_file.exists():
-                with open(style_file, 'r') as f:
-                    stylesheet = f.read()
-                self.setStyleSheet(stylesheet)
-                print(f"[Correlation Engine] Loaded styles from: {style_file}")
-            else:
-                print(f"[Correlation Engine] Warning: Style file not found: {style_file}")
+            from ui.site_theme import apply_site_theme
+            from correlation_engine.gui.ui_styling import engine_extra
+            apply_site_theme(self, root=root, extra=engine_extra())
+        except Exception as e:
+            print(f"[Correlation Engine] site look not applied: {e}")
+
+    def _load_styles(self):
+        """The site look, set BEFORE the children exist (ui/site_theme.py).
+
+        It used to load crow_eye_styles.qss here, and the integration set it a
+        second time after the window was built - a replaced sheet leaves the
+        children in the old fonts. One source now: the site sheet plus the
+        engine's own rules (ui_styling.engine_extra)."""
+        try:
+            from ui.site_theme import begin_site_theme
+            from correlation_engine.gui.ui_styling import engine_extra
+            begin_site_theme(self, extra=engine_extra())
         except Exception as e:
             print(f"[Correlation Engine] Error loading styles: {e}")
-        
+
     def _create_menu_bar(self):
         """Create the menu bar"""
         menubar = self.menuBar()
@@ -987,16 +948,9 @@ class MainWindow(QMainWindow):
             message: Notification message
             level: Notification level (info, success, warning, error)
         """
-        # Set color based on level
-        colors = {
-            "info": "#2196F3",
-            "success": "#4CAF50",
-            "warning": "#FF9800",
-            "error": "#F44336"
-        }
-        
-        color = colors.get(level, colors["info"])
-        self.status_label.setStyleSheet(f"color: {color};")
+        # The level is the label's status colour (the site's meaning colours)
+        kinds = {"info": "info", "success": "ok", "warning": "warn", "error": "bad"}
+        set_status(self.status_label, kinds.get(level, "info"))
         self.status_label.setText(message)
         
         # Show in status bar for 5 seconds
@@ -1482,6 +1436,17 @@ class MainWindow(QMainWindow):
         # what wing_completed collected if a caller emitted only the aggregate.
         wing_summaries = summary.get('wing_summaries') or \
             getattr(self, '_run_wing_summaries', [])
+        if summary.get('cancelled') and wing_summaries:
+            # A stopped run's wing summaries carry no results (the executor's
+            # cancelled summary has none), so the Summary would have no
+            # statistics. Read the wings back from the database, where the
+            # engine saved their statistics before it stopped.
+            wing_summaries = self._stopped_wings_from_database(wing_summaries)
+            summary = dict(summary, wing_summaries=wing_summaries,
+                           total_wings_executed=len(wing_summaries),
+                           total_matches_all_wings=sum(w.get('total_matches', 0) or 0
+                                                       for w in wing_summaries),
+                           execution_times=[w.get('execution_time', 0) for w in wing_summaries])
         if wing_summaries:
             # With progress: this is the moment the run ends and the results
             # start loading, and a run's worth of matches takes long enough
@@ -1499,6 +1464,25 @@ class MainWindow(QMainWindow):
         # Switch to Summary tab within Results (index 0)
         self.results_viewer.enhanced_tab_widget.tab_widget.setCurrentIndex(0)
     
+    def _stopped_wings_from_database(self, wing_summaries):
+        """Each stopped wing as the results database holds it (statistics,
+        counts, the stored cancel), marked cancelled; a wing it cannot read
+        back is kept as it came."""
+        out = []
+        for ws in wing_summaries:
+            db, eid = ws.get('database_path'), ws.get('execution_id')
+            detected = []
+            if db and eid:
+                try:
+                    detected = self.results_viewer._detect_wings_from_execution(db, eid)
+                except Exception as e:
+                    print(f"[MainWindow] Could not read stopped wing back: {e}")
+            for d in detected:
+                d['cancelled'] = True
+                d.setdefault('run_group_id', ws.get('run_group_id'))
+            out.extend(detected or [ws])
+        return out
+
     def _on_load_results_requested(self, request_data: dict):
         """
         Handle request to load results from database with loading dialog.
@@ -1513,11 +1497,25 @@ class MainWindow(QMainWindow):
         
         output_dir = request_data.get('output_dir', '')
         selected_executions = request_data.get('selected_executions', [])
-        
+
         if not output_dir:
             QMessageBox.warning(self, "No Output Directory", "Please specify an output directory.")
             return
-        
+
+        # Loading while this window's own run is still going shows that run
+        # half-written. Say so; it still loads what is saved.
+        worker = getattr(getattr(self, 'execution_control', None), 'worker_thread', None)
+        try:
+            running = worker is not None and worker.isRunning()
+        except RuntimeError:
+            running = False
+        if running:
+            QMessageBox.information(
+                self, "Correlation Still Running",
+                "A correlation is still running in this window - its results open by "
+                "themselves when it finishes.\n\nThe latest run's saved results will load "
+                "now, marked as not finished.")
+
         if not selected_executions:
             # Fallback to load_last_results if no specific executions selected
             print("[MainWindow] No specific executions selected, loading most recent")
@@ -1611,30 +1609,6 @@ class MainWindow(QMainWindow):
                 # Create a tabbed widget to hold all wing viewers from this execution
                 from PyQt5.QtWidgets import QTabWidget
                 combined_viewer = QTabWidget()
-                combined_viewer.setStyleSheet("""
-                    QTabWidget::pane {
-                        border: 1px solid #334155;
-                        background-color: #0B1220;
-                    }
-                    QTabBar::tab {
-                        background-color: #1E293B;
-                        color: #94A3B8;
-                        padding: 6px 12px;
-                        margin-right: 2px;
-                        border: 1px solid #334155;
-                        border-bottom: none;
-                        border-top-left-radius: 4px;
-                        border-top-right-radius: 4px;
-                    }
-                    QTabBar::tab:selected {
-                        background-color: #0B1220;
-                        color: #00FFFF;
-                        border-bottom: 2px solid #00FFFF;
-                    }
-                    QTabBar::tab:hover {
-                        background-color: #334155;
-                    }
-                """)
                 
                 # Identity wings share ONE unified sub-tab (with per-identity
                 # wing attribution); time-window wings keep one sub-tab per wing
@@ -1687,6 +1661,7 @@ class MainWindow(QMainWindow):
                 
                 # Add the combined viewer as a single Results tab for this execution
                 tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
+                self._apply_site_look(root=combined_viewer)
                 print(f"[MainWindow] [OK] Results tab created for execution {exec_id_display} with {len(wing_summaries)} wings")
             
             # Update Summary tab with aggregate statistics

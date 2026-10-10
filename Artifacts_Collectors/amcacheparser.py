@@ -700,6 +700,14 @@ class RegistryHivesLive(object):
         return tempfile
 
 # Class to parse Amcache.hve and store in a normalized SQLite database
+try:
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new, row_exists
+except ImportError:                                    # standalone run
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new, row_exists
+
+
 def _carved_text(data):
     """A carved value as text, or a short hex preview when it is not text.
 
@@ -733,6 +741,9 @@ class AmcacheParser:
     def __init__(self, file_path: str, normalized_db_path: str, windows_partition: str = "C:", offline_mode: bool = False, verify_hashes: bool = False):
         # One sqlite connection for the whole parse; see _connection().
         self._conn = None
+        # Rows written vs already present, per table, for this run (a re-parse
+        # adds only what is new - see utils/dedupe_insert.py).
+        self.tally = Tally()
         # Off unless asked for: it reads and hashes files from disk. Never
         # available offline - there is no filesystem to compare against.
         self.verify_hashes = bool(verify_hashes) and not offline_mode
@@ -803,6 +814,14 @@ class AmcacheParser:
 
                 # Add index on id for fast duplicate checking
                 cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{table_name}_id ON {table_name} (id)")
+                # The identity a re-parse checks: the entry and the time
+                # Windows last wrote it. The same entry written again later is
+                # a new version and is kept; the same version is not stored
+                # twice (every wide table held two copies after a second run).
+                if table_name in NAME_VALUE_TABLES:
+                    ensure_identity_index(conn, table_name, ["id", "name"])
+                elif table_name != "UnknownSubkeys" and "key_last_write" in fields:
+                    ensure_identity_index(conn, table_name, ["id", "key_last_write"])
                 # Yield to UI periodically during database initialization
                 sys.stdout.flush()
             conn.commit()
@@ -860,6 +879,22 @@ class AmcacheParser:
                 return value
         return None
 
+    def _mapped_entry_exists(self, table_name, entry_id, values, present, key_last_write):
+        """Is this version of the entry already stored?
+
+        Identity is the entry id plus its key's LastWriteTime when the hive
+        gives one; otherwise every stored value (parsed_at excluded). It is
+        checked on the row as it will be STORED. The previous check compared
+        the hive's value names (ProgramId) with the table's column names
+        (program_id), never matched, and a second parse doubled every table.
+        """
+        conn = self._connection()
+        if key_last_write:
+            return row_exists(conn, table_name, {"id": entry_id, "key_last_write": key_last_write})
+        ident = {"id": entry_id}
+        ident.update({f: values[f] for f in present if f not in ("parsed_at",)})
+        return row_exists(conn, table_name, ident)
+
     def _check_entry_exists(self, table_name: str, entry_id: str,
                             data_json: Dict[str, Any]) -> bool:
         """True if an identical entry is already stored (parsed_at ignored)."""
@@ -916,7 +951,9 @@ class AmcacheParser:
             subkey_name = data_json.get("subkey_name", "")
             payload = {k: v for k, v in data_json.items() if k != "subkey_name"}
             if self._check_entry_exists(table_name, entry_id, data_json):
+                self.tally.skipped(table_name)
                 return
+            self.tally.inserted(table_name)
             cursor = self._connection().cursor()
             cursor.execute(
                 "INSERT INTO UnknownSubkeys "
@@ -926,9 +963,6 @@ class AmcacheParser:
                  json.dumps({k: v for k, v in data_json.items()
                              if k != "parsed_at"}, sort_keys=True),
                  key_last_write, parsed_at])
-            return
-
-        if self._check_entry_exists(table_name, entry_id, data_json):
             return
 
         fields = AMCACHE_SCHEMAS[table_name]
@@ -963,7 +997,9 @@ class AmcacheParser:
         if table_name == "InventoryApplicationFile":
             size = values.get("size")
             try:
-                size = int(str(size).strip()) if size not in (None, "") else None
+                text = str(size).strip() if size not in (None, "") else ""
+                # Older hives store some numbers as "0x..." text.
+                size = (int(text, 16) if text.lower().startswith("0x") else int(text)) if text else None
             except ValueError:
                 size = None
             if size is not None:
@@ -985,6 +1021,10 @@ class AmcacheParser:
                     break
 
         present = [f for f in fields if values.get(f) is not None]
+        if self._mapped_entry_exists(table_name, entry_id, values, present, key_last_write):
+            self.tally.skipped(table_name)
+            return
+        self.tally.inserted(table_name)
         cursor = self._connection().cursor()
         cursor.execute(
             "INSERT INTO %s (%s) VALUES (%s)"
@@ -1119,7 +1159,18 @@ class AmcacheParser:
                      else ""))
 
             parsed_at = get_current_forensic_timestamp()
-            cursor = self._connection().cursor()
+            conn = self._connection()
+            cursor = conn.cursor()
+            # `INSERT OR IGNORE` had no unique constraint to ignore against, so
+            # every re-parse stored the carved cells again. Identity: the cell,
+            # its path and (keys) its timestamp / (values) its data.
+            ensure_identity_index(conn, "AmcacheCarvedKeys", ["cell_offset", "key_path"])
+            ensure_identity_index(conn, "AmcacheCarvedValues", ["cell_offset", "parent_cell_offset"])
+            key_cols = ["id", "cell_offset", "key_name", "key_path", "parent_resolved",
+                        "key_last_write", "subkey_count", "value_count", "record_state", "parsed_at"]
+            value_cols = ["id", "cell_offset", "parent_cell_offset", "key_path", "value_name",
+                          "value_type", "data_size", "is_inline", "data", "record_state", "parsed_at"]
+            key_rows, value_rows = [], []
             keys = values = 0
             for record in walk.carved_keys:
                 when = ""
@@ -1129,11 +1180,7 @@ class AmcacheParser:
                             filetime_to_datetime(record["timestamp_raw"]))
                     except Exception:
                         when = ""
-                cursor.execute(
-                    "INSERT OR IGNORE INTO AmcacheCarvedKeys "
-                    "(id, cell_offset, key_name, key_path, parent_resolved, "
-                    "key_last_write, subkey_count, value_count, record_state, "
-                    "parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                key_rows.append(
                     (str(record["cell_offset"]), record["cell_offset"],
                      record.get("key_name", ""), record.get("key_path", ""),
                      1 if record.get("parent_resolved") else 0, when,
@@ -1141,12 +1188,7 @@ class AmcacheParser:
                      "deleted", parsed_at))
                 keys += 1
                 for value in record.get("values", []):
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO AmcacheCarvedValues "
-                        "(id, cell_offset, parent_cell_offset, key_path, "
-                        "value_name, value_type, data_size, is_inline, data, "
-                        "record_state, parsed_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    value_rows.append(
                         (str(value["cell_offset"]), value["cell_offset"],
                          record["cell_offset"], record.get("key_path", ""),
                          value.get("value_name", ""),
@@ -1156,7 +1198,11 @@ class AmcacheParser:
                          _carved_text(value.get("data")),
                          "deleted", parsed_at))
                     values += 1
-            self._connection().commit()
+            insert_new(conn, "AmcacheCarvedKeys", key_cols, key_rows,
+                       [c for c in key_cols if c != "parsed_at"], self.tally)
+            insert_new(conn, "AmcacheCarvedValues", value_cols, value_rows,
+                       [c for c in value_cols if c != "parsed_at"], self.tally)
+            conn.commit()
             print("[Amcache] Recovered %d deleted key(s) and %d deleted "
                   "value(s) from free space" % (keys, values))
         except Exception as exc:                       # pragma: no cover
@@ -1247,7 +1293,9 @@ class AmcacheParser:
                 "LIMIT 1" % table_name,
                 (entry_id, name, str(value) if value is not None else None))
             if cursor.fetchone():
+                self.tally.skipped(table_name)
                 continue
+            self.tally.inserted(table_name)
             cursor.execute(
                 "INSERT INTO %s (id, entry, name, value, key_last_write, "
                 "parsed_at) VALUES (?, ?, ?, ?, ?, ?)" % table_name,
@@ -1518,8 +1566,13 @@ def parse_amcache_hive(case_path=None, offline_mode=False, db_path=None, windows
         ap = AmcacheParser(filepath, db_path, windows_partition)
         yield_to_ui()  # Allow UI to process events before starting parse
         ap.parse(search_key=SEARCH_KEYS)
+        tot = ap.tally.totals()
         print(f"[Amcache] Data saved to {db_path}")
-        return db_path
+        print("[Amcache] %d entries read: %d new, %d already in the database"
+              % (tot["parsed"], tot["inserted"], tot["duplicates"]))
+        # A dict, so Parse Status sees what this run added (it used to get
+        # the path only and counted the whole database).
+        return ap.tally.as_result(success=True, output_path=db_path)
     except OSError as e:
         if isAdmin():
             print(f"[Amcache Error] Error loading hive: {str(e)}")
@@ -1567,15 +1620,18 @@ def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
                     filepath = path
                     break
                 else:
-                    # Case-insensitive fallback for Linux
-                    dirname = os.path.dirname(path)
-                    basename = os.path.basename(path)
-                    if os.path.exists(dirname):
-                        for f in os.listdir(dirname):
-                            if f.lower() == basename.lower():
-                                filepath = os.path.join(dirname, f)
-                                break
-                    if filepath:
+                    # Case-insensitive fallback for Linux - the FOLDERS too.
+                    # Matching only the file name missed the collected
+                    # "AmCache" folder (the lookup asks for "amcache"), so on
+                    # Linux the offline AmCache parse found nothing at all.
+                    try:
+                        from utils.path_utils import PathUtils
+                        rel = os.path.relpath(path, case_path)
+                        found = PathUtils.get_case_insensitive_path(case_path, rel)
+                    except Exception:
+                        found = None
+                    if found and os.path.isfile(found):
+                        filepath = found
                         break
             
             if not filepath:
@@ -1597,6 +1653,9 @@ def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
         ap = AmcacheParser(filepath, db_path, windows_partition, offline_mode=offline_mode)
         ap.parse(search_key=SEARCH_KEYS)
         print(f"[Amcache] Data saved to {db_path}")
+        tot = ap.tally.totals()
+        print("[Amcache] %d entries read: %d new, %d already in the database"
+              % (tot["parsed"], tot["inserted"], tot["duplicates"]))
         
         # Count total records from database
         import sqlite3
@@ -1616,7 +1675,8 @@ def amcache_parser(case_path=None, offline_mode=False, windows_partition="C:"):
             print(f"[Amcache] Warning: Could not count records: {e}")
             total_records = 0
         
-        return {'success': True, 'records': total_records, 'output_path': db_path}
+        # `records` is what this run READ; the database total is kept beside it.
+        return ap.tally.as_result(success=True, output_path=db_path, rows_in_database=total_records)
     except OSError as e:
         error_msg = f"Error loading hive: {str(e)}"
         if isAdmin():
@@ -1632,7 +1692,9 @@ def main():
     if db_path:
         # Create parser and display data
         try:
-            ap = AmcacheParser(LIVE_AMCACHE_PATH if LIVE_ANALYSIS else OFFLINE_AMCACHE_PATH, db_path)
+            live_path = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                     "appcompat", "Programs", "Amcache.hve")
+            ap = AmcacheParser(live_path if LIVE_ANALYSIS else OFFLINE_AMCACHE_PATH, db_path)
             ap.display_normalized_data()
             print("Amcache parsing complete.")
         except Exception as e:

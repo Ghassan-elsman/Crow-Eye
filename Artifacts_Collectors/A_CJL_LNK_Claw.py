@@ -9,7 +9,10 @@ import re
 import string
 import traceback
 import json
+import logging
 from utils.time_utils import format_forensic_timestamp, filetime_to_datetime
+
+logger = logging.getLogger(__name__)
 
 try:
     import olefile
@@ -742,12 +745,12 @@ def parse_custom_destinations_global_header(data):
         # Requirement 13A.7: Flag non-zero Reserved as potentially non-standard
         if reserved != 0:
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"CustomDestinations Global Header has non-zero Reserved field: 0x{reserved:08X}")
             
     except Exception as e:
         import logging
-        logger = logging.getLogger('A_CJL_LNK_Claw')
+        logger = logging.getLogger(__name__)
         logger.error(f"Failed to parse CustomDestinations Global Header: {str(e)}")
     
     return result
@@ -848,7 +851,7 @@ def parse_custom_destinations_category_header(data, offset=0x0C):
             
     except Exception as e:
         import logging
-        logger = logging.getLogger('A_CJL_LNK_Claw')
+        logger = logging.getLogger(__name__)
         logger.error(f"Failed to parse CustomDestinations Category Header: {str(e)}")
     
     return result
@@ -1112,7 +1115,7 @@ class LnkStreamParser:
         except Exception as e:
             # Requirement 32.7: Handle parsing errors gracefully
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to parse Console Data Block: {str(e)}")
         
         return result
@@ -1158,7 +1161,7 @@ class LnkStreamParser:
         except Exception as e:
             # Handle parsing errors gracefully
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to parse Console FE Data Block: {str(e)}")
         
         return result
@@ -1210,7 +1213,7 @@ class LnkStreamParser:
         except Exception as e:
             # Handle parsing errors gracefully
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to parse Special Folder Data Block: {str(e)}")
         
         return result
@@ -1256,7 +1259,7 @@ class LnkStreamParser:
         except Exception as e:
             # Handle parsing errors gracefully
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to parse Vista IDList Data Block: {str(e)}")
         
         return result
@@ -1327,7 +1330,7 @@ class LnkStreamParser:
         except Exception as e:
             # Requirement 36.6: Handle parsing errors gracefully
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.warning(f"Failed to parse Tracker Droids: {str(e)}")
         
         return result
@@ -1663,7 +1666,7 @@ class LnkStreamParser:
             self.parsed_data['Target_Source'] = ''
         except Exception as e:
             import logging
-            logging.getLogger('A_CJL_LNK_Claw').debug(f"Target resolution failed: {e}")
+            logging.getLogger(__name__).debug(f"Target resolution failed: {e}")
 
     def parse_idlist(self, data):
         """
@@ -1693,7 +1696,7 @@ class LnkStreamParser:
             if i_offset + item_size > len(data):
                 # Log warning for malformed item
                 import logging
-                logger = logging.getLogger('A_CJL_LNK_Claw')
+                logger = logging.getLogger(__name__)
                 logger.warning(f"Malformed shell item: size {item_size} exceeds available data")
                 break
             
@@ -1728,7 +1731,7 @@ class LnkStreamParser:
             except Exception as e:
                 # Requirement 1.8: Skip corrupted items and continue with next
                 import logging
-                logger = logging.getLogger('A_CJL_LNK_Claw')
+                logger = logging.getLogger(__name__)
                 logger.warning(f"Failed to parse shell item type 0x{item_type:02X}: {str(e)}")
             
             # Parse extension block if present (applies to all item types)
@@ -1992,7 +1995,7 @@ class LnkStreamParser:
         except Exception as e:
             # Requirement 1.8: Log warnings for malformed extension blocks
             import logging
-            logger = logging.getLogger('A_CJL_LNK_Claw')
+            logger = logging.getLogger(__name__)
             logger.debug(f"Failed to parse extension block at offset {ext_start}: {str(e)}")
 
 def extract_artifacts_from_file(filepath, appids=None, known_guids=None):
@@ -2198,7 +2201,7 @@ def extract_artifacts_from_file(filepath, appids=None, known_guids=None):
                     expected_entry_count = category_headers[0].get('CustDest_Entry_Count', 0)
                     if expected_entry_count > 0 and entry_count != expected_entry_count:
                         import logging
-                        logger = logging.getLogger('A_CJL_LNK_Claw')
+                        logger = logging.getLogger(__name__)
                         logger.warning(f"CustomDestinations Entry Count mismatch: Expected {expected_entry_count}, Found {entry_count}")
                         # Flag mismatch in Property_Metadata for all entries
                         for entry in results:
@@ -2292,6 +2295,76 @@ def detect_artifact(file_path):
 def is_important_path(source_path):
     return any(p in source_path for p in ["Recent", "Desktop", "Start Menu", "Explorer"])
 
+def _find_link_files(folder_path, workers=8):
+    """Every file whose NAME makes it an LNK / Jump List, under folder_path.
+
+    The full scan walks the whole user profile: on one machine 873,260 files
+    in 315,526 folders to find 1,122 artifacts - 67 s of the 115 s the LNK
+    parse took. The listing is I/O-bound, so the folders are listed eight at
+    a time (measured warm: 29.0 s -> 16.3 s, the same 1,122 files). Nothing is
+    pruned: a shortcut planted in an unlikely folder is still found.
+
+    Returned in the order os.walk() gave - a folder's own files, then its
+    subfolders by name - so rows are inserted in the same order as before.
+
+    One thing IS skipped: a Crow-Eye case folder (Target_Artifacts beside
+    live_acquisition or Correlation). Its live_acquisition holds copies of
+    ANOTHER machine's shortcuts and jump lists - on one examiner's machine 433
+    of 636 LNK rows came from old cases in Documents, and UBA then reported
+    the other machine's users opening programs in 2014 as this user.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    skipped_cases = []
+
+    def _list(d):
+        found, subdirs, names = [], [], set()
+        try:
+            with os.scandir(d) as it:
+                for e in it:
+                    try:
+                        names.add(e.name.lower())
+                        if e.is_dir(follow_symlinks=False):
+                            subdirs.append(e.path)
+                        elif detect_artifact(e.name):
+                            found.append(e.path)
+                    except OSError:
+                        continue
+        except OSError:
+            pass
+        if is_crow_eye_case_listing(names):
+            skipped_cases.append(d)
+            return [], []
+        return found, subdirs
+
+    found, frontier = [], [folder_path]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        while frontier:
+            nxt = []
+            for files, subdirs in pool.map(_list, frontier):
+                found.extend(files)
+                nxt.extend(subdirs)
+            frontier = nxt
+
+    base = len(os.path.normpath(folder_path).rstrip("\\/").split(os.sep))
+
+    def _walk_order(path):
+        parts = os.path.normpath(path).split(os.sep)[base:]
+        # NTFS lists a folder by the UPPERCASE form of each name.
+        return [(1, p.upper()) for p in parts[:-1]] + [(0, parts[-1].upper())]
+    found.sort(key=_walk_order)
+    if skipped_cases:
+        print("[LNK] Skipped %d Crow-Eye case folder(s) - their evidence copies are "
+              "another machine's artifacts: %s" % (len(skipped_cases), "; ".join(skipped_cases[:5])))
+    return found
+
+
+def is_crow_eye_case_listing(names):
+    """True when a folder's (lowercased) entry names are a Crow-Eye case:
+    Target_Artifacts beside live_acquisition or Correlation."""
+    return "target_artifacts" in names and ("live_acquisition" in names or "correlation" in names)
+
+
 def categorize_files_by_type(folder_path, progress_callback=None, counters=None):
     """
     Categorize files by type - NO progress updates during scanning.
@@ -2305,16 +2378,14 @@ def categorize_files_by_type(folder_path, progress_callback=None, counters=None)
     lnk_files, automatic_jump_lists, custom_jump_lists = [], [], []
     
     # Scan all files without progress updates (per user request)
-    for root, _, files in os.walk(folder_path):
-        for file in files:
-            file_path = os.path.join(root, file)
-            art_type = detect_artifact(file_path)
-            if art_type == "lnk": 
-                lnk_files.append(file_path)
-            elif art_type == "Custom JumpList": 
-                custom_jump_lists.append(file_path)
-            elif art_type == "Automatic JumpList": 
-                automatic_jump_lists.append(file_path)
+    for file_path in _find_link_files(folder_path):
+        art_type = detect_artifact(file_path)
+        if art_type == "lnk": 
+            lnk_files.append(file_path)
+        elif art_type == "Custom JumpList": 
+            custom_jump_lists.append(file_path)
+        elif art_type == "Automatic JumpList": 
+            automatic_jump_lists.append(file_path)
     
     # NO progress updates during scanning - user wants only final processed count
     return lnk_files, automatic_jump_lists, custom_jump_lists
@@ -2323,8 +2394,11 @@ def create_database(case_path=None):
     db_path = 'LnkDB.db'
     if case_path:
         artifacts_dir = os.path.join(case_path, 'Target_Artifacts')
-        if os.path.exists(artifacts_dir):
-            db_path = os.path.join(artifacts_dir, 'LnkDB.db')
+        # Created, not merely checked: in a new case whose first parse was
+        # this one, Target_Artifacts did not exist yet and the database
+        # went to the current working folder instead of the case.
+        os.makedirs(artifacts_dir, exist_ok=True)
+        db_path = os.path.join(artifacts_dir, 'LnkDB.db')
     
     with sqlite3.connect(db_path) as conn:
         C = conn.cursor()
@@ -3171,15 +3245,25 @@ def collect_artifacts(source_path, user=None):
         pass
     return artifacts
 
-def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
+def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db', progress_callback=None):
+    """Parse every LNK / Jump List under ``folder_path`` into ``db_path``.
+
+    Returns (unparsed_file_count, records_inserted). Both callers passed a
+    ``progress_callback`` this function did not accept, so every offline and
+    image LNK parse raised TypeError and reported failure.
+    """
     appids = read_AppId(appid_path)
     known_guids = read_KnownGuids(guid_path)
     unparsed_files = []
     lnk_files, automatic_jump_lists, custom_jump_lists = categorize_files_by_type(folder_path)
-    
+    counts = {'recent': 0, 'automatic': 0, 'custom': 0}
+    all_files = sorted(lnk_files) + sorted(automatic_jump_lists) + sorted(custom_jump_lists)
+    logger.info("LNK/Jump Lists: %d LNK, %d automatic, %d custom file(s) under %s",
+                len(lnk_files), len(automatic_jump_lists), len(custom_jump_lists), folder_path)
+
     with sqlite3.connect(db_path) as conn:
         C = conn.cursor()
-        for file in lnk_files + automatic_jump_lists + custom_jump_lists:
+        for index, file in enumerate(all_files, 1):
             artifact_type = detect_artifact(file)
             try:
                 stat_info = os.stat(file)
@@ -3199,10 +3283,21 @@ def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db'):
                             
                         if not inserted:
                             unparsed_files.append(file)
-            except Exception:
+                        else:
+                            counts[dir_key] += 1
+            except Exception as exc:
+                logger.debug("LNK/Jump List not parsed: %s: %s", file, exc)
                 unparsed_files.append(file)
+            if progress_callback and (index % 50 == 0 or index == len(all_files)):
+                try:
+                    progress_callback(counts['recent'], counts['automatic'], counts['custom'],
+                                      "Parsed %d of %d file(s)" % (index, len(all_files)))
+                except Exception:
+                    pass
         conn.commit()
-    return len(unparsed_files)
+    if unparsed_files:
+        logger.warning("LNK/Jump Lists: %d file(s) could not be parsed", len(unparsed_files))
+    return len(set(unparsed_files)), sum(counts.values())
 
 def collect_user_artifacts(user, full_scan=True):
     """
@@ -3355,7 +3450,8 @@ def collect_forensic_artifacts(full_scan=True):
     stats['total_custom'] += len(system_data['custom'])
     return stats
 
-def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_scan=True, progress_callback=None):
+def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_scan=True, progress_callback=None,
+                   offline_folder=None):
     """
     Main LNK/JumpList collection and parsing function.
     
@@ -3365,6 +3461,8 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_s
         direct_parse: If True, parse live system artifacts directly
         full_scan: If True (default), scan entire system. If False, scan only known locations.
         progress_callback: Optional callback function(lnk_count, auto_count, custom_count, message) for progress updates
+        offline_folder: offline mode - the folder the collected files are in (the
+            Offline Importer passes it; Crow-Claw writes link_jumplist, not C_AJL_Lnk)
     """
     db_path = None
     try:
@@ -3411,15 +3509,29 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_s
             print("\n=== NORMAL COLLECTION MODE ===")
             collection_stats = collect_forensic_artifacts(full_scan=full_scan)
             folder_path = TARGET_BASE_DIR
-            unparsed_count = process_lnk_and_jump_list_files(folder_path, db_path, progress_callback=progress_callback)
+            unparsed_count, _ = process_lnk_and_jump_list_files(folder_path, db_path, progress_callback=progress_callback)
             total_records = collection_stats['total_recent'] + collection_stats['total_automatic'] + collection_stats['total_custom'] if collection_stats else 0
             
         else:
             print("\n=== OFFLINE MODE ===")
-            folder_path = os.path.join(case_path, "live_acquisition", "C_AJL_Lnk") if case_path else TARGET_BASE_DIR
-            if not os.path.exists(folder_path): folder_path = TARGET_BASE_DIR
-            unparsed_count = process_lnk_and_jump_list_files(folder_path, db_path, progress_callback=progress_callback)
-            total_records = 1 # Approximation
+            # The folder the files are in: the one given, then the Offline
+            # Importer's name, then Crow-Claw's (link_jumplist), then the
+            # parse target. Only C_AJL_Lnk used to be looked at, so a Crow-Claw
+            # collection's 1,185 LNK files were never read.
+            candidates = [offline_folder]
+            if case_path:
+                candidates += [os.path.join(case_path, "live_acquisition", "C_AJL_Lnk"),
+                               os.path.join(case_path, "live_acquisition", "link_jumplist")]
+            candidates.append(TARGET_BASE_DIR)
+            folder_path = next((c for c in candidates if c and os.path.isdir(c)), TARGET_BASE_DIR)
+            # How many files were there to read: a re-parse that adds no new
+            # row is not a parse that found nothing
+            try:
+                files_found = sum(len(group) for group in categorize_files_by_type(folder_path))
+            except Exception:
+                files_found = None
+            unparsed_count, total_records = process_lnk_and_jump_list_files(
+                folder_path, db_path, progress_callback=progress_callback)
             
     except KeyboardInterrupt:
         return {'success': False, 'records': 0, 'error': 'Collection aborted by user'}
@@ -3429,7 +3541,11 @@ def A_CJL_LNK_Claw(case_path=None, offline_mode=False, direct_parse=True, full_s
 
     # Suppress print when running from GUI (captured by loading dialog)
     # print(f"\033[92m\nParsing completed by Crow Eye\nDatabase saved to: {db_path}\033[0m")
-    return {'success': True, 'records': total_records, 'output_path': db_path}
+    result = {'success': True, 'records': total_records, 'output_path': db_path}
+    if offline_mode and not direct_parse:
+        result['files'] = files_found
+        result['folder'] = folder_path
+    return result
 
 if __name__ == "__main__":
     # Usage: python A_CJL_LNK_Claw.py <case_path> [--live]

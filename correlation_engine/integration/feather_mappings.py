@@ -458,7 +458,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('EventID', 'INTEGER'), ('Source', 'TEXT'), ('EventType', 'TEXT'),
         ('Category', 'TEXT'), ('EventTimestampUTC', 'TEXT'), ('ComputerName', 'TEXT'),
         ('User', 'TEXT'), ('Keywords', 'TEXT'), ('TaskCategory', 'TEXT'),
-        ('EventDescription', 'TEXT')
+        ('EventDescription', 'TEXT'), ('RecordNumber', 'INTEGER')
         ]
     },
     {
@@ -470,7 +470,8 @@ FEATHER_MAPPINGS: List[Dict] = [
         'fallback_columns': [
         ('EventID', 'INTEGER'), ('Source', 'TEXT'), ('EventType', 'TEXT'),
         ('Category', 'TEXT'), ('EventTimestampUTC', 'TEXT'), ('ComputerName', 'TEXT'),
-        ('User', 'TEXT'), ('Keywords', 'TEXT'), ('EventDescription', 'TEXT')
+        ('User', 'TEXT'), ('Keywords', 'TEXT'), ('EventDescription', 'TEXT'),
+        ('RecordNumber', 'INTEGER')
         ]
     },
     {
@@ -482,7 +483,8 @@ FEATHER_MAPPINGS: List[Dict] = [
         'fallback_columns': [
         ('EventID', 'INTEGER'), ('Source', 'TEXT'), ('EventType', 'TEXT'),
         ('Category', 'TEXT'), ('EventTimestampUTC', 'TEXT'), ('ComputerName', 'TEXT'),
-        ('User', 'TEXT'), ('Keywords', 'TEXT'), ('EventDescription', 'TEXT')
+        ('User', 'TEXT'), ('Keywords', 'TEXT'), ('EventDescription', 'TEXT'),
+        ('RecordNumber', 'INTEGER')
         ]
     },
     
@@ -670,7 +672,7 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('share_name', 'TEXT'), ('drive_letter', 'TEXT'), ('mft_record_number', 'INTEGER'),
         ('registry_path', 'TEXT'), ('parent_path', 'TEXT'), ('last_written', 'TEXT'),
         ('time_basis', 'TEXT'), ('node_slot', 'INTEGER'), ('bag_views', 'TEXT'),
-        ('parsed_at', 'TEXT'), ('user_name', 'TEXT')
+        ('parsed_at', 'TEXT'), ('user_name', 'TEXT'), ('value_name', 'TEXT')
         ]
     },
     {

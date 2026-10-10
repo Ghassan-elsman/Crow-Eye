@@ -1,0 +1,56 @@
+# Crow-Eye (Python source version) - Windows and Linux.
+#
+# Crow-Eye installs these itself on first start, into crow_eye_venv/. This file
+# is for doing it by hand, or in a container:
+#
+#     python -m venv crow_eye_venv
+#     crow_eye_venv/bin/python -m pip install -r requirements.txt      (Linux)
+#     crow_eye_venv\Scripts\python -m pip install -r requirements.txt  (Windows)
+#
+# Keep it in step with General_Requirements / Windows_Only_Requirements in
+# "Crow Eye.py" - that list is what the first start installs.
+#
+# Linux also needs Qt's system libraries (not pip packages), e.g. on
+# Debian/Ubuntu:
+#     sudo apt install python3-venv libxcb-cursor0 libxkbcommon-x11-0 \
+#         libxcb-icccm4 libxcb-keysyms1 libxcb-image0 libxcb-render-util0 \
+#         libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libasound2 \
+#         libpango-1.0-0 libpangoft2-1.0-0
+# (libpango is for weasyprint's PDF export.)
+
+PyQt5
+PyQtWebEngine
+python-registry
+pandas
+streamlit
+altair
+olefile
+psutil
+tqdm
+colorama
+pyyaml
+matplotlib
+python-evtx
+dissect.esedb
+dissect.target
+dissect.volume
+dissect.ntfs
+dissect.fat
+dissect.extfs
+dissect.evidence
+pycdlib
+keyring
+requests
+weasyprint
+markdown
+beautifulsoup4
+tiktoken
+jsonschema
+openai
+anthropic
+google-genai
+
+# Live collection uses the Windows API; Linux runs the offline and image paths.
+pywin32; sys_platform == "win32"
+windowsprefetch; sys_platform == "win32"
+wmi; sys_platform == "win32"

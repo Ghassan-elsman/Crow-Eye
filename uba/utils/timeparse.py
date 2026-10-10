@@ -37,7 +37,9 @@ def _parse_numeric(value: float) -> Optional[datetime]:
             return datetime.fromtimestamp(value / 1000, tz=timezone.utc)
         if 946684800 < value < 2524608000:
             return datetime.fromtimestamp(value, tz=timezone.utc)
-        if 0 < value < 1_500_000_000:
+        # One day, not zero: a bare '6' or '0.5' is a count or a version
+        # fragment, and as Cocoa seconds it landed on 2001-01-01.
+        if 86_400 < value < 1_500_000_000:
             cand = _COCOA_EPOCH + timedelta(seconds=value)
             if _MIN_YEAR <= cand.year <= _MAX_YEAR:
                 return cand
@@ -80,6 +82,9 @@ def normalize_ts(value) -> Optional[str]:
         dt = _parse_string(value)
     if dt is None:
         return None
+    # An offset is converted, not dropped: '09:25+03:00' is 06:25 UTC.
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
     try:
         if dt.year < _MIN_YEAR or dt.year > _MAX_YEAR:
             return None

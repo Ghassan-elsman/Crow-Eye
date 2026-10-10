@@ -10,9 +10,59 @@ from PyQt5.QtWidgets import (
     QCheckBox, QSpinBox
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QPalette, QColor, QFont
+from PyQt5.QtGui import QFont
 from ...config.semantic_mapping import SemanticCondition, SemanticRule
 import uuid
+
+# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
+
+def _role(widget, role):
+    if _site is not None:
+        _site.set_role(widget, role)
+
+
+def _status(widget, kind):
+    if _site is not None:
+        _site.set_status(widget, kind)
+
+
+def _variant(widget, variant, compact=False, cell=False):
+    """A button's role. ``compact``: a fixed-size row button (+ Add);
+    ``cell``: the icon-only remove button inside a condition row."""
+    if compact:
+        widget.setProperty("compact", True)
+    if cell:
+        widget.setProperty("cell", True)
+    if _site is not None:
+        _site.set_variant(widget, variant)
+
+
+def _dialog_extra():
+    """The dialog's own rules on top of the site sheet: the condition tables
+    are dense (22px rows of combos / edits), the preview is a mono well, and
+    the semantic-output fields keep their cyan edge."""
+    if _site is None:
+        return ""
+    mono = _site.families()[1]
+    return """
+QTableWidget QComboBox, QTableWidget QLineEdit { padding: 0 4px; border-radius: 6px;
+    font-size: 12px; min-height: 0; }
+QTableWidget QComboBox::drop-down { width: 14px; }
+QTableWidget QComboBox::down-arrow { margin-right: 3px; }
+QPushButton[compact="true"] { padding: 2px 10px; min-height: 0; font-size: 12px; border-radius: 7px; }
+QPushButton[cell="true"] { padding: 0; min-height: 0; border-radius: 6px; }
+QLineEdit[emphasis="true"] { border: 1px solid rgba(34, 211, 238, 0.60); }
+QLineEdit[emphasis="true"]:focus { border: 1px solid %(CYAN)s; }
+QLabel#rulePreview { background: %(BG)s; color: %(CYAN)s; border: 1px solid %(LINE)s;
+    border-radius: 10px; padding: 8px; font-family: '%(mono)s'; font-size: 12px; }
+QFrame#conditionGroup { background: %(BG)s; border: 1px solid %(LINE)s; border-radius: 10px; }
+QFrame#modeBar { background: %(CARD)s; border: 1px solid %(LINE)s; border-radius: 12px; }
+""" % dict(BG=_site.BG, CARD=_site.CARD, LINE=_site.LINE, CYAN=_site.CYAN, mono=mono)
 
 
 class SemanticMappingDialog(QDialog):
@@ -53,6 +103,8 @@ class SemanticMappingDialog(QDialog):
         if self.mapping and (self.mapping.get('conditions') or mapping_advanced):
             self.mode = 'advanced'
 
+        if _site is not None:
+            _site.begin_site_theme(self, extra=_dialog_extra())
         self.init_ui()
         self.load_mapping()
 
@@ -83,50 +135,50 @@ class SemanticMappingDialog(QDialog):
         
         # Mode + Scope in single compact bar
         mode_frame = QFrame()
-        mode_frame.setStyleSheet("QFrame { background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; }")
+        mode_frame.setObjectName("modeBar")
         mode_frame.setFixedHeight(42)
         mode_layout = QHBoxLayout(mode_frame)
         mode_layout.setSpacing(16)
         mode_layout.setContentsMargins(14, 0, 14, 0)
         
         mode_label = QLabel("Mode:")
-        mode_label.setStyleSheet("font-size: 11pt; font-weight: bold; color: #00FFFF; background: transparent;")
+        _role(mode_label, "section")
         mode_layout.addWidget(mode_label)
         
         self.mode_group = QButtonGroup()
         self.simple_radio = QRadioButton("Simple")
         self.simple_radio.setChecked(self.mode == 'simple')
         self.simple_radio.toggled.connect(self._mode_changed)
-        self.simple_radio.setStyleSheet("font-size: 11pt; font-weight: bold; color: #F8FAFC; background: transparent;")
+        self.simple_radio.setFont(QFont(self.simple_radio.font().family(), -1, QFont.Bold))
         self.mode_group.addButton(self.simple_radio)
         mode_layout.addWidget(self.simple_radio)
         
         self.adv_radio = QRadioButton("Advanced")
         self.adv_radio.setChecked(self.mode == 'advanced')
-        self.adv_radio.setStyleSheet("font-size: 11pt; font-weight: bold; color: #F8FAFC; background: transparent;")
+        self.adv_radio.setFont(QFont(self.adv_radio.font().family(), -1, QFont.Bold))
         self.mode_group.addButton(self.adv_radio)
         mode_layout.addWidget(self.adv_radio)
         
         # Scope in same bar
         if not self.mapping:
             sep = QLabel("|")
-            sep.setStyleSheet("color: #475569; font-size: 14pt; background: transparent;")
+            _role(sep, "muted")
             mode_layout.addWidget(sep)
             
             scope_label = QLabel("Scope:")
-            scope_label.setStyleSheet("font-size: 11pt; font-weight: bold; color: #3B82F6; background: transparent;")
+            _role(scope_label, "section")
             mode_layout.addWidget(scope_label)
             
             self.scope_group = QButtonGroup()
             self.global_radio = QRadioButton("Global")
             self.global_radio.setChecked(self.scope == 'global')
-            self.global_radio.setStyleSheet("font-size: 11pt; font-weight: bold; color: #F8FAFC; background: transparent;")
+            self.global_radio.setFont(QFont(self.global_radio.font().family(), -1, QFont.Bold))
             self.scope_group.addButton(self.global_radio)
             mode_layout.addWidget(self.global_radio)
             
             self.wing_radio = QRadioButton("Wing")
             self.wing_radio.setEnabled(self.wing_id is not None)
-            self.wing_radio.setStyleSheet("font-size: 11pt; font-weight: bold; color: #F8FAFC; background: transparent;")
+            self.wing_radio.setFont(QFont(self.wing_radio.font().family(), -1, QFont.Bold))
             self.scope_group.addButton(self.wing_radio)
             mode_layout.addWidget(self.wing_radio)
         
@@ -135,62 +187,47 @@ class SemanticMappingDialog(QDialog):
         
         # Simple mode form - professional with visible text
         self.simple_grp = QGroupBox("Simple Mapping")
-        self.simple_grp.setStyleSheet("""
-            QGroupBox { 
-                font-size: 11pt; font-weight: bold; color: #00FFFF; 
-                border: 2px solid #00FFFF; border-radius: 6px; 
-                padding-top: 18px; margin-top: 6px; background: #111827;
-            } 
-            QGroupBox::title { background: #111827; padding: 2px 8px; }
-        """)
         sf = QFormLayout()
         sf.setSpacing(12)
         sf.setContentsMargins(16, 24, 16, 16)
         sf.setLabelAlignment(Qt.AlignRight)
         
-        # Style for form labels
-        label_style = "font-size: 10pt; font-weight: bold; color: #E5E7EB;"
-        input_style = "background: #1E293B; color: #F8FAFC; border: 1px solid #334155; border-radius: 4px; padding: 4px;"
         
         src_label = QLabel("Source:")
-        src_label.setStyleSheet(label_style)
+        _role(src_label, "label")
         self.src = QComboBox()
         self.src.setEditable(True)
-        self.src.setStyleSheet(input_style)
         self.src.addItems(["SecurityLogs", "Prefetch", "ShimCache", "AmCache", "Registry", "SRUM", "MFT", "LNK", "USN", "ShellBags"])
         self.src.setFixedHeight(32)
         sf.addRow(src_label, self.src)
         
         fld_label = QLabel("Field:")
-        fld_label.setStyleSheet(label_style)
+        _role(fld_label, "label")
         self.fld = QComboBox()
         self.fld.setEditable(True)
-        self.fld.setStyleSheet(input_style)
         self.fld.addItems(["EventID", "Status", "Code", "Type", "Value", "path", "executable_name", "user"])
         self.fld.setFixedHeight(32)
         sf.addRow(fld_label, self.fld)
         
         tech_label = QLabel("Value:")
-        tech_label.setStyleSheet(label_style)
+        _role(tech_label, "label")
         self.tech = QLineEdit()
         self.tech.setPlaceholderText("e.g., 4624, chrome.exe")
-        self.tech.setStyleSheet(input_style)
         self.tech.setFixedHeight(32)
         sf.addRow(tech_label, self.tech)
         
         sem_label = QLabel("Semantic:")
-        sem_label.setStyleSheet(label_style)
+        _role(sem_label, "label")
         self.sem = QLineEdit()
         self.sem.setPlaceholderText("e.g., User Login, Browser Activity")
         self.sem.setFixedHeight(32)
-        self.sem.setStyleSheet("border: 2px solid #00FFFF; background: #1E293B; color: #F8FAFC; border-radius: 4px; padding: 4px;")
+        self.sem.setProperty("emphasis", True)
         sf.addRow(sem_label, self.sem)
         
         desc_label = QLabel("Description:")
-        desc_label.setStyleSheet(label_style)
+        _role(desc_label, "label")
         self.desc = QLineEdit()
         self.desc.setPlaceholderText("Optional description")
-        self.desc.setStyleSheet(input_style)
         self.desc.setFixedHeight(32)
         sf.addRow(desc_label, self.desc)
         
@@ -201,24 +238,14 @@ class SemanticMappingDialog(QDialog):
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.NoFrame)
-        self.scroll.setStyleSheet("QScrollArea { background: #0B1220; border: none; }")
         
         self.adv_widget = QWidget()
-        self.adv_widget.setStyleSheet("background: #0B1220;")
         av = QVBoxLayout(self.adv_widget)
         av.setSpacing(10)
         av.setContentsMargins(0, 0, 0, 0)
         
         # Rule output - professional styling
         rg = QGroupBox("Rule Output")
-        rg.setStyleSheet("""
-            QGroupBox { 
-                font-size: 11pt; font-weight: bold; color: #00FFFF; 
-                border: 2px solid #00FFFF; border-radius: 6px; 
-                padding-top: 18px; margin-top: 6px; background: #111827;
-            } 
-            QGroupBox::title { background: #111827; padding: 2px 8px; }
-        """)
         rf = QVBoxLayout()
         rf.setSpacing(10)
         rf.setContentsMargins(14, 22, 14, 14)
@@ -226,23 +253,21 @@ class SemanticMappingDialog(QDialog):
         # Row 1: Name and Semantic
         row1 = QHBoxLayout()
         row1.setSpacing(12)
-        adv_input_style = "background: #1E293B; color: #F8FAFC; border: 1px solid #334155; border-radius: 4px; padding: 4px;"
         name_lbl = QLabel("Name:")
-        name_lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
+        _role(name_lbl, "label")
         row1.addWidget(name_lbl)
         self.rname = QLineEdit()
         self.rname.setPlaceholderText("Rule name")
         self.rname.setFixedHeight(32)
-        self.rname.setStyleSheet(adv_input_style)
         self.rname.textChanged.connect(self._preview)
         row1.addWidget(self.rname, 1)
         sem_lbl = QLabel("Semantic:")
-        sem_lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
+        _role(sem_lbl, "label")
         row1.addWidget(sem_lbl)
         self.rsem = QLineEdit()
         self.rsem.setPlaceholderText("Output value")
         self.rsem.setFixedHeight(32)
-        self.rsem.setStyleSheet("border: 2px solid #00FFFF; background: #1E293B; color: #F8FAFC; border-radius: 4px; padding: 4px;")
+        self.rsem.setProperty("emphasis", True)
         self.rsem.textChanged.connect(self._preview)
         row1.addWidget(self.rsem, 1)
         rf.addLayout(row1)
@@ -250,32 +275,28 @@ class SemanticMappingDialog(QDialog):
         # Row 2: Category, Severity, Description
         row2 = QHBoxLayout()
         row2.setSpacing(12)
-        adv_combo_style = "background: #1E293B; color: #F8FAFC; border: 1px solid #334155; border-radius: 4px; padding: 4px;"
         cat_lbl = QLabel("Category:")
-        cat_lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
+        _role(cat_lbl, "label")
         row2.addWidget(cat_lbl)
         self.cat = QComboBox()
         self.cat.setEditable(True)
-        self.cat.setStyleSheet(adv_combo_style)
         self.cat.addItems(["", "authentication", "process_execution", "file_access", "user_activity"])
         self.cat.setFixedHeight(30)
         self.cat.setFixedWidth(150)
         row2.addWidget(self.cat)
         sev_lbl = QLabel("Severity:")
-        sev_lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
+        _role(sev_lbl, "label")
         row2.addWidget(sev_lbl)
         self.sev = QComboBox()
-        self.sev.setStyleSheet(adv_combo_style)
         self.sev.addItems(["info", "low", "medium", "high", "critical"])
         self.sev.setFixedHeight(30)
         self.sev.setFixedWidth(100)
         row2.addWidget(self.sev)
         desc_lbl = QLabel("Description:")
-        desc_lbl.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
+        _role(desc_lbl, "label")
         row2.addWidget(desc_lbl)
         self.rdesc = QLineEdit()
         self.rdesc.setPlaceholderText("Optional")
-        self.rdesc.setStyleSheet(adv_input_style)
         self.rdesc.setFixedHeight(30)
         row2.addWidget(self.rdesc, 1)
         rf.addLayout(row2)
@@ -289,14 +310,6 @@ class SemanticMappingDialog(QDialog):
 
         # Conditions table - COMPACT professional styling
         cg = QGroupBox("Conditions")
-        cg.setStyleSheet("""
-            QGroupBox { 
-                font-size: 10pt; font-weight: bold; color: #3B82F6; 
-                border: 2px solid #3B82F6; border-radius: 6px; 
-                padding-top: 14px; margin-top: 4px; background: #111827;
-            } 
-            QGroupBox::title { background: #111827; padding: 2px 6px; }
-        """)
         cl = QVBoxLayout()
         cl.setSpacing(4)
         cl.setContentsMargins(8, 18, 8, 8)
@@ -309,11 +322,11 @@ class SemanticMappingDialog(QDialog):
         btn_row.setSpacing(6)
         ab = QPushButton("+ Add")
         ab.setFixedSize(70, 26)
-        ab.setStyleSheet("background: #10B981; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 10pt;")
+        _variant(ab, "primary", compact=True)
         ab.clicked.connect(self._add_cond)
         btn_row.addWidget(ab)
         tip = QLabel("* = wildcard")
-        tip.setStyleSheet("color: #94A3B8; font-size: 8pt; background: transparent;")
+        _role(tip, "muted")
         btn_row.addWidget(tip)
         btn_row.addStretch()
         cl.addLayout(btn_row)
@@ -331,14 +344,6 @@ class SemanticMappingDialog(QDialog):
         
         # Logic section
         lg = QGroupBox("Logic")
-        lg.setStyleSheet("""
-            QGroupBox { 
-                font-size: 11pt; font-weight: bold; color: #F59E0B; 
-                border: 2px solid #F59E0B; border-radius: 6px; 
-                padding-top: 18px; margin-top: 6px; background: #111827;
-            } 
-            QGroupBox::title { background: #111827; padding: 2px 8px; }
-        """)
         ll = QHBoxLayout()
         ll.setContentsMargins(14, 22, 14, 14)
         self.logic = QComboBox()
@@ -348,7 +353,8 @@ class SemanticMappingDialog(QDialog):
         self.logic.currentIndexChanged.connect(self._preview)
         ll.addWidget(self.logic)
         self.lind = QLabel("All match")
-        self.lind.setStyleSheet("font-size: 8pt; color: #F59E0B;")
+        _role(self.lind, "muted")
+        _status(self.lind, "warn")
         self.logic.currentIndexChanged.connect(lambda: self.lind.setText("All match" if self.logic.currentIndex()==0 else "Any match"))
         ll.addWidget(self.lind)
         lg.setLayout(ll)
@@ -358,20 +364,12 @@ class SemanticMappingDialog(QDialog):
         
         # Preview section
         pg = QGroupBox("Preview")
-        pg.setStyleSheet("""
-            QGroupBox { 
-                font-size: 11pt; font-weight: bold; color: #8B5CF6; 
-                border: 2px solid #8B5CF6; border-radius: 6px; 
-                padding-top: 18px; margin-top: 6px; background: #111827;
-            } 
-            QGroupBox::title { background: #111827; padding: 2px 8px; }
-        """)
         pl = QVBoxLayout()
         pl.setContentsMargins(14, 22, 14, 14)
         self.prev = QLabel()
         self.prev.setWordWrap(True)
         self.prev.setMinimumHeight(28)
-        self.prev.setStyleSheet("background: #0F172A; border: 1px solid #334155; padding: 8px; color: #00FFFF; font-family: Consolas; font-size: 10pt; border-radius: 4px;")
+        self.prev.setObjectName("rulePreview")
         pl.addWidget(self.prev)
         pg.setLayout(pl)
         bottom.addWidget(pg, 1)
@@ -382,290 +380,40 @@ class SemanticMappingDialog(QDialog):
         layout.addWidget(self.scroll, 1)
         
         # Dialog buttons - professional styling
-        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        bb.setStyleSheet("""
-            QPushButton {
-                min-width: 100px;
-                min-height: 36px;
-                font-size: 11pt;
-                font-weight: bold;
-                border-radius: 6px;
-            }
-        """)
+        # Buttons made (and given their role) BEFORE they join the box: a
+        # button the box creates loses the site font when it is re-polished
+        # under the app's style sheet, so OK / Cancel came out plain and
+        # lower-case. Same text, same accepted / rejected.
+        bb = QDialogButtonBox()
+        ok_btn, cancel_btn = QPushButton("OK"), QPushButton("Cancel")
+        _variant(ok_btn, "primary")
+        _variant(cancel_btn, "ghost")
+        bb.addButton(ok_btn, QDialogButtonBox.AcceptRole)
+        bb.addButton(cancel_btn, QDialogButtonBox.RejectRole)
+        ok_btn.setDefault(True)
+        for b in bb.buttons():
+            b.setMinimumSize(100, 36)           # as the box's own sheet had it
         bb.accepted.connect(self._accept)
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
         
-        self._style()
+        self._apply_site_look()
         self._mode_changed()
         if self.allow_advanced:
             self._rule_type_changed()
         self.update()
     
-    def _style(self):
-        """Apply comprehensive dark theme styling to the dialog"""
-        try:
-            # Force clear any inherited styles
-            self.setStyleSheet("")
-            
-            # Set palette for backup styling
-            palette = QPalette()
-            palette.setColor(QPalette.Window, QColor("#0B1220"))
-            palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-            palette.setColor(QPalette.Base, QColor("#1E293B"))
-            palette.setColor(QPalette.AlternateBase, QColor("#111827"))
-            palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-            palette.setColor(QPalette.Button, QColor("#3B82F6"))
-            palette.setColor(QPalette.ButtonText, QColor("white"))
-            palette.setColor(QPalette.Highlight, QColor("#00FFFF"))
-            palette.setColor(QPalette.HighlightedText, QColor("#0B1220"))
-            self.setPalette(palette)
-            
-            # Main dialog stylesheet - comprehensive dark theme
-            dialog_style = """
-                QDialog {
-                    background-color: #0B1220;
-                    color: #E5E7EB;
-                    font-size: 10pt;
-                }
-                QWidget {
-                    background-color: #0B1220;
-                    color: #E5E7EB;
-                }
-                QGroupBox {
-                    background-color: #111827;
-                    border: 2px solid #1E3A5F;
-                    border-radius: 6px;
-                    color: #00FFFF;
-                    font-weight: bold;
-                    padding: 6px;
-                    padding-top: 18px;
-                    margin-top: 6px;
-                    font-size: 11pt;
-                }
-                QGroupBox::title {
-                    subcontrol-origin: margin;
-                    left: 10px;
-                    padding: 2px 6px;
-                    background: #111827;
-                    color: #00FFFF;
-                }
-                QLineEdit {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 6px;
-                    color: #F8FAFC;
-                    font-size: 10pt;
-                    min-height: 24px;
-                }
-                QLineEdit:focus {
-                    border-color: #00FFFF;
-                    border-width: 2px;
-                }
-                QLineEdit::placeholder {
-                    color: #64748B;
-                }
-                QComboBox {
-                    background-color: #1E293B;
-                    border: 1px solid #334155;
-                    border-radius: 4px;
-                    padding: 6px;
-                    color: #F8FAFC;
-                    font-size: 10pt;
-                    min-height: 24px;
-                }
-                QComboBox:focus {
-                    border-color: #00FFFF;
-                }
-                QComboBox:editable {
-                    background-color: #1E293B;
-                    color: #F8FAFC;
-                }
-                QComboBox QLineEdit {
-                    background-color: #1E293B;
-                    color: #F8FAFC;
-                    border: none;
-                    padding: 4px;
-                }
-                QComboBox::drop-down {
-                    border: none;
-                    width: 20px;
-                    background: #334155;
-                    border-top-right-radius: 4px;
-                    border-bottom-right-radius: 4px;
-                }
-                QComboBox::down-arrow {
-                    border-left: 5px solid transparent;
-                    border-right: 5px solid transparent;
-                    border-top: 6px solid #00FFFF;
-                    margin-right: 5px;
-                }
-                QComboBox QAbstractItemView {
-                    background-color: #1E293B;
-                    color: #F8FAFC;
-                    selection-background-color: #3B82F6;
-                    selection-color: white;
-                    border: 1px solid #334155;
-                }
-                QComboBox QAbstractItemView::item {
-                    color: #F8FAFC;
-                    padding: 6px;
-                }
-                QComboBox QAbstractItemView::item:selected {
-                    background-color: #3B82F6;
-                    color: white;
-                }
-                QComboBox QAbstractItemView QScrollBar:vertical {
-                    background-color: #1E293B;
-                    width: 12px;
-                    border-radius: 6px;
-                    margin: 2px;
-                }
-                QComboBox QAbstractItemView QScrollBar::handle:vertical {
-                    background-color: #475569;
-                    border-radius: 5px;
-                    min-height: 20px;
-                }
-                QComboBox QAbstractItemView QScrollBar::handle:vertical:hover {
-                    background-color: #00FFFF;
-                }
-                QComboBox QAbstractItemView QScrollBar::add-line:vertical,
-                QComboBox QAbstractItemView QScrollBar::sub-line:vertical {
-                    height: 0px;
-                }
-                QComboBox QAbstractItemView QScrollBar::add-page:vertical,
-                QComboBox QAbstractItemView QScrollBar::sub-page:vertical {
-                    background-color: #1E293B;
-                }
-                QRadioButton {
-                    color: #F8FAFC;
-                    font-size: 11pt;
-                    font-weight: bold;
-                    spacing: 8px;
-                    background: transparent;
-                }
-                QRadioButton:checked {
-                    color: #00FFFF;
-                    font-weight: bold;
-                }
-                QRadioButton::indicator {
-                    width: 18px;
-                    height: 18px;
-                    border-radius: 9px;
-                    border: 2px solid #64748B;
-                    background-color: #1E293B;
-                }
-                QRadioButton::indicator:checked {
-                    background-color: #00FFFF;
-                    border-color: #00FFFF;
-                }
-                QRadioButton::indicator:hover {
-                    border-color: #00FFFF;
-                }
-                QPushButton {
-                    background-color: #3B82F6;
-                    color: white;
-                    border: none;
-                    border-radius: 5px;
-                    padding: 8px 16px;
-                    font-size: 10pt;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #2563EB;
-                }
-                QPushButton:pressed {
-                    background-color: #1E40AF;
-                }
-                QPushButton:disabled {
-                    background-color: #475569;
-                    color: #94A3B8;
-                }
-                QDialogButtonBox QPushButton {
-                    min-width: 100px;
-                    min-height: 36px;
-                    background-color: #3B82F6;
-                    color: white;
-                }
-                QDialogButtonBox QPushButton:hover {
-                    background-color: #2563EB;
-                }
-                QLabel {
-                    color: #E5E7EB;
-                    font-size: 10pt;
-                    background: transparent;
-                }
-                QScrollArea {
-                    background-color: #0B1220;
-                    border: none;
-                }
-                QScrollBar:vertical {
-                    background-color: #1E293B;
-                    width: 14px;
-                    border-radius: 7px;
-                }
-                QScrollBar::handle:vertical {
-                    background-color: #475569;
-                    border-radius: 7px;
-                    min-height: 24px;
-                }
-                QScrollBar::handle:vertical:hover {
-                    background-color: #64748B;
-                }
-                QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
-                    height: 0px;
-                }
-                QTableWidget {
-                    background-color: #0F172A;
-                    border: 1px solid #334155;
-                    color: #F8FAFC;
-                    font-size: 10pt;
-                    gridline-color: #334155;
-                }
-                QTableWidget::item {
-                    padding: 6px;
-                    border: none;
-                    color: #F8FAFC;
-                }
-                QTableWidget::item:selected {
-                    background-color: #3B82F6;
-                    color: white;
-                }
-                QHeaderView::section {
-                    background-color: #1E293B;
-                    color: #00FFFF;
-                    padding: 8px;
-                    border: none;
-                    border-bottom: 2px solid #00FFFF;
-                    font-size: 10pt;
-                    font-weight: bold;
-                }
-                QTableCornerButton::section {
-                    background-color: #1E293B;
-                    border: none;
-                }
-                QFrame {
-                    background-color: transparent;
-                    color: #E5E7EB;
-                }
-            """
-            
-            self.setStyleSheet(dialog_style)
-                
-        except Exception as e:
-            # Fallback to basic styling if advanced styling fails
-            print(f"Warning: Failed to apply advanced styling: {e}")
-            self.setStyleSheet("QDialog { background-color: #1E1E1E; color: white; }")
-    
-    def showEvent(self, event):
-        """Override showEvent to ensure styling is applied when dialog is shown"""
-        super().showEvent(event)
-        # Reapply styling when dialog is shown
-        self._style()
-        # Force update
-        self.update()
-    
+    def _apply_site_look(self):
+        """The site look, once (ui/site_theme.py).
+
+        This used to be _style(): a 230-line sheet in the old palette that
+        showEvent wiped and set again on every show - each show re-polished
+        the whole dialog, and the per-widget sheets fought it. The labels'
+        own sheets become roles here; rows added later take the dialog
+        sheet through their properties."""
+        if _site is not None:
+            _site.apply_site_theme(self, extra=_dialog_extra())
+
     def _mode_changed(self):
         adv = self.adv_radio.isChecked()
         self.simple_grp.setVisible(not adv)
@@ -677,20 +425,6 @@ class SemanticMappingDialog(QDialog):
     # Reusable condition-table machinery (shared by match / absence /
     # threshold / sequence editors and nested groups)
     # ------------------------------------------------------------------
-    _CELL_COMBO_STYLE = (
-        "QComboBox { font-size: 9pt; padding: 2px; background: #1E293B; "
-        "border: 1px solid #334155; color: #F8FAFC; border-radius: 2px; "
-        "min-height: 20px; max-height: 20px; }"
-        "QComboBox:editable { background: #1E293B; color: #F8FAFC; }"
-        "QComboBox QLineEdit { background: #1E293B; color: #F8FAFC; border: none; font-size: 9pt; }"
-        "QComboBox QAbstractItemView { background: #1E293B; color: #F8FAFC; border: 1px solid #334155; font-size: 9pt; }"
-        "QComboBox QAbstractItemView::item { color: #F8FAFC; padding: 2px; }"
-        "QComboBox QAbstractItemView::item:selected { background: #3B82F6; color: white; }"
-    )
-    _CELL_EDIT_STYLE = (
-        "font-size: 9pt; padding: 2px; min-height: 18px; max-height: 20px; "
-        "background: #1E293B; border: 1px solid #334155; color: #F8FAFC; border-radius: 2px;"
-    )
     _DEFAULT_FEATHERS = [
         "_identity", "Prefetch", "ShimCache", "AmCache", "AmCache_App", "AmCache_File",
         "UserAssist", "RecentDocs", "ShellBags", "TypedPaths", "LNK", "JumpLists",
@@ -704,12 +438,6 @@ class SemanticMappingDialog(QDialog):
         "user", "timestamp", "source", "destination", "hash", "size", "command_line",
         "reason", "si_created", "fn_created", "target_path",
     ]
-    _TABLE_STYLE = (
-        "QTableWidget { background: #0F172A; border: 1px solid #334155; color: #F8FAFC; font-size: 9pt; gridline-color: #334155; }"
-        "QTableWidget::item { padding: 2px; color: #F8FAFC; }"
-        "QHeaderView::section { background: #1E293B; color: #00FFFF; padding: 3px; border: none; border-bottom: 1px solid #00FFFF; font-size: 9pt; font-weight: bold; }"
-    )
-
     def _make_cond_table(self, advanced=None):
         """Build a condition table. Advanced tables add Negate + Compare→ columns."""
         adv = self.allow_advanced if advanced is None else advanced
@@ -720,7 +448,6 @@ class SemanticMappingDialog(QDialog):
             cols = ["Feather", "Field", "Op", "Value", ""]
         tbl.setColumnCount(len(cols))
         tbl.setHorizontalHeaderLabels(cols)
-        tbl.setStyleSheet(self._TABLE_STYLE)
         h = tbl.horizontalHeader()
         h.setMinimumSectionSize(14)
         h.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -749,24 +476,24 @@ class SemanticMappingDialog(QDialog):
         tbl.insertRow(r)
         adv = tbl.columnCount() >= 7
 
-        f = QComboBox(); f.setEditable(True); f.setStyleSheet(self._CELL_COMBO_STYLE); f.setFixedHeight(22)
+        f = QComboBox(); f.setEditable(True); f.setFixedHeight(22)
         f.addItems(self.available_feathers if self.available_feathers else self._DEFAULT_FEATHERS)
         f.currentTextChanged.connect(self._preview)
         tbl.setCellWidget(r, 0, f)
 
-        fd = QComboBox(); fd.setEditable(True); fd.setStyleSheet(self._CELL_COMBO_STYLE); fd.setFixedHeight(22)
+        fd = QComboBox(); fd.setEditable(True); fd.setFixedHeight(22)
         fd.addItems(self._DEFAULT_FIELDS)
         fd.currentTextChanged.connect(self._preview)
         tbl.setCellWidget(r, 1, fd)
 
-        o = QComboBox(); o.setStyleSheet(self._CELL_COMBO_STYLE); o.setFixedHeight(22)
+        o = QComboBox(); o.setFixedHeight(22)
         for label, name in self.OP_ITEMS:
             if adv or name in self.OP_BASIC:
                 o.addItem(label, name)
         o.currentIndexChanged.connect(self._preview)
         tbl.setCellWidget(r, 2, o)
 
-        v = QLineEdit(); v.setStyleSheet(self._CELL_EDIT_STYLE); v.setFixedHeight(22)
+        v = QLineEdit(); v.setFixedHeight(22)
         v.textChanged.connect(self._preview)
         tbl.setCellWidget(r, 3, v)
 
@@ -778,7 +505,7 @@ class SemanticMappingDialog(QDialog):
             wl.setAlignment(Qt.AlignCenter); wl.addWidget(neg)
             tbl.setCellWidget(r, 4, wrap)
             cmp = QLineEdit(); cmp.setPlaceholderText("blank = literal value")
-            cmp.setStyleSheet(self._CELL_EDIT_STYLE); cmp.setFixedHeight(22)
+            cmp.setFixedHeight(22)
             cmp.setToolTip("Cross-feather compare: feather.field (blank = compare to Value)")
             cmp.textChanged.connect(self._preview)
             tbl.setCellWidget(r, 5, cmp)
@@ -786,7 +513,7 @@ class SemanticMappingDialog(QDialog):
 
         from ...gui.crow_eye_icons import CrowEyeIcons
         x = QPushButton(); x.setIcon(CrowEyeIcons.delete()); x.setToolTip("Remove condition")
-        x.setStyleSheet("background: #EF4444; color: white; border: none; font-size: 10pt; font-weight: bold; border-radius: 3px; padding: 0px;")
+        _variant(x, "danger", cell=True)
         x.setFixedSize(20, 20)
         x.clicked.connect(lambda _=None, t=tbl, b=x: self._rm_cond_row(t, b))
         tbl.setCellWidget(r, del_col, x)
@@ -863,7 +590,7 @@ class SemanticMappingDialog(QDialog):
         tbl.setMinimumHeight(min_h)
         lay.addWidget(tbl)
         ab = QPushButton("+ Add"); ab.setFixedSize(70, 24)
-        ab.setStyleSheet("background: #10B981; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 9pt;")
+        _variant(ab, "primary", compact=True)
         ab.clicked.connect(lambda _=None, t=tbl: self._add_cond_row(t))
         row = QHBoxLayout(); row.addWidget(ab); row.addStretch(); lay.addLayout(row)
         box.setLayout(lay)
@@ -877,7 +604,7 @@ class SemanticMappingDialog(QDialog):
         lay = QVBoxLayout(); lay.setContentsMargins(12, 18, 12, 12); lay.setSpacing(8)
 
         top = QHBoxLayout(); top.setSpacing(10)
-        rt_lbl = QLabel("Rule Type:"); rt_lbl.setStyleSheet("font-weight: bold; color: #E5E7EB;")
+        rt_lbl = QLabel("Rule Type:"); _role(rt_lbl, "label")
         top.addWidget(rt_lbl)
         self.rule_type_combo = QComboBox()
         self.rule_type_combo.addItems(self.RULE_TYPES)
@@ -885,12 +612,12 @@ class SemanticMappingDialog(QDialog):
         self.rule_type_combo.currentIndexChanged.connect(self._rule_type_changed)
         top.addWidget(self.rule_type_combo)
         top.addSpacing(14)
-        tech_lbl = QLabel("ATT&CK IDs:"); tech_lbl.setStyleSheet("font-weight: bold; color: #E5E7EB;")
+        tech_lbl = QLabel("ATT&CK IDs:"); _role(tech_lbl, "label")
         top.addWidget(tech_lbl)
         self.tech_ids = QLineEdit(); self.tech_ids.setPlaceholderText("e.g. T1070.004, T1562.001")
         self.tech_ids.setFixedHeight(28)
         top.addWidget(self.tech_ids, 1)
-        tac_lbl = QLabel("Tactic:"); tac_lbl.setStyleSheet("font-weight: bold; color: #E5E7EB;")
+        tac_lbl = QLabel("Tactic:"); _role(tac_lbl, "label")
         top.addWidget(tac_lbl)
         self.tactics = QLineEdit(); self.tactics.setPlaceholderText("e.g. defense-evasion")
         self.tactics.setFixedHeight(28)
@@ -908,7 +635,8 @@ class SemanticMappingDialog(QDialog):
             size_px=12,
         ))
         note.setWordWrap(True)
-        note.setStyleSheet("color: #FBBF24; font-size: 9pt; background: transparent;")
+        _role(note, "note")                   # the site's amber notice
+        _status(note, "warn")
         lay.addWidget(note)
 
         bar.setLayout(lay)
@@ -925,7 +653,7 @@ class SemanticMappingDialog(QDialog):
         self.group_widgets = []  # list of (frame, logic_combo, table)
         gl.addLayout(self.groups_layout)
         add_grp = QPushButton("+ Add Group"); add_grp.setFixedHeight(24)
-        add_grp.setStyleSheet("background: #6366F1; color: white; border: none; border-radius: 4px; font-weight: bold; font-size: 9pt;")
+        _variant(add_grp, "primary", compact=True)
         add_grp.clicked.connect(lambda: self._add_group())
         gl.addWidget(add_grp, alignment=Qt.AlignLeft)
         self.groups_group.setLayout(gl)
@@ -938,7 +666,7 @@ class SemanticMappingDialog(QDialog):
         abs_box, self.absent_tbl = self._cond_table_block("Require Absent")
         al.addWidget(exp_box); al.addWidget(abs_box)
         wrow = QHBoxLayout()
-        wl = QLabel("Within minutes (0 = whole window):"); wl.setStyleSheet("color: #E5E7EB;")
+        wl = QLabel("Within minutes (0 = whole window):"); _role(wl, "label")
         wrow.addWidget(wl)
         self.abs_within = QSpinBox(); self.abs_within.setRange(0, 100000); self.abs_within.setValue(0)
         self.abs_within.setFixedWidth(90); wrow.addWidget(self.abs_within); wrow.addStretch()
@@ -952,13 +680,13 @@ class SemanticMappingDialog(QDialog):
         thr_box, self.thr_tbl = self._cond_table_block("Match Condition(s)")
         tl.addWidget(thr_box)
         trow = QHBoxLayout()
-        mcl = QLabel("Min count:"); mcl.setStyleSheet("color: #E5E7EB;"); trow.addWidget(mcl)
+        mcl = QLabel("Min count:"); _role(mcl, "label"); trow.addWidget(mcl)
         self.thr_min = QSpinBox(); self.thr_min.setRange(1, 1000000); self.thr_min.setValue(5)
         self.thr_min.setFixedWidth(80); trow.addWidget(self.thr_min)
-        twl = QLabel("Within minutes:"); twl.setStyleSheet("color: #E5E7EB;"); trow.addWidget(twl)
+        twl = QLabel("Within minutes:"); _role(twl, "label"); trow.addWidget(twl)
         self.thr_within = QSpinBox(); self.thr_within.setRange(0, 100000); self.thr_within.setValue(0)
         self.thr_within.setFixedWidth(90); trow.addWidget(self.thr_within)
-        gbl = QLabel("Group by field:"); gbl.setStyleSheet("color: #E5E7EB;"); trow.addWidget(gbl)
+        gbl = QLabel("Group by field:"); _role(gbl, "label"); trow.addWidget(gbl)
         self.thr_group_by = QLineEdit(); self.thr_group_by.setPlaceholderText("optional, e.g. user")
         self.thr_group_by.setFixedHeight(26); trow.addWidget(self.thr_group_by, 1)
         tl.addLayout(trow)
@@ -971,7 +699,7 @@ class SemanticMappingDialog(QDialog):
         seq_box, self.seq_tbl = self._cond_table_block("Steps (in order)")
         sl.addWidget(seq_box)
         srow = QHBoxLayout()
-        sgl = QLabel("Max gap minutes between steps:"); sgl.setStyleSheet("color: #E5E7EB;")
+        sgl = QLabel("Max gap minutes between steps:"); _role(sgl, "label")
         srow.addWidget(sgl)
         self.seq_gap = QSpinBox(); self.seq_gap.setRange(0, 100000); self.seq_gap.setValue(30)
         self.seq_gap.setFixedWidth(90); srow.addWidget(self.seq_gap); srow.addStretch()
@@ -980,13 +708,12 @@ class SemanticMappingDialog(QDialog):
         # field values (e.g. same host/user) — a real correlation, not just
         # time-coincidence. Steps may each target a different feather.
         jrow = QHBoxLayout()
-        jl = QLabel("Join on fields (same across steps):"); jl.setStyleSheet("color: #E5E7EB;")
+        jl = QLabel("Join on fields (same across steps):"); _role(jl, "label")
         jrow.addWidget(jl)
         self.seq_join = QLineEdit(); self.seq_join.setPlaceholderText("optional, e.g. host, user")
         self.seq_join.setFixedHeight(26); jrow.addWidget(self.seq_join, 1)
         sl.addLayout(jrow)
         self.seq_same_identity = QCheckBox("Restrict to the same identity")
-        self.seq_same_identity.setStyleSheet("color: #E5E7EB;")
         self.seq_same_identity.setToolTip(
             "Sequences are already evaluated within one correlated identity; this flag records "
             "that intent explicitly. Use 'Join on fields' for finer cross-feather binding.")
@@ -996,21 +723,21 @@ class SemanticMappingDialog(QDialog):
 
     def _add_group(self, logic='AND', conditions=None):
         frame = QFrame()
-        frame.setStyleSheet("QFrame { border: 1px solid #334155; border-radius: 4px; background: #0F172A; }")
+        frame.setObjectName("conditionGroup")
         fl = QVBoxLayout(frame); fl.setContentsMargins(6, 6, 6, 6); fl.setSpacing(4)
         hdr = QHBoxLayout()
         lc = QComboBox(); lc.addItems(["AND", "OR"]); lc.setFixedWidth(70)
         lc.setCurrentText(logic if logic in ("AND", "OR") else "AND")
         hdr.addWidget(QLabel("Group logic:")); hdr.addWidget(lc); hdr.addStretch()
         rm = QPushButton("Remove group"); rm.setFixedHeight(22)
-        rm.setStyleSheet("background: #EF4444; color: white; border: none; border-radius: 3px; font-size: 9pt; padding: 0 8px;")
+        _variant(rm, "danger", compact=True)
         hdr.addWidget(rm)
         fl.addLayout(hdr)
         tbl = self._make_cond_table(advanced=False)
         tbl.setMaximumHeight(110)
         fl.addWidget(tbl)
         ab = QPushButton("+ Add condition"); ab.setFixedHeight(22)
-        ab.setStyleSheet("background: #10B981; color: white; border: none; border-radius: 3px; font-size: 9pt; padding: 0 8px;")
+        _variant(ab, "primary", compact=True)
         ab.clicked.connect(lambda _=None, t=tbl: self._add_cond_row(t))
         fl.addWidget(ab, alignment=Qt.AlignLeft)
         self.groups_layout.addWidget(frame)

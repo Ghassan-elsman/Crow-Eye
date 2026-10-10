@@ -15,12 +15,110 @@ from .identity_correlation_engine import IdentityCorrelationEngine
 from .identity_grouping import sub_identity_key
 from .correlation_result import CorrelationResult, CorrelationMatch
 from .weighted_scoring import WeightedScoringEngine
-from .progress_tracking import ProgressTracker, ProgressListener, ProgressEvent, ProgressEventType, CorrelationProgressReporter, CorrelationStallMonitor, CorrelationStallException
+from .progress_tracking import ProgressTracker, ProgressListener, ProgressEvent, ProgressEventType, CorrelationProgressReporter, CorrelationStallMonitor, CorrelationStallException, OperationCancelledException
+from sys import intern
 from ..integration.semantic_mapping_integration import SemanticMappingIntegration, SemanticMappingStats
 from ..integration.weighted_scoring_integration import WeightedScoringIntegration
 from ..config.identifier_extraction_config import WingsConfig
 
 logger = logging.getLogger(__name__)
+
+_COPY_SUFFIX = None
+
+
+def _feathers_of_match(feather_records_json):
+    """The feather ids one stored match draws on (its feather_records keys).
+
+    A trailing `_<n>` copy suffix is dropped and nothing else. The count used
+    to keep only the text before the FIRST underscore, so `mft_usn`,
+    `security_logs`, `amcache_app` and every other underscored feather counted
+    under a name no feather has - their "matches created" read 0 and they
+    were missing from the Matches by Feather chart."""
+    global _COPY_SUFFIX
+    if not feather_records_json:
+        return ()
+    try:
+        import json
+        keys = json.loads(feather_records_json).keys()
+    except (ValueError, TypeError, AttributeError):
+        return ()
+    if _COPY_SUFFIX is None:
+        import re
+        _COPY_SUFFIX = re.compile(r"_\d+$")
+    return {_COPY_SUFFIX.sub("", k) for k in keys}
+
+# Rows read per batch while a feather streams (memory stays flat, cancel and
+# progress get a chance between batches).
+_FETCH_BATCH = 5000
+# Keys the engine adds to a record; never part of a row's content.
+_INTERNAL_KEYS = ('_feather_id', '_table', '_sub_variant_key')
+
+
+class _RowFetcher:
+    """Full feather rows by reference, read only when a match is built.
+
+    A reference is (feather_id, table, rowid, first_timestamp, variant_tag);
+    rowid None means the table had no rowid and the reference carries the
+    record itself as a sixth element. One read-only connection per feather,
+    kept for the wing and closed with it.
+    """
+
+    def __init__(self, feather_paths):
+        self._paths = dict(feather_paths or {})
+        self._conns = {}
+        self._columns = {}
+
+    def _conn(self, fid):
+        conn = self._conns.get(fid)
+        if conn is None:
+            import sqlite3
+            conn = sqlite3.connect(self._paths[fid])
+            self._conns[fid] = conn
+        return conn
+
+    def records(self, refs):
+        """The record dicts for `refs`, in the same order - exactly what the
+        old SELECT * + dict(zip()) built, plus the engine's three tags."""
+        out = [None] * len(refs)
+        groups = {}
+        for i, ref in enumerate(refs):
+            if ref[2] is None:
+                out[i] = ref[5]
+                continue
+            groups.setdefault((ref[0], ref[1]), []).append(i)
+        for (fid, table), positions in groups.items():
+            conn = self._conn(fid)
+            rows_by_id = {}
+            ids = [refs[i][2] for i in positions]
+            cols = self._columns.get((fid, table))
+            for start in range(0, len(ids), 900):
+                chunk = ids[start:start + 900]
+                cur = conn.execute(
+                    'SELECT rowid, * FROM "%s" WHERE rowid IN (%s)'
+                    % (table.replace('"', '""'), ",".join("?" * len(chunk))), chunk)
+                if cols is None:
+                    cols = self._columns[(fid, table)] = [d[0] for d in cur.description[1:]]
+                for row in cur:
+                    rows_by_id[row[0]] = row[1:]
+            for i in positions:
+                ref = refs[i]
+                row = rows_by_id.get(ref[2])
+                if row is None:
+                    continue
+                record = dict(zip(cols, row))
+                record['_feather_id'] = fid
+                record['_table'] = table
+                record['_sub_variant_key'] = ref[4]
+                out[i] = record
+        return [r for r in out if r is not None]
+
+    def close(self):
+        for conn in self._conns.values():
+            try:
+                conn.close()
+            except Exception:
+                pass
+        self._conns.clear()
 
 
 class IdentityBasedEngineAdapter(BaseCorrelationEngine):
@@ -358,7 +456,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 total_matches=total_match_count, # Use tracked count (works for both streaming and non-streaming)
                 execution_duration_seconds=execution_time,
                 filters_applied=self._get_applied_filters(),
-                feather_metadata={}, # Will be populated AFTER Identity Semantic Phase
+                feather_metadata={}, # Filled below, before the Identity Semantic Phase
                 # CRITICAL: Set database info for Identity Semantic Phase (streaming mode support)
                 streaming_mode=streaming_enabled,
                 database_path=str(Path(self._output_dir) / "correlation_results.db") if streaming_enabled and self._output_dir else None,
@@ -371,21 +469,14 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
 
             self._stamp_streamed_result_id(self.last_results, streaming_enabled)
             
-            # Task 7.1: Execute Identity Semantic Phase after correlation completes
-            # Requirements: 10.1, 10.2, 10.3
-            # This applies identity-level semantic mappings in a dedicated final analysis phase
-            logger.info(f"[Identity Engine] Starting Identity Semantic Phase...")
-            logger.info(f"[Identity Engine] DEBUG: About to call _execute_identity_semantic_phase")
-            self.last_results = self._execute_identity_semantic_phase(
-                self.last_results, 
-                wing_configs
-            )
-            logger.info(f"[Identity Engine] DEBUG: _execute_identity_semantic_phase returned")
-            logger.info(f"[Identity Engine] Identity Semantic Phase completed")
             
-            # NOW calculate feather metadata AFTER matches are written and semantic phase is complete
-            # Build feather_metadata from collected statistics AFTER matches are written
-            # Requirements: 7.1, 7.2
+            # Feather metadata BEFORE the Identity Semantic Phase. It reads only
+            # the matches already written (the semantic phase changes only their
+            # semantic columns), and it is what the Summary's statistics and
+            # charts are drawn from. Written after the phase, a run stopped or
+            # killed inside it - a phase that ran most of an hour on a large
+            # case - left the result row with no feather_metadata and the
+            # Summary with nothing to draw. Requirements: 7.1, 7.2
             feather_metadata = {}
             
             # Calculate matches per feather by counting how many matches each feather contributed to
@@ -423,38 +514,25 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         if total_matches == 0:
                             continue
 
-                        # Process matches in batches to avoid memory issues
-                        batch_size = 10000
-                        offset = 0
-
-                        while offset < total_matches:
-                            cursor.execute("""
-                                SELECT feather_records FROM matches
-                                WHERE result_id = ?
-                                LIMIT ? OFFSET ?
-                            """, (result_id, batch_size, offset))
-
-                            batch = cursor.fetchall()
-
+                        # One pass, read in chunks. LIMIT/OFFSET re-walked every
+                        # earlier row for each page, so the count slowed down
+                        # page by page on a large run.
+                        cursor.execute("""
+                            SELECT feather_records FROM matches
+                            WHERE result_id = ?
+                        """, (result_id,))
+                        counted = 0
+                        while True:
+                            batch = cursor.fetchmany(10000)
+                            if not batch:
+                                break
                             for row in batch:
-                                feather_records_str = row[0]
-                                if not feather_records_str:
-                                    continue
-
-                                try:
-                                    feather_records = json.loads(feather_records_str)
-                                    for feather_key in feather_records.keys():
-                                        # Extract base feather name (remove _0, _1 suffixes)
-                                        feather_id = feather_key.split('_')[0] if '_' in feather_key else feather_key
-                                        matches_per_feather[feather_id] = matches_per_feather.get(feather_id, 0) + 1
-                                except (json.JSONDecodeError, AttributeError):
-                                    pass
-
-                            offset += batch_size
-
+                                for feather_id in _feathers_of_match(row[0]):
+                                    matches_per_feather[feather_id] = matches_per_feather.get(feather_id, 0) + 1
+                            counted += len(batch)
                             # Show progress for large datasets
-                            if total_matches > 50000 and offset % 50000 == 0:
-                                logger.info(f"[Identity Engine] Processed {offset:,}/{total_matches:,} matches...")
+                            if total_matches > 50000 and counted % 50000 < 10000:
+                                logger.info(f"[Identity Engine] Processed {counted:,}/{total_matches:,} matches...")
 
                     logger.info(f"[Identity Engine] [OK] Counted matches for {len(matches_per_feather)} feathers")
 
@@ -547,6 +625,38 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         except Exception:
                             pass
             
+            # Provisional execution totals, for the same reason: the pipeline
+            # writes the final ones after every wing, and a run that never gets
+            # there kept "0 matches, 0 s" on its execution row.
+            if streaming_enabled and self._execution_id:
+                try:
+                    from pathlib import Path
+                    from .database_persistence import ResultsDatabase
+                    with ResultsDatabase(str(Path(self._output_dir) / "correlation_results.db")) as _db:
+                        _db.update_execution_stats(
+                            execution_id=self._execution_id,
+                            execution_duration=(datetime.now() - start_time).total_seconds(),
+                            total_matches=total_match_count)
+                except Exception as e:
+                    logger.info(f"[Identity Engine] Warning: provisional execution totals not saved: {e}")
+
+            # Task 7.1: Execute Identity Semantic Phase after correlation completes
+            # Requirements: 10.1, 10.2, 10.3
+            # This applies identity-level semantic mappings in a dedicated final analysis phase
+            logger.info(f"[Identity Engine] Starting Identity Semantic Phase...")
+            logger.info(f"[Identity Engine] DEBUG: About to call _execute_identity_semantic_phase")
+            self.last_results = self._execute_identity_semantic_phase(
+                self.last_results, 
+                wing_configs
+            )
+            logger.info(f"[Identity Engine] DEBUG: _execute_identity_semantic_phase returned")
+            logger.info(f"[Identity Engine] Identity Semantic Phase completed")
+            # The phase may hand back another result object; the statistics
+            # built above must stay on whatever the pipeline saves next, or its
+            # final save_result writes the row back without them.
+            if not getattr(self.last_results, 'feather_metadata', None):
+                self.last_results.feather_metadata = feather_metadata
+
             logger.info(f"[Identity Engine] Feather metadata summary:")
             for feather_id, metadata in feather_metadata.items():
                 if feather_id.startswith('_'): # Skip engine metadata
@@ -937,7 +1047,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 extracted, stats = hit
                 logger.info(f"[Identity Engine] Reusing {len(extracted)} extracted "
                             f"record(s) for {feather_id} from this run's cache")
-                return self._copy_extracted(extracted), self._copy_stats(stats)
+                return extracted, self._copy_stats(stats)
 
         # Initialize stats for this feather. The drop sub-buckets
         # name *why* a record was excluded so the end-of-run
@@ -957,6 +1067,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             },
         }
         extracted = []
+        seen_keys = set()        # identity keys already given their details
+        seen_variants = set()    # (identity_key, variant_key) likewise
 
         # ENHANCEMENT: Load feather metadata for smart identity extraction
         feather_metadata = self.core_engine.load_feather_metadata(db_path, feather_id)
@@ -1007,56 +1119,108 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     continue
 
                 try:
-                    cursor.execute(f"SELECT * FROM {table}")
-                    rows = cursor.fetchall()
+                    # Streamed, not fetchall(): the record dict exists only
+                    # while it is filtered and its identity extracted; the
+                    # row is kept as a reference and re-read by rowid when a
+                    # match is built (_RowFetcher).
+                    quoted = table.replace('"', '""')
+                    try:
+                        cursor.execute(f'SELECT rowid AS "__crow_rowid", * FROM "{quoted}"')
+                        has_rowid = True
+                    except sqlite3.OperationalError:
+                        cursor.execute(f'SELECT * FROM "{quoted}"')
+                        has_rowid = False
                     columns = [desc[0] for desc in cursor.description]
+                    if has_rowid:
+                        columns = columns[1:]
+                    ts_fields = [f for f in getattr(self.core_engine, 'timestamp_field_patterns', ())
+                                 if f in columns]
+                    table_name = table
+                    while True:
+                        batch = cursor.fetchmany(_FETCH_BATCH)
+                        if not batch:
+                            break
+                        # Cancel and progress between batches - the read of a
+                        # 3.8M-row feather used to be silent and unstoppable.
+                        tracker = getattr(self, 'progress_tracker', None)
+                        if tracker is not None:
+                            tracker.check_cancellation()
+                            self._loading_progress(feather_id, stats['total'] + len(batch),
+                                                   total_feather_records)
+                        for row in batch:
+                            if has_rowid:
+                                rowid = row[0]
+                                record = dict(zip(columns, row[1:]))
+                            else:
+                                rowid = None
+                                record = dict(zip(columns, row))
+                            record['_feather_id'] = feather_id
+                            record['_table'] = table_name
 
-                    for row in rows:
-                        record = dict(zip(columns, row))
-                        record['_feather_id'] = feather_id
-                        record['_table'] = table
+                            stats['total'] += 1
 
-                        stats['total'] += 1
+                            # Apply filters - skip record if it should be filtered out
+                            if self._should_filter_record(record):
+                                stats['dropped_by_filter'] += 1
+                                samples = stats['drop_samples']['by_filter']
+                                if len(samples) < 3:
+                                    # Sample one identifying value from the row so the
+                                    # accounting block can show *what* got filtered.
+                                    for key in ('executable_name', 'app_name', 'name', 'filename', 'service_name', 'app_path'):
+                                        if record.get(key):
+                                            samples.append(str(record[key])[:80])
+                                            break
+                                continue
 
-                        # Apply filters - skip record if it should be filtered out
-                        if self._should_filter_record(record):
-                            stats['dropped_by_filter'] += 1
-                            samples = stats['drop_samples']['by_filter']
-                            if len(samples) < 3:
-                                # Sample one identifying value from the row so the
-                                # accounting block can show *what* got filtered.
-                                for key in ('executable_name', 'app_name', 'name', 'filename', 'service_name', 'app_path'):
-                                    if record.get(key):
-                                        samples.append(str(record[key])[:80])
+                            # ENHANCEMENT: Extract identity using core engine with feather metadata
+                            name, path, hash_val, id_type = self.core_engine.extract_identity_info(record, feather_metadata)
+
+                            if name or path or hash_val:
+                                # ENHANCEMENT: Normalize identity name to get base and suffix
+                                base_name, suffix = self.core_engine.normalize_identity_name(name) if name else (name, "")
+
+                                # Normalize identity key (uses base_name internally)
+                                identity_key = intern(self.core_engine.normalize_identity_key(name, path, hash_val))
+
+                                variant_key = intern(sub_identity_key(name)) if name else ""
+
+                                # The first timestamp in priority order - what the
+                                # anchor clustering sorts and groups by.
+                                ts = None
+                                for ts_field in ts_fields:
+                                    v = record.get(ts_field)
+                                    if v:
+                                        ts = str(v)
                                         break
-                            continue
+                                ref = ((feather_id, table_name, rowid, ts, variant_key or '(base)')
+                                       if rowid is not None else
+                                       (feather_id, table_name, None, ts, variant_key or '(base)', record))
 
-                        # ENHANCEMENT: Extract identity using core engine with feather metadata
-                        name, path, hash_val, id_type = self.core_engine.extract_identity_info(record, feather_metadata)
+                                # Identity / variant details are only read the first
+                                # time an identity or a variant appears (in feather
+                                # order, then row order) - keep them for those rows
+                                # only, not for millions of repeats.
+                                info = None
+                                if identity_key not in seen_keys or (variant_key and (identity_key, variant_key) not in seen_variants):
+                                    info = (base_name, name, path, hash_val, suffix)
+                                    seen_keys.add(identity_key)
+                                    if variant_key:
+                                        seen_variants.add((identity_key, variant_key))
+                                extracted.append((identity_key, variant_key, bool(suffix or name), info, ref))
+                                stats['identities'].add(identity_key)
+                                stats['extracted'] += 1
+                            else:
+                                # Record reached us, no filter rejected it,
+                                # but no identity could be extracted.
+                                # Account explicitly so the analyst can
+                                # tell apart "filtered" from "no identity".
+                                stats['dropped_no_identity'] += 1
+                                samples = stats['drop_samples']['no_identity']
+                                if len(samples) < 3:
+                                    samples.append(list(record.keys())[:6])
 
-                        if name or path or hash_val:
-                            # ENHANCEMENT: Normalize identity name to get base and suffix
-                            base_name, suffix = self.core_engine.normalize_identity_name(name) if name else (name, "")
-
-                            # Normalize identity key (uses base_name internally)
-                            identity_key = self.core_engine.normalize_identity_key(name, path, hash_val)
-
-                            variant_key = sub_identity_key(name) if name else ""
-
-                            extracted.append((identity_key, base_name, name, path,
-                                              hash_val, suffix, variant_key, record))
-                            stats['identities'].add(identity_key)
-                            stats['extracted'] += 1
-                        else:
-                            # Record reached us, no filter rejected it,
-                            # but no identity could be extracted.
-                            # Account explicitly so the analyst can
-                            # tell apart "filtered" from "no identity".
-                            stats['dropped_no_identity'] += 1
-                            samples = stats['drop_samples']['no_identity']
-                            if len(samples) < 3:
-                                samples.append(list(record.keys())[:6])
-
+                except OperationCancelledException:
+                    raise
                 except Exception as e:
                     stats['dropped_read_error'] += 1
                     samples = stats['drop_samples']['read_error']
@@ -1078,11 +1242,41 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         if cache is not None and cache_key is not None:
             try:
                 cache.note_load()
-                cache.put(cache_key, (extracted, stats))
+                # ~200 bytes a reference (tuple + rowid + timestamp string);
+                # the shared strings are interned. Sized here: walking 3.8M
+                # rows to measure them cost as much as reading them.
+                cache.put(cache_key, (extracted, stats), size_bytes=len(extracted) * 200)
             except Exception as e:
                 logger.warning(f"[Identity Engine] Could not cache {feather_id}: {e}")
 
-        return self._copy_extracted(extracted), self._copy_stats(stats)
+        return extracted, self._copy_stats(stats)
+
+    def _loading_progress(self, feather_id, done, total):
+        """'Loading feather X: n / N rows' - every 2 s while a feather reads."""
+        import time as _time
+        now = _time.monotonic()
+        if done < total and now - getattr(self, '_last_load_progress', 0.0) < 2.0:
+            return
+        self._last_load_progress = now
+        self._emit_phase_progress(f"Loading {feather_id}", done, total, unit="rows")
+
+    def _emit_phase_progress(self, label, done, total, unit="items"):
+        """A phase the analyst can see: the log line (print reaches the
+        Execution log) and an event the progress bar and status line read."""
+        pct = (done / total * 100.0) if total else 0.0
+        print(f"[Identity Engine] {label}: {done:,}/{total:,} {unit} ({pct:.0f}%)")
+        try:
+            event = ProgressEvent(
+                event_type=ProgressEventType.WINDOW_PROGRESS,
+                timestamp=datetime.now(),
+                overall_progress=self.progress_tracker._create_overall_progress(),
+                message=label,
+                additional_data={'phase_progress': {
+                    'label': label, 'done': int(done), 'total': int(total), 'unit': unit}},
+            )
+            self.progress_tracker._emit_event(event)
+        except Exception as e:
+            logger.debug(f"[Identity Engine] phase progress not emitted: {e}")
 
     @staticmethod
     def _copy_extracted(extracted):
@@ -1204,6 +1398,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Track per-feather extraction statistics
         feather_stats = {} # feather_id -> {total, extracted, identities}
         identity_feathers = {} # identity_key -> set of feather_ids
+        variant_index = {} # (identity_key, variant_key) -> sub-identity dict
         
         feather_count = 0
         for feather_id, db_path in feather_paths.items():
@@ -1219,11 +1414,13 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
 
                 feather_records = 0
 
-                for (identity_key, base_name, name, path, hash_val,
-                     suffix, record_variant_key, record) in extracted:
+                for (identity_key, record_variant_key, has_name, info, ref) in extracted:
 
                     if identity_key not in identity_index:
-                        # Create new identity entry with sub-identity tracking
+                        # Create new identity entry with sub-identity tracking.
+                        # The first row of an identity in a feather always
+                        # carries its details (info).
+                        base_name, name, path, hash_val, suffix = info
                         identity_index[identity_key] = {
                             'base_name': base_name, # Base name without suffix
                             'name': name, # Original full name
@@ -1241,55 +1438,31 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     # as separate variants instead of collapsing
                     # to one entry. Single source of truth lives
                     # in identity_grouping.sub_identity_key - both
-                    # engines and both viewers agree.
-                    if suffix or name:
-                        variant_key = record_variant_key
-                        if variant_key:
-                            sub_match = None
-                            for sub in identity_index[identity_key]['sub_identities']:
-                                if sub.get('variant_key') == variant_key:
-                                    sub_match = sub
-                                    break
-                            if sub_match is None:
-                                # New variant just landed on this
-                                # identity. If it isn't the FIRST
-                                # variant, surface a one-shot debug
-                                # log so the analyst can see that
-                                # the canonical identity_key is
-                                # bundling multiple variants -
-                                # they may want them split.
-                                existing_variants = [
-                                    s.get('variant_key')
-                                    for s in identity_index[identity_key]['sub_identities']
-                                ]
-                                if existing_variants and self.debug_mode:
-                                    logger.debug(
-                                        f"[Identity Engine] identity_key={identity_key!r} "
-                                        f"now bundles sub-variants "
-                                        f"{set(existing_variants) | {variant_key}} - "
-                                        f"review if they should be separate identities"
-                                    )
-                                sub_match = {
-                                    'full_name': name,
-                                    'suffix': suffix,
-                                    'variant_key': variant_key,
-                                    'record_count': 0,
-                                }
-                                identity_index[identity_key]['sub_identities'].append(sub_match)
-                            sub_match['record_count'] += 1
+                    # engines and both viewers agree. A dict finds the
+                    # variant (it was a scan of every variant per row).
+                    if has_name and record_variant_key:
+                        vkey = (identity_key, record_variant_key)
+                        sub_match = variant_index.get(vkey)
+                        if sub_match is None:
+                            if identity_index[identity_key]['sub_identities'] and self.debug_mode:
+                                logger.debug(
+                                    f"[Identity Engine] identity_key={identity_key!r} "
+                                    f"now bundles another sub-variant {record_variant_key!r} - "
+                                    f"review if they should be separate identities"
+                                )
+                            sub_match = {
+                                'full_name': info[1],
+                                'suffix': info[4],
+                                'variant_key': record_variant_key,
+                                'record_count': 0,
+                            }
+                            identity_index[identity_key]['sub_identities'].append(sub_match)
+                            variant_index[vkey] = sub_match
+                        sub_match['record_count'] += 1
 
-                    # Tag each record with its sub-variant key so
-                    # the GUI / downstream consumers can group
-                    # records by variant within a single match
-                    # (e.g., "5 records from chrome v1, 3 from
-                    # chrome v2" inside one chrome match). The
-                    # sub_identities array carries the variant
-                    # counts; this tag carries the per-record
-                    # attribution.
-                    if '_sub_variant_key' not in record:
-                        record['_sub_variant_key'] = record_variant_key or '(base)'
-
-                    identity_index[identity_key]['records'].append(record)
+                    # The record's sub-variant tag travels in its reference
+                    # and is put on the record when the match is built.
+                    identity_index[identity_key]['records'].append(ref)
                     identity_feathers[identity_key].add(feather_id)
                     feather_records += 1
                     total_records += 1
@@ -1331,6 +1504,10 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     if self.verbose_logging:
                         logger.info(f" Loaded {feather_records} records from {feather_id}")
 
+            except OperationCancelledException:
+                if streaming_writer:
+                    streaming_writer.close()
+                raise
             except Exception as e:
                 # Requirement 5.5: Log errors processing feather
                 logger.info(f"[Identity Engine] Error processing {feather_id}: {e}")
@@ -1459,6 +1636,10 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         
         processed_count = 0
         cancellation_check_interval = 15000 if total_identities > 100000 else 10000 # Less frequent checks for large datasets
+        # Full rows are read back by rowid only when a match is built.
+        self._row_fetcher = _RowFetcher(feather_paths)
+        import time as _time
+        last_phase_emit = 0.0
         
         for identity_key, identity_data in identity_index.items():
             # Check for cancellation less frequently for better performance
@@ -1495,6 +1676,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                         streaming_writer.close()
                         logger.info(f"[Identity Engine] [OK] Partial results saved - can resume later")
                     
+                    self._row_fetcher.close()
                     # Return partial results for immediate display
                     return matches, processed_count, feather_stats
             
@@ -1510,9 +1692,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     )
             
             records = identity_data['records']
-            
+
             # Get unique feathers for this identity
-            feather_ids = list(set(r.get('_feather_id', '') for r in records))
+            feather_ids = list(set(r[0] for r in records))
             
             # Count by category
             if len(records) == 1:
@@ -1565,6 +1747,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             # Requirements: 4.2, 4.3, 4.4
             processed_count += 1
             progress_reporter.update(items_processed=1)
+            now = _time.monotonic()
+            if now - last_phase_emit >= 1.0 or processed_count == total_identities:
+                last_phase_emit = now
+                self._emit_phase_progress("Correlating identities", processed_count,
+                                          total_identities, unit="identities")
             
             # Task 9.2: Update stall monitor periodically (every 10000 identities for performance)
             # Requirements: 5.2, 5.4
@@ -1578,6 +1765,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Task 8.2: Report final progress (100%)
         # Requirements: 4.1, 4.5
         progress_reporter.force_report()
+        self._row_fetcher.close()
         
         # Flush any remaining matches in streaming mode
         if streaming_enabled and streaming_writer:
@@ -1671,28 +1859,18 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         except ImportError:
             has_dateutil = False
         
-        # Step 1: Extract timestamps and sort records
+        # Step 1: Extract timestamps and sort records. A reference carries
+        # its first timestamp (read when the feather streamed).
         records_with_timestamps = []
         records_without_timestamps = []
-        
+
         for record in records:
-            timestamp = None
-            for ts_field in self.core_engine.timestamp_field_patterns:
-                if ts_field in record and record[ts_field]:
-                    try:
-                        # Try to parse timestamp
-                        ts_str = str(record[ts_field])
-                        # Store both string and parsed datetime
-                        timestamp = ts_str
-                        break
-                    except Exception as e:
-                        pass
-            
+            timestamp = record[3]
             if timestamp:
                 records_with_timestamps.append((timestamp, record))
             else:
                 records_without_timestamps.append(record)
-        
+
         # Sort records by timestamp
         records_with_timestamps.sort(key=lambda x: x[0])
         
@@ -1701,13 +1879,31 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         current_anchor_records = []
         current_anchor_start = None
         current_anchor_end = None
-        
+        # The anchor end parsed once and carried forward (each record's time
+        # was parsed twice before: its own and the anchor end's again).
+        dt_anchor_end = None
+        dt_anchor_end_ok = False
+
         for timestamp, record in records_with_timestamps:
+            dt_current = None
+            dt_current_ok = False
+            if has_dateutil:
+                try:
+                    # ISO strings (what the feathers store) parse natively;
+                    # dateutil only for anything else - same datetime either way.
+                    try:
+                        dt_current = datetime.fromisoformat(timestamp)
+                    except ValueError:
+                        dt_current = date_parser.parse(timestamp)
+                    dt_current_ok = True
+                except Exception:
+                    dt_current_ok = False
             if not current_anchor_records:
                 # Start first anchor
                 current_anchor_records = [record]
                 current_anchor_start = timestamp
                 current_anchor_end = timestamp
+                dt_anchor_end, dt_anchor_end_ok = dt_current, dt_current_ok
             else:
                 # Check if record is within time window of current anchor
                 # Parse timestamps and calculate time difference
@@ -1715,12 +1911,12 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 if has_dateutil:
                     try:
-                        dt_current = date_parser.parse(timestamp)
-                        dt_anchor_end = date_parser.parse(current_anchor_end)
-                        
+                        if not (dt_current_ok and dt_anchor_end_ok):
+                            raise ValueError("unparsable timestamp")
+
                         # Calculate time difference in minutes
                         time_diff = (dt_current - dt_anchor_end).total_seconds() / 60
-                        
+
                         # If time difference exceeds window, create new anchor
                         if abs(time_diff) > time_window_minutes:
                             should_create_new_anchor = True
@@ -1752,10 +1948,12 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                     current_anchor_records = [record]
                     current_anchor_start = timestamp
                     current_anchor_end = timestamp
+                    dt_anchor_end, dt_anchor_end_ok = dt_current, dt_current_ok
                 else:
                     # Add to current anchor
                     current_anchor_records.append(record)
                     current_anchor_end = timestamp
+                    dt_anchor_end, dt_anchor_end_ok = dt_current, dt_current_ok
         
         # Add last anchor
         if current_anchor_records:
@@ -1803,7 +2001,15 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         """
         if not records:
             return None
-        
+        # References -> the full records, read back by rowid
+        if isinstance(records[0], tuple):
+            fetcher = getattr(self, '_row_fetcher', None)
+            if fetcher is None:
+                fetcher = self._row_fetcher = _RowFetcher(feather_paths)
+            records = fetcher.records(records)
+            if not records:
+                return None
+
         # PERFORMANCE OPTIMIZED: Use simplified hash-based deduplication
         # Deduplicate records using a fast hash set for O(N) performance
         feather_records_dict = {}
@@ -1855,7 +2061,12 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             if self.debug_mode and record_idx < 3:
                 logger.info(f"[Identity Engine] HASH: Record {record_idx} - ts='{ts}', name='{name[:30]}...', path='{path[:30]}...', fid='{fid}'")
             
-            record_hash = hash((ts, name, path, fid))
+            # A duplicate is an identical ROW, not "same time + name + path":
+            # MFT rows have no name / path keys, so every MFT record of an
+            # identity sharing its first timestamp collapsed into one and the
+            # rest of that evidence was dropped.
+            record_hash = hash((fid, tuple(v for k, v in record.items()
+                                           if k not in _INTERNAL_KEYS)))
             
             if self.debug_mode and record_idx < 3:
                 logger.info(f"[Identity Engine] HASH: Record {record_idx} hash = {record_hash}")
@@ -1903,8 +2114,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             flattened_feather_records[fid] = record_list if record_list else []
             
             # Log record inclusion for verification
-            if record_list:
-                logger.info(f"[Identity Engine] Included {len(record_list)} records for feather_id={fid}")
+            if record_list and self.debug_mode:
+                logger.debug(f"[Identity Engine] Included {len(record_list)} records for feather_id={fid}")
         
         if self.debug_mode:
             logger.info(f"[Identity Engine] MATCH: Flattened to {len(flattened_feather_records)} feather records")
@@ -3073,7 +3284,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             # Create Identity Semantic Controller
             controller = IdentitySemanticController(
                 config=phase_config,
-                semantic_integration=self.semantic_integration
+                semantic_integration=self.semantic_integration,
+                # Stop reaches the phase (it checks between candidate chunks).
+                cancel_check=self.is_cancelled
             )
             
             # Execute final analysis phase
@@ -3375,8 +3588,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         """
         self.progress_tracker.remove_listener(listener)
     
-    def request_cancellation(self):
-        """Request cancellation of the current correlation operation"""
+    def request_cancellation(self, reason=None):
+        """Request cancellation of the current correlation operation.
+
+        PipelineExecutor calls this with a reason; without the parameter that
+        call raised TypeError and the engine never heard the Cancel."""
         self.progress_tracker.request_cancellation()
     
     def is_cancelled(self) -> bool:

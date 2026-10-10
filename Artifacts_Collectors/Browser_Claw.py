@@ -47,6 +47,7 @@ import re
 import shutil
 import sqlite3
 import struct
+import sys
 import tempfile
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
@@ -173,6 +174,23 @@ GECKO_VENDORS = [
 ]
 
 
+def _native(rel):
+    """A table path in this OS's separators.
+
+    The tables are written the way Windows shows them. On Linux - parsing a
+    collected tree or an image's extracted files - os.path.join kept
+    "Mozilla\\Firefox" as ONE folder name that never exists, so no Firefox
+    profile was ever found there, and named Chromium vendors only turned up
+    through the glob fallback, under the wrong label.
+    """
+    return os.path.join(*rel.split("\\"))
+
+
+CHROMIUM_VENDORS = [(b, base, _native(rel)) for b, base, rel in CHROMIUM_VENDORS]
+ELECTRON_APPS = [(app, _native(rel)) for app, rel in ELECTRON_APPS]
+GECKO_VENDORS = [(b, _native(rel)) for b, rel in GECKO_VENDORS]
+
+
 @dataclass
 class ProfileSource:
     """One browser profile to parse.
@@ -271,12 +289,17 @@ def _chromium_profiles_in(user_data_dir: str, browser: str, user_name: str,
     return out
 
 
-def _gecko_profile_dirs(vendor_root: str):
+def _gecko_profile_dirs(vendor_root: str, remap_abs=None):
     """Yield (profile_name, profile_dir) for a Gecko vendor root.
 
     Reads `profiles.ini` so profiles that live OUTSIDE the default `Profiles\\`
     directory (a `Path=` with `IsRelative=0`) are found, then falls back to a
     plain glob of `Profiles\\*`.
+
+    ``remap_abs`` is for offline / image trees: an absolute ``Path=`` names a
+    folder on the EVIDENCE machine (``C:\\Users\\Ann\\...``), and reading it as
+    written would open the analyst's own disk. The callable maps it onto the
+    collected tree, or returns None to drop it.
     """
     seen = set()
     ini = os.path.join(vendor_root, "profiles.ini")
@@ -292,7 +315,14 @@ def _gecko_profile_dirs(vendor_root: str):
                 if not path:
                     continue
                 is_rel = cp.get(section, "IsRelative", fallback="1").strip() == "1"
-                prof_dir = os.path.join(vendor_root, path.replace("/", "\\")) if is_rel else path
+                if is_rel:
+                    prof_dir = os.path.join(vendor_root, path.replace("/", "\\"))
+                elif remap_abs is not None:
+                    prof_dir = remap_abs(path)
+                    if not prof_dir:
+                        continue
+                else:
+                    prof_dir = path
                 if os.path.isdir(prof_dir):
                     key = os.path.normcase(prof_dir)
                     if key not in seen:
@@ -316,17 +346,93 @@ def discover_live_profiles() -> List[ProfileSource]:
     Chromium install, so CEF / Copilot / EdgeWebView and future vendors are
     caught without being named.
     """
+    roots = [(name, path, _sid_for_path(path)) for name, path in _live_user_roots()]
+    return discover_profiles(roots)
+
+
+# Folders under a Users directory that are not people.
+_NON_USER_DIRS = {"public", "default", "default user", "all users", "defaultapppool"}
+
+
+def offline_user_roots(users_dir: str) -> List[Tuple[str, str]]:
+    """[(user_name, profile_folder)] for a COLLECTED ``Users`` directory.
+
+    The user name is the folder name and nothing else - the same strict rule
+    ``user_identity.identify_ntuser_hive`` uses. Nothing here consults this
+    machine: an offline tree is somebody else's computer.
+    """
+    out: List[Tuple[str, str]] = []
+    try:
+        for entry in sorted(os.listdir(users_dir)):
+            full = os.path.join(users_dir, entry)
+            if os.path.isdir(full) and entry.lower() not in _NON_USER_DIRS:
+                out.append((entry, full))
+    except OSError as exc:
+        logger.debug("Users dir enumeration failed for %s: %s", users_dir, exc)
+    return out
+
+
+def _evidence_path_remapper(users_dir: str):
+    """Map an absolute evidence path (``C:\\Users\\Ann\\...``) onto a collected
+    ``users_dir``; None when the path is not under a Users folder."""
+    def remap(path: str) -> Optional[str]:
+        norm = path.replace("/", "\\")
+        low = norm.lower()
+        idx = low.find("\\users\\")
+        if idx < 0:
+            return None
+        # The ini is evidence: a "..\.." in it must not walk the parse out of
+        # the collected tree and onto the analyst's own disk.
+        base = os.path.normpath(users_dir)
+        target = os.path.normpath(os.path.join(base, norm[idx + len("\\users\\"):]))
+        if not os.path.normcase(target).startswith(os.path.normcase(base) + os.sep):
+            return None
+        return target
+    return remap
+
+
+def discover_offline_profiles(users_dirs, sid_map=None) -> List[ProfileSource]:
+    """Find every browser profile in one or more COLLECTED ``Users`` trees.
+
+    ``users_dirs``: paths of collected ``Users`` folders (from an image or a
+    collected folder - the layout below them is the Windows one).
+    ``sid_map``: optional ``{profile folder name (lower-case): SID}`` built
+    from the evidence's own SOFTWARE hive. Absent a mapping the SID stays
+    empty; it is never looked up on the analyst's machine.
+    """
+    sid_map = {k.lower(): v for k, v in (sid_map or {}).items()}
+    roots = []
+    remaps = {}
+    for users_dir in users_dirs:
+        for name, path in offline_user_roots(users_dir):
+            roots.append((name, path, sid_map.get(name.lower(), "")))
+            remaps[os.path.normcase(path)] = _evidence_path_remapper(users_dir)
+    return discover_profiles(roots, remaps=remaps)
+
+
+def discover_profiles(user_roots, remaps=None) -> List[ProfileSource]:
+    """Walk ``[(user_name, user_folder, sid)]`` for browser profiles.
+
+    The one discovery used by the live parse and by offline / image trees:
+    everything below a user folder is relative, so the same walk serves both.
+    ``remaps`` maps a user folder to the callable that turns an absolute
+    evidence path (Firefox ``profiles.ini`` ``IsRelative=0``) into the
+    collected tree; live users have none and use the path as written.
+    """
     sources: List[ProfileSource] = []
     seen_roots = set()
+    remaps = remaps or {}
 
     def _add(ps: ProfileSource):
-        key = os.path.normcase(ps.root_dir)
+        # By REAL path: Local\Application Data is a junction back to Local, and
+        # a glob through it found the same profile a second time.
+        key = os.path.normcase(os.path.realpath(ps.root_dir))
         if key not in seen_roots:
             seen_roots.add(key)
             sources.append(ps)
 
-    for user_name, user_path in _live_user_roots():
-        sid = _sid_for_path(user_path)
+    for user_name, user_path, sid in user_roots:
+        remap_abs = remaps.get(os.path.normcase(user_path))
         appdata = {
             "Local": os.path.join(user_path, "AppData", "Local"),
             "Roaming": os.path.join(user_path, "AppData", "Roaming"),
@@ -340,16 +446,22 @@ def discover_live_profiles() -> List[ProfileSource]:
                     _add(ps)
 
         # 2) Glob fallback: any User Data\<profile>\History anywhere under
-        #    AppData\Local (depth-limited) that we did not already label.
+        #    AppData\Local, zero to two vendor folders deep (Google\Chrome,
+        #    CEF, or a loose tree with none), that we did not already label.
         local_root = appdata["Local"]
         try:
-            for hist in glob.glob(os.path.join(local_root, "*", "*", "User Data", "*", "History")):
+            hists = []
+            for depth in ((), ("*",), ("*", "*")):
+                hists += glob.glob(os.path.join(local_root, *depth, "User Data", "*", "History"))
+            for hist in hists:
                 prof_dir = os.path.dirname(hist)
-                if os.path.normcase(prof_dir) in seen_roots:
+                if os.path.normcase(os.path.realpath(prof_dir)) in seen_roots:
                     continue
                 user_data = os.path.dirname(prof_dir)
-                # Label from the vendor folder two levels up.
+                # Label from the vendor folder above User Data.
                 vendor_folder = os.path.basename(os.path.dirname(user_data))
+                if vendor_folder.lower() == "local":
+                    vendor_folder = "Chromium"
                 for ps in _chromium_profiles_in(user_data, vendor_folder, user_name, sid):
                     _add(ps)
         except Exception as exc:
@@ -362,7 +474,7 @@ def discover_live_profiles() -> List[ProfileSource]:
             if not os.path.isdir(vendor_root):
                 continue
             cache_vendor_root = os.path.join(local_root, rel)
-            for name, prof_dir in _gecko_profile_dirs(vendor_root):
+            for name, prof_dir in _gecko_profile_dirs(vendor_root, remap_abs):
                 cache_dir = os.path.join(cache_vendor_root, "Profiles", name, "cache2")
                 _add(ProfileSource(
                     browser=browser, vendor="gecko", user_name=user_name,
@@ -610,11 +722,49 @@ TABLE_SCHEMAS: Dict[str, str] = {
 }
 
 
+# The columns that tell a row apart, per table with no UNIQUE key (behind
+# source_path). The identity a re-parse checks is still every column but
+# parsed_at; this index is what makes that lookup a seek instead of a scan.
+_IDENTITY_INDEX = {
+    "browser_sessions": ["session_file", "window_index", "tab_index", "url"],
+    "browser_local_storage": ["origin", "key", "seq"],
+    "browser_indexeddb": ["origin", "database_name", "object_store", "key"],
+    "browser_service_worker": ["resource_url", "response_time"],
+    "browser_cache": ["url", "response_time"],
+    "browser_push": ["app_id", "origin"],
+    "browser_media_router": ["device_name", "last_seen"],
+    "browser_extension_storage": ["extension_id", "key", "seq"],
+    "browser_network_state": ["host_or_key", "source"],
+    "browser_dips": ["site"],
+    "browser_gecko_localstorage": ["origin", "key"],
+    "browser_gecko_sessions": ["window_index", "tab_index", "url"],
+}
+
+
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create every output table if it does not already exist."""
+    """Create every output table if it does not already exist.
+
+    Also two kinds of index: on a table with no UNIQUE key, the identity a
+    re-parse checks (source_path + the first data column); and on every table,
+    its first time column - the browser dashboard and the timeline read by
+    time, and the database had no secondary index at all.
+    """
     cur = conn.cursor()
     for name, cols in TABLE_SCHEMAS.items():
         cur.execute(f"CREATE TABLE IF NOT EXISTS {name} ({cols})")
+        names = [c[1] for c in cur.execute(f"PRAGMA table_info({name})")]
+        upper = cols.upper()
+        if "UNIQUE" not in upper and "PRIMARY KEY" not in upper and "source_path" in names:
+            data = [c for c in names if c not in _PROV_COLS]
+            ident = [c for c in _IDENTITY_INDEX.get(name, data[:1]) if c in names] or data[:1]
+            # A new name: cases parsed before keep their old, two-column
+            # index (harmless); the planner takes the more selective one.
+            ensure_identity_index(conn, name, ["source_path"] + ident,
+                                  name="idx_%s_identity_v2" % name)
+        when = next((c for c in names if c.endswith("_time") or c.startswith("date_")
+                     or c in ("timestamp", "last_visit_time")), None)
+        if when:
+            cur.execute(f'CREATE INDEX IF NOT EXISTS "idx_{name}_{when}" ON {name} ("{when}")')
     conn.commit()
 
 
@@ -623,6 +773,63 @@ def create_schema(conn: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 _SQLITE_SIDECARS = ("-wal", "-journal", "-shm")
+
+
+# Databases that could not be copied in this parse (locked by a running
+# browser) - reported as warnings, so a profile read only in part does not
+# show as plainly "Parsed". Reset by parse_browser_data.
+_UNREAD: List[str] = []
+_ACCESSOR = {"obj": None}
+
+
+def _copy_locked(src: str, dst: str) -> bool:
+    """Copy a file the browser holds open, the way the rest of Crow-Eye does.
+
+    FileAccessor (StandardCopy -> VSS -> RawDisk, with retry) - the chain the
+    image collector and SRUM use - then the raw backup-semantics copy. The
+    raw fallback alone could not open a Cookies file a running browser locks
+    ("Raw disk access method not yet fully implemented"), and the profile's
+    cookies were simply missing from the case.
+    """
+    try:
+        if _ACCESSOR["obj"] is None:
+            from Artifacts_Collectors.crow_claw.core.file_accessor import FileAccessor
+            import ctypes as _ct
+            try:
+                admin = bool(_ct.windll.shell32.IsUserAnAdmin())
+            except Exception:
+                admin = False
+            acc = FileAccessor(is_admin=admin)
+            try:
+                from Artifacts_Collectors.SRUM_Claw import _parser_allows_snapshot_creation
+                if not _parser_allows_snapshot_creation():
+                    for strategy in getattr(acc, "strategies", []):
+                        if type(strategy).__name__ == "VSSAccessStrategy":
+                            strategy.allow_snapshot_creation = False
+            except Exception:
+                pass
+            _ACCESSOR["obj"] = acc
+        result = _ACCESSOR["obj"].access_file_with_retry(src, dst, "Browser")
+        if getattr(result, "success", False) and os.path.exists(dst):
+            return True
+    except Exception as exc:
+        logger.debug("FileAccessor copy of %s unavailable: %s", src, exc)
+    if copy_locked_file_raw is not None:
+        try:
+            return bool(copy_locked_file_raw(src, dst)) and os.path.exists(dst)
+        except Exception as exc:
+            logger.debug("Raw copy of %s failed: %s", src, exc)
+    return False
+
+
+def _custody_before(src):
+    """(open custody record or None, the source's times read before the copy)."""
+    try:
+        from utils import custody
+        rec = custody.active()
+        return (rec, custody.file_times(src)) if rec is not None else (None, None)
+    except Exception:
+        return None, None
 
 
 def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
@@ -634,20 +841,35 @@ def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
     """
     if not os.path.isfile(src):
         return None
-    dst = os.path.join(tmp_dir, os.path.basename(src))
+    # One private folder per copy. A shared folder keyed on the basename let a
+    # leftover "data.sqlite-wal" from one origin / profile sit beside the next
+    # copy of the same-named DB, and SQLite would apply the wrong WAL to it.
+    dst_dir = tempfile.mkdtemp(prefix="db_", dir=tmp_dir)
+    dst = os.path.join(dst_dir, os.path.basename(src))
     copied = False
+    method = "copy"
+    rec, times = _custody_before(src)
     try:
         shutil.copy2(src, dst)
         copied = True
     except (PermissionError, OSError) as exc:
-        logger.debug("Plain copy of %s failed (%s); trying raw copy", src, exc)
-        if copy_locked_file_raw is not None:
-            try:
-                copied = bool(copy_locked_file_raw(src, dst))
-            except Exception as raw_exc:
-                logger.debug("Raw copy of %s failed: %s", src, raw_exc)
+        logger.debug("Plain copy of %s failed (%s); trying the locked-file chain", src, exc)
+        copied = _copy_locked(src, dst)
+        method = "locked-file copy (FileAccessor / backup semantics)"
     if not copied:
+        _UNREAD.append(src)
+        if rec is not None:
+            rec.add_failure(src, "browser database could not be copied (locked by the browser)",
+                            method="copy")
         return None
+    if rec is not None:
+        try:
+            # Source and copy hashed; a browser that is running can change the
+            # file between the two reads, which the entry then says.
+            rec.add_source(src, copy=dst, method=method, times=times,
+                           note="temporary working copy, parsed read-only")
+        except Exception:
+            pass
     # Bring the sidecars along so WAL/rollback content is visible.
     for suffix in _SQLITE_SIDECARS:
         side = src + suffix
@@ -664,15 +886,25 @@ def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
 
 
 def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
-    """Open a copied SQLite DB read-only. Returns None if it will not open."""
-    try:
-        uri = "file:" + db_path.replace("?", "%3f").replace("#", "%23") + "?mode=ro&immutable=1"
-        conn = sqlite3.connect(uri, uri=True, timeout=5)
-        conn.row_factory = sqlite3.Row
-        return conn
-    except sqlite3.Error as exc:
-        logger.debug("Could not open %s read-only: %s", db_path, exc)
-        return None
+    """Open a copied SQLite DB read-only. Returns None if it will not open.
+
+    ``db_path`` is always our private copy, never the evidence. It is opened
+    with plain ``mode=ro`` so SQLite applies the copied ``-wal``: with
+    ``immutable=1`` it ignores the WAL, and rows the browser had committed but
+    not yet checkpointed silently vanished (measured: 1 of 2 rows read).
+    ``immutable=1`` is kept only as the fallback for a copy SQLite refuses to
+    open normally.
+    """
+    base = "file:" + db_path.replace("?", "%3f").replace("#", "%23")
+    for query in ("?mode=ro", "?mode=ro&immutable=1"):
+        try:
+            conn = sqlite3.connect(base + query, uri=True, timeout=5)
+            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
+            conn.row_factory = sqlite3.Row
+            return conn
+        except sqlite3.Error as exc:
+            logger.debug("Could not open %s (%s): %s", db_path, query, exc)
+    return None
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
@@ -721,6 +953,18 @@ def _fmt_unix(value) -> str:
         return ""
 
 
+def _fmt_keyword_created(value) -> str:
+    """keywords.date_created: WebKit microseconds (17 digits) in current
+    Chromium, Unix seconds in old builds."""
+    try:
+        n = int(value or 0)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    return _fmt_webkit(n) if n > 10 ** 13 else _fmt_unix(n)
+
+
 def _fmt_unix_scaled(value) -> str:
     """Unix time that may be seconds, milliseconds or microseconds.
 
@@ -758,20 +1002,224 @@ def _transition_text(raw) -> str:
 
 
 class _Writer:
-    """Batched INSERT OR IGNORE helper against the output DB."""
+    """Batched writer against the output DB: only rows not stored yet.
+
+    A table with a UNIQUE key uses INSERT OR IGNORE; the twelve without one
+    (sessions, local storage, IndexedDB, caches ...) go through
+    utils.dedupe_insert.insert_new with every column but parsed_at as the
+    identity. Before, a re-parse DELETED each profile's earlier rows to avoid
+    duplicates - and history or cookies that had since aged out of the live
+    browser were lost from the case with them.
+
+    ``stats`` counts rows READ per table (it used to count every row as
+    written when SQLite reported no rowcount); ``tally`` has what was new and
+    what was already present.
+    """
 
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
         self.stats: Dict[str, int] = {}
+        self.tally = Tally()
+        self._unique: Dict[str, bool] = {}
+        self._keys: Dict[str, List[str]] = {}
+        # Was the table empty when this run first wrote to it? Then nothing in
+        # it can repeat a stored row, and the per-row check is skipped.
+        self._empty_at_start: Dict[str, bool] = {}
+        # Rows already in the case whose values changed since (a visit count,
+        # a last-access time, an extension's version): updated in place.
+        self.updated: Dict[str, int] = {}
+        # Per table, for this run: the path column's stored values by
+        # normcase, and the Crow-Claw copy roots among them (see
+        # _drop_stored_under_other_path).
+        self._stored_paths: Dict[str, Dict[str, str]] = {}
+        self._copy_roots: Dict[str, Dict[str, Tuple[str, str]]] = {}
+        self._origin: Dict[str, Optional[Tuple[str, str]]] = {}
+
+    def _origin_of(self, path) -> Optional[Tuple[str, str]]:
+        if not isinstance(path, str):
+            return None
+        if path not in self._origin:
+            self._origin[path] = collected_copy_origin(path)
+        return self._origin[path]
+
+    def _load_stored_paths(self, table: str, col: str) -> None:
+        """Every distinct stored path of the table (once per run), and the
+        Crow-Claw copy roots among them."""
+        stored, roots = {}, {}
+        try:
+            for (p,) in self.conn.execute(f"SELECT DISTINCT {col} FROM {table}"):
+                if not isinstance(p, str):
+                    continue
+                stored[os.path.normcase(p)] = p
+                origin = self._origin_of(p)
+                if origin:
+                    roots[os.path.normcase(origin[0])] = origin
+        except sqlite3.Error:
+            pass
+        self._stored_paths[table] = stored
+        self._copy_roots[table] = roots
+
+    def _has_copy_rows(self, table: str, col: str) -> bool:
+        try:
+            return self.conn.execute(
+                f"SELECT 1 FROM {table} WHERE {col} LIKE ? LIMIT 1",
+                ("%\\" + BROWSER_CASE_DIR + "\\" + LIVE_SOURCE_TAG + "\\Users\\%",)
+            ).fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    def _drop_stored_under_other_path(self, table: str, columns: List[str],
+                                      rows: List[tuple]) -> List[tuple]:
+        """The rows not already stored under the other spelling of their file.
+
+        Crow-Claw copies a live profile to <case>\\live_acquisition\\Browser\\
+        live\\Users\\...; parsing the live profile and then that copy (or the
+        other way round) read the same evidence twice, and because the identity
+        includes the path every row of the copy looked new - case 7.10.2026
+        held ~113k Brave rows twice (all of its downloads, autofill and
+        credentials). A row is already present when the same row, with every
+        path below the copy root moved to the original volume (or back), is
+        stored: every column but parsed_at, provenance (user, SID) included,
+        so another machine's profile never matches. The row keeps its own
+        path when it IS new - the copy's path stays the evidence it came from.
+        """
+        col = "original_path" if table == "browser_files" else "source_path"
+        if col not in columns:
+            return rows
+        pi = columns.index(col)
+        batch_is_copy = any(self._origin_of(r[pi]) for r in rows)
+        if table not in self._stored_paths:
+            if not batch_is_copy and not self._has_copy_rows(table, col):
+                self._stored_paths[table], self._copy_roots[table] = {}, {}
+            else:
+                self._load_stored_paths(table, col)
+        stored = self._stored_paths[table]
+        if not stored:
+            return rows
+        idx = [i for i, c in enumerate(columns) if c != "parsed_at"]
+        sql = "SELECT 1 FROM %s WHERE %s LIMIT 1" % (
+            table, " AND ".join("%s IS ?" % columns[i] for i in idx))
+        keep = []
+        for row in rows:
+            path = row[pi]
+            moves = []
+            origin = self._origin_of(path)
+            if origin:
+                moves.append((origin[0], origin[1]))
+            elif isinstance(path, str):
+                for copy_root, original_root in self._copy_roots[table].values():
+                    if rebase_path(path, original_root, copy_root):
+                        moves.append((original_root, copy_root))
+            found = False
+            for src_root, dst_root in moves:
+                other = rebase_path(path, src_root, dst_root)
+                other = stored.get(os.path.normcase(other)) if other else None
+                if not other:
+                    continue
+                moved = []
+                for i in idx:
+                    v = row[i]
+                    if i == pi:
+                        v = other
+                    elif isinstance(v, str):
+                        m = rebase_path(v, src_root, dst_root)
+                        if m:
+                            v = stored.get(os.path.normcase(m), m)
+                    moved.append(v)
+                if self.conn.execute(sql, moved).fetchone():
+                    found = True
+                    break
+            if not found:
+                keep.append(row)
+        dropped = len(rows) - len(keep)
+        if dropped:
+            self.tally.add(table, dropped, 0)
+            self.stats[table] = self.stats.get(table, 0) + dropped
+        return keep
+
+    def _unique_key(self, table: str) -> List[str]:
+        """The columns of the table's UNIQUE(...) constraint, from its schema."""
+        if table not in self._keys:
+            import re as _re
+            m = _re.search(r"UNIQUE\s*\(([^)]*)\)", TABLE_SCHEMAS.get(table, ""), _re.I)
+            self._keys[table] = [c.strip() for c in m.group(1).split(",")] if m else []
+        return self._keys[table]
+
+    def _has_unique_key(self, table: str) -> bool:
+        if table not in self._unique:
+            schema = TABLE_SCHEMAS.get(table, "")
+            self._unique[table] = "UNIQUE" in schema.upper() or "PRIMARY KEY" in schema.upper()
+        return self._unique[table]
 
     def add(self, table: str, columns: List[str], rows: List[tuple]) -> None:
         if not rows:
             return
-        placeholders = ",".join("?" * len(columns))
-        sql = f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
         try:
-            cur = self.conn.executemany(sql, rows)
-            self.stats[table] = self.stats.get(table, 0) + (cur.rowcount if cur.rowcount and cur.rowcount > 0 else len(rows))
+            rows = self._drop_stored_under_other_path(table, columns, rows)
+            if not rows:
+                return
+            key = self._unique_key(table)
+            n_read = len(rows)
+            if key and all(k in columns for k in key):
+                # A NULL in the UNIQUE key never conflicts - SQLite treats every
+                # NULL as distinct - so ON CONFLICT never fired for such a row
+                # and each re-parse stored it again (a saved card with no
+                # name_on_card: browser_payments grew by 3 on every parse).
+                # Those rows are checked NULL-safely (IS) on every column but
+                # parsed_at, as a table without a UNIQUE key is: two cards that
+                # differ only outside the key are both kept, as before.
+                kidx = [columns.index(k) for k in key]
+                with_null = [r for r in rows if any(r[i] is None for i in kidx)]
+                if with_null:
+                    insert_new(self.conn, table, columns, with_null,
+                               [c for c in columns if c != "parsed_at"], self.tally)
+                    rows = [r for r in rows if not any(r[i] is None for i in kidx)]
+            if not rows:
+                pass
+            elif key and all(k in columns for k in key):
+                # Upsert: new keys are inserted; an existing key is updated
+                # only where a value differs (parsed_at follows the change).
+                # INSERT OR IGNORE kept the first parse's values for ever.
+                placeholders = ",".join("?" * len(columns))
+                data_cols = [c for c in columns if c not in key and c != "parsed_at"]
+                set_cols = [c for c in columns if c not in key]
+                sql = f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
+                if set_cols:
+                    sql += (" ON CONFLICT(%s) DO UPDATE SET %s" % (
+                        ",".join(key), ",".join("%s=excluded.%s" % (c, c) for c in set_cols)))
+                    if data_cols:
+                        sql += " WHERE " + " OR ".join(
+                            "%s IS NOT excluded.%s" % (c, c) for c in data_cols)
+                else:
+                    sql += " ON CONFLICT DO NOTHING"
+                top = self.conn.execute(f"SELECT COALESCE(MAX(rowid), 0) FROM {table}").fetchone()[0]
+                before = self.conn.total_changes
+                self.conn.executemany(sql, rows)
+                changes = self.conn.total_changes - before
+                new = self.conn.execute(f"SELECT COUNT(*) FROM {table} WHERE rowid > ?",
+                                        (top,)).fetchone()[0]
+                self.tally.add(table, len(rows), new)
+                if changes > new:
+                    self.updated[table] = self.updated.get(table, 0) + (changes - new)
+            elif self._has_unique_key(table):
+                placeholders = ",".join("?" * len(columns))
+                sql = f"INSERT OR IGNORE INTO {table} ({','.join(columns)}) VALUES ({placeholders})"
+                before = self.conn.total_changes
+                self.conn.executemany(sql, rows)
+                self.tally.add(table, len(rows), self.conn.total_changes - before)
+            else:
+                if table not in self._empty_at_start:
+                    self._empty_at_start[table] = table_is_empty(self.conn, table)
+                if self._empty_at_start[table]:
+                    placeholders = ",".join("?" * len(columns))
+                    before = self.conn.total_changes
+                    self.conn.executemany(
+                        f"INSERT INTO {table} ({','.join(columns)}) VALUES ({placeholders})", rows)
+                    self.tally.add(table, len(rows), self.conn.total_changes - before)
+                else:
+                    insert_new(self.conn, table, columns, rows,
+                               [c for c in columns if c != "parsed_at"], self.tally)
+            self.stats[table] = self.stats.get(table, 0) + n_read
         except sqlite3.Error as exc:
             logger.warning("[Browser] insert into %s failed: %s", table, exc)
 
@@ -781,6 +1229,19 @@ def _prov_tuple(ps: ProfileSource, source_path: str, now: str) -> tuple:
 
 
 _PROV_COLS = ["browser", "vendor", "user_name", "sid", "profile", "source_path", "parsed_at"]
+
+try:
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new, table_is_empty
+except ImportError:                                    # run as a script
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    from utils.dedupe_insert import Tally, ensure_identity_index, insert_new, table_is_empty
+try:
+    from Artifacts_Collectors.browser_paths import (BROWSER_CASE_DIR, LIVE_SOURCE_TAG,
+                                                    collected_copy_origin, original_profile_path,
+                                                    rebase_path)
+except ImportError:                                    # run as a script
+    from browser_paths import (BROWSER_CASE_DIR, LIVE_SOURCE_TAG, collected_copy_origin,
+                               original_profile_path, rebase_path)
 
 
 # ---------------------------------------------------------------------------
@@ -883,11 +1344,16 @@ def _parse_chromium_cookies(ps, writer, now, tmp_dir):
             for r in conn.execute("SELECT * FROM cookies"):
                 blob = r["encrypted_value"] if "encrypted_value" in r.keys() else None
                 enc_b64, scheme = _encode_secret(blob)
+                # Chrome before ~M66 named these secure / httponly / persistent;
+                # reading only the new names failed the whole table on older
+                # images ("No item with that key").
                 rows.append(prov + (
                     r["host_key"], r["name"], r["path"],
                     _fmt_webkit(r["creation_utc"]), _fmt_webkit(r["expires_utc"]),
-                    _fmt_webkit(r["last_access_utc"]), r["is_secure"], r["is_httponly"],
-                    r["is_persistent"] if "is_persistent" in r.keys() else None,
+                    _fmt_webkit(_col(r, "last_access_utc")),
+                    _col(r, "is_secure", _col(r, "secure")),
+                    _col(r, "is_httponly", _col(r, "httponly")),
+                    _col(r, "is_persistent", _col(r, "persistent")),
                     r["samesite"] if has_samesite else None,
                     r["source_scheme"] if has_scheme else None,
                     r["has_expires"] if "has_expires" in r.keys() else None,
@@ -1042,7 +1508,11 @@ def _parse_chromium_webdata(ps, writer, now, tmp_dir):
                 rows.append(prov + (
                     _col(r, "short_name"), _col(r, "keyword"), _col(r, "url"),
                     _col(r, "favicon_url"), _col(r, "suggest_url"),
-                    _fmt_unix(_col(r, "date_created")),
+                    # WebKit time (us since 1601) in current Chromium, like
+                    # last_modified: read as Unix seconds it gave nothing -
+                    # 49 of 49 blank on one machine. Older builds wrote Unix
+                    # seconds, so the scale decides. 0 = a built-in engine.
+                    _fmt_keyword_created(_col(r, "date_created")),
                     # keywords.last_modified is Chrome/WebKit time (us since 1601),
                     # not Unix seconds - _fmt_unix silently yielded nothing.
                     _fmt_webkit(_col(r, "last_modified")),
@@ -1278,6 +1748,10 @@ def _parse_chromium_preferences(ps, writer, now):
     src = os.path.join(ps.root_dir, "Preferences")
     data = _load_json(src)
     if not data:
+        # Present but unreadable (damaged clusters on an image) is not the same
+        # as absent: raise so the profile's warnings say so.
+        if os.path.isfile(src) and os.path.getsize(src) > 0:
+            raise ValueError("Preferences is present but is not valid JSON")
         return
     prov = _prov_tuple(ps, src, now)
     # Anti-forensics + identity + configuration keys worth surfacing.
@@ -1670,10 +2144,41 @@ def _sha1_file(path: str) -> str:
 
 def _extract_dir_for(ps: ProfileSource, extract_root: str, artifact: str) -> str:
     safe = lambda s: "".join(c if c.isalnum() or c in "-._" else "_" for c in (s or "x"))
+    # Keyed on the profile's folder too: two sources in one case can both
+    # hold Chrome\bob\Default, and their f_000001 bodies would overwrite.
+    # Crow-Claw's copy of a live profile is keyed on the folder it was copied
+    # from, so its payloads land beside the live parse's: the same body is
+    # reused rather than extracted twice, and its rows name the same file.
+    root = original_profile_path(ps.root_dir or "")
+    tag = hashlib.sha1(os.path.normcase(os.path.normpath(root))
+                       .encode("utf-8", "replace")).hexdigest()[:8]
     path = os.path.join(extract_root, safe(ps.browser), safe(ps.user_name),
-                        safe(ps.profile), artifact)
+                        safe(ps.profile) + "_" + tag, artifact)
     os.makedirs(path, exist_ok=True)
     return path
+
+
+def _versioned_dest(dest: str, new_sha1: str) -> str:
+    """Where a payload goes without overwriting a different one.
+
+    Chrome recycles cache file names (f_00000a), so a re-parse used to copy a
+    new body over the file an earlier browser_cache / browser_files row still
+    described. A destination holding the same bytes is reused (no copy); one
+    holding different bytes gets this body's SHA-1 in its name."""
+    if not os.path.exists(dest) or not new_sha1:
+        return dest
+    if _sha1_file(dest) == new_sha1:
+        return dest
+    root, ext = os.path.splitext(dest)
+    return "%s.%s%s" % (root, new_sha1[:12], ext)
+
+
+def _copy_payload(src: str, dest: str) -> str:
+    """Copy ``src`` to ``dest`` (or its versioned name); returns the path used."""
+    dest = _versioned_dest(dest, _sha1_file(src))
+    if not os.path.exists(dest):
+        shutil.copy2(src, dest)
+    return dest
 
 
 def _record_extracted(writer, ps, now, artifact, original_path, extracted_path):
@@ -1825,7 +2330,7 @@ def _parse_chromium_indexeddb(ps, writer, now, extract_root):
                     d = os.path.join(dest, rel)
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     try:
-                        shutil.copy2(s, d)
+                        d = _copy_payload(s, d)
                         _record_extracted(writer, ps, now, "indexeddb_blob", s, d)
                     except OSError:
                         pass
@@ -2056,7 +2561,7 @@ def _parse_chromium_service_worker(ps, writer, now, extract_root):
     sw_root = os.path.join(ps.root_dir, "Service Worker", "CacheStorage")
     if not os.path.isdir(sw_root):
         return
-    rows = []
+    entries = []                      # (scope, entry path), in directory order
     for scope_dir in glob.glob(os.path.join(sw_root, "*")):
         if not os.path.isdir(scope_dir):
             continue
@@ -2075,28 +2580,37 @@ def _parse_chromium_service_worker(ps, writer, now, extract_root):
                 names = os.listdir(cache_dir)
             except OSError:
                 continue
-            for name in names:
-                if len(name) < 18 or name[16:18] != "_0":
-                    continue
-                entry = os.path.join(cache_dir, name)
-                try:
-                    with open(entry, "rb") as handle:
-                        blob = handle.read()
-                except OSError:
-                    continue
-                if len(blob) < 24:
-                    continue
-                magic, _version, key_len, _key_hash = struct.unpack_from("<QIII", blob, 0)
-                if magic != _SIMPLE_CACHE_MAGIC64 or not (0 < key_len < 4096):
-                    continue
-                url = blob[20:20 + key_len].decode("utf-8", "replace")
-                if not url:
-                    continue
-                method, status, ctype, cenc, clen, headers = _cachestorage_meta(
-                    _simple_cache_stream0(blob, key_len))
-                rows.append(_prov_tuple(ps, entry, now) + (
-                    scope, url, "", clen if clen is not None else len(blob), "",
-                    method, status, ctype, cenc, headers))
+            entries.extend((scope, os.path.join(cache_dir, name)) for name in names
+                           if len(name) >= 18 and name[16:18] == "_0")
+
+    def _one(item):
+        scope, entry = item
+        try:
+            with open(entry, "rb") as handle:
+                blob = handle.read()
+        except OSError:
+            return None
+        if len(blob) < 24:
+            return None
+        magic, _version, key_len, _key_hash = struct.unpack_from("<QIII", blob, 0)
+        if magic != _SIMPLE_CACHE_MAGIC64 or not (0 < key_len < 4096):
+            return None
+        url = blob[20:20 + key_len].decode("utf-8", "replace")
+        if not url:
+            return None
+        method, status, ctype, cenc, clen, headers = _cachestorage_meta(
+            _simple_cache_stream0(blob, key_len))
+        return _prov_tuple(ps, entry, now) + (
+            scope, url, "", clen if clen is not None else len(blob), "",
+            method, status, ctype, cenc, headers)
+
+    # The cost is the first open of each file (on-access antivirus scanning),
+    # not the reading: measured 8.7 ms per cold open one at a time, 1.2 ms with
+    # eight in flight. One Brave profile held 26,674 entries - 332 s of a
+    # 373 s profile parse. map() keeps the order, so the rows are the same.
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rows = [r for r in pool.map(_one, entries, chunksize=64) if r is not None]
     writer.add("browser_service_worker", _PROV_COLS + [
         "scope", "resource_url", "response_time", "content_length",
         "extracted_body_path", "request_method", "http_status", "content_type",
@@ -2290,16 +2804,24 @@ def _snss_tab_placement(data):
     return tab_window, tab_index
 
 
+# Chrome before M86 kept its SNSS files in the profile folder itself, under
+# these fixed names, instead of Sessions\Session_<n> / Tabs_<n>.
+_LEGACY_SNSS_FILES = ("Current Session", "Last Session", "Current Tabs", "Last Tabs")
+
+
 def _parse_chromium_sessions(ps, writer, now):
+    files = []
     sess_dir = os.path.join(ps.root_dir, "Sessions")
-    if not os.path.isdir(sess_dir):
+    if os.path.isdir(sess_dir):
+        files += [os.path.join(sess_dir, f) for f in sorted(os.listdir(sess_dir))
+                  if f.startswith(("Session_", "Tabs_", "Apps_"))]
+    files += [os.path.join(ps.root_dir, f) for f in _LEGACY_SNSS_FILES
+              if os.path.isfile(os.path.join(ps.root_dir, f))]
+    if not files:
         return
     rows = []
-    for fname in sorted(os.listdir(sess_dir)):
-        if not (fname.startswith("Session_") or fname.startswith("Tabs_")
-                or fname.startswith("Apps_")):
-            continue
-        full = os.path.join(sess_dir, fname)
+    for full in files:
+        fname = os.path.basename(full)
         try:
             with open(full, "rb") as fh:
                 data = fh.read()
@@ -2670,7 +3192,7 @@ def _parse_chromium_cache(ps, writer, now, extract_root, tmp_dir):
             continue
         dest = os.path.join(extract_dir, f)
         try:
-            shutil.copy2(copied, dest)
+            dest = _copy_payload(copied, dest)
         except OSError:
             continue
         try:
@@ -2866,13 +3388,16 @@ def _parse_chromium_top_sites(ps, writer, now, tmp_dir):
     if not db:
         return
     conn = _open_ro(db)
-    if not conn or not _has_table(conn, "top_sites"):
+    # Chrome before ~M70 kept the same tiles in a `thumbnails` table (with
+    # the page thumbnail beside them); url / title / url_rank are the same.
+    table = next((t for t in ("top_sites", "thumbnails") if conn and _has_table(conn, t)), None)
+    if not table:
         if conn:
             conn.close()
         return
     try:
         rows = []
-        for r in conn.execute("SELECT url, title, url_rank FROM top_sites"):
+        for r in conn.execute(f"SELECT url, title, url_rank FROM {table}"):
             rows.append(_prov_tuple(ps, src, now) + (
                 _col(r, "url"), _col(r, "title"), _col(r, "url_rank")))
         writer.add("browser_top_sites", _PROV_COLS + ["url", "title", "url_rank"], rows)
@@ -3165,7 +3690,7 @@ def _parse_gecko_storage_idb(ps, writer, now, extract_root, tmp_dir):
                     d = os.path.join(dest, os.path.relpath(s, files_dir))
                     os.makedirs(os.path.dirname(d), exist_ok=True)
                     try:
-                        shutil.copy2(s, d)
+                        d = _copy_payload(s, d)
                         _record_extracted(writer, ps, now, "gecko_idb_blob", s, d)
                     except OSError:
                         pass
@@ -3361,10 +3886,12 @@ def _parse_gecko_cache(ps, writer, now, extract_root, tmp_dir):
                 body = blob
         except Exception:
             body = blob
-        dest = os.path.join(extract_dir, fname)
+        dest = _versioned_dest(os.path.join(extract_dir, fname),
+                               hashlib.sha1(body).hexdigest())
         try:
-            with open(dest, "wb") as out:
-                out.write(body)
+            if not os.path.exists(dest):
+                with open(dest, "wb") as out:
+                    out.write(body)
             _record_extracted(writer, ps, now, "gecko_cache_body", fpath, dest)
             body_head = body[:8]
         except OSError:
@@ -3419,7 +3946,7 @@ def _parse_gecko_metadata(ps, writer, now, extract_root):
         if os.path.isfile(s):
             d = os.path.join(key_dir, name)
             try:
-                shutil.copy2(s, d)
+                d = _copy_payload(s, d)
                 _record_extracted(writer, ps, now, "gecko_key_material", s, d)
                 kept.append(name)
             except OSError:
@@ -3437,9 +3964,14 @@ def _parse_gecko_metadata(ps, writer, now, extract_root):
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings):
+def _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings,
+                       include_cache=True):
     """Dispatch every applicable artifact parser for a single profile,
-    isolating each so one failure never aborts the profile or the run."""
+    isolating each so one failure never aborts the profile or the run.
+
+    ``include_cache=False`` skips the HTTP / Service Worker / Gecko caches -
+    the bulk of a profile on disk - for a faster, smaller offline parse.
+    """
 
     def run(label, fn, *args):
         try:
@@ -3465,7 +3997,8 @@ def _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings):
             run("sessions", _parse_chromium_sessions, ps, writer, now)
             run("push", _parse_chromium_push, ps, writer, now)
             run("media_router", _parse_chromium_media_router, ps, writer, now)
-            run("cache", _parse_chromium_cache, ps, writer, now, extract_root, tmp_dir)
+            if include_cache:
+                run("cache", _parse_chromium_cache, ps, writer, now, extract_root, tmp_dir)
             run("reading_list", _parse_chromium_reading_list, ps, writer, now)
             run("network_state", _parse_chromium_network_state, ps, writer, now)
             run("dips", _parse_chromium_dips, ps, writer, now, tmp_dir)
@@ -3474,7 +4007,8 @@ def _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings):
         # Storage engines are shared by Chromium browsers and Electron apps.
         run("local_storage", _parse_chromium_localstorage, ps, writer, now)
         run("indexeddb", _parse_chromium_indexeddb, ps, writer, now, extract_root)
-        run("service_worker", _parse_chromium_service_worker, ps, writer, now, extract_root)
+        if include_cache:
+            run("service_worker", _parse_chromium_service_worker, ps, writer, now, extract_root)
         run("extension_storage", _parse_chromium_extension_storage, ps, writer, now, extract_root)
     elif ps.vendor == "gecko":
         run("places", _parse_gecko_places, ps, writer, now, tmp_dir)
@@ -3484,13 +4018,32 @@ def _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings):
         run("sessions", _parse_gecko_sessions, ps, writer, now)
         run("localstorage", _parse_gecko_localstorage, ps, writer, now, tmp_dir)
         run("storage_idb", _parse_gecko_storage_idb, ps, writer, now, extract_root, tmp_dir)
-        run("cache", _parse_gecko_cache, ps, writer, now, extract_root, tmp_dir)
+        if include_cache:
+            run("cache", _parse_gecko_cache, ps, writer, now, extract_root, tmp_dir)
         run("metadata", _parse_gecko_metadata, ps, writer, now, extract_root)
+
+
+def _forget_profile_rows(conn, ps: ProfileSource) -> None:
+    """Drop the rows an earlier parse wrote for THIS profile, before re-reading it.
+
+    Twelve tables have no UNIQUE key, so a second parse of the same case
+    doubled them. Rows are matched on their own source path (``original_path``
+    for browser_files), so other profiles and other sources are untouched.
+    """
+    prefixes = [os.path.join(d, "") for d in (ps.root_dir, ps.cache_dir) if d]
+    for table in TABLE_SCHEMAS:
+        col = "original_path" if table == "browser_files" else "source_path"
+        cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if col not in cols:
+            continue
+        for p in prefixes:
+            conn.execute(f"DELETE FROM {table} WHERE {col} = ? OR substr({col}, 1, ?) = ?",
+                         (p[:-1], len(p), p))
 
 
 def parse_browser_data(case_artifacts_dir, progress_callback=None,
                        windows_partition="C:", offline_mode=False,
-                       source_roots=None):
+                       source_roots=None, include_cache=True):
     """Parse browser artifacts into browser_analysis.db.
 
     Args:
@@ -3498,16 +4051,23 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
             here as browser_analysis.db, with extracted payloads under
             browser_extracted/).
         progress_callback: optional callable(str) for status messages.
-        windows_partition: reserved for offline/image callers.
-        offline_mode: reserved; when True, ``source_roots`` must be supplied.
-        source_roots: optional list of ProfileSource. When None, live profiles
-            are discovered on this host.
+        windows_partition: accepted for call-site symmetry; a live parse always
+            reads this host's own profiles, and offline / image callers pass
+            ``source_roots`` built from the collected tree instead.
+        offline_mode: when True, ``source_roots`` must be supplied - an
+            offline parse never falls back to discovering this machine.
+        source_roots: optional list of ProfileSource (see
+            discover_offline_profiles). When None, live profiles are
+            discovered on this host.
+        include_cache: False skips the HTTP / Service Worker / Gecko caches.
 
     Returns:
         dict with success / statistics / errors / warnings / output_db.
     """
     def status(msg):
-        print(f"[Browser] {msg}")
+        # User / profile names come from the evidence and may be any script;
+        # a cp1252 console would abort the whole parse on them.
+        print(f"[Browser] {msg}".encode("ascii", "backslashreplace").decode("ascii"))
         if progress_callback:
             try:
                 progress_callback(msg)
@@ -3545,8 +4105,9 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
            ", ".join(sorted({f'{s.browser}' for s in sources})))
 
     conn = sqlite3.connect(output_db)
+    writer = _Writer(conn)   # first: its tally lists the indexes create_schema adds
     create_schema(conn)
-    writer = _Writer(conn)
+    del _UNREAD[:]
     now = get_current_forensic_timestamp()
     warnings: List[str] = []
 
@@ -3554,7 +4115,9 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
     try:
         for i, ps in enumerate(sources, 1):
             status(f"[{i}/{len(sources)}] {ps.browser} - {ps.user_name}\\{ps.profile}")
-            _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings)
+            # Earlier runs' rows are KEPT; the writer adds only what is new.
+            _parse_one_profile(ps, writer, now, tmp_dir, extract_root, warnings,
+                               include_cache=include_cache)
             conn.commit()
     finally:
         conn.commit()
@@ -3562,10 +4125,20 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
     result["statistics"] = dict(writer.stats)
+    # Each database a running browser kept locked, by name: its rows are
+    # missing from this parse (close the browser, or parse again elevated).
+    for path in _UNREAD:
+        warnings.append("Not read - locked by the running browser: %s" % path)
     result["warnings"] = warnings
     result["success"] = True
-    total = sum(writer.stats.values())
-    status(f"Done. {total} rows across {len(writer.stats)} tables. DB: {output_db}")
+    tot = writer.tally.totals()
+    result["records"] = tot["parsed"]
+    result["inserted"] = tot["inserted"]
+    result["duplicates"] = tot["duplicates"]
+    result["tables"] = writer.tally.tables
+    result["updated"] = sum(writer.updated.values())
+    status(f"Done. {tot['parsed']} rows read across {len(writer.stats)} tables: "
+           f"{tot['inserted']} new, {tot['duplicates']} already in the database. DB: {output_db}")
     return result
 
 

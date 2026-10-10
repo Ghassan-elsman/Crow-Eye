@@ -1,0 +1,1666 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NTFS MFT Record Forensics — How the Master File Table Works</title>
+
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* Intro definition card — the entire card IS the tooltip. Whole card
+       expands / minimizes with movement-style animations: spring easing on
+       the card, the LABEL slides up + scales down + fades when minimizing
+       (and springs back DOWN with a scale-up on maximize), and the body
+       paragraph slides in from the left with its own fade. */
+    /* Intro card (animated collapsible) look now lives in anatomy.css. */
+    .intro-icon-tip { display: none; }
+
+    /* Fact grid */
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    /* .fact-card look -> anatomy.css */
+    /* .fact-card:hover look -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 8px; }
+    .fact-value { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 26px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.1; }
+    .fact-detail { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+
+    /* Component map — overview of how the 6 byte-map tabs fit together inside one record */
+    .component-map { background: var(--bg1); border: 1px solid var(--border); border-radius: 16px; padding: 24px 28px 22px; margin-bottom: 14px; position: relative; }
+    .component-map.mft-frame { border-color: var(--border2); border-left: 3px solid var(--header-color); }
+    .component-map.companion-map { border-color: var(--border2); border-left: 3px solid var(--trace-color); margin-bottom: 36px; }
+    .component-map .map-intro { color: var(--tx2); font-size: 14px; line-height: 1.65; margin-bottom: 16px; }
+    /* .component-map h2 sizing removed - shared h2 (anatomy.css) governs so all headings match */
+
+    /* ---- container header strip — compact identity panel ---- */
+    .container-strip { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px; margin-bottom: 16px; }
+    .container-strip-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; background: var(--bg2); border: 1px solid var(--border2); }
+    .mft-frame .container-strip-icon { color: var(--header-color); }
+    .companion-map .container-strip-icon { color: var(--trace-color); }
+    .container-strip-title { font-family: 'Barlow Semi Condensed', sans-serif; font-size: 16px; font-weight: 700; color: var(--tx); line-height: 1.3; }
+    .container-strip-title em { color: var(--tx); font-style: italic; font-weight: 700; }
+    .container-strip-sub { font-family: 'Space Mono', monospace; font-size: 11.5px; color: var(--tx2); margin-top: 4px; line-height: 1.55; }
+    .container-strip-sub code { font-family: 'Space Mono', monospace; font-size: 11px; padding: 1px 6px; border-radius: 3px; background: var(--bg2); border: 1px solid var(--border); font-weight: 600; color: var(--tx); }
+    .container-strip-meta { text-align: right; font-family: 'Space Mono', monospace; font-size: 10px; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.1em; line-height: 1.45; padding-left: 16px; border-left: 1px solid var(--border); }
+    .container-strip-meta strong { display: block; font-size: 16px; font-weight: 700; letter-spacing: 0; text-transform: none; margin: 2px 0; color: var(--tx); }
+
+    /* ---- merged single scrollable bar — clean, professional, palette-aligned ---- */
+    .component-bar-wrap { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px 14px; margin-bottom: 14px; }
+    .component-bar-label { display: flex; justify-content: space-between; align-items: center; font-family: 'Space Mono', monospace; font-size: 10.5px; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.15em; margin-bottom: 8px; }
+    .component-bar-label .bar-title { color: var(--tx2); letter-spacing: 0.18em; font-weight: 700; font-size: 11px; }
+    /* outer scroll container — horizontal scrollbar lives here so the bar itself stays clean */
+    .component-bar-scroll { overflow-x: auto; overflow-y: hidden; border-radius: 6px; border: 1px solid var(--border); }
+    .component-bar-scroll::-webkit-scrollbar { height: 10px; }
+    .component-bar-scroll::-webkit-scrollbar-track { background: var(--bg2); }
+    .component-bar-scroll::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 5px; border: 2px solid var(--bg2); }
+    .component-bar-scroll::-webkit-scrollbar-thumb:hover { background: var(--tx3); }
+    /* 3600 px canvas → ~3.5 px per byte; tiny bands lifted by min-width below */
+    .component-bar { display: flex; height: 82px; min-width: 3600px; position: relative; }
+    .component-band { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 4px; cursor: pointer; transition: background-color 0.12s; border-right: 1px solid var(--bg); padding: 0 14px; min-width: 110px; overflow: hidden; position: relative; }
+    .component-band:last-child { border-right: none; }
+    .component-band:hover { filter: brightness(1.12); }
+    .component-band-name { font-family: 'Space Mono', monospace; font-size: 13px; font-weight: 700; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .component-band-size { font-family: 'Space Mono', monospace; font-size: 11px; opacity: 0.9; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+    .component-band-range { font-family: 'Space Mono', monospace; font-size: 10px; opacity: 0.7; letter-spacing: 0.03em; font-weight: 600; white-space: nowrap; }
+    /* tiny bands (USA, END) — give them a fractional flex but a hard min-width so labels fit */
+    .component-band.tiny { min-width: 130px; }
+    .component-band.reserved { background-image: repeating-linear-gradient(45deg, transparent 0 8px, rgba(255,255,255,0.025) 8px 16px); }
+    .component-bar-axis { display: flex; justify-content: space-between; font-family: 'Space Mono', monospace; font-size: 10.5px; font-weight: 600; color: var(--tx3); margin-top: 6px; }
+    .component-bar-note { font-size: 12px; color: var(--tx3); margin-top: 10px; line-height: 1.5; }
+    .scroll-hint { display: inline-flex; align-items: center; gap: 7px; font-family: 'Space Mono', monospace; font-size: 10.5px; color: var(--tx3); margin-bottom: 6px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; }
+    .scroll-hint i { color: var(--tx2); }
+
+    /* ---- legend below the bar ---- */
+    .bar-legend { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+    .bar-legend-item { display: flex; align-items: center; gap: 8px; font-family: 'Space Mono', monospace; font-size: 11.5px; color: var(--tx2); }
+    .bar-legend-swatch { width: 14px; height: 14px; border-radius: 3px; flex-shrink: 0; }
+
+    /* ---- FRN connector bridging MFT and USN ---- */
+    .frn-bridge { display: flex; flex-direction: column; align-items: center; gap: 0; margin: -2px 0 -2px; position: relative; z-index: 2; }
+    .frn-line { width: 1px; height: 18px; background: var(--border2); }
+    .frn-pill { display: flex; flex-direction: column; align-items: center; gap: 10px; background: var(--bg1); border: 1px solid var(--border2); border-radius: 8px; padding: 14px 22px; font-family: 'Space Mono', monospace; color: var(--tx); max-width: 760px; text-align: center; }
+    .frn-pill .frn-row { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: center; font-size: 13px; font-weight: 600; }
+    .frn-pill .frn-key { color: var(--tx3); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; font-size: 10px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); }
+    .frn-pill .frn-arrow { color: var(--tx2); font-size: 16px; font-weight: 700; }
+    .frn-pill .frn-caption { font-size: 11px; color: var(--tx2); letter-spacing: 0.06em; text-transform: uppercase; line-height: 1.55; font-weight: 500; }
+    .frn-pill .frn-caption strong { color: var(--tx); font-weight: 700; }
+    .frn-pill code { font-family: 'Space Mono', monospace; font-size: 12.5px; font-weight: 700; color: var(--tx); background: var(--bg); padding: 3px 8px; border-radius: 4px; border: 1px solid var(--border); }
+    .frn-pill .frn-blue { color: var(--header-color); font-weight: 700; }
+    .frn-pill .frn-purple { color: var(--trace-color); font-weight: 700; }
+    .component-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 24px; }
+    /* .comp-card look -> anatomy.css */
+    /* .comp-card:hover look -> anatomy.css */
+    .comp-card-head { display: flex; align-items: center; gap: 12px; }
+    .comp-card-icon { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .comp-card-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 16px; font-weight: 800; color: var(--tx); line-height: 1.1; }
+    .comp-card-size { font-family: 'Space Mono', monospace; font-size: 10px; color: var(--tx3); margin-top: 2px; }
+    .comp-card-purpose { font-size: 13px; color: var(--tx2); line-height: 1.55; }
+    .comp-card-purpose strong { color: var(--tx); }
+    .comp-card-purpose code { font-family: 'Space Mono', monospace; font-size: 11.5px; background: var(--bg2); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+    .comp-card-row { display: grid; grid-template-columns: 60px 1fr; gap: 8px; font-size: 12.5px; }
+    .comp-card-row-label { color: var(--tx3); font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; padding-top: 2px; }
+    .comp-card-row-text { color: var(--tx2); line-height: 1.55; }
+    /* usn-card: keep only a purple cross-link accent; the card glass comes from anatomy.css (.comp-card) */
+    .comp-card.usn-card { border-left: 3px solid var(--trace-color); }
+    .comp-card.usn-card:hover { box-shadow: 0 8px 30px rgba(167,139,250,0.18); }
+    .usn-card .comp-card-name { font-size: 18px; }
+
+    /* Timeline */
+    .timeline { position: relative; padding-left: 28px; margin-top: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 50%, var(--props-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 22px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+    .timeline-text code { font-family: 'Space Mono', monospace; font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How the NTFS Master File Table works in forensics: the 1024-byte FILE record, STANDARD_INFORMATION, FILE_NAME, DATA, resident vs non-resident data, and timestamps.">
+  <meta name="keywords" content="NTFS MFT, master file table, MFT record structure, MFT forensics, STANDARD_INFORMATION, FILE_NAME timestamps, timestomping detection">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/mft_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/mft_anatomy">
+  <meta property="og:title" content="NTFS MFT Record Forensics — How the Master File Table Works">
+  <meta property="og:description" content="How the NTFS Master File Table works in forensics: the 1024-byte FILE record, STANDARD_INFORMATION, FILE_NAME, DATA, resident vs non-resident data, and timestamps.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="NTFS MFT Record Forensics — How the Master File Table Works">
+  <meta name="twitter:description" content="How the NTFS Master File Table works in forensics: the 1024-byte FILE record, STANDARD_INFORMATION, FILE_NAME, DATA, resident vs non-resident data, and timestamps.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "The NTFS Master File Table record structure and its forensic interpretation",
+      "keywords": "NTFS MFT, master file table, MFT record structure, MFT forensics, STANDARD_INFORMATION, FILE_NAME timestamps, timestomping detection",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "NTFS MFT Record Forensics — How the Master File Table Works",
+      "description": "How the NTFS Master File Table works in forensics: the 1024-byte FILE record, STANDARD_INFORMATION, FILE_NAME, DATA, resident vs non-resident data, and timestamps.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "NTFS Master File Table",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/mft_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "NTFS MFT Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/mft_anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is the NTFS Master File Table?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The MFT is the index NTFS keeps of every file and directory on a volume. Each entry is a fixed-size record, normally 1024 bytes, holding the file's attributes - its names, timestamps, permissions and either the data itself when small enough or the runs pointing at where it lives on disk."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What is the difference between STANDARD_INFORMATION and FILE_NAME timestamps?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Both attributes carry created, modified, accessed and MFT-changed times. STANDARD_INFORMATION is what Windows shows and what user-space tools can set; FILE_NAME is updated by the kernel. When the two disagree in ways normal activity would not produce, that discrepancy is a well-known indicator of timestamp manipulation."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can the MFT show files that were deleted?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Deleting a file marks its record as unused rather than wiping it, so until the record is reallocated the name, size, timestamps and cluster runs often survive - which is why the MFT is a primary source for reconstructing deleted files."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What is MFT resident data?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Files small enough to fit inside their own MFT record are stored there rather than in separate clusters. The whole content of a small file can therefore be recovered from the MFT alone, even if nothing remains elsewhere on the volume."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>The NTFS Master File Table: structure, contents and evidential limits</h1>
+      <p class="header-sub">Logical mapping of the 1024-byte NTFS FILE record, its attribute headers, and the four most forensically-loaded attributes: <code style="color: var(--accent);">$STANDARD_INFORMATION</code>, <code style="color: var(--accent);">$FILE_NAME</code>, <code style="color: var(--accent);">$DATA</code>, and <code style="color: var(--accent);">$ATTRIBUTE_LIST</code> &mdash; including the timestamp pair that exposes timestomping.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#record">Anatomy component map &mdash; how the pieces fit together</a></li>
+        <li><a href="#usn-companion">Companion artifact &mdash; the USN Journal</a></li>
+        <li><a href="#versions">NTFS version history &mdash; when the MFT reached its current form</a></li>
+        <li><a href="#key-facts">Key MFT facts</a></li>
+        <li><a href="#system-files">The first 16 MFT records (system files)</a></li>
+        <li><a href="#attribute-types">All 17 attribute types</a></li>
+        <li><a href="#data-attributes">Persistence conventions &mdash; mft_data_attributes</a></li>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#standard-information-flags">$STANDARD_INFORMATION flags (0x20)</a></li>
+        <li><a href="#file-name-namespaces">$FILE_NAME namespaces (byte 0x41)</a></li>
+        <li><a href="#reparse-tags">Reparse point tags ($REPARSE_POINT 0xC0)</a></li>
+        <li><a href="#record-flags">FILE record flags (header offset 0x16)</a></li>
+        <li><a href="#limits">What an MFT record supports, and what it does not</a></li>
+        <li><a href="#anti-forensics">Anti-forensic techniques</a></li>
+        <li><a href="#dashboard">Reading the MFT/USN dashboard</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <!-- INTRO TOOLTIP / DEFINITION CARD — the entire card is the tooltip.
+         Starts collapsed so the page-load expand animation plays smoothly;
+         minimizes back to icon-only after 60s; click the icon to toggle. -->
+    <div class="intro-card collapsed">
+      <div class="intro-icon" aria-label="What is the MFT?" title="What is the MFT?"><i class="fas fa-info"></i></div>
+      <div class="intro-content">
+        <div class="intro-title">What is the MFT?</div>
+        <div class="intro-body">
+          <strong style="color: var(--accent);">TL;DR &mdash;</strong> NTFS's central index. Every file and directory on the volume has at least one <strong>1024-byte FILE record</strong> in <code>$MFT</code> carrying the timestamps, sizes, parent pointer, and a list of attributes that describe the actual data. For an investigator, it is the closest thing NTFS has to a <strong>full filesystem ledger</strong>.
+          <br><br>
+          The <strong>Master File Table</strong> &mdash; stored as the system file <code>$MFT</code> &mdash; is the spine of NTFS. Every file, every directory, and even the volume's metadata files live as fixed-size <strong>FILE records</strong> (1024 bytes on standard volumes, 4096 bytes on some large-cluster formats) inside this table. A FILE record begins with the magic bytes <code>F I L E</code> (0x46 0x49 0x4C 0x45), followed by a header, then a stream of <strong>attributes</strong> that describe everything Windows knows about that file: when it was created, where its data lives on disk, who owns it, what's in its name, what reparse points it carries.
+          <br><br>
+          For a forensic investigator, the MFT is the most authoritative source of file metadata on the system. It survives deletion (the record is just marked free, not zeroed), records four independent timestamp sets — one in <code>$SI</code>, short for <code>$STANDARD_INFORMATION</code>, and one in <code>$FN</code>, short for <code>$FILE_NAME</code> —, and links every file to its parent directory by MFT reference.
+        </div>
+      </div>
+    </div>
+
+    <!-- COMPONENT MAP — how the byte-map tabs fit together inside one record -->
+    <div class="component-map mft-frame">
+      <h2 id="record" style="margin-bottom: 18px;">Anatomy component map &mdash; how the pieces fit together</h2>
+
+      <div class="container-strip">
+        <div class="container-strip-icon"><i class="fas fa-table"></i></div>
+        <div>
+          <div class="container-strip-title">The MFT Record &mdash; each file's <em>current</em> on-disk state</div>
+          <div class="container-strip-sub">On-disk location: <code>C:\$MFT</code> &middot; one fixed-size FILE record per file / directory<br><strong style="color:var(--tx);">Holds:</strong> FILE Header, USA, <code>$STANDARD_INFORMATION</code>, <code>$FILE_NAME</code>, <code>$DATA</code>, end sentinel, slack.</div>
+        </div>
+        <div class="container-strip-meta">Slot size<strong>1024 B</strong>fixed</div>
+      </div>
+
+      <p class="map-intro">An MFT entry is always exactly <strong>1024 bytes</strong> on standard NTFS volumes (4096 on large-cluster formats). The first <strong>48 bytes</strong> are a kernel-managed <strong>FILE Record Header</strong> (NTFS 3.1) ending at <code>0x2F</code>, followed by an <strong>Update Sequence Array</strong> (USA) at <code>0x30</code>&ndash;<code>0x37</code> (a 2-byte Update Sequence Number, two fixup values and two bytes of alignment — note this USN is the record's own torn-write counter and has nothing to do with the USN Journal). The first attribute begins at offset <code>0x38</code> (per the header's <em>First Attribute Offset</em> field) and a stream of typed, 8-byte-aligned <strong>attributes</strong> follows in canonical order: <code style="color:var(--accent);">$STANDARD_INFORMATION</code> &rarr; <code style="color:var(--accent);">$FILE_NAME</code> &rarr; <code style="color:var(--accent);">$DATA</code> &rarr; &hellip; until a <code style="color:var(--accent);">0xFFFFFFFF</code> sentinel marks end-of-attributes. Everything past that point is <strong>record slack</strong>. The bar below maps that 1024 B slot &mdash; drawn to true byte proportions on a wide canvas so every band stays readable. <strong>Scroll horizontally</strong> to traverse the full record; <strong>click any band</strong> to jump to its byte-level tab.</p>
+
+      <!-- Single merged bar — drawn to actual byte proportions, scrolls horizontally so every band stays fully readable -->
+      <div class="component-bar-wrap">
+        <div class="component-bar-label">
+          <span>OFFSET 0x000</span>
+          <span class="bar-title">FILE RECORD &mdash; full 1024 B, drawn to scale</span>
+          <span>0x400 (1024)</span>
+        </div>
+        <div class="scroll-hint"><i class="fas fa-arrows-left-right"></i> scroll horizontally to read every band &mdash; record slack is huge</div>
+        <div class="component-bar-scroll">
+          <div class="component-bar">
+            <div class="component-band" style="background: #194191; color: #bfdbfe; flex: 48 0 0;" onclick="setVersion('header')" title="48-byte FILE Record Header (NTFS 3.1) — magic 'FILE', USA offset/size, LSN, sequence, hardlinks, flags, first attr offset (0x38), used/allocated size, base record ref, next attr ID, alignment, record number">
+              <span class="component-band-name">FILE Header</span>
+              <span class="component-band-size">48 B</span>
+              <span class="component-band-range">0x00&ndash;0x2F</span>
+            </div>
+            <div class="component-band tiny" style="background: #14754d; color: #d1fae5; flex: 8 0 0;" onclick="setVersion('header')" title="USA region — USN (2 B) + 2 fixups (2×2 B) + 2 B alignment padding = 8 B total for a 1024 B record">
+              <span class="component-band-name">USA</span>
+              <span class="component-band-size">8 B (USN + 2 fixups + align)</span>
+              <span class="component-band-range">0x30&ndash;0x37</span>
+            </div>
+            <div class="component-band" style="background: #0e2942; color: #22d3ee; flex: 96 0 0;" onclick="setVersion('si')" title="$STANDARD_INFORMATION (type 0x10) — 24 B attr header + 72 B content (4 FILETIMEs + flags + owner_id + security_id + quota + USN)">
+              <span class="component-band-name">$STANDARD_INFORMATION (type 0x10)</span>
+              <span class="component-band-size">24 hdr + 72 content = 96 B</span>
+              <span class="component-band-range">0x38&ndash;0x97</span>
+            </div>
+            <div class="component-band" style="background: #4a2f0b; color: #fbbf24; flex: 104 0 0;" onclick="setVersion('fn')" title="$FILE_NAME (type 0x30) — 24 B attr header + 80 B content (parent ref + 4 FILETIMEs + sizes + flags + UTF-16 name, 8-B padded). 104 B shown is for a 7-char name like 'cmd.exe'.">
+              <span class="component-band-name">$FILE_NAME (type 0x30)</span>
+              <span class="component-band-size">24 hdr + 80 content &asymp; 104 B</span>
+              <span class="component-band-range">0x98&ndash;0xFF</span>
+            </div>
+            <div class="component-band" style="background: #0f3f26; color: #34d399; flex: 40 0 0;" onclick="setVersion('data_r')" title="$DATA resident (type 0x80) — 24 B attr header + ~16 B inline content for a tiny file. Optional: not present in every record (the dissection example below has no $DATA).">
+              <span class="component-band-name">$DATA resident (type 0x80)</span>
+              <span class="component-band-size">24 hdr + inline content &asymp; 40 B</span>
+              <span class="component-band-range">0x100&ndash;0x127</span>
+            </div>
+            <div class="component-band tiny" style="background: #2b174a; color: #a78bfa; flex: 4 0 0;" title="0xFFFFFFFF — end-of-attributes sentinel. Always 4 B, 8-B aligned.">
+              <span class="component-band-name">END</span>
+              <span class="component-band-size">0xFFFFFFFF</span>
+              <span class="component-band-range">0x128&ndash;0x12B</span>
+            </div>
+            <div class="component-band reserved" style="background: var(--bg3); color: var(--tx3); flex: 724 0 0;" title="Record slack — leftover bytes inside the 1024 B slot; often retains residue from a previously deleted record (valuable for tombstone reconstruction)">
+              <span class="component-band-name">Record Slack &mdash; tombstone residue</span>
+              <span class="component-band-size">~724 B</span>
+              <span class="component-band-range">0x12C&ndash;0x3FF</span>
+            </div>
+          </div>
+        </div>
+        <div class="component-bar-note">Drawn to actual byte proportions on a wide canvas so every band &mdash; even the 4&nbsp;B END marker &mdash; stays fully readable. Scroll right to see all of the ~724&nbsp;B record slack: most of every MFT record is leftover space from whatever file previously occupied the slot. Colours match the dissection map below.</div>
+
+        <div class="bar-legend">
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#194191;"></span> FILE Header <span style="color:var(--tx3);">(blue &mdash; kernel bookkeeping)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#14754d;"></span> USA <span style="color:var(--tx3);">(green &mdash; integrity fixup)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#0e2942;"></span> <code style="color:#22d3ee;background:transparent;border:none;padding:0;">$SI</code> <span style="color:var(--tx3);">(cyan &mdash; mutable timestamps)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#4a2f0b;"></span> <code style="color:#fbbf24;background:transparent;border:none;padding:0;">$FN</code> <span style="color:var(--tx3);">(amber &mdash; name + parent ref)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#0f3f26;"></span> <code style="color:#34d399;background:transparent;border:none;padding:0;">$DATA</code> <span style="color:var(--tx3);">(green &mdash; file content / runlist)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#2b174a;"></span> END <span style="color:var(--tx3);">(purple &mdash; 0xFFFFFFFF sentinel)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:var(--bg3); background-image:repeating-linear-gradient(45deg, transparent 0 4px, rgba(255,255,255,0.05) 4px 8px);"></span> Record Slack <span style="color:var(--tx3);">(tombstone residue)</span></div>
+        </div>
+      </div>
+
+      <div class="component-cards">
+        <!-- 1. Full Record -->
+        <div class="comp-card" onclick="setVersion('full'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: var(--accent-dim); border: 1px solid var(--accent); color: var(--accent);"><i class="fas fa-layer-group"></i></div>
+            <div>
+              <div class="comp-card-name">Full Record</div>
+              <div class="comp-card-size">1024 bytes &middot; mandatory</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> The entire FILE record &mdash; one fixed-size slot in the MFT for one file or directory.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">Gives every NTFS object a predictable, addressable home. The MFT is just an array of these slots, indexed by record number.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Always &mdash; every file, directory, system file, even deleted entries (with the IN_USE bit cleared).</span></div>
+        </div>
+
+        <!-- 2. FILE Header -->
+        <div class="comp-card" onclick="setVersion('header'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: #0a1835; border: 1px solid #60a5fa; color: #60a5fa;"><i class="fas fa-flag"></i></div>
+            <div>
+              <div class="comp-card-name">FILE Header</div>
+              <div class="comp-card-size">48 B + 8 B USA &middot; mandatory</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> The fixed 48-byte slab at the top of every record. Carries <code>"FILE"</code> magic, sequence number, hardlink count, in-use / directory flags, and the offset of the first attribute.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">The kernel needs a deterministic place to find "is this slot live?", "where do attributes start?", and "what record number am I?". The Update Sequence Array protects against torn writes.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Always at offset 0 of every record. Even a wiped slot keeps the magic if only the IN_USE flag was cleared.</span></div>
+        </div>
+
+        <!-- 3. $STANDARD_INFORMATION -->
+        <div class="comp-card" onclick="setVersion('si'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: #0a1d2e; border: 1px solid #22d3ee; color: #22d3ee;"><i class="fas fa-clock"></i></div>
+            <div>
+              <div class="comp-card-name">$STANDARD_INFORMATION</div>
+              <div class="comp-card-size">96 B (24 hdr + 72 content) &middot; mandatory</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> The four MAC(b) timestamps, the DOS-era file-attribute flags, and (NTFS 3.0+) the owner_id, security_id, quota, and USN.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">Holds the metadata Windows shows in Explorer's "Properties" dialog. <strong>This is the timestamp set that <code>SetFileTime()</code> writes to</strong> &mdash; and the one timestomping tools target.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Every base record. Always the first attribute (type 0x10).</span></div>
+        </div>
+
+        <!-- 4. $FILE_NAME -->
+        <div class="comp-card" onclick="setVersion('fn'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: #352108; border: 1px solid #fbbf24; color: #fbbf24;"><i class="fas fa-tag"></i></div>
+            <div>
+              <div class="comp-card-name">$FILE_NAME</div>
+              <div class="comp-card-size">~104 B (24 hdr + 80 content) &middot; can repeat</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> The filename (UTF-16LE), the parent directory's MFT reference, and a <strong>second independent set</strong> of four MAC(b) timestamps used by NTFS for index-key updates.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">The parent directory keeps a B+tree index keyed by filename &mdash; it needs a copy of the name + size + timestamps right next to the entry. Updated <strong>only on rename / move</strong>, which is what makes it timestomping-resistant.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Every base record. <strong>Multiple copies</strong> exist for hard-linked files (one per link) and 8.3 short-name files (one Win32, one DOS).</span></div>
+        </div>
+
+        <!-- 5. $DATA Resident -->
+        <div class="comp-card" onclick="setVersion('data_r'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: #0a2a1a; border: 1px solid #34d399; color: #34d399;"><i class="fas fa-file"></i></div>
+            <div>
+              <div class="comp-card-name">$DATA <span style="color: var(--tx3); font-weight: 500;">(resident)</span></div>
+              <div class="comp-card-size">~24 B hdr + content &middot; small files only</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> The actual file bytes, stored <strong>inside</strong> the MFT record next to the metadata.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">Avoids allocating a whole 4 KB cluster for tiny files. A single disk read fetches both the metadata and the content. Common for shortcut hashes, registry stub files, log fragments, named-pipe tokens.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">When the file content fits in the leftover ~700 B of the record after the other attributes. Triggered automatically by NTFS &mdash; user has no control.</span></div>
+        </div>
+
+        <!-- 6. $DATA Non-Resident -->
+        <div class="comp-card" onclick="setVersion('data_nr'); window.scrollTo({top: document.querySelector('.dissection-layout').offsetTop - 80, behavior: 'smooth'});">
+          <div class="comp-card-head">
+            <div class="comp-card-icon" style="background: #0f3f26; border: 1px solid #34d399; color: #34d399;"><i class="fas fa-database"></i></div>
+            <div>
+              <div class="comp-card-name">$DATA <span style="color: var(--tx3); font-weight: 500;">(non-resident)</span></div>
+              <div class="comp-card-size">~64 B hdr + runlist &middot; large files</div>
+            </div>
+          </div>
+          <div class="comp-card-purpose"><strong>What:</strong> A 64-byte non-resident header (allocated/real/initialized sizes, plus the range of <strong>VCNs</strong> — Virtual Cluster Numbers, the file's own clusters counted from zero) followed by a compact <strong>cluster runlist</strong>: pairs of (length, <strong>LCN</strong> delta), where an LCN is a Logical Cluster Number, the cluster's position on the volume. Each pair says "this many clusters, this far from the last run" telling the kernel where to find the file's bytes on disk.</div>
+          <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">Files larger than the record's spare bytes can't live inline. The runlist is <strong>extremely compact</strong> (a single contiguous file = one 8-byte run), so even multi-GB files have tiny $DATA attributes.</span></div>
+          <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Most files larger than ~700 B. <strong>Multiple $DATA attributes</strong> on one record = Alternate Data Streams (ADS), each named.</span></div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- FRN bridge — visual link from MFT to USN -->
+    <div class="frn-bridge">
+      <div class="frn-line"></div>
+      <div class="frn-pill">
+        <span class="frn-caption"><span class="frn-blue">The MFT (above)</span> and <span class="frn-purple">the USN Journal (below)</span> are <strong>two separate files</strong> on the volume</span>
+        <div class="frn-row">
+          <span class="frn-key">Join key</span>
+          <code>FileReferenceNumber</code>
+          <span class="frn-arrow">&harr;</span>
+          <span style="color: var(--tx2);">1 MFT record &nbsp;:&nbsp; N USN events</span>
+        </div>
+        <span class="frn-caption">Pivot from any USN event back to the live MFT record (or its parent directory) by matching FRN</span>
+      </div>
+      <div class="frn-line"></div>
+    </div>
+
+    <!-- COMPANION MAP — USN Journal lives OUTSIDE the FILE record -->
+    <div class="component-map companion-map">
+      <h2 id="usn-companion" style="margin-bottom: 18px;">Companion artifact &mdash; the USN Journal</h2>
+
+      <div class="container-strip">
+        <div class="container-strip-icon"><i class="fas fa-stream"></i></div>
+        <div>
+          <div class="container-strip-title">The USN Journal &mdash; the <em>history</em> of every change that produced that state</div>
+          <div class="container-strip-sub">On-disk location: <code>C:\$Extend\$UsnJrnl:$J</code> &middot; one sparse stream for the whole volume<br><strong style="color:var(--tx);">Holds:</strong> a continuous log of variable-length <code>USN_RECORD_V2</code> entries (FRN, parent FRN, reason flags, FILETIME, filename).</div>
+        </div>
+        <div class="container-strip-meta">Record size<strong>variable</strong>~60&ndash;120 B</div>
+      </div>
+
+      <p class="map-intro">This is a <strong>completely separate file</strong> from <code style="color:var(--trace-color);">$MFT</code>. The MFT box above records the <em>current</em> state of a file; this box records the <em>history</em> &mdash; every <code style="color:var(--trace-color);">FILE_CREATE</code>, rename, attribute write, and security change, with a precise FILETIME on each event. The two are joined on <strong>FRN</strong>: a <code style="color:var(--trace-color);">BASIC_INFO_CHANGE</code> reason always corresponds to a write into the <code style="color:var(--accent);">$STANDARD_INFORMATION</code> band above; <code style="color:var(--trace-color);">RENAME_OLD_NAME</code> / <code style="color:var(--trace-color);">RENAME_NEW_NAME</code> always corresponds to a rewrite of the <code style="color:var(--accent);">$FILE_NAME</code> band above.</p>
+
+      <a class="comp-card usn-card" href="usn_anatomy.html#dissection" style="text-decoration: none; color: inherit; display: block;">
+        <div class="comp-card-head">
+          <div class="comp-card-icon" style="background: #1e1035; border: 1px solid #a78bfa; color: #a78bfa; width: 44px; height: 44px; font-size: 18px;"><i class="fas fa-stream"></i></div>
+          <div>
+            <div class="comp-card-name">USN Journal &mdash; companion change log <span style="font-family: 'Space Mono'; font-size: 11px; color: var(--trace-color); margin-left: 6px;">(opens USN Anatomy &rarr;)</span></div>
+            <div class="comp-card-size">Lives in <code style="font-family: 'Space Mono'; background: var(--bg2); padding: 1px 5px; border-radius: 3px; color: var(--trace-color); font-size: 11px;">\$Extend\$UsnJrnl:$J</code> &middot; <strong style="color: var(--tx2);">not inside the FILE record</strong></div>
+          </div>
+        </div>
+        <div class="comp-card-purpose" style="font-size: 13.5px;"><strong>What:</strong> A separate sparse stream of variable-length <code>USN_RECORD_V2</code> entries that records <em>every change</em> made to the files described above. Where the MFT records the <em>current</em> state, the USN journal records the <em>history</em> of state transitions &mdash; with a precise FILETIME on every event.</div>
+        <div class="comp-card-row"><span class="comp-card-row-label">Why</span><span class="comp-card-row-text">A FILE record can only carry the <strong>last</strong> values of its attributes. The USN journal preserves the <strong>full sequence</strong> &mdash; every <code>FILE_CREATE</code>, every rename, every <code>BASIC_INFO_CHANGE</code> (timestamp / attribute write), every <code>SECURITY_CHANGE</code>, every <code>CLOSE</code> &mdash; so investigators can reconstruct exactly how a file got into its current shape.</span></div>
+        <div class="comp-card-row"><span class="comp-card-row-label">Join</span><span class="comp-card-row-text">Each <code>USN_RECORD</code> carries a <strong>FileReferenceNumber</strong> (the same MFT entry/sequence pair embedded in the FILE Header above) and a <strong>ParentFileReferenceNumber</strong> (the same pair stored inside <code>$FILE_NAME</code>). FRN is the universal pivot &mdash; one MFT record &harr; many USN events.</span></div>
+        <div class="comp-card-row"><span class="comp-card-row-label">When</span><span class="comp-card-row-text">Default-on for the system volume since Windows Vista. Off by default for non-system NTFS volumes; can be enabled with <code>fsutil usn createjournal</code>. Older entries are continuously discarded as the sparse stream's allocated region wraps.</span></div>
+      </a>
+    </div>
+
+    <div class="version-selector" id="version-selector">
+      <div class="v-tab active" onclick="setVersion('full')">Full Record</div>
+      <div class="v-tab" onclick="setVersion('header')">FILE Header</div>
+      <div class="v-tab" onclick="setVersion('si')">$STANDARD_INFORMATION</div>
+      <div class="v-tab" onclick="setVersion('fn')">$FILE_NAME</div>
+      <div class="v-tab" onclick="setVersion('data_r')">$DATA (Resident)</div>
+      <div class="v-tab" onclick="setVersion('data_nr')">$DATA (Non-Resident)</div>
+    </div>
+
+    <div class="dissection-layout">
+      <div class="map-container">
+        <div id="view-banner" style="font-family: 'Space Mono'; font-size: 11px; color: var(--identity-color); margin-bottom: 12px;"><i class="fas fa-layer-group"></i> <span id="view-banner-text">Full FILE record overview (320-byte slice)</span></div>
+        <span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div>
+      </div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);"><p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-search-plus"></i></p><p>Select any field in the map to reveal a deep forensic dive.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ARTIFACT NARRATIVE -->
+    <div class="narrative-section reveal">
+      <div class="narrative-title">The Master File Table &mdash; NTFS's Family Tree</div>
+      <div class="narrative-text">
+        <p>NTFS does not store files in a directory tree the way FAT does. Every file and every directory on an NTFS volume is just a <strong>row in a giant database</strong> called the Master File Table. Even the MFT itself is a row in the MFT (record 0, <code>$MFT</code>). Even the root directory is a row (record 5, "."). Even the volume label, the security descriptor pool, and the bad-cluster list are rows.</p>
+        <p>Each row is a <strong>1024-byte FILE record</strong> beginning with the ASCII magic <code>FILE</code>. The record header is followed by a stream of <strong>attributes</strong> &mdash; small typed structures that describe one facet of the file each. Three attributes appear in nearly every record an investigator cares about: <strong>$STANDARD_INFORMATION</strong> (timestamps + flags), <strong>$FILE_NAME</strong> (the filename + parent reference + a <em>second</em> timestamp set), and <strong>$DATA</strong> (the actual file content, either resident inside the record or pointed at by runlist extents on disk).</p>
+        <p>When the attributes for one file no longer fit in 1024 bytes &mdash; large directories, files with hundreds of alternate data streams, or heavily fragmented files &mdash; NTFS spills them into <strong>extension records</strong> tracked by a fourth attribute, <code>$ATTRIBUTE_LIST</code>. Crow-Eye's MFT_Claw parser walks every record sequentially, dispatches by attribute type, and reconstructs full paths by chasing each <code>$FILE_NAME</code> entry's parent reference back to record 5.</p>
+      </div>
+    </div>
+
+    <!-- HOW THE MFT WORKS -->
+    <div class="narrative-section reveal" style="border-left-color: var(--identity-color);">
+      <div class="narrative-title">How the MFT Works &mdash; Kernel-Level Bookkeeping</div>
+      <div class="narrative-text">
+        <p>At volume format time, NTFS reserves an <strong>MFT Zone</strong> &mdash; by default about <strong>12.5%</strong> of the volume &mdash; for the MFT to grow into without fragmenting. The first 16 records (0&ndash;15) are reserved for NTFS metadata files. Records 16 and beyond hold user files and directories.</p>
+        <p>The <strong>lifecycle of a single FILE record:</strong></p>
+        <ol style="margin-left: 24px; margin-top: 8px;">
+          <li><strong>Allocation.</strong> When a new file is created, NTFS finds a free record slot (tracked by the <code>$Bitmap</code> attribute on the MFT itself) and writes a fresh FILE header with the in-use flag set.</li>
+          <li><strong>Attribute population.</strong> The kernel writes <code>$STANDARD_INFORMATION</code> (four FILETIMEs, file-attribute flags) and <code>$FILE_NAME</code> (parent reference, name, second FILETIME set) immediately. If the file has data, a <code>$DATA</code> attribute follows &mdash; resident if the data fits in the remaining bytes of the record, non-resident (with cluster runlists) if it doesn't.</li>
+          <li><strong>Updates.</strong> Each metadata change increments the record's <code>$LogFile</code> Sequence Number (LSN) and updates the <code>$SI</code> "entry changed" timestamp. The on-disk update is fixed up at write time by the <strong>Update Sequence Array</strong> (USA) &mdash; a 2-byte signature is interleaved into every 512-byte sector so torn writes can be detected.</li>
+          <li><strong>Deletion.</strong> When the file is deleted, only the in-use flag (bit 0 of record flags) is cleared. The attributes, filename, timestamps, and parent pointer all <strong>remain intact</strong>. This is why MFT analysis recovers so much forensic value from deleted files &mdash; the record is essentially a tombstone with full metadata.</li>
+          <li><strong>Reuse.</strong> The next file created in that slot increments the record's <strong>sequence number</strong> and overwrites the attributes. Cross-checking the sequence number is how NTFS detects stale references.</li>
+        </ol>
+        <p style="margin-top: 16px;">Every <code>$FILE_NAME</code> attribute embeds its parent directory as an <strong>8-byte MFT reference</strong>: the lower 48 bits are the parent's MFT entry number, the upper 16 bits are the parent's sequence number. By chasing parent references record-by-record back to entry 5 (the root), Crow-Eye reconstructs full paths even for deleted files whose parent directory still exists.</p>
+      </div>
+    </div>
+
+    <!-- HISTORY / VERSION TIMELINE -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="versions">NTFS version history &mdash; when the MFT reached its current form</h2>
+      <p style="color: var(--tx2); font-size: 15px; line-height: 1.7; margin-bottom: 8px;">Unlike many Windows artifacts, the on-disk MFT format has changed surprisingly little since 2001. Crow-Eye's parser handles the current format (NTFS 3.1) which has been stable from Windows XP through Windows 11.</p>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="timeline-year">JULY 1993 &middot; NTFS 1.0</div>
+          <div class="timeline-event">Windows NT 3.1 &mdash; NTFS ships</div>
+          <div class="timeline-text">NTFS debuts as the native filesystem for Windows NT 3.1, replacing the older HPFS / FAT-only model. The fundamental design &mdash; everything-is-a-file, every file lives in the MFT, attributes describe everything &mdash; is laid down. Each FILE record is <strong>1024 bytes</strong>, beginning with the magic <code>FILE</code>.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">MAY 1995 &middot; NTFS 1.1</div>
+          <div class="timeline-event">Windows NT 3.51 &mdash; refinements</div>
+          <div class="timeline-text">Compressed attributes are added (the <code>0x0001</code> bit in the resident-attribute flags). FILE record layout is unchanged.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">JULY 1996 &middot; NTFS 1.2</div>
+          <div class="timeline-event">Windows NT 4.0 &mdash; security descriptors</div>
+          <div class="timeline-text"><code>$SECURITY_DESCRIPTOR</code> attribute is added as a per-file ACL container. This is the last revision sometimes called "NTFS 4" by old documentation; the on-disk version byte is still 1.2.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">FEBRUARY 2000 &middot; NTFS 3.0</div>
+          <div class="timeline-event">Windows 2000 &mdash; the big rewrite</div>
+          <div class="timeline-text">Major expansion. Adds <strong>$OBJECT_ID</strong>, <strong>$REPARSE_POINT</strong> (symlinks, mount points, dedup, AppExecLinks), <strong>$EA</strong> / <strong>$EA_INFORMATION</strong> (extended attributes), <strong>$LOGGED_UTILITY_STREAM</strong> (used by EFS), <strong>disk quotas</strong>, <strong>sparse files</strong>, and the <strong>USN Journal</strong>. <code>$STANDARD_INFORMATION</code> grows from 48 to 72 bytes to hold <code>owner_id</code>, <code>security_id</code>, <code>quota_charged</code>, and <code>usn</code>.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">OCTOBER 2001 &middot; NTFS 3.1 &mdash; CURRENT</div>
+          <div class="timeline-event">Windows XP through Windows 11</div>
+          <div class="timeline-text">A single tweak: the FILE record header is extended with a 4-byte field at offset <strong>0x2C</strong> holding the <strong>record's own MFT number</strong>. This lets forensic tools validate a record's expected location even when reading raw clusters. The format has not changed since &mdash; <strong>Crow-Eye's parser targets this version</strong>. Modern Windows ships <code>1.2 PB</code> max volume size, optional 4096-byte FILE records on huge volumes, and transparent compression / deduplication on top, but the on-disk MFT record layout remains v3.1.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KEY FACTS -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="key-facts">Key MFT facts</h2>
+      <div class="fact-grid">
+        <div class="fact-card">
+          <div class="fact-label">Record size</div>
+          <div class="fact-value">1024 B</div>
+          <div class="fact-detail">Standard FILE record. 4096&nbsp;B on volumes with very large clusters (rare).</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Magic / Signature</div>
+          <div class="fact-value">"FILE"</div>
+          <div class="fact-detail">ASCII <code>0x46 0x49 0x4C 0x45</code> at offset 0. Carving anchor.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">MFT Zone</div>
+          <div class="fact-value">12.5%</div>
+          <div class="fact-detail">Reserved at format time for MFT growth. Reduces fragmentation.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">System records</div>
+          <div class="fact-value">0 &ndash; 15</div>
+          <div class="fact-detail">Reserved for NTFS metadata files (<code>$MFT</code>, <code>$LogFile</code>, etc.).</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Attribute types</div>
+          <div class="fact-value">17</div>
+          <div class="fact-detail">Defined attribute types from <code>0x10</code> ($SI) to <code>0x100</code> ($LOGGED_UTILITY_STREAM).</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Timestamps per file</div>
+          <div class="fact-value">8</div>
+          <div class="fact-detail">Four in <code>$SI</code> + four in <code>$FN</code>. The pair is the key to detecting timestomping.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Parent reference</div>
+          <div class="fact-value">48&nbsp;+&nbsp;16 bit</div>
+          <div class="fact-detail">Lower 48&nbsp;bits = parent MFT entry; upper 16&nbsp;bits = parent sequence number.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">End marker</div>
+          <div class="fact-value">0xFFFFFFFF</div>
+          <div class="fact-detail">Sentinel that terminates the attribute stream inside a FILE record.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SYSTEM RECORDS + ATTRIBUTES -->
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="system-files">The first 16 MFT records (system files)</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">Reserved by NTFS at format time. Every NTFS volume has these records, every time.</p>
+        <span class="cap">Table 1</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Rec #</th><th>Filename</th><th>Role</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0</td><td style="color: var(--tx);">$MFT</td><td>The MFT itself &mdash; its own DATA attribute is the table.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">1</td><td style="color: var(--tx);">$MFTMirr</td><td>Mirror of the first 4 records &mdash; recovery insurance.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">2</td><td style="color: var(--tx);">$LogFile</td><td>Transaction log used by NTFS recovery (LSN source).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">3</td><td style="color: var(--tx);">$Volume</td><td>Volume name, NTFS version, dirty bit.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">4</td><td style="color: var(--tx);">$AttrDef</td><td>Definitions of every attribute type known to this volume.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">5</td><td style="color: var(--tx);">. (root)</td><td>Root directory. All path reconstruction terminates here.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">6</td><td style="color: var(--tx);">$Bitmap</td><td>Cluster allocation bitmap for the whole volume.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">7</td><td style="color: var(--tx);">$Boot</td><td>Maps the boot sector(s) as a file. First-stage bootloader lives here.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">8</td><td style="color: var(--tx);">$BadClus</td><td>Sparse map of bad clusters marked by chkdsk.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">9</td><td style="color: var(--tx);">$Secure</td><td>Shared security descriptor pool (since NTFS 3.0).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">10</td><td style="color: var(--tx);">$UpCase</td><td>Unicode uppercase mapping table for case-insensitive lookup.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">11</td><td style="color: var(--tx);">$Extend</td><td>Container directory for $Quota, $ObjId, $Reparse, $UsnJrnl.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">12&ndash;15</td><td style="color: var(--tx3);">reserved</td><td>Reserved for future Microsoft use; usually zero / unused.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kb-section">
+        <h2 id="attribute-types">All 17 attribute types</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">Every attribute begins with a 4-byte type code. <strong style="color: var(--props-color);">Green rows are deep-parsed by Crow-Eye</strong> (timestamps decoded, paths extracted, GUIDs formatted). The remaining rows are still recognised and counted, but their content is opaque.</p>
+        <span class="cap">Table 2</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Type</th><th>Name</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x10</td><td style="color: var(--props-color); font-weight: 700;">$STANDARD_INFORMATION</td><td>4 timestamps, file-attr flags, owner_id, security_id, USN.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x20</td><td style="color: var(--props-color); font-weight: 700;">$ATTRIBUTE_LIST</td><td>Pointer to extension records when attributes overflow.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x30</td><td style="color: var(--props-color); font-weight: 700;">$FILE_NAME</td><td>Filename + parent ref + 2nd timestamp set. Can appear multiple times.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x40</td><td style="color: var(--props-color); font-weight: 700;">$OBJECT_ID</td><td>128-bit globally-unique ID assigned to the file. Persisted as <code>data_type='ObjectID'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x50</td><td style="color: var(--tx);">$SECURITY_DESCRIPTOR</td><td>Per-file ACL. Mostly replaced by <code>$Secure</code> shared pool in 3.0+.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x60</td><td style="color: var(--props-color); font-weight: 700;">$VOLUME_NAME</td><td>Only on record 3 ($Volume) &mdash; the volume label. Persisted as <code>data_type='VolumeName'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x70</td><td style="color: var(--props-color); font-weight: 700;">$VOLUME_INFORMATION</td><td>NTFS version + dirty bit + flags. Persisted as <code>data_type='VolumeInfo'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x80</td><td style="color: var(--props-color); font-weight: 700;">$DATA</td><td>The file content. Unnamed = default stream; named = ADS (now correctly distinguished).</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x90</td><td style="color: var(--props-color); font-weight: 700;">$INDEX_ROOT</td><td>Root B+tree node for directories. Persisted as <code>data_type='IndexRoot'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0</td><td style="color: var(--tx);">$INDEX_ALLOCATION</td><td>Non-resident B+tree leaf clusters for large directories.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xB0</td><td style="color: var(--tx);">$BITMAP</td><td>Allocation bitmap for indexes / the MFT itself.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0xC0</td><td style="color: var(--props-color); font-weight: 700;">$REPARSE_POINT</td><td>Symlinks, mount points, dedup, AppExecLinks. Tag + target path extracted. <code>data_type='Reparse:&lt;Type&gt;'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0xD0</td><td style="color: var(--props-color); font-weight: 700;">$EA_INFORMATION</td><td>Length info for OS/2-style extended attributes. <code>data_type='EaInfo'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0xE0</td><td style="color: var(--props-color); font-weight: 700;">$EA</td><td>OS/2 extended attribute data, walked entry-by-entry. <code>data_type='EA'</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xF0</td><td style="color: var(--tx);">$PROPERTY_SET</td><td>Obsolete; never used in modern Windows.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">0x100</td><td style="color: var(--props-color); font-weight: 700;">$LOGGED_UTILITY_STREAM</td><td>EFS (<code>$EFS</code>) and TxF (<code>$TXF_DATA</code>) streams. <code>data_type='LoggedUtilStream'</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- HOW THE PARSER PERSISTS THE NEW ATTRIBUTES WITHOUT CHANGING THE SCHEMA -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="data-attributes">Persistence conventions &mdash; <code style="color: var(--accent); font-size: 18px;">mft_data_attributes</code></h2>
+      <p style="color: var(--tx2); font-size: 15px; line-height: 1.7; margin-bottom: 16px;">Rather than alter the database schema, the enhanced parser packs the newly-parsed NTFS attributes into the existing <code>mft_data_attributes</code> table using a typed <code>data_type</code> convention. Existing consumers that filter on <code>data_type IN ('Default','ADS','Zone.Identifier',&hellip;)</code> are unaffected; new analyses can pivot on the additional types below.</p>
+      <span class="cap">Table 3</span>
+      <div class="responsive-table-wrap">
+      <table class="technical-table">
+          <thead><tr><th>data_type</th><th>attribute_name</th><th>size</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">Default</td><td><code>''</code> (empty)</td><td>stream bytes</td><td>The file's default unnamed <code>$DATA</code> stream.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--props-color);">ADS</td><td>ADS stream name</td><td>stream bytes</td><td>Generic named <code>$DATA</code> (Alternate Data Stream).</td></tr>
+            <tr><td style="font-family: 'Space Mono';">Zone.Identifier</td><td><code>Zone.Identifier</code></td><td>stream bytes</td><td>Mark-of-the-Web ADS &mdash; proves origin URL of downloaded files.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">Thumbnail / Encrypted</td><td>name</td><td>stream bytes</td><td>Other well-known ADS variants.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">ObjectID</td><td>GUID <code>{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}</code></td><td>16+</td><td>Decoded <code>$OBJECT_ID</code> primary GUID.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">Reparse:Symlink</td><td>substitute path</td><td>tag (0xA000000C)</td><td><code>$REPARSE_POINT</code> tag 0xA000000C &mdash; Windows symbolic link.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">Reparse:MountPoint</td><td>substitute path</td><td>tag (0xA0000003)</td><td>NTFS junction or volume mount.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">Reparse:AppExecLink</td><td>target exe path</td><td>tag (0x8000001B)</td><td>UWP execution alias (e.g. <code>winget.exe</code> in WindowsApps).</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">Reparse:Dedup</td><td><code>(empty)</code></td><td>tag (0x80000013)</td><td>Data Deduplication chunk-store reference.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">VolumeName</td><td>volume label</td><td>bytes</td><td>From record 3 (<code>$Volume</code>).</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">VolumeInfo</td><td><code>NTFS 3.1 flags=0x...</code></td><td>flag bitmask</td><td>NTFS major.minor version + dirty bit.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">EaInfo</td><td><code>count=N packed=X unpacked=Y</code></td><td>packed_ea_size</td><td>Summary of OS/2 extended attributes attached to the file.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">EA</td><td>comma-joined EA names</td><td>ea count</td><td>Walked <code>$EA</code> entry list. Common: <code>$KERNEL.PURGE.*</code>.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">IndexRoot</td><td>index stream name (<code>$I30</code>, <code>$O</code>, &hellip;)</td><td>attr size</td><td>Directory B+tree root or other index. Multiple rows per record.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">LoggedUtilStream</td><td>stream name (<code>$EFS</code>, <code>$TXF_DATA</code>)</td><td>attr size</td><td>EFS-encrypted files or transactional NTFS streams.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">Hardlinks</td><td><code>hardlinks=N</code></td><td>N</td><td>Only emitted when hardlink count &gt; 1 &mdash; surfaces hard-linked DLLs.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">ExtensionOf</td><td><code>base_rec=N</code></td><td>N</td><td>This record is an extension of base record N (via <code>$ATTRIBUTE_LIST</code>).</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color: var(--tx3); font-size: 13px; margin-top: 16px;"><i class="fas fa-info-circle" style="color: var(--accent); margin-right: 6px;"></i> The schema is the same 4-table layout introduced with the original parser (<code>mft_records</code>, <code>mft_standard_info</code>, <code>mft_file_names</code>, <code>mft_data_attributes</code>). Existing databases gain richer rows on next parse; no migration needed.</p>
+    </div>
+
+    <!-- FULL LOGICAL DISSECTION TABLE -->
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 4</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Offset</th>
+              <th style="width: 60px;">Size</th>
+              <th style="width: 220px;">Field Name</th>
+              <th>Forensic Meaning &amp; Value</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FLAGS / NAMESPACES KB GRID -->
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="standard-information-flags">$STANDARD_INFORMATION flags (0x20)</h2>
+        <span class="cap">Table 5</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Mask</th><th>Flag</th><th>Forensic Meaning</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x0001</td><td style="color: var(--tx);">Read-only</td><td>Common but trivially flippable; rarely indicative.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0002</td><td style="color: var(--tx);">Hidden</td><td>Often set on system / staged adversary payloads.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0004</td><td style="color: var(--tx);">System</td><td>Combined with Hidden = classic dropper hiding pattern.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0020</td><td style="color: var(--tx);">Archive</td><td>Set by writes; cleared by backup utilities.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0040</td><td style="color: var(--tx);">Device</td><td>Internal NTFS use.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0080</td><td style="color: var(--tx);">Normal</td><td>"No other attributes set" &mdash; mutually exclusive with everything.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0100</td><td style="color: var(--tx);">Temporary</td><td>Marked for deletion at close; suspicious if persisting.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0200</td><td style="color: var(--tx);">Sparse</td><td>Sparse file (only allocated where non-zero).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0400</td><td style="color: var(--tx);">Reparse Point</td><td>File has a <code>$REPARSE_POINT</code> attribute &mdash; symlink / mount / dedup.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0800</td><td style="color: var(--tx);">Compressed</td><td>NTFS LZ77 compression on the data stream.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x1000</td><td style="color: var(--tx);">Offline</td><td>Stored remotely; HSM dehydration in progress.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x2000</td><td style="color: var(--tx);">Not Indexed</td><td>Excluded from content indexing.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x4000</td><td style="color: var(--tx);">Encrypted</td><td>EFS-encrypted data stream.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kb-section">
+        <h2 id="file-name-namespaces">$FILE_NAME namespaces (byte 0x41)</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">A single file can have <strong>multiple</strong> <code>$FILE_NAME</code> attributes &mdash; one per namespace. Crow-Eye prefers the non-DOS name when picking the primary filename.</p>
+        <span class="cap">Table 6</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Value</th><th>Namespace</th><th>Description</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0</td><td style="color: var(--tx);">POSIX</td><td>Case-sensitive, allows any Unicode except <code>/</code> and <code>NUL</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">1</td><td style="color: var(--tx);">Win32</td><td>Case-insensitive; the long filename most users see.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">2</td><td style="color: var(--tx);">DOS (8.3)</td><td>Legacy short name (<code>PROGRA~1</code> style). Auto-generated.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">3</td><td style="color: var(--tx);">Win32 &amp; DOS</td><td>Single name compatible with both spaces (e.g. <code>readme.txt</code>).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="reparse-tags">Reparse point tags ($REPARSE_POINT 0xC0)</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">Crow-Eye recognises these explicitly. The tag is the first 4 bytes of the reparse data.</p>
+        <span class="cap">Table 7</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Tag</th><th>Type</th><th>Investigative Note</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0xA0000003</td><td style="color: var(--tx);">Mount Point</td><td>Junction or volume mount &mdash; expands to a different MFT.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA000000C</td><td style="color: var(--tx);">Symbolic Link</td><td>True Windows symlink (admin-only creation by default).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x80000013</td><td style="color: var(--tx);">Dedup</td><td>Data Deduplication chunk store reference.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x8000001B</td><td style="color: var(--tx);">AppExecLink</td><td>UWP app execution alias (e.g. <code>winget.exe</code> in WindowsApps).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kb-section">
+        <h2 id="record-flags">FILE record flags (header offset 0x16)</h2>
+        <span class="cap">Table 8</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Bit</th><th>Meaning</th><th>Forensic Use</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x0001</td><td style="color: var(--tx);">IN_USE</td><td>Set when the record is allocated to a live file. <strong>Cleared</strong> on delete &mdash; the rest of the record persists.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0002</td><td style="color: var(--tx);">IS_DIRECTORY</td><td>Record describes a directory (uses <code>$INDEX_ROOT</code> / <code>$INDEX_ALLOCATION</code>).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0004</td><td style="color: var(--tx);">IS_EXTENSION</td><td>Record is a continuation of another record's attribute list.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0008</td><td style="color: var(--tx);">SPECIAL_INDEX</td><td>Special index present (rare; view-index style).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIMITS -->
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="limits">What an MFT record supports, and what it does not</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">The MFT
+      describes every file on the volume, which makes it the natural backbone of a file-system
+      timeline and the artifact most often read as more certain than it is. Four claims it does not
+      carry:</p>
+
+      <div class="myth">
+        <h4>A single timestamp is not evidence; the pair is</h4>
+        <p><code>$STANDARD_INFORMATION</code> is writable through a documented API, so its four
+        times can be set to anything. <code>$FILE_NAME</code> is written by the kernel on create and
+        rename and is not reachable the same way. A record quoting one <code>$SI</code> time proves
+        nothing about when the file arrived; the <em>disagreement</em> between <code>$SI</code> and
+        <code>$FN</code> is the finding, and agreement between them is not proof of innocence
+        either, because a careful adversary sets both.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A record is a file's description, not a record of use</h4>
+        <p>There is no user, no process and no application anywhere in an MFT entry. It says a file
+        of this name, size and layout existed at this path with these times. Who created it, what
+        opened it and whether anyone ever read it are questions for Prefetch, the USN journal, the
+        registry's MRU keys or the event log &mdash; never for the MFT alone.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A path is reconstructed, not stored</h4>
+        <p>No record holds a full path. Each <code>$FILE_NAME</code> holds one name and a reference
+        to its parent directory, and the path is walked back from there. One file can carry several
+        of those names at once &mdash; an 8.3 alias, a long name, a hard link in another directory
+        &mdash; so "the" path is a choice among them. If a parent directory was renamed or its
+        record reused, the reconstruction follows the volume as it is now, not as it was.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A record marked not-in-use may already belong to another file</h4>
+        <p>Deleting a file clears the in-use flag and leaves the record where it is, which is why
+        deleted entries are recoverable at all. But NTFS reuses those records, incrementing the
+        sequence number each time. A record found without its in-use flag may be an intact deleted
+        file, or the remains of one partially overwritten by the next. The sequence number is what
+        distinguishes the two, and a file reference that quotes an older sequence number is pointing
+        at a file that no longer exists.</p>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75;"><strong style="color: var(--tx);">What
+      it is genuinely good for:</strong> completeness and the timestomp cross-check. Every file on
+      the volume has a record, including files that were deleted and directories that were emptied,
+      and each one carries two independent sets of times written by different mechanisms. No other
+      Windows artifact both covers the whole volume and contains its own contradiction detector.</p>
+    </div>
+
+    <!-- ANTI-FORENSICS -->
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="anti-forensics">Anti-forensic techniques</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">How sophisticated adversaries try to defeat MFT-based evidence &mdash; and how an investigator catches each play:</p>
+      <span class="cap">Table 9</span>
+      <div class="responsive-table-wrap">
+      <table class="kb-table" style="font-size: 15px;">
+          <thead><tr><th>Technique</th><th>Indicator in the MFT</th><th>Counter-detection</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Timestomping ($SI only)</td>
+              <td>The four <code>$STANDARD_INFORMATION</code> timestamps are rewritten to backdate a dropped binary, but the four <code>$FILE_NAME</code> timestamps still reflect creation reality.</td>
+              <td><strong>Cross-check $SI vs $FN.</strong> The kernel updates $FN only on rename/move &mdash; if $SI says "2019" but $FN says "yesterday", the file was timestomped. Crow-Eye exposes both sets in <code>mft_standard_info</code> and <code>mft_file_names</code>.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Alternate Data Stream payloads</td>
+              <td>A binary blob hidden in a named $DATA stream on an innocent-looking host file (<code>notes.txt:evil.exe</code>). Default browsing tools never show ADS.</td>
+              <td>Crow-Eye flags every record with <code>has_ads = 1</code> and counts ADS in <code>ads_count</code>. The named streams are itemised in <code>mft_data_attributes</code> with <code>data_type IN ('ADS','Zone.Identifier','ObjectID','Thumbnail')</code>.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">FILE record zeroing</td>
+              <td>An adversary wipes the entire 1024-byte record after deleting the file, removing the in-use flag <em>and</em> the metadata.</td>
+              <td>Hard to defeat directly &mdash; but the parent directory's <code>$INDEX_ROOT</code> / <code>$INDEX_ALLOCATION</code> may still hold the filename. <code>$MFTMirr</code> (record 1) preserves the first 4 records even if $MFT is tampered with.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Slack-space residue</td>
+              <td>The allocated MFT clusters are larger than the logical <code>$MFT</code> size &mdash; the trailing slack contains <strong>old FILE records</strong> from previous allocations.</td>
+              <td>Crow-Eye's <code>scan_slack_space_records()</code> walks past the logical EOF and recovers every valid <code>FILE</code>-signature record in slack. These are flagged separately and can reveal deleted-then-overwritten activity.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Extension-record fragmentation</td>
+              <td>Heavy ADS abuse or huge directories force the file's attributes to spill into extension records linked by <code>$ATTRIBUTE_LIST</code>. A naive parser sees only the base record and misses half the evidence.</td>
+              <td>Crow-Eye's <code>AttributeListParser</code> reads every entry of <code>$ATTRIBUTE_LIST</code>, lists the extension record numbers, and records them in <code>MFTRecord.extension_records</code> so the analyst can follow the chain.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Sequence-number reuse</td>
+              <td>An adversary deletes a file, then creates one in the same MFT slot &mdash; references to the old file (in <code>$FILE_NAME</code> parent pointers, USN journal, <a href="prefetch_anatomy.html#dissection">prefetch</a>) now resolve to a totally different binary.</td>
+              <td>The 16-bit <strong>sequence number</strong> in every MFT reference increments on reuse. Compare the sequence number in the reference against the live record's sequence number &mdash; a mismatch proves slot reuse.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">USA / fixup forgery</td>
+              <td>Attempts to forge a FILE record on disk fail to update the Update Sequence Array correctly &mdash; the 2-byte sector signatures at offsets <code>0x1FE</code>, <code>0x3FE</code> don't match the USN at the top of the USA.</td>
+              <td>Validate the USA: the last 2 bytes of every 512-byte sector inside the record should equal the first 2 bytes of the USA (the USN). Mismatches are evidence of crafted records or torn writes.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+    function gen(l, s) { let r = []; for(let i=0; i<l; i++) r.push(((Math.sin(s + i) * 10000) & 0xFF).toString(16).padStart(2, '0').toUpperCase()); return r; }
+    // Build a 320-byte realistic FILE record. Represents an MFT entry for
+    // C:\Windows\System32\cmd.exe whose parent directory is the volume root
+    // (record 5).  All fields match the documented offsets verbatim, including
+    // the canonical FILETIME order (Created, Modified, MFT-Modified, Accessed)
+    // confirmed by libfsntfs and flatcap.
+    function HX(s) { return s.replace(/\s+/g, '').match(/.{2}/g).map(b => b.toUpperCase()); }
+    const realRecord = [].concat(
+      // ---- FILE Record Header (bytes 0x00..0x2F = 48 B) ----
+      HX('46494C45'),               // 0x00 "FILE"
+      HX('3000'),                   // 0x04 USA offset = 0x0030
+      HX('0300'),                   // 0x06 USA size (entries) = 3
+      HX('F8A61200 00000000'),      // 0x08 $LogFile LSN = 1222392
+      HX('0200'),                   // 0x10 Sequence Number = 2
+      HX('0100'),                   // 0x12 Hard Link Count = 1
+      HX('3800'),                   // 0x14 First Attribute Offset = 0x0038
+      HX('0100'),                   // 0x16 Flags = IN_USE
+      HX('80010000'),               // 0x18 Used Size = 384
+      HX('00040000'),               // 0x1C Allocated Size = 1024
+      HX('00000000 00000000'),      // 0x20 Base Record Ref = 0 (base record)
+      HX('0600'),                   // 0x28 Next Attribute ID = 6
+      HX('0000'),                   // 0x2A Alignment padding
+      HX('7E540400'),               // 0x2C MFT Record Number = 283262
+      // ---- Update Sequence Array (0x30..0x37 = 8 B) ----
+      HX('1234'),                   // 0x30 USN sentinel
+      HX('5678'),                   // 0x32 Fixup [0] (real bytes from sector 1's tail)
+      HX('9ABC'),                   // 0x34 Fixup [1] (real bytes from sector 2's tail)
+      HX('0000'),                   // 0x36 alignment to 8-byte boundary
+      // ---- $STANDARD_INFORMATION (0x38..0x97 = 96 B: 24 hdr + 72 content) ----
+      HX('10000000'),               // 0x38 type 0x10
+      HX('60000000'),               // 0x3C length 96
+      HX('00'),                     // 0x40 non-resident = 0
+      HX('00'),                     // 0x41 name length = 0
+      HX('0000'),                   // 0x42 name offset
+      HX('0000'),                   // 0x44 attr flags
+      HX('0000'),                   // 0x46 attr ID
+      HX('48000000'),               // 0x48 content size = 72
+      HX('1800'),                   // 0x4C content offset = 24
+      HX('0000'),                   // 0x4E indexed + pad
+      HX('00003 87 EF377DA01'.replace(/\s+/g, '')),  // 0x50 Created  (2024-03-14 10:00:00 UTC)
+      HX('00A05D3BB3A1DB01'),       // 0x58 Modified (2025-01-15 14:30:00 UTC)
+      HX('00A05D3BB3A1DB01'),       // 0x60 MFT Entry Modified (same as modified — typical)
+      HX('0080ACF1E59EDC01'),       // 0x68 Accessed (2026-04-30 09:00:00 UTC)
+      HX('20000000'),               // 0x70 File-attr flags = Archive
+      HX('00000000'),               // 0x74 Max versions
+      HX('00000000'),               // 0x78 Version
+      HX('00000000'),               // 0x7C Class ID
+      HX('00010000'),               // 0x80 Owner ID
+      HX('03010000'),               // 0x84 Security ID
+      HX('00000000 00000000'),      // 0x88 Quota Charged
+      HX('F8A61200 00000000'),      // 0x90 USN
+      // ---- $FILE_NAME (0x98..0x0FF = 104 B: 24 hdr + 80 content) ----
+      HX('30000000'),               // 0x98 type 0x30
+      HX('68000000'),               // 0x9C length 104
+      HX('00'),                     // 0xA0 non-resident = 0
+      HX('00'),                     // 0xA1 name length = 0
+      HX('0000'),                   // 0xA2 name offset
+      HX('0000'),                   // 0xA4 attr flags
+      HX('0100'),                   // 0xA6 attr ID = 1
+      HX('50000000'),               // 0xA8 content size = 80
+      HX('1800'),                   // 0xAC content offset = 24
+      HX('0100'),                   // 0xAE indexed = 1 (always for $FN)
+      HX('05000000 00000500'),      // 0xB0 Parent Ref: root dir (entry 5, seq 5)
+      HX('0000387EF377DA01'),       // 0xB8 Created  (matches $SI)
+      HX('0000387EF377DA01'),       // 0xC0 Modified (matches $SI created — $FN only updates on rename)
+      HX('0000387EF377DA01'),       // 0xC8 MFT Entry Modified (same)
+      HX('0000387EF377DA01'),       // 0xD0 Accessed (same)
+      HX('00000600 00000000'),      // 0xD8 Allocated size = 393216
+      HX('00980500 00000000'),      // 0xE0 Real size = 366080
+      HX('20000000'),               // 0xE8 Flags = Archive
+      HX('00000000'),               // 0xEC Reparse value
+      HX('07'),                     // 0xF0 Filename length = 7 chars
+      HX('01'),                     // 0xF1 Namespace = Win32
+      HX('63006D00 64002E00 65007800 65000000'),  // 0xF2 "cmd.exe" UTF-16LE + 2-byte align
+      // ---- 8-byte attribute alignment padding (0x100..0x107) ----
+      HX('00000000 00000000'),
+      // ---- End-of-attributes marker (0x108..0x10B) ----
+      HX('FFFFFFFF'),
+      // ---- Record slack (0x10C..0x13F = 52 B, mostly zeros) ----
+      HX('00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000')
+    );
+    // Trim/pad to exactly 320 bytes
+    while (realRecord.length < 320) realRecord.push('00');
+    realRecord.length = 320;
+
+    // ----- Reusable field generators -----
+    const fileHeaderFields = (baseOff = 0) => [
+      { section: 'FILE Record Header', name: 'Signature \"FILE\"', offset: baseOff + 0, size: 4, type: 'header-color', val: 'FILE', forensic: '<strong>4-byte ASCII magic.</strong> <code>0x46 0x49 0x4C 0x45</code> &mdash; the carving anchor for every MFT record. Crow-Eye validates it at <code>raw_data[0:4] != b\"FILE\"</code> (MFT_Claw.py:1111, 1482). A record missing this signature is either zeroed slack space or a corrupted entry and is skipped.' },
+      { section: 'FILE Record Header', name: 'USA Offset', offset: baseOff + 4, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; offset to the Update Sequence Array.</strong> Typically <code>0x002A</code> or <code>0x0030</code>. The USA is the integrity mechanism: its first 2 bytes are the USN (Update Sequence Number) and the last 2 bytes of every 512-byte sector inside the record are swapped with sector-specific fixup values so torn writes can be detected.' },
+      { section: 'FILE Record Header', name: 'USA Size', offset: baseOff + 6, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; number of 2-byte entries in the USA, including the USN itself.</strong> For a 1024-byte record split across two 512-byte sectors this is typically <strong>3</strong> (1 USN + 2 fixups). For a 4096-byte record it is 9.' },
+      { section: 'FILE Record Header', name: '$LogFile Sequence Number (LSN)', offset: baseOff + 8, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; the last transaction in the <code>$LogFile</code> that affected this record.</strong> Used by NTFS recovery to undo / redo unfinished operations after a crash. For investigators, the LSN delta between successive backups proves how many transactions occurred &mdash; useful in change-volume analysis.' },
+      { section: 'FILE Record Header', name: 'Sequence Number', offset: baseOff + 16, size: 2, type: 'hash-color', forensic: '<strong>UInt16 &mdash; increments every time this record slot is reused.</strong> Crow-Eye reads it via <code>struct.unpack(\"<H\", raw_data[16:18])</code> (MFT_Claw.py:1486). When something references this MFT entry (a parent ref, a USN entry, a prefetch MFT ref), the reference embeds the sequence too &mdash; mismatch proves slot reuse.' },
+      { section: 'FILE Record Header', name: 'Hard Link Count', offset: baseOff + 18, size: 2, type: 'identity-color', forensic: '<strong>UInt16 &mdash; number of hard links pointing at this file.</strong> Each link contributes one <code>$FILE_NAME</code> attribute. Multiple non-DOS <code>$FN</code>s in one record means real hard linking is in play &mdash; common for system DLLs (e.g. WinSxS).' },
+      { section: 'FILE Record Header', name: 'First Attribute Offset', offset: baseOff + 20, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; byte offset of the first attribute inside the record.</strong> Typically <code>0x0038</code> (56). Crow-Eye uses it as the starting point for <code>_parse_attributes()</code> (MFT_Claw.py:1540).' },
+      { section: 'FILE Record Header', name: 'Flags', offset: baseOff + 22, size: 2, type: 'props-color', forensic: '<strong>UInt16 bitmask.</strong> Bit 0 = <code>IN_USE</code>, bit 1 = <code>IS_DIRECTORY</code>, bit 2 = <code>IS_EXTENSION</code>. Crow-Eye decodes <code>in_use = bool(flags &amp; 0x0001)</code> and <code>is_directory = bool(flags &amp; 0x0002)</code> (MFT_Claw.py:1488-1489). <strong>Deleted files have bit 0 cleared but every other byte of the record is intact &mdash; that is why MFT analysis recovers so much from "deleted" files.</strong>' },
+      { section: 'FILE Record Header', name: 'Used Size', offset: baseOff + 24, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; actual bytes in use inside this 1024-byte record.</strong> Typically 400&ndash;900 depending on attribute payload. Anything past this byte is unused slack inside the record &mdash; valuable for recovering overwritten attribute data.' },
+      { section: 'FILE Record Header', name: 'Allocated Size', offset: baseOff + 28, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; total bytes allocated to the record.</strong> Usually <strong>1024</strong> exactly. Discrepancies between this value and the record size declared in <code>$MFT</code>\'s DATA attribute hint at corruption or crafted records.' },
+      { section: 'FILE Record Header', name: 'Base Record File Reference', offset: baseOff + 32, size: 8, type: 'hash-color', forensic: '<strong>8 bytes &mdash; MFT reference to the base record for extension records.</strong> Zero for normal (base) records. When an attribute spills via <code>$ATTRIBUTE_LIST</code> into an extension record, that extension record\'s base-ref points back here. Crow-Eye tracks the relationship in <code>MFTRecord.extension_records</code>.' },
+      { section: 'FILE Record Header', name: 'Next Attribute ID', offset: baseOff + 40, size: 2, type: 'identity-color', forensic: '<strong>UInt16 &mdash; the ID that will be assigned to the next attribute added to this record.</strong> Functions as a monotonic counter &mdash; useful for spotting heavily modified records.' },
+      { section: 'FILE Record Header', name: 'Reserved / Padding', offset: baseOff + 42, size: 2, type: 'reserved', forensic: '<strong>2 bytes of alignment padding.</strong> In NTFS 3.0 and earlier this was always zero. NTFS 3.1 added a 4-byte field at 0x2C, so this padding remains; not parsed.' },
+      { section: 'FILE Record Header', name: 'MFT Record Number (NTFS 3.1+)', offset: baseOff + 44, size: 4, type: 'header-color', forensic: '<strong>UInt32 &mdash; this record\'s own MFT entry number.</strong> Added in NTFS 3.1 (Windows XP, October 2001). Lets forensic tools validate that a record recovered from raw disk is sitting at the location it expects. Crow-Eye does not currently read this field &mdash; record numbers are derived from the read offset.' }
+    ];
+
+    const usaFields = (off) => [
+      { section: 'Update Sequence Array', name: 'Update Sequence Number (USN)', offset: off + 0, size: 2, type: 'fileinfo-color', forensic: '<strong>2 bytes &mdash; the integrity signature.</strong> NTFS writes this value to the <strong>last 2 bytes of every 512-byte sector</strong> of the record, then patches in the real fixup values from the USA before reading. Mismatch on read = the record was torn (e.g. mid-write power loss) and needs <code>$LogFile</code> replay.' },
+      { section: 'Update Sequence Array', name: 'Fixup [0] (sector 1)', offset: off + 2, size: 2, type: 'fileinfo-color', forensic: '<strong>The real value that originally lived at offset 0x1FE.</strong> When the record was last written, NTFS overwrote those 2 bytes with the USN and stashed the originals here. On read the swap is reversed. Forgers who don\'t update the USA properly trip a fixup mismatch.' },
+      { section: 'Update Sequence Array', name: 'Fixup [1] (sector 2)', offset: off + 4, size: 2, type: 'fileinfo-color', forensic: '<strong>The real value originally at offset 0x3FE.</strong> Same mechanism as fixup[0] but for the second 512-byte sector of the 1024-byte record. A 4096-byte record would have 7 more fixups here.' }
+    ];
+
+    const siAttrFields = (off) => [
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Attribute Type Code', offset: off + 0, size: 4, type: 'identity-color', val: '0x00000010', forensic: '<strong>UInt32 &mdash; identifies the attribute type.</strong> <code>0x10</code> = <code>$STANDARD_INFORMATION</code>. Crow-Eye dispatches by type in <code>AttributeParserRegistry</code> (MFT_Claw.py:551&mdash;573). The end-of-attributes marker <code>0xFFFFFFFF</code> uses the same field to terminate the stream.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Attribute Length', offset: off + 4, size: 4, type: 'identity-color', forensic: '<strong>UInt32 &mdash; total bytes occupied by this attribute, including header.</strong> Crow-Eye uses it to step to the next attribute (MFT_Claw.py:1556-1559). A length of <code>0</code> is treated as end-of-stream.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Non-Resident Flag', offset: off + 8, size: 1, type: 'props-color', val: '0x00', forensic: '<strong>1 byte.</strong> <code>0x00</code> = resident (data inline in the record), <code>0x01</code> = non-resident (data lives in disk clusters). $SI is <strong>always resident</strong>.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Name Length', offset: off + 9, size: 1, type: 'props-color', forensic: '<strong>1 byte &mdash; number of Unicode characters in the attribute name.</strong> <code>0</code> for $SI (no name). Used for ADS detection on $DATA.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Name Offset', offset: off + 10, size: 2, type: 'props-color', forensic: '<strong>UInt16 &mdash; byte offset (from start of attribute) where the optional name begins.</strong> Zero for unnamed attributes like $SI.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Attr Flags (compressed/encrypted)', offset: off + 12, size: 2, type: 'props-color', forensic: '<strong>UInt16 &mdash; per-attribute flags.</strong> <code>0x0001</code> = compressed stream, <code>0x4000</code> = encrypted, <code>0x8000</code> = sparse. Distinct from the file-attribute flags in the $SI content.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Attribute ID', offset: off + 14, size: 2, type: 'identity-color', forensic: '<strong>UInt16 &mdash; per-record unique attribute ID.</strong> Used by $ATTRIBUTE_LIST to reference specific attributes when they spill across extension records.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Resident Content Size', offset: off + 16, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; bytes of resident content following this header.</strong> Typically <strong>48 (NTFS 1.x)</strong> or <strong>72 (NTFS 3.0+)</strong> for $SI. Crow-Eye reads the content at this size (MFT_Claw.py:1580-1584).' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Resident Content Offset', offset: off + 20, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; byte offset (from start of attribute) to the resident content.</strong> Typically <code>0x18</code> (24). Adding this to the attribute base gives the start of the $SI payload.' },
+      { section: '$STANDARD_INFORMATION Attribute Header', name: 'Indexed Flag + Padding', offset: off + 22, size: 2, type: 'reserved', forensic: '<strong>1 byte indexed flag + 1 byte alignment padding.</strong> The indexed flag is non-zero when this attribute is referenced from an index ($FN on indexed directories).' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Created (FILETIME)', offset: off + 24, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x00 &mdash; file creation time.</strong> 100-nanosecond intervals since 1601-01-01 UTC. Crow-Eye parses via <code>StandardInformationParser._parse_filetime()</code> (MFT_Claw.py:345-359). <strong>This is one of the four "$SI" timestamps in the SI/FN "MAC(b)" forensic shorthand. Timestomping tools usually touch ONLY these four &mdash; not the $FN copies.</strong>' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Modified (FILETIME)', offset: off + 32, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x08 &mdash; last data modification.</strong> Updated whenever <code>$DATA</code> changes. Persisted in <code>mft_records.modified_time</code> and <code>mft_standard_info.modified</code>.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'MFT Entry Modified (FILETIME)', offset: off + 40, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x10 &mdash; "entry changed" / MFT record modification time.</strong> Updated on every attribute write, including rename, permission change, and the kernel\'s internal metadata fixups. <strong>Order confirmed by <a href="https://github.com/libyal/libfsntfs/blob/main/documentation/New%20Technologies%20File%20System%20(NTFS).asciidoc" style="color: var(--accent);">libfsntfs</a> and <a href="https://flatcap.github.io/linux-ntfs/ntfs/attributes/standard_information.html" style="color: var(--accent);">flatcap docs</a>.</strong> Timestomping tools <strong>often forget</strong> to backdate this one &mdash; making it the single most reliable timestamp.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Accessed (FILETIME)', offset: off + 48, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x18 &mdash; last access time.</strong> Modern Windows (8+) disables real-time access updates by default (registry: <code>NtfsDisableLastAccessUpdate</code>). The stored time reflects either lazy updates or pre-disable values &mdash; investigators must know the setting before drawing conclusions.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'File Attribute Flags', offset: off + 56, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; the classic DOS-era file attributes.</strong> See the "$STANDARD_INFORMATION Flags" reference box below. Crow-Eye persists this raw int in <code>mft_records.file_attributes</code> and <code>mft_standard_info.flags</code>.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Max Versions', offset: off + 60, size: 4, type: 'reserved', forensic: '<strong>UInt32 &mdash; historic file-version cap.</strong> Unused in modern NTFS; always 0. Recorded by the parser for completeness.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Version Number', offset: off + 64, size: 4, type: 'reserved', forensic: '<strong>UInt32.</strong> Companion to Max Versions; always 0 on modern Windows.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Class ID', offset: off + 68, size: 4, type: 'reserved', forensic: '<strong>UInt32.</strong> Reserved for OS/2-era class linkage; unused on modern Windows.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Owner ID (NTFS 3.0+)', offset: off + 72, size: 4, type: 'hash-color', forensic: '<strong>UInt32 &mdash; index into <code>$Quota</code>.</strong> Identifies the user who owns this file for disk-quota accounting. Crow-Eye persists this in <code>mft_standard_info.owner_id</code>.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Security ID (NTFS 3.0+)', offset: off + 76, size: 4, type: 'hash-color', forensic: '<strong>UInt32 &mdash; key into the shared <code>$Secure</code> stream.</strong> Resolves to a full SDDL security descriptor (owner SID, ACEs). Letting NTFS deduplicate ACLs this way is what made record 9 ($Secure) viable in NTFS 3.0.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Quota Charged (NTFS 3.0+)', offset: off + 80, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; bytes counted against the owner\'s disk quota.</strong> Usually equals the file size, but may differ for sparse / compressed files. Crow-Eye persists this in <code>mft_standard_info.quota_charged</code>.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'USN (NTFS 3.0+)', offset: off + 88, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; latest USN journal entry that touched this file.</strong> Provides a pivot into <code>$UsnJrnl</code> to retrieve the recent change history. Crow-Eye stores this in <code>mft_standard_info.usn</code> and correlates with USN_Claw output.' }
+    ];
+
+    const fnAttrFields = (off) => [
+      { section: '$FILE_NAME Attribute Header', name: 'Attribute Type Code', offset: off + 0, size: 4, type: 'identity-color', val: '0x00000030', forensic: '<strong>UInt32.</strong> <code>0x30</code> identifies a <code>$FILE_NAME</code> attribute. A record can have <strong>multiple</strong> $FN attributes &mdash; one per namespace + one per hard link.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Attribute Length', offset: off + 4, size: 4, type: 'identity-color', forensic: '<strong>UInt32.</strong> Variable: 88 bytes of header + content + variable-length UTF-16 filename. Crow-Eye uses this to step to the next attribute.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Non-Resident Flag', offset: off + 8, size: 1, type: 'props-color', val: '0x00', forensic: '<strong>1 byte.</strong> Always <code>0x00</code> &mdash; $FILE_NAME is required to be resident.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Name Length / Offset / Flags', offset: off + 9, size: 7, type: 'props-color', forensic: '<strong>7 bytes of attribute-header fields.</strong> Name length (1B), name offset (2B), attribute flags (2B), attribute ID (2B). For $FN the "name" here refers to the attribute name (always empty), <strong>not</strong> the filename itself &mdash; that lives in the content.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Resident Content Size', offset: off + 16, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; bytes of resident content.</strong> 66 + (filename_chars &times; 2). For an 8-character filename = 82 bytes.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Resident Content Offset', offset: off + 20, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; byte offset to the resident content.</strong> Typically <code>0x18</code>.' },
+      { section: '$FILE_NAME Attribute Header', name: 'Indexed Flag + Padding', offset: off + 22, size: 2, type: 'reserved', forensic: '<strong>Indexed flag (always 1 for $FN &mdash; the name is keyed into $INDEX_ROOT) + 1 byte alignment.</strong>' },
+      { section: '$FILE_NAME Content', name: 'Parent Directory Reference', offset: off + 24, size: 8, type: 'hash-color', forensic: '<strong>8 bytes &mdash; the analyst\'s path-reconstruction pivot.</strong> Lower 48 bits = parent MFT entry number; upper 16 bits = parent sequence number. Crow-Eye decodes via <code>parent_record = parent_ref &amp; 0xFFFFFFFFFFFF</code> and <code>parent_seq = (parent_ref &gt;&gt; 48) &amp; 0xFFFF</code> (MFT_Claw.py:373-380). Walking parent references back to entry 5 (the root) reconstructs the full path even for deleted files.' },
+      { section: '$FILE_NAME Content', name: 'Created (FILETIME)', offset: off + 32, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x08 &mdash; creation time as recorded in $FN.</strong> Updated only on file <strong>creation, rename, or move</strong>. <strong>This is the gold standard for detecting $SI timestomping</strong> &mdash; if $SI.created is way older than $FN.created, the file has been timestomped.' },
+      { section: '$FILE_NAME Content', name: 'Modified (FILETIME)', offset: off + 40, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x10 &mdash; the $FN copy of modified time.</strong> Persisted in <code>mft_file_names.modified</code> distinct from <code>mft_standard_info.modified</code>.' },
+      { section: '$FILE_NAME Content', name: 'MFT Entry Modified (FILETIME)', offset: off + 48, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x18 &mdash; the $FN copy of "entry changed".</strong> Comparing this $FN value to <code>$SI.mft_modified</code> closes the timestomping detection loop &mdash; tools that scrub $SI rarely touch the $FN copies. <strong>Order per <a href="https://flatcap.github.io/linux-ntfs/ntfs/attributes/file_name.html" style="color: var(--accent);">flatcap $FILE_NAME docs</a>.</strong>' },
+      { section: '$FILE_NAME Content', name: 'Accessed (FILETIME)', offset: off + 56, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x20 &mdash; the $FN copy of access time.</strong> Updated only on rename / move (not on every access) &mdash; behaves almost like a creation time on stable files.' },
+      { section: '$FILE_NAME Content', name: 'Allocated Size', offset: off + 64, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; bytes allocated to the file (sum of cluster runlists, rounded up).</strong> May exceed the real size &mdash; sparse / compressed files often differ significantly. Crow-Eye persists in <code>mft_file_names.allocated_size</code>.' },
+      { section: '$FILE_NAME Content', name: 'Real Size', offset: off + 72, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; logical file size in bytes.</strong> The size Explorer displays. Stored in <code>mft_file_names.real_size</code>.' },
+      { section: '$FILE_NAME Content', name: 'File Attribute Flags', offset: off + 80, size: 4, type: 'props-color', forensic: '<strong>UInt32 &mdash; duplicate of the $SI file-attribute flags.</strong> NTFS keeps them in sync for index efficiency &mdash; the index uses the $FN copy. A divergence between $SI.flags and $FN.flags is itself an anomaly worth flagging.' },
+      { section: '$FILE_NAME Content', name: 'Reparse Value / EA Size', offset: off + 84, size: 4, type: 'fileinfo-color', forensic: '<strong>UInt32.</strong> If the file has a reparse point, this holds the reparse tag (see Reparse Tags reference). Otherwise it carries the extended attribute size.' },
+      { section: '$FILE_NAME Content', name: 'Filename Length (chars)', offset: off + 88, size: 1, type: 'identity-color', forensic: '<strong>UInt8 &mdash; length of the filename in UTF-16 characters (not bytes).</strong> Maximum 255 chars. Multiply by 2 to get the byte count. Crow-Eye reads it at byte 64 of the content (MFT_Claw.py:397).' },
+      { section: '$FILE_NAME Content', name: 'Filename Namespace', offset: off + 89, size: 1, type: 'props-color', forensic: '<strong>UInt8.</strong> <code>0</code>=POSIX, <code>1</code>=Win32, <code>2</code>=DOS, <code>3</code>=Win32+DOS. Crow-Eye prefers non-DOS names in <code>MFTRecord.get_primary_filename()</code> (MFT_Claw.py:234-245) to avoid surfacing 8.3-style short names like <code>PROGRA~1</code>.' },
+      { section: '$FILE_NAME Content', name: 'Filename (UTF-16LE)', offset: off + 90, size: 16, type: 'string-color', forensic: '<strong>Variable-length UTF-16LE filename.</strong> Up to 510 bytes (255 chars &times; 2). Crow-Eye decodes with <code>filename_bytes.decode(\"utf-16le\", errors=\"replace\")</code> (MFT_Claw.py:403-404) and persists in <code>mft_file_names.file_name</code>.' }
+    ];
+
+    const dataAttrResidentFields = (off) => [
+      { section: '$DATA Attribute Header', name: 'Attribute Type Code', offset: off + 0, size: 4, type: 'metrics-color', val: '0x00000080', forensic: '<strong>UInt32.</strong> <code>0x80</code> identifies a <code>$DATA</code> attribute. <strong>Unnamed</strong> $DATA = the file\'s default data stream; <strong>named</strong> $DATA = an Alternate Data Stream (ADS).' },
+      { section: '$DATA Attribute Header', name: 'Attribute Length', offset: off + 4, size: 4, type: 'metrics-color', forensic: '<strong>UInt32 &mdash; total bytes incl. header + resident content.</strong>' },
+      { section: '$DATA Attribute Header', name: 'Non-Resident Flag', offset: off + 8, size: 1, type: 'props-color', val: '0x00', forensic: '<strong>1 byte.</strong> <code>0x00</code> = resident (data inline). Resident $DATA is only used when the file content is small enough to fit inside the leftover bytes of the 1024-byte record &mdash; typically under ~700 bytes.' },
+      { section: '$DATA Attribute Header', name: 'Name Length / Offset / Flags / ID', offset: off + 9, size: 7, type: 'props-color', forensic: '<strong>7 bytes &mdash; name length, name offset, attribute flags, attribute ID.</strong> For an ADS, the name length is non-zero and the name (UTF-16LE) sits between the header and the content. Crow-Eye flags any $DATA with a non-empty <code>attr_name</code> as ADS (MFT_Claw.py:1518-1525).' },
+      { section: '$DATA Attribute Header', name: 'Resident Content Size', offset: off + 16, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; bytes of resident content.</strong> Crow-Eye uses this as the file size for the resident path (MFT_Claw.py:1510-1512).' },
+      { section: '$DATA Attribute Header', name: 'Resident Content Offset', offset: off + 20, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; byte offset to the inline content.</strong>' },
+      { section: '$DATA Attribute Header', name: 'Indexed Flag + Padding', offset: off + 22, size: 2, type: 'reserved', forensic: '<strong>1 byte indexed flag + 1 byte padding.</strong>' },
+      { section: '$DATA Content', name: 'Inline File Bytes', offset: off + 24, size: 40, type: 'metrics-color', forensic: '<strong>The actual file content, stored byte-for-byte inside the MFT record.</strong> Crow-Eye exposes it via <code>MFTAttribute.raw_data</code> when resident (MFT_Claw.py:454-460). For an ADS, this is the alternate stream content &mdash; a notorious hiding spot for small payloads.' }
+    ];
+
+    const dataAttrNonResidentFields = (off) => [
+      { section: '$DATA Attribute Header', name: 'Attribute Type Code', offset: off + 0, size: 4, type: 'metrics-color', val: '0x00000080', forensic: '<strong>UInt32.</strong> <code>0x80</code> identifies a $DATA attribute.' },
+      { section: '$DATA Attribute Header', name: 'Attribute Length', offset: off + 4, size: 4, type: 'metrics-color', forensic: '<strong>UInt32 &mdash; non-resident header is 64 bytes minimum plus runlist.</strong>' },
+      { section: '$DATA Attribute Header', name: 'Non-Resident Flag', offset: off + 8, size: 1, type: 'props-color', val: '0x01', forensic: '<strong>1 byte.</strong> <code>0x01</code> = the file data lives in disk clusters elsewhere, described by the runlist below.' },
+      { section: '$DATA Attribute Header', name: 'Name Length / Offset / Flags / ID', offset: off + 9, size: 7, type: 'props-color', forensic: '<strong>7 bytes &mdash; same shape as resident.</strong>' },
+      { section: '$DATA Non-Resident Header', name: 'Starting VCN', offset: off + 16, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; first Virtual Cluster Number this attribute covers.</strong> Usually 0; non-zero only for sparse / segmented streams. Crow-Eye reads this in <code>DataAttributeParser.parse()</code> when non-resident (MFT_Claw.py:464-472).' },
+      { section: '$DATA Non-Resident Header', name: 'Ending VCN', offset: off + 24, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; last VCN covered.</strong> Plus 1 gives the cluster count this attribute describes.' },
+      { section: '$DATA Non-Resident Header', name: 'Runlist Offset', offset: off + 32, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; offset (from start of attribute) to the cluster runlist.</strong> The runlist itself is variable-length nibble-packed cluster extents (length, LCN delta).' },
+      { section: '$DATA Non-Resident Header', name: 'Compression Unit Size', offset: off + 34, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16.</strong> <code>0</code> = no compression. Non-zero = log2 of the compression-unit cluster count (typically 4 &rArr; 16 clusters per compressed block).' },
+      { section: '$DATA Non-Resident Header', name: 'Reserved / Alignment', offset: off + 36, size: 4, type: 'reserved', forensic: '<strong>4 bytes of zero padding for 8-byte alignment.</strong>' },
+      { section: '$DATA Non-Resident Header', name: 'Allocated Size', offset: off + 40, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; bytes of cluster space allocated.</strong> Always a multiple of the cluster size.' },
+      { section: '$DATA Non-Resident Header', name: 'Real / Logical Size', offset: off + 48, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; the actual file size.</strong> Crow-Eye uses this for the file size when no resident DATA is present.' },
+      { section: '$DATA Non-Resident Header', name: 'Initialized Size', offset: off + 56, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; bytes that contain valid data.</strong> May be less than the real size for sparse files (the gap reads as zeros).' },
+      { section: '$DATA Non-Resident Header', name: 'Cluster Runlist', offset: off + 64, size: 24, type: 'trace-color', forensic: '<strong>Variable-length nibble-packed sequence of (run_length_LCN_pairs).</strong> First nibble of each byte = byte count of the run length, second nibble = byte count of the LCN delta. A terminating <code>0x00</code> byte ends the runlist. This is what Windows uses to follow the file across the disk.' }
+    ];
+
+    // ----- Synthetic byte-arrays for the two $DATA tabs (the demo record above
+    //       intentionally has no $DATA attribute — these are stand-alone examples) -----
+    const residentDataExample = [].concat(
+      HX('80000000'),                 // 0x00 type 0x80
+      HX('40000000'),                 // 0x04 length 64
+      HX('00'),                       // 0x08 resident
+      HX('00'),                       // 0x09 name length = 0 (default unnamed stream)
+      HX('0000'),                     // 0x0A name offset
+      HX('0000'),                     // 0x0C attr flags
+      HX('0200'),                     // 0x0E attr ID = 2
+      HX('28000000'),                 // 0x10 content size = 40 (small "Hello..." style payload)
+      HX('1800'),                     // 0x14 content offset = 24
+      HX('0000'),                     // 0x16 indexed + pad
+      // Inline 40-byte payload — ASCII so it shows up in the side-panel
+      HX('48656C6C 6F2C2074 68697320 69732074 68652072 65736964 656E7420 24444154 41207061 796C6F61')
+    );
+    while (residentDataExample.length < 64) residentDataExample.push('00');
+    residentDataExample.length = 64;
+
+    const nonResidentDataExample = [].concat(
+      HX('80000000'),                 // 0x00 type 0x80
+      HX('70000000'),                 // 0x04 length 112
+      HX('01'),                       // 0x08 non-resident
+      HX('00'),                       // 0x09 name length
+      HX('0000'),                     // 0x0A name offset
+      HX('0000'),                     // 0x0C attr flags
+      HX('0300'),                     // 0x0E attr ID = 3
+      HX('00000000 00000000'),        // 0x10 Starting VCN = 0
+      HX('1F000000 00000000'),        // 0x18 Ending VCN = 31 (32 clusters covered)
+      HX('4000'),                     // 0x20 Runlist offset = 0x40
+      HX('0000'),                     // 0x22 Compression unit = 0
+      HX('00000000'),                 // 0x24 reserved / alignment
+      HX('00200000 00000000'),        // 0x28 Allocated size = 0x2000 (8192)
+      HX('981C0000 00000000'),        // 0x30 Real size = 7320
+      HX('981C0000 00000000'),        // 0x38 Initialized size = 7320
+      // Cluster runlist starting at 0x40 (24 bytes shown)
+      HX('21 20 78F1'.replace(/\s+/g,'')), // header byte 0x21 → 2-byte LCN delta, 1-byte length; len=0x20 (32), LCN=0xF178
+      HX('22 1000 8002'.replace(/\s+/g,'')), // header 0x22 → 2-byte LCN delta + 2-byte length
+      HX('00'),                          // runlist terminator
+      HX('00 00 00 00 00 00 00 00 00 00 00 00 00 00 00'.replace(/\s+/g,''))  // tail padding
+    );
+    while (nonResidentDataExample.length < 112) nonResidentDataExample.push('00');
+    nonResidentDataExample.length = 112;
+
+    // ----- Views (the "version" tabs) -----
+    const fullRecord = {
+      hex: realRecord.slice(0, 320),
+      banner: 'Full FILE record (CMD.EXE parented to root) &mdash; 320 byte slice of a real 1024 B record',
+      fields: [
+        ...fileHeaderFields(0),
+        ...usaFields(48),
+        ...siAttrFields(56),
+        ...fnAttrFields(152),
+        { section: 'Attribute Stream Terminator', name: 'Alignment Padding', offset: 256, size: 8, type: 'reserved', forensic: '<strong>8 bytes of zero padding</strong> that bring the next attribute (or the end-of-attributes marker) onto an 8-byte boundary. The kernel requires every attribute header to be 8-byte aligned; smaller attributes round up.' },
+        { section: 'Attribute Stream Terminator', name: 'End-of-attributes marker', offset: 264, size: 4, type: 'trace-color', val: '0xFFFFFFFF', forensic: '<strong>The 4 bytes <code>0xFFFFFFFF</code> tell the kernel "no more attributes in this record."</strong> Crow-Eye breaks the attribute loop here (MFT_Claw.py:1547-1548). Anything beyond this marker up to the allocated record size is <strong>record slack</strong> &mdash; potentially holding residue from a previously-deleted file that occupied this slot.' },
+        { section: 'Attribute Stream Terminator', name: 'Record Slack (unused bytes)', offset: 268, size: 52, type: 'reserved', forensic: '<strong>Trailing bytes inside the 1024-byte record that are not in active use.</strong> Sometimes hold leftover data from a previously-stored record &mdash; carving the slack of every record can recover deleted-file metadata even when the in-use flag has been reused.' }
+      ]
+    };
+    const headerOnly = {
+      hex: realRecord.slice(0, 56),
+      banner: 'FILE record header (48 B) + Update Sequence Array (8 B) &mdash; magnified',
+      fields: [...fileHeaderFields(0), ...usaFields(48)]
+    };
+    const siOnly = {
+      hex: realRecord.slice(56, 152),
+      banner: '$STANDARD_INFORMATION attribute &mdash; 24-byte header + 72-byte content (canonical timestamp order)',
+      fields: siAttrFields(0)
+    };
+    const fnOnly = {
+      hex: realRecord.slice(152, 256),
+      banner: '$FILE_NAME attribute &mdash; 24-byte header + 80-byte content + UTF-16 "cmd.exe"',
+      fields: fnAttrFields(0)
+    };
+    const dataResidentOnly = {
+      hex: residentDataExample,
+      banner: '$DATA attribute &mdash; resident (40-byte ASCII payload stored inline)',
+      fields: dataAttrResidentFields(0)
+    };
+    const dataNonResidentOnly = {
+      hex: nonResidentDataExample,
+      banner: '$DATA attribute &mdash; non-resident (8 KB file across 2 cluster runs)',
+      fields: dataAttrNonResidentFields(0)
+    };
+
+    const versions = {
+      full: fullRecord,
+      header: headerOnly,
+      si: siOnly,
+      fn: fnOnly,
+      data_r: dataResidentOnly,
+      data_nr: dataNonResidentOnly
+    };
+
+    let curV = 'full';
+
+    function setVersion(v) {
+      curV = v;
+      document.querySelectorAll('.v-tab').forEach(t => t.classList.remove('active'));
+      const tabs = document.querySelectorAll('.v-tab');
+      const order = ['full','header','si','fn','data_r','data_nr'];
+      const idx = order.indexOf(v);
+      if (tabs[idx]) tabs[idx].classList.add('active');
+      document.getElementById('view-banner-text').textContent = versions[v].banner.replace(/<[^>]+>/g, '');
+      render();
+    }
+
+    function render() {
+      const v = versions[curV];
+      const map = document.getElementById('master-map');
+      const table = document.getElementById('table-body');
+      map.innerHTML = ""; table.innerHTML = "";
+      let curS = ""; let curF = null;
+      // Per-type counter inside the current section. Each color family steps
+      // through its 7-shade palette independently, so two adjacent fields of
+      // the same type get shades 0 then 1 (a clean gradient) rather than
+      // unrelated shades caused by a global fieldIdx wrapping.
+      let typeIdx = {};
+      const fieldShade = new Map();
+
+      v.hex.forEach((b, i) => {
+        const f = v.fields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curS) {
+          const divider = document.createElement('div');
+          divider.className = 'divider-row';
+          divider.textContent = f.section;
+          map.appendChild(divider);
+          curS = f.section;
+          typeIdx = {};  // reset every section so palettes restart at 0
+        }
+        if (f && f !== curF) {
+          curF = f;
+          if (f.type !== 'reserved') {
+            // First time seeing this field: pick its shade based on how many
+            // fields of the same type have already appeared in this section.
+            const idx = (typeIdx[f.type] || 0);
+            fieldShade.set(f, idx);
+            typeIdx[f.type] = idx + 1;
+          }
+        }
+        const c = document.createElement('div');
+        c.className = 'byte-cell';
+        c.textContent = b;
+        if (f) {
+          if (f.type === 'reserved') {
+            c.classList.add('reserved');
+          } else {
+            const pal = palettes[f.type] || [{bg: 'var(--bg2)', fg: 'var(--tx3)'}];
+            const color = pal[fieldShade.get(f) % pal.length];
+            c.style.backgroundColor = color.bg;
+            c.style.color = color.fg;
+          }
+        } else {
+          c.classList.add('reserved');
+        }
+        c.onclick = () => selectField(f, i);
+        map.appendChild(c);
+      });
+
+      v.fields.forEach(f => {
+        const r = document.createElement('tr');
+        r.innerHTML = `<td>0x${f.offset.toString(16).toUpperCase()}</td><td>${f.size}B</td><td style="font-weight:700; color:var(--tx);">${f.name}</td><td>${f.forensic}</td>`;
+        r.onclick = () => selectField(f, f.offset);
+        table.appendChild(r);
+      });
+
+      selectField(v.fields[0], 0);
+    }
+
+    function selectField(f, idx) {
+      if (!f) {
+        document.getElementById('selection-output').innerHTML = `
+          <div class="field-name">Undocumented Byte</div>
+          <div class="meta-box"><span class="meta-lbl">Global Offset</span><div class="meta-v">0x${idx.toString(16).toUpperCase()}</div></div>
+          <div class="forensic-text"><strong>Forensic Insight:</strong> This byte sits between documented structures &mdash; likely <strong>alignment padding</strong> or record slack from a previously-stored entry.</div>
+        `;
+        return;
+      }
+      const v = versions[curV];
+      const s = f.offset, e = f.offset + f.size - 1;
+      const fieldBytes = v.hex.slice(s, e + 1);
+      document.querySelectorAll('.byte-cell').forEach((c, i) => c.classList.toggle('active', i >= s && i <= e));
+
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      let out = `
+        <div class="field-name">${f.name}</div>
+
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx); font-family: 'Space Mono'; font-size: 13px;">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2); font-family: 'Space Mono'; font-size: 13px;">${asciiString}</div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+          <div class="meta-box"><span class="meta-lbl">Global Offset</span><div class="meta-v" style="font-family: 'Space Mono';">0x${s.toString(16).toUpperCase()}</div></div>
+          <div class="meta-box"><span class="meta-lbl">Size</span><div class="meta-v">${f.size}B</div></div>
+        </div>
+
+        <div class="forensic-text">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+      document.getElementById('selection-output').innerHTML = out;
+    }
+
+    window.onload = () => {
+      setVersion('full');
+      initIntroTooltip();
+    };
+
+    // "What is the MFT?" intro-card behaviour. The whole card IS the tooltip:
+    //   - starts collapsed (icon-only pill) in the markup so the page-load
+    //     "maximize" animation has something to animate FROM;
+    //   - 600 ms after load, expands smoothly into the full definition card;
+    //   - 60 seconds later, minimizes back into the icon — UNLESS the user
+    //     has already clicked, in which case auto-collapse is cancelled forever
+    //     and the card stays in whatever state the user last set;
+    //   - clicking the icon (or the collapsed pill) toggles between the two
+    //     states with the same animation.
+    function initIntroTooltip() {
+      const card = document.querySelector('.intro-card');
+      const icon = document.querySelector('.intro-icon');
+      if (!card || !icon) return;
+
+      let autoCollapseTimer = null;
+      let userTookOver = false;
+
+      const expand   = () => card.classList.remove('collapsed');
+      const collapse = () => card.classList.add('collapsed');
+
+      // Brief delay so the maximize animation lands after first paint.
+      setTimeout(() => {
+        expand();
+        autoCollapseTimer = setTimeout(() => {
+          if (!userTookOver) collapse();
+        }, 60000);
+      }, 600);
+
+      const handleToggle = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        userTookOver = true;
+        if (autoCollapseTimer) { clearTimeout(autoCollapseTimer); autoCollapseTimer = null; }
+        card.classList.contains('collapsed') ? expand() : collapse();
+      };
+
+      icon.addEventListener('click', handleToggle);
+      // Allow clicking anywhere on the small pill (when collapsed) to expand.
+      card.addEventListener('click', (e) => {
+        if (!card.classList.contains('collapsed')) return;
+        if (icon.contains(e.target)) return;  // already handled
+        handleToggle(e);
+      });
+    }
+  </script>
+
+  <div class="wrap">
+    <h2 id="dashboard">Reading the MFT/USN dashboard</h2>
+    <p class="map-intro">Parsing the MFT and USN journal and correlating them produces
+      <code style="color:var(--accent);">mft_usn_correlated_analysis.db</code>. The <strong>Charts</strong>
+      button on the MFT and USN table tabs opens that data as an interactive dashboard &mdash; the current
+      state of every file (from <code style="color:var(--accent);">$MFT</code>) joined on
+      <strong>FRN</strong> to the <em>history</em> of what changed it (from the USN journal). One rule holds
+      everywhere: <strong style="color:var(--trace-color);">USN reason = colour</strong>.</p>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Two timelines, two time-scales</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">The MFT and the USN journal live on very
+        different clocks, so the top of the dashboard stacks two timelines. The <strong>MFT history</strong>
+        (a bar per day of files <span style="color:#22d3ee;font-weight:700;">created</span> /
+        <span style="color:#6366f1;font-weight:700;">modified</span>, from Standard-Info times) spans the
+        machine's whole life. Beneath it, the <strong>USN journal</strong> strip covers the journal's short
+        rolling window &mdash; five reason-category rows, auto-switching day or hour cells. <strong>Click a
+        bucket</strong> in the USN strip to explore that window below.</p>
+    </div>
+
+    <div class="full-reference">
+      <span class="cap">Reason categories</span>
+      <div class="responsive-table-wrap">
+        <table class="ref-table">
+          <thead><tr><th style="width:180px;">Category</th><th>USN reason flags it collects</th><th style="width:120px;">Colour</th></tr></thead>
+          <tbody>
+            <tr><td>Create</td><td><code>FILE_CREATE</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:6px;"></span>green</td></tr>
+            <tr><td>Delete</td><td><code>FILE_DELETE</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#f43f5e;vertical-align:-1px;margin-right:6px;"></span>rose</td></tr>
+            <tr><td>Rename</td><td><code>RENAME_OLD_NAME</code> / <code>RENAME_NEW_NAME</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#fbbf24;vertical-align:-1px;margin-right:6px;"></span>amber</td></tr>
+            <tr><td>Data change</td><td><code>DATA_OVERWRITE</code> / <code>DATA_EXTEND</code> / <code>DATA_TRUNCATION</code></td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:6px;"></span>blue</td></tr>
+            <tr><td>Metadata / Security</td><td><code>BASIC_INFO_CHANGE</code> / <code>SECURITY_CHANGE</code> / <code>OBJECT_ID_CHANGE</code> &hellip;</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:6px;"></span>purple</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color:var(--tx2);font-size:12.5px;margin-top:8px;">A single USN event usually carries several
+        OR'd flags (e.g. <code>DATA_EXTEND | FILE_CREATE | CLOSE</code>), so it counts in <em>every</em>
+        category its flags touch.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">The three regions</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;"><strong>Left</strong> &mdash; the two
+        timelines, then the <strong>window drill-down</strong> for the selected bucket: changes-by-hour
+        (stacked by category), top directories, top file types, and a chronological <strong>events list</strong>
+        (time, change, file, path, size). <strong>Right</strong> &mdash; the <strong>overview</strong>: totals
+        (files, directories, files with USN events, created / renamed / data-changed), an
+        <strong>Anomalies</strong> card, events by category, and the most active directories and file types.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid rgba(244,63,94,0.35);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Anomalies &amp; anti-forensics</h3>
+      <ul style="color:var(--tx2);font-size:14px;line-height:1.8;margin:0;padding-left:20px;">
+        <li><strong>Timestomp candidates</strong> &mdash; a deliberately <em>tight</em> screen: files whose
+          Standard-Info creation is <strong>newer than</strong> the kernel-written File-Name creation
+          (forward-dating &mdash; FN is not user-settable), or whose four SI times are all zeroed to whole
+          seconds while File-Name keeps sub-second precision (the classic timestomp-tool signature).
+          &ldquo;SI modified before created&rdquo; is deliberately <em>not</em> counted &mdash; that is normal
+          for copied and installed files.</li>
+        <li><strong>USN journal gaps</strong> &mdash; deleted / overwritten stretches of the journal
+          (from <code>deleted_entries</code>): activity someone tried to erase.</li>
+        <li><strong>Deleted, still in MFT</strong> &mdash; records marked deleted whose entry is still resident.</li>
+        <li><strong>Alternate data streams</strong> &mdash; files carrying an extra <code>$DATA</code> stream.</li>
+      </ul>
+      <p style="color:var(--tx2);font-size:12.5px;margin-top:10px;">Every count is a <em>candidate for review</em>
+        &mdash; open a file to judge it against the evidence, not to accept the flag.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Click for detail</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">Click a <strong>USN bucket</strong> to fill
+        the drill-down for that window. Click an <strong>hour bar</strong> for that hour's records-by-category
+        and the files in it. Click a <strong>file</strong> (a row in the events list) for its full profile:
+        its <strong>USN change timeline</strong> (every reason, in order) and a
+        <strong>Standard-Info vs File-Name</strong> MACE table with differing rows highlighted &mdash; the
+        timestamping view a timestomp candidate is judged from directly. Standard-Info is user-settable
+        (the timestomp target); File-Name is written by the kernel.</p>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;margin-top:8px;">Two header filters apply to
+        the whole dashboard: a <strong>search</strong> box (path / filename / type, matched ANY or ALL), a
+        <strong>volume</strong> selector, and a <strong>date dropdown</strong> (pick a month, then a day).</p>
+    </div>
+  </div>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Parse the whole $MFT with Crow-Eye</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">Crow-Eye reads $MFT records across the volume — comparing $STANDARD_INFORMATION vs $FILE_NAME timestamps to flag timestomping, and recovering resident data, alternate data streams, and parent-child paths.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is the NTFS Master File Table?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">The MFT is the index NTFS keeps of every file and directory on a volume. Each entry is a fixed-size record, normally 1024 bytes, holding the file's attributes - its names, timestamps, permissions and either the data itself when small enough or the runs pointing at where it lives on disk.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is the difference between STANDARD_INFORMATION and FILE_NAME timestamps?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Both attributes carry created, modified, accessed and MFT-changed times. STANDARD_INFORMATION is what Windows shows and what user-space tools can set; FILE_NAME is updated by the kernel. When the two disagree in ways normal activity would not produce, that discrepancy is a well-known indicator of timestamp manipulation.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Can the MFT show files that were deleted?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Yes. Deleting a file marks its record as unused rather than wiping it, so until the record is reallocated the name, size, timestamps and cluster runs often survive - which is why the MFT is a primary source for reconstructing deleted files.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is MFT resident data?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Files small enough to fit inside their own MFT record are stored there rather than in separate clusters. The whole content of a small file can therefore be recovered from the MFT alone, even if nothing remains elsewhere on the volume.</p>
+      </div>
+    </section>
+  </div>
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+</html>

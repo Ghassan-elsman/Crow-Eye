@@ -8,6 +8,7 @@ Windows FILETIME, and standard datetime formats.
 
 import datetime
 import re
+import struct
 from typing import Any, Optional, Union
 from utils.time_utils import (
     filetime_to_datetime,

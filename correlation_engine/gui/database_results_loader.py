@@ -20,6 +20,8 @@ from PyQt5.QtGui import QFont
 from ..engine.database_persistence import ResultsDatabase
 from .ui_styling import CorrelationEngineStyles
 from .crow_eye_icons import CrowEyeIcons
+from ui.site_theme import set_variant, set_status, STATUS_COLORS, font as site_font
+from PyQt5.QtGui import QColor
 
 
 class _ExecutionsQueryWorker(QObject):
@@ -79,16 +81,6 @@ class DatabaseResultsLoaderDialog(QDialog):
         
         self.browse_other_btn = QPushButton("Load Other Database...")
         self.browse_other_btn.clicked.connect(self._browse_other_database)
-        self.browse_other_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #3B82F6;
-                color: white;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2563EB;
-            }
-        """)
         db_path_layout.addWidget(self.browse_other_btn)
         
         db_layout.addLayout(db_path_layout)
@@ -127,7 +119,8 @@ class DatabaseResultsLoaderDialog(QDialog):
         selection_btn_layout.addStretch()
         
         self.selection_count_label = QLabel("0 selected")
-        self.selection_count_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        self.selection_count_label.setFont(site_font("ui", 13, QFont.Bold))
+        set_status(self.selection_count_label, "info")
         selection_btn_layout.addWidget(self.selection_count_label)
         
         executions_layout.addLayout(selection_btn_layout)
@@ -154,21 +147,6 @@ class DatabaseResultsLoaderDialog(QDialog):
         self.load_btn = QPushButton("Load Selected")
         self.load_btn.clicked.connect(self._load_selected)
         self.load_btn.setEnabled(False)
-        self.load_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #10B981;
-                color: white;
-                font-weight: bold;
-                padding: 8px 16px;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:disabled {
-                background-color: #4B5563;
-                color: #9CA3AF;
-            }
-        """)
         button_layout.addWidget(self.load_btn)
         
         cancel_btn = QPushButton("Cancel")
@@ -185,12 +163,15 @@ class DatabaseResultsLoaderDialog(QDialog):
         self.load_btn.setIcon(CrowEyeIcons.history())
         cancel_btn.setIcon(CrowEyeIcons.close())
 
-        # Dark theme for the whole dialog. Without this the dialog renders in
-        # default (white) Qt chrome. Must run AFTER all widgets exist; the
-        # helper only re-styles close/cancel/export-prefixed buttons, so the
-        # blue "Load Other Database" and green "Load Selected" accents above
-        # survive it.
-        CorrelationEngineStyles.apply_evidence_detail_styling(self)
+        # The site look for the whole dialog (without it the dialog renders in
+        # default white Qt chrome). Must run AFTER all widgets exist. The
+        # buttons take the role family: Load Selected is the main action,
+        # the rest are everyday.
+        for b, variant in ((self.load_btn, "primary"), (self.browse_btn, "ghost"),
+                           (self.browse_other_btn, "ghost"), (select_all_btn, "ghost"),
+                           (deselect_all_btn, "ghost"), (cancel_btn, "ghost")):
+            set_variant(b, variant)
+        CorrelationEngineStyles.apply_evidence_detail_styling(self, clear_inline=True)
     
     def _browse_database(self):
         """Browse for a database file in current case."""
@@ -315,9 +296,9 @@ class DatabaseResultsLoaderDialog(QDialog):
             # Engine type with color coding
             engine_item = QTableWidgetItem(execution['engine_type'] or "")
             if execution['engine_type'] == 'identity_based':
-                engine_item.setForeground(Qt.green)
+                engine_item.setForeground(QColor(STATUS_COLORS["accent"]))
             elif execution['engine_type'] == 'time_window_scanning':
-                engine_item.setForeground(Qt.cyan)
+                engine_item.setForeground(QColor(STATUS_COLORS["info"]))
             self.executions_table.setItem(row_idx, 3, engine_item)
             
             self.executions_table.setItem(row_idx, 4, 

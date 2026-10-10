@@ -77,6 +77,80 @@ export const MFT_RAMPS = {
   modified: ['#0f1626', '#26306b', '#39429c', '#4f5ad0', '#6366f1'],
 }
 
+// ===== One colour per USN reason FLAG (the strip has a row per flag) =====
+// Each family keeps its category's hue - creates green, deletes red, renames
+// amber, data blue, metadata violet - so a flag still reads as its kind of
+// change, while no two flags share a colour.
+export const FLAG_COLOR = {
+  FILE_CREATE: '#39d353',
+  FILE_DELETE: '#f43f5e',
+  RENAME_OLD_NAME: '#f59e0b',
+  RENAME_NEW_NAME: '#fde047',
+  DATA_OVERWRITE: '#4aa8ff',
+  DATA_EXTEND: '#38bdf8',
+  DATA_TRUNCATION: '#818cf8',
+  NAMED_DATA_OVERWRITE: '#60a5fa',
+  NAMED_DATA_EXTEND: '#7dd3fc',
+  NAMED_DATA_TRUNCATION: '#a5b4fc',
+  BASIC_INFO_CHANGE: '#a78bfa',
+  SECURITY_CHANGE: '#e879f9',
+  EA_CHANGE: '#c084fc',
+  OBJECT_ID_CHANGE: '#d8b4fe',
+  REPARSE_POINT_CHANGE: '#fb923c',
+  STREAM_CHANGE: '#2dd4bf',
+  HARD_LINK_CHANGE: '#f472b6',
+  INDEXABLE_CHANGE: '#94a3b8',
+  INTEGRITY_CHANGE: '#a3e635',
+  COMPRESSION_CHANGE: '#14b8a6',
+  ENCRYPTION_CHANGE: '#ef4444',
+  TRANSACTED_CHANGE: '#eab308',
+  DESIRED_STORAGE_CLASS_CHANGE: '#64748b',
+  CLOSE: '#cbd5e1',
+  mft_created: MFT_CREATED,
+  mft_modified: MFT_MODIFIED,
+}
+
+// A flag no list above names (a newer Windows) still gets a stable colour.
+function hashColor(key) {
+  let h = 0
+  for (const ch of String(key)) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return `hsl(${h % 360}, 70%, 62%)`
+}
+
+export function flagColor(key) {
+  return FLAG_COLOR[key] || hashColor(key)
+}
+
+// 5-step ramp (empty -> full) mixed from the strip background. Computed, so
+// every key - including one only a future case contains - has its ramp; a
+// colour list without a ramp per key blanks the whole strip (see
+// docs/building-a-visualization.md §4).
+const BG = [15, 22, 38]
+function rgbOf(color) {
+  const m = /^#([0-9a-f]{6})$/i.exec(color)
+  if (m) return [0, 2, 4].map(i => parseInt(m[1].slice(i, i + 2), 16))
+  const el = document.createElement('div')
+  el.style.color = color
+  document.body.appendChild(el)
+  const out = (getComputedStyle(el).color.match(/\d+/g) || [128, 128, 128]).slice(0, 3).map(Number)
+  el.remove()
+  return out
+}
+const _ramps = {}
+export function flagRamp(key) {
+  if (_ramps[key]) return _ramps[key]
+  const c = rgbOf(flagColor(key))
+  const mix = (t) => `rgb(${BG.map((b, i) => Math.round(b + (c[i] - b) * t)).join(',')})`
+  _ramps[key] = ['#0f1626', mix(0.28), mix(0.5), mix(0.75), mix(1)]
+  return _ramps[key]
+}
+
+export function flagLabel(key) {
+  if (key === 'mft_created') return 'Files created (MFT)'
+  if (key === 'mft_modified') return 'Files modified (MFT)'
+  return String(key).toLowerCase().replace(/_/g, ' ').replace(/^\w/, c => c.toUpperCase())
+}
+
 export function fmtFull(iso) {
   if (!iso) return '—'
   try {

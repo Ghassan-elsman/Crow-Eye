@@ -7,6 +7,7 @@ in a dedicated phase rather than applying semantic mappings per-record.
 """
 
 import logging
+import os
 import time
 import re
 from datetime import datetime
@@ -94,15 +95,20 @@ class IdentitySemanticController:
     """
     
     def __init__(self, config: Optional[IdentitySemanticConfig] = None,
-                 semantic_integration: Optional[SemanticMappingIntegration] = None):
+                 semantic_integration: Optional[SemanticMappingIntegration] = None,
+                 cancel_check=None):
         """
         Initialize Identity Semantic Controller.
         
         Args:
             config: Configuration for the phase
             semantic_integration: Optional semantic mapping integration instance
+            cancel_check: Optional callable, True once the run was asked to
+                stop - handed to the SQL mapper, which checks it between
+                candidate chunks.
         """
         self.config = config or IdentitySemanticConfig()
+        self.cancel_check = cancel_check
         self.semantic_integration = semantic_integration
         self.statistics = IdentitySemanticStatistics()
         
@@ -484,7 +490,13 @@ class IdentitySemanticController:
             logger.info(f"{'='*80}\n")
             
             # Use SQL-based semantic mapper
-            mapper = SQLSemanticMapper(database_path, execution_id)
+            mapper = SQLSemanticMapper(database_path, execution_id,
+                                       cancel_check=getattr(self, 'cancel_check', None))
+            # Named in the run's "settings in force" block (semantic_mapping.log).
+            mapper.rules_files = [str(p) for p in (
+                getattr(semantic_manager, 'default_rules_path', None),
+                getattr(semantic_manager, 'custom_rules_path', None))
+                if p is not None and os.path.exists(str(p))]
             
             # Apply semantic mapping using SQL
             stats = mapper.apply_semantic_mapping(identity_rules)

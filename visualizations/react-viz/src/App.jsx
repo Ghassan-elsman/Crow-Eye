@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import HeatmapStack from './HeatmapStack.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import DayActivitySection from './DayActivitySection.jsx'
@@ -65,14 +65,17 @@ export default function App() {
   // heatmaps + overview reload on filter change
   useEffect(() => {
     if (bounds && !bounds.hasData) { setHeatLoading(false); setOverviewLoading(false); return }
+    // Wait for bounds: they set the range, and loading before them read
+    // the whole case once for nothing and then again for the range.
+    if (!bounds) return
     setHeatLoading(true); setOverviewLoading(true)
     setLoadErr('')
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getSrumHeatmaps', JSON.stringify({ ...filterArgs }))
+      latest('getSrumHeatmaps', JSON.stringify({ ...filterArgs }))
         .then(setHeatmaps).catch((e) => { setHeatmaps({ providers: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setHeatLoading(false))
-      call('getSrumOverview', JSON.stringify({ ...filterArgs }))
+      latest('getSrumOverview', JSON.stringify({ ...filterArgs }))
         .then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOverviewLoading(false))
     }, 180)
     return () => clearTimeout(debounce.current)
@@ -93,9 +96,10 @@ export default function App() {
     setDayLoading(true)
     setLoadMsg('Loading the selected period…')
     Promise.all([
-      call('getSrumDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setCompanion),
-      call('getSrumDayActivity', JSON.stringify({ day: selectedDay, topN: 40, ...filterArgs })).then(setDayActivity),
-    ]).finally(() => setDayLoading(false))
+      latest('getSrumDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setCompanion),
+      latest('getSrumDayActivity', JSON.stringify({ day: selectedDay, topN: 40, ...filterArgs })).then(setDayActivity),
+    ]).catch((e) => setLoadErr(String(e && e.message || e) || 'that query failed'))
+      .finally(() => setDayLoading(false))
   }, [selectedDay, filterArgs])
 
   // App modal, scoped to whatever period opened it.
@@ -108,8 +112,10 @@ export default function App() {
     if (!selectedApp) { setAppDetail(null); return }
     setAppDetailLoading(true)
     const scope = appRange || { start: selectedDay, end: selectedDay }
-    call('getSrumAppDetail', JSON.stringify({ app: selectedApp, ...scope, terms, mode }))
-      .then(setAppDetail).finally(() => setAppDetailLoading(false))
+    latest('getSrumAppDetail', JSON.stringify({ app: selectedApp, ...scope, terms, mode }))
+      .then(setAppDetail)
+      .catch((e) => { setAppDetail(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
+      .finally(() => setAppDetailLoading(false))
   }, [selectedApp, appRange, selectedDay, terms, mode])
 
   function addTerm(e) {

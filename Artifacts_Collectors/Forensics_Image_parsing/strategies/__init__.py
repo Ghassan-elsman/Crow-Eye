@@ -1,3 +1,5 @@
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.strategies")
 """
 Image Access Strategy Classes
 
@@ -19,32 +21,32 @@ try:
     __all__.append('E01AccessStrategy')
 except ImportError as e:
     # If dependencies are missing, provide a helpful error message
-    print(f"Warning: Could not import E01AccessStrategy: {e}")
+    _log.warning(f"Warning: Could not import E01AccessStrategy: {e}")
 
 try:
     from .vhdx_access_strategy import VHDXAccessStrategy
     __all__.append('VHDXAccessStrategy')
 except ImportError as e:
     # If dependencies are missing, provide a helpful error message
-    print(f"Warning: Could not import VHDXAccessStrategy: {e}")
+    _log.warning(f"Warning: Could not import VHDXAccessStrategy: {e}")
 
 try:
     from .vmdk_access_strategy import VMDKAccessStrategy
     __all__.append('VMDKAccessStrategy')
 except ImportError as e:
     # If dependencies are missing, provide a helpful error message
-    print(f"Warning: Could not import VMDKAccessStrategy: {e}")
+    _log.warning(f"Warning: Could not import VMDKAccessStrategy: {e}")
 
 try:
     from .iso_access_strategy import ISOAccessStrategy
     __all__.append('ISOAccessStrategy')
 except ImportError as e:
     # If dependencies are missing, provide a helpful error message
-    print(f"Warning: Could not import ISOAccessStrategy: {e}")
+    _log.warning(f"Warning: Could not import ISOAccessStrategy: {e}")
 
 try:
     from .raw_access_strategy import RawAccessStrategy
     __all__.append('RawAccessStrategy')
 except ImportError as e:
     # If dependencies are missing, provide a helpful error message
-    print(f"Warning: Could not import RawAccessStrategy: {e}")
+    _log.warning(f"Warning: Could not import RawAccessStrategy: {e}")

@@ -23,9 +23,13 @@ logger = logging.getLogger(__name__)
 GENERIC_READ = 0x80000000
 FILE_SHARE_READ = 0x00000001
 FILE_SHARE_WRITE = 0x00000002
+FILE_SHARE_DELETE = 0x00000004
 OPEN_EXISTING = 3
 FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
-INVALID_HANDLE_VALUE = -1
+# CreateFileW's restype is HANDLE (a pointer), so a failure comes back as
+# 0xFFFFFFFFFFFFFFFF on 64-bit Python, never as -1: the old "== -1" test let
+# an invalid handle through. Compare against the pointer form.
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
 # NTFS constants
 FSCTL_GET_RETRIEVAL_POINTERS = 0x00090073
@@ -33,7 +37,10 @@ FSCTL_GET_NTFS_VOLUME_DATA = 0x00090064
 
 # Load Windows API functions
 if os.name == 'nt':
-    kernel32 = ctypes.windll.kernel32
+    # A private handle with use_last_error: ctypes.get_last_error() reads 0
+    # for every failure otherwise, and the shared windll.kernel32 must not have
+    # its argtypes rewritten under other modules.
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
 
     CreateFileW = kernel32.CreateFileW
     CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
@@ -62,6 +69,11 @@ if os.name == 'nt':
     DeviceIoControl.argtypes = [wintypes.HANDLE, wintypes.DWORD, c_void_p, wintypes.DWORD,
                                c_void_p, wintypes.DWORD, ctypes.POINTER(wintypes.DWORD), c_void_p]
     DeviceIoControl.restype = wintypes.BOOL
+
+    WriteFile = kernel32.WriteFile
+    WriteFile.argtypes = [wintypes.HANDLE, c_void_p, wintypes.DWORD,
+                          ctypes.POINTER(wintypes.DWORD), c_void_p]
+    WriteFile.restype = wintypes.BOOL
 else:
     kernel32 = None
     CreateFileW = None
@@ -70,6 +82,61 @@ else:
     SetFilePointer = None
     GetFileSizeEx = None
     DeviceIoControl = None
+    WriteFile = None
+
+
+def _invalid(handle):
+    return handle is None or handle == 0 or handle == INVALID_HANDLE_VALUE
+
+
+def _enable_backup_privilege():
+    """Enable SeBackupPrivilege on this process token. True when it is enabled.
+
+    FILE_FLAG_BACKUP_SEMANTICS bypasses a file's ACL only while the privilege
+    is ENABLED - holding it (every administrator does) is not enough, and it
+    is disabled by default. Without this the backup-semantics open was an
+    ordinary open with a misleading name.
+    """
+    if os.name != 'nt':
+        return False
+    try:
+        advapi32 = ctypes.WinDLL('advapi32', use_last_error=True)
+
+        class LUID(ctypes.Structure):
+            _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+        class LUID_AND_ATTRIBUTES(ctypes.Structure):
+            _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+        class TOKEN_PRIVILEGES(ctypes.Structure):
+            _fields_ = [("PrivilegeCount", wintypes.DWORD),
+                        ("Privileges", LUID_AND_ATTRIBUTES * 1)]
+
+        TOKEN_ADJUST_PRIVILEGES, TOKEN_QUERY, SE_PRIVILEGE_ENABLED = 0x20, 0x8, 0x2
+        token = wintypes.HANDLE()
+        kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+        advapi32.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD,
+                                              ctypes.POINTER(wintypes.HANDLE)]
+        if not advapi32.OpenProcessToken(kernel32.GetCurrentProcess(),
+                                         TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, byref(token)):
+            return False
+        try:
+            luid = LUID()
+            if not advapi32.LookupPrivilegeValueW(None, "SeBackupPrivilege", byref(luid)):
+                return False
+            tp = TOKEN_PRIVILEGES(1, (LUID_AND_ATTRIBUTES * 1)(
+                LUID_AND_ATTRIBUTES(luid, SE_PRIVILEGE_ENABLED)))
+            advapi32.AdjustTokenPrivileges.argtypes = [
+                wintypes.HANDLE, wintypes.BOOL, ctypes.POINTER(TOKEN_PRIVILEGES),
+                wintypes.DWORD, c_void_p, c_void_p]
+            ok = advapi32.AdjustTokenPrivileges(token, False, byref(tp), 0, None, None)
+            # Succeeds even when the privilege is not held; 1300 says so.
+            return bool(ok) and ctypes.get_last_error() != 1300
+        finally:
+            kernel32.CloseHandle(token)
+    except Exception as e:
+        logger.debug("SeBackupPrivilege not enabled: %s", e)
+        return False
 
 
 class LARGE_INTEGER(ctypes.Structure):
@@ -141,18 +208,23 @@ def _copy_with_backup_semantics(source_path: str, dest_path: str) -> bool:
     dest_handle = None
     
     try:
-        # Open source file with backup semantics
+        if not _enable_backup_privilege():
+            logger.info("SeBackupPrivilege could not be enabled (not elevated?); "
+                        "the backup-semantics open is an ordinary open")
+        # Open source file with backup semantics. FILE_SHARE_DELETE as well:
+        # a file its owner opened with delete sharing refuses any open that
+        # does not offer it back.
         source_handle = CreateFileW(
             source_path,
             GENERIC_READ,
-            FILE_SHARE_READ | FILE_SHARE_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             None,
             OPEN_EXISTING,
             FILE_FLAG_BACKUP_SEMANTICS,
             None
         )
         
-        if source_handle == INVALID_HANDLE_VALUE or source_handle == 0:
+        if _invalid(source_handle):
             error = ctypes.get_last_error()
             logger.warning(f"Could not open source file: Error {error}")
             return False
@@ -177,7 +249,7 @@ def _copy_with_backup_semantics(source_path: str, dest_path: str) -> bool:
             None
         )
         
-        if dest_handle == INVALID_HANDLE_VALUE or dest_handle == 0:
+        if _invalid(dest_handle):
             logger.warning("Could not create destination file")
             return False
         
@@ -198,8 +270,8 @@ def _copy_with_backup_semantics(source_path: str, dest_path: str) -> bool:
                 break
             
             # Write chunk
-            if not kernel32.WriteFile(dest_handle, buffer, bytes_read.value,
-                                     byref(bytes_written), None):
+            if not WriteFile(dest_handle, buffer, bytes_read.value,
+                             byref(bytes_written), None):
                 logger.error("Write failed")
                 return False
             
@@ -218,9 +290,9 @@ def _copy_with_backup_semantics(source_path: str, dest_path: str) -> bool:
         return False
     
     finally:
-        if source_handle and source_handle != INVALID_HANDLE_VALUE:
+        if not _invalid(source_handle):
             CloseHandle(source_handle)
-        if dest_handle and dest_handle != INVALID_HANDLE_VALUE:
+        if not _invalid(dest_handle):
             CloseHandle(dest_handle)
 
 

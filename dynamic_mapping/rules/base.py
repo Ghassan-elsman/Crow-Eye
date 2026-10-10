@@ -2,8 +2,12 @@
 Base classes for rules in the Dynamic Linking Intelligence Engine.
 """
 
+import re
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
+
+_FROM_TARGET = re.compile(r"\bFROM\s+TargetDB\.\"?(\w+)\"?", re.I)
+_AS_COLUMN = re.compile(r"(?:^|,|DISTINCT|SELECT)\s*([\w.\"]+)\s+AS\s+(value|key)\b", re.I)
 
 
 class DefaultRule(ABC):
@@ -38,6 +42,35 @@ class DefaultRule(ABC):
         if os.path.exists(db_path):
             return db_path
         return None
+
+    def source_info(self) -> Dict[str, str]:
+        """Where this rule reads: database, table, value and key columns.
+
+        Read from the rule's own query, so it cannot drift from what the rule
+        actually runs. A column built from an expression (COALESCE, CASE)
+        reads as "expression". Internal rules have no source database.
+        """
+        info = {"source_db": self.target_db_name or "", "source_table": "",
+                "value_column": "", "key_column": ""}
+        if self.target_db_name is None:
+            info["source_table"] = "(built in)"
+            return info
+        try:
+            query = self.get_query()
+        except Exception:
+            return info
+        m = _FROM_TARGET.search(query)
+        if m:
+            info["source_table"] = m.group(1)
+        found = {}
+        for col, alias in _AS_COLUMN.findall(query):
+            found.setdefault(alias.lower(), col.split(".")[-1].strip('"'))
+        for alias in ("value", "key"):
+            if alias in found:
+                info[alias + "_column"] = found[alias]
+            elif re.search(r"\bAS\s+%s\b" % alias, query, re.I):
+                info[alias + "_column"] = "expression"
+        return info
 
     @abstractmethod
     def get_query(self) -> str:
@@ -102,6 +135,20 @@ class CustomRule:
         self.key_column = key_column
         self.description = description or f"Custom rule for {category} mappings"
     
+    def source_info(self) -> Dict[str, str]:
+        """Where this rule reads (the fields the investigator chose)."""
+        return {"source_db": self.db_name or "", "source_table": self.table_name or "",
+                "value_column": self.value_column or "", "key_column": self.key_column or ""}
+
+    def missing_source(self, artifacts_dir: str) -> str:
+        """Why this rule cannot run here, or "" when its database exists."""
+        import os
+        if not artifacts_dir:
+            return "no artifacts directory in this case"
+        if not self.db_name or not os.path.exists(os.path.join(artifacts_dir, self.db_name)):
+            return "database %s not found in this case" % (self.db_name or "(none)")
+        return ""
+
     def validate(self) -> Tuple[bool, str]:
         """
         Validate custom rule schema references.
@@ -141,7 +188,7 @@ class CustomRule:
         FROM "{self.table_name}"
         """
     
-    def execute(self, artifacts_dir: str) -> List[Tuple[str, str, str]]:
+    def execute(self, artifacts_dir: str, raise_errors: bool = False) -> List[Tuple[str, str, str]]:
         """
         Execute custom rule and extract mappings.
 
@@ -155,7 +202,9 @@ class CustomRule:
         Returns:
             List of tuples (value, key, source). Empty list on any failure
             (missing DB / bad table / column mismatch) so the caller can simply
-            continue with the next rule.
+            continue with the next rule - unless ``raise_errors``, which the
+            engine passes so a broken rule is reported as failed, not as
+            "success, 0 mappings".
         """
         import os
         import sqlite3
@@ -172,6 +221,17 @@ class CustomRule:
         try:
             conn = sqlite3.connect(db_path)
             cursor = conn.cursor()
+            # SQLite reads a double-quoted name that matches no column as a
+            # STRING: a mistyped column linked the literal text "no_such_column"
+            # to every key in the table. Check the columns exist first.
+            cursor.execute('PRAGMA table_info("%s")' % self.table_name.replace('"', '""'))
+            columns = {row[1].lower() for row in cursor.fetchall()}
+            if not columns:
+                raise ValueError("table %s not found in %s" % (self.table_name, self.db_name))
+            missing = [c for c in (self.value_column, self.key_column) if c.lower() not in columns]
+            if missing:
+                raise ValueError("column(s) %s not found in %s.%s"
+                                 % (", ".join(missing), self.db_name, self.table_name))
             cursor.execute(self.generate_query())
             rows = cursor.fetchall()
             for row in rows:
@@ -186,8 +246,10 @@ class CustomRule:
                     continue
                 mappings.append((v_str, k_str, self.table_name))
         except Exception as e:
-            # Surfaced by the caller via _log_gather_history; degrade quietly here.
-            print(f"[Warning] Custom rule '{self.name}' execution failed: {e}")
+            if raise_errors:
+                raise
+            import logging
+            logging.getLogger(__name__).warning("Custom rule '%s' execution failed: %s", self.name, e)
             return []
         finally:
             if conn is not None:

@@ -51,9 +51,19 @@ export const SOURCES = [
   { key: 'recentapps', label: 'RecentApps', color: '#a3e635', hint: 'Search\\RecentApps — recently used apps (Windows 10)' },
   { key: 'appmru', label: 'App MRUs', color: '#facc15', hint: 'Per-application MRUs — 7-Zip, WinSCP, PuTTY, FileZilla…' },
   { key: 'regedit', label: 'Regedit last key', color: '#cbd5e1', hint: 'Applets\\Regedit LastKey — the last key open in Registry Editor' },
+  // What the user RAN - registry execution evidence, one time per entry.
+  { key: 'userassist', label: 'UserAssist', color: '#f472b6', hint: 'Explorer\\UserAssist — programs this user ran, with run count, focus count and focus time' },
+  { key: 'bam', label: 'BAM', color: '#ff6b6b', hint: 'Background Activity Moderator — last run of each program, per account' },
+  { key: 'dam', label: 'DAM', color: '#c4b5fd', hint: 'Desktop Activity Moderator — last run, on modern-standby devices' },
+  { key: 'apppermissions', label: 'Camera / mic / location', color: '#fb7185', hint: 'CapabilityAccessManager\\ConsentStore — when each app last used the camera, microphone or location' },
   { key: 'muicache', label: 'MUICache', color: '#67e8f9', hint: 'Shell\\MuiCache — programs this user launched (name + company; no time recorded)' },
   { key: 'shellfolders', label: 'User Shell Folders', color: '#86efac', hint: 'Explorer\\User Shell Folders — where each known folder points (no time recorded)' },
   { key: 'shellext', label: 'Shell extensions', color: '#fca5a5', hint: 'Shell open commands, icon overlay handlers, delay-load shell objects (no time recorded)' },
+  // Ran or set, with only the key's write time (one upper bound for every entry): listed, not dated.
+  { key: 'featureusage', label: 'FeatureUsage', color: '#fde047', hint: 'Explorer\\FeatureUsage — taskbar switch, launch and badge counts (key time only)' },
+  { key: 'compat', label: 'Compatibility Assistant', color: '#7dd3fc', hint: 'PCA Store — programs the Program Compatibility Assistant saw run (key time only)' },
+  { key: 'fileexts', label: 'File associations', color: '#d9f99d', hint: 'Explorer\\FileExts — what opens each file type: OpenWithList, UserChoice (key time only)' },
+  { key: 'programscache', label: 'ProgramsCache', color: '#e2e8f0', hint: 'StartPage2\\ProgramsCache — the cached Start menu program list (key time only)' },
 ]
 export const SOURCE_COLOR = Object.fromEntries(SOURCES.map(s => [s.key, s.color]))
 export const SOURCE_LABEL = Object.fromEntries(SOURCES.map(s => [s.key, s.label]))
@@ -82,6 +92,14 @@ export const SOURCE_RAMPS = {
   muicache: ['#0f1626', '#1d4650', '#2a6b7a', '#44a7bd', '#67e8f9'],
   shellfolders: ['#0f1626', '#24452f', '#356b47', '#55a872', '#86efac'],
   shellext: ['#0f1626', '#4d2a2a', '#7a3e3e', '#bb6464', '#fca5a5'],
+  userassist: ['#0f1626', '#4f304e', '#7d426b', '#b4588e', '#f472b6'],
+  bam: ['#0f1626', '#522e39', '#823f47', '#bc5358', '#ff6b6b'],
+  dam: ['#0f1626', '#424362', '#66628d', '#9188c1', '#c4b5fd'],
+  apppermissions: ['#0f1626', '#512a38', '#813d4f', '#bc576d', '#fb7185'],
+  featureusage: ['#0f1626', '#524f2f', '#817736', '#baa73e', '#fde047'],
+  compat: ['#0f1626', '#2e4b62', '#44718d', '#5e9ec0', '#7dd3fc'],
+  fileexts: ['#0f1626', '#485647', '#70835f', '#a0b97c', '#d9f99d'],
+  programscache: ['#0f1626', '#4a515f', '#747b87', '#a7adb7', '#e2e8f0'],
 }
 
 // The target's location — a secondary axis (filter + insights), not the colour.
@@ -99,5 +117,5 @@ export const TYPE_LABEL = {
   folder: 'folder', file: 'file', volume: 'volume', network: 'network',
   command: 'command', search: 'search', application: 'program', other: 'item',
   pinned: 'pinned', url: 'url', 'remote host': 'remote host', 'registry key': 'reg key', item: 'item',
-  'shell extension': 'shell ext',
+  'shell extension': 'shell ext', executed: 'ran', configured: 'setting', 'device access': 'device use',
 }

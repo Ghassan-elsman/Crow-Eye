@@ -340,7 +340,7 @@
         },
         {
           "feather_id": "mft_usn",
-          "field_name": "file_name",
+          "field_name": "fn_filename",
           "operator": "wildcard",
           "value": "*"
         }

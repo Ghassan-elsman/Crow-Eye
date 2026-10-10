@@ -36,9 +36,33 @@ from eye.ui.onboarding_wizard import OnboardingWizard
 from eye.ui.case_setup_dialog import CaseSetupDialog, CaseContextEditDialog
 from eye.ui.case_summary_dialog import CaseSummaryDialog
 from eye.ui import message_box_helper
+# Module level: all four Eye windows call CrowEyeStyles.resource_icon() in
+# __init__, before the local `from styles import ... as _CES` further down -
+# without this every Eye window raised NameError on open.
+from styles import CrowEyeStyles
 
 logger = logging.getLogger(__name__)
 
+
+
+def _eye_icon(button, name):
+    """The app's SVG icon on a toolbar button (no emoji in the GUI)."""
+    try:
+        from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+        button.setIcon(getattr(CrowEyeIcons, name)())
+    except Exception:
+        pass
+
+
+def _site_font(sheet):
+    """The site's UI font in a sheet that named Segoe UI (ui/site_theme.py)."""
+    try:
+        from ui.site_theme import families
+        fam = families()[0]
+    except Exception:
+        return sheet
+    return (sheet.replace("'Segoe UI', -apple-system, sans-serif", "'%s'" % fam)
+                 + " QPushButton { font-family: '%s'; }" % fam)
 
 class _EvidenceImportWorker(QThread):
     """Runs evidence import off the GUI thread so a large conversion or hash
@@ -101,8 +125,17 @@ class _EvidenceImportWorker(QThread):
                          "row_count": result.get("row_count"),
                          "primary_timestamp": result.get("primary_timestamp")})
                     result["sha256"] = (entry or {}).get("sha256")
+                elif not result.get("ok"):
+                    from eye.services.imported_evidence_manifest import ledger_evidence_import
+                    ledger_evidence_import(self.artifacts_dir, failed=result.get("error") or "not imported",
+                                           source_path=self.src_path)
         except Exception as e:  # never let the thread die silently
             logger.exception("Evidence import worker failed")
+            try:
+                from eye.services.imported_evidence_manifest import ledger_evidence_import
+                ledger_evidence_import(self.artifacts_dir, failed=e, source_path=self.src_path)
+            except Exception:
+                pass
             result = {"ok": False, "error": f"Import failed: {e}", "dest_db": None,
                       "table": None, "row_count": 0, "primary_timestamp": None,
                       "source_type": None, "display_name": None}
@@ -516,7 +549,7 @@ class EYEAssistantWindow(QWidget):
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.setContentsMargins(0, 0, 0, 0)
         self.splitter.setHandleWidth(2)
-        self.splitter.setStyleSheet("QSplitter::handle { background-color: #334155; } QSplitter::handle:hover { background-color: #00FFFF; }")
+        self.splitter.setStyleSheet("QSplitter::handle { background-color: #334155; } QSplitter::handle:hover { background-color: #818CF8; }")
         
         # QWebEngineView construction is the single biggest freeze source on
         # first launch (cold WebEngine process spin-up, ~hundreds of ms each).
@@ -585,7 +618,7 @@ class EYEAssistantWindow(QWidget):
 
         layout.addWidget(self.splitter)
         self._pump_splash()
-        self.setStyleSheet("""
+        self.setStyleSheet(_site_font("""
             QWidget { 
                 background-color: #0B1220; 
                 color: #E2E8F0;
@@ -598,14 +631,14 @@ class EYEAssistantWindow(QWidget):
             QSplitter::handle:horizontal:hover { 
                 background-color: #C084FC; 
             }
-        """)
+        """))
 
     def _create_toolbar(self) -> QToolBar:
         """Create window toolbar."""
         toolbar = QToolBar("Eye AI Toolbar")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
-        toolbar.setStyleSheet("""
+        toolbar.setStyleSheet(_site_font("""
             QToolBar { 
                 spacing: 8px; 
                 padding: 4px 12px; 
@@ -629,13 +662,15 @@ class EYEAssistantWindow(QWidget):
             QPushButton:pressed {
                 background: rgba(255, 255, 255, 0.02);
             }
-        """)
+        """))
         
-        btn_context = QPushButton("\ud83d\udccb Case Context")
+        btn_context = QPushButton("Case Context")
+        _eye_icon(btn_context, "clipboard")
         btn_context.clicked.connect(self._on_case_context_clicked)
         toolbar.addWidget(btn_context)
         
-        btn_summary = QPushButton("\ud83d\udcca Case Summary")
+        btn_summary = QPushButton("Case Summary")
+        _eye_icon(btn_summary, "chart")
         btn_summary.clicked.connect(self._on_case_summary_clicked)
         toolbar.addWidget(btn_summary)
         

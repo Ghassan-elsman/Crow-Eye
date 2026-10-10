@@ -40,7 +40,7 @@ export default function OverviewPanel({ overview, loading, onOpenInsight, emptyN
     <div className="ov">
       <div className="ov-title">Overview</div>
       <div className="ov-stats">
-        <Tile v={fmtInt(t.items)} l="shell items" />
+        <Tile v={fmtInt(t.items)} l="items" />
         <Tile v={fmtInt(t.targets)} l="distinct targets" />
         <Tile v={fmtInt(t.sources)} l="active sources" />
         <Tile v={fmtInt(t.activeDays)} l="active days" />

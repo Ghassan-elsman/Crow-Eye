@@ -1,0 +1,2547 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="google-adsense-account" content="ca-pub-2578144143174926">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Browser Forensics Anatomy — Chromium and Gecko, Byte by Byte</title>
+    <meta name="description"
+        content="Browser forensics byte by byte: Chromium and Gecko stores, interactive maps of the HTTP cache, SNSS and LevelDB, and how to read the activity dashboard.">
+
+    <!-- Favicon -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+    <link rel="stylesheet" href="../style.css">
+    <!-- SEO (injected) -->
+    <link rel="canonical" href="https://crow-eye.com/Eye-Describe/browser-forensics">
+    <meta name="keywords" content="browser forensics, chromium forensics, firefox forensics, browser history forensics, cookies dpapi v20 app-bound encryption, leveldb forensics, sqlite wal browser, snss session forensics, browser cache blockfile simple cache cache2, entrystore cache address, cachestorage protobuf, simplefileheader magic, mozlz4, snss session commands, indexeddb local storage forensics, webkit timestamp prtime">
+    <meta name="robots" content="index, follow">
+    <meta property="og:type" content="article">
+    <meta property="og:site_name" content="Crow-Eye">
+    <meta property="og:url" content="https://crow-eye.com/Eye-Describe/browser-forensics">
+    <meta property="og:title" content="Browser Forensics Anatomy — Chromium and Gecko, Byte by Byte">
+    <meta property="og:description" content="Browser forensics byte by byte: Chromium and Gecko stores, interactive maps of the HTTP cache, SNSS and LevelDB, and how to read the activity dashboard.">
+    <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+    <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+    <meta property="og:image:type" content="image/jpeg">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Browser Forensics Anatomy — Chromium and Gecko, Byte by Byte">
+    <meta name="twitter:description" content="Browser forensics byte by byte: Chromium and Gecko stores, interactive maps of the HTTP cache, SNSS and LevelDB, and how to read the activity dashboard.">
+    <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+    <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+    <!-- SEO structured data (injected) -->
+    <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "headline": "Browser Forensics Anatomy — Chromium and Gecko, Byte by Byte",
+      "description": "Every browser artifact down to the wire format: interactive byte maps of the Chromium blockfile cache, EntryStore, Simple Cache, CacheStorage protobuf, Firefox cache2, SNSS sessions, LevelDB and mozLz4 - plus what Crow-Eye does not decode, and why.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "Web browser forensics",
+      "inLanguage": "en",
+      "dateModified": "2026-09-13",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/browser-forensics"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "Browser Forensics",
+          "item": "https://crow-eye.com/Eye-Describe/browser-forensics"
+        }
+      ]
+    }
+  ]
+}
+    </script>
+
+    <!-- Byte-map geometry. anatomy.css pins the byte-cell COLOURS but not the
+         grid, the inspector panel or the variant tabs, so those live here, the
+         same way every other anatomy page carries them. -->
+    <style>
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    .cap { display: block; font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--tx3); margin-bottom: 8px; }
+
+    /* The 16-column map is wider than a phone; say so rather than letting the
+       right-hand bytes look as though they are missing. */
+    .scroll-hint { display: none; align-items: center; gap: 7px; font-family: 'Space Mono', monospace; font-size: 10.5px; color: var(--tx3); margin-bottom: 6px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; }
+    .scroll-hint i { color: var(--tx2); }
+    @media (max-width: 1100px) { .scroll-hint { display: inline-flex; } }
+
+    @media (max-width: 1100px) {
+        .dissection-layout { grid-template-columns: 1fr; }
+        .dynamic-side { position: static; max-height: none; min-height: 0; }
+    }
+    </style>
+
+    <!-- anatomy.css is linked LAST so it wins the cascade by source order. -->
+    <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+
+
+    <!-- NAV -->
+    <nav id="main-nav">
+        <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+        <div class="nav-links-wrap">
+            <a href="https://crow-eye.com/">Home</a>
+            <a href="https://crow-eye.com/sentinel">Sentinel</a>
+            <a href="https://crow-eye.com/eye-describe">Eye Describe</a>
+            <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+            <a href="https://crow-eye.com/user-guide">User Guide</a>
+            <a href="https://crow-eye.com/documentation">Docs</a>
+            <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+        </div>
+        <button class="nav-toggle" aria-label="Toggle Menu">
+            <i class="fas fa-bars"></i>
+        </button>
+    </nav>
+
+    <!-- HERO -->
+    <section class="hero">
+
+        <div class="hero-badge">
+            <span class="pulse"></span>
+            Eye Describe Anatomy
+        </div>
+        <h1 class="hero-title"><i class="fas fa-compass"></i> Browser forensics, end to end</h1>
+        <p class="hero-sub">Every artifact a browser leaves behind — how it works, where it lives, and what it proves</p>
+
+        <div class="scroll-hint">
+            <span>Scroll to investigate</span>
+            <div class="line"></div>
+        </div>
+    </section>
+
+    <main class="container">
+        <style>
+            main.container { max-width: 1560px; }
+            p, li, td, dd { text-wrap: pretty; }
+            h1, h2, h3, h4 { text-wrap: balance; }
+
+            .warmup { margin: 0 0 2.2rem; padding: 1.2rem 1.4rem; border-left: 3px solid var(--cyan); background: rgba(34,211,238,0.04); border-radius: 0 12px 12px 0; }
+            .warmup p { color: #cbd5e1; font-size: 1.08rem; line-height: 1.75; margin: 0; max-width: 820px; }
+            .warmup p + p { margin-top: 0.75rem; }
+            .warmup .eli5 { color: var(--cyan); font-weight: 700; }
+
+            /* ---- Diagram shell (mirrors the boot article's .boot-diagram) ---- */
+            .bf-diagram { margin: 2.5rem 0; padding: 1.6rem; background: var(--bg-card); border: 1px solid var(--border); border-radius: 16px; }
+            .bf-diagram .diagram-title { font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan); margin-bottom: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+            .bf-diagram .diagram-title i { color: var(--indigo); }
+            .bf-cap { color: var(--muted); font-size: 0.82rem; margin-top: 1rem; text-align: center; }
+
+            /* ---- Engine profile trees (two columns) ---- */
+            .bf-trees { display: grid; grid-template-columns: 1fr 1fr; gap: 1.4rem; }
+            .bf-tree { background: rgba(10,12,16,0.55); border: 1px solid var(--border); border-radius: 12px; padding: 1.1rem 1.2rem; }
+            .bf-tree h4 { margin: 0 0 0.8rem; font-size: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+            .bf-tree.chromium h4 { color: #60a5fa; }
+            .bf-tree.gecko h4 { color: #fb923c; }
+            .tree-row { font-family: 'JetBrains Mono', monospace; font-size: 0.82rem; line-height: 1.9; color: #cbd5e1; white-space: nowrap; overflow-x: auto; }
+            .tree-row .tw { color: var(--muted); }
+            .tree-row .tf { color: #e2e8f0; }
+            .tree-row .tc { color: var(--cyan); }
+            .tree-note { color: var(--muted); font-size: 0.82rem; margin-top: 0.8rem; line-height: 1.6; }
+
+            /* ---- Substrate map ---- */
+            .bf-substrate { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 1rem; }
+            .sub-card { background: rgba(10,12,16,0.55); border: 1px solid var(--border); border-left: 3px solid var(--indigo); border-radius: 10px; padding: 1rem 1.1rem; }
+            .sub-card h4,
+            .sub-card .sub-card-title { display: block; margin: 0 0 0.4rem; font-size: 0.98rem; font-weight: 700; color: #e2e8f0; }
+            .sub-card .kind { font-family: 'JetBrains Mono', monospace; font-size: 0.68rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); }
+            .sub-card .arts { color: var(--muted); font-size: 0.86rem; line-height: 1.6; margin: 0.5rem 0 0; }
+
+            /* ---- Epoch timeline ---- */
+            .bf-epoch { display: flex; flex-direction: column; gap: 0.7rem; }
+            .epoch-row { display: grid; grid-template-columns: 150px 1fr; gap: 1rem; align-items: center; }
+            .epoch-row .ep-name { font-weight: 700; }
+            .epoch-row .ep-bar { height: 10px; border-radius: 6px; background: linear-gradient(90deg, var(--indigo), var(--cyan)); }
+            .epoch-row .ep-meta { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--muted); }
+
+            /* ---- Flow diagrams (keychain, pipeline) ---- */
+            .bf-flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.6rem; }
+            .flow-node { flex: 1; min-width: 150px; background: rgba(10,12,16,0.55); border: 1px solid var(--border); border-radius: 10px; padding: 0.9rem 1rem; }
+            .flow-node .fn-k { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); display: block; margin-bottom: 0.3rem; }
+            .flow-node .fn-t { display: block; color: #e2e8f0; font-size: 0.92rem; font-weight: 600; }
+            .flow-node .fn-d { display: block; color: var(--muted); font-size: 0.8rem; line-height: 1.5; margin-top: 0.3rem; }
+            .flow-node.warn { border-color: rgba(244,63,94,0.4); border-left: 3px solid var(--rose); }
+            .flow-arrow { display: flex; align-items: center; color: var(--indigo); font-size: 1.1rem; }
+            @media (max-width: 720px) { .flow-arrow { transform: rotate(90deg); align-self: center; } .bf-flow { flex-direction: column; } .bf-trees { grid-template-columns: 1fr; } .epoch-row { grid-template-columns: 110px 1fr; } }
+
+            /* ---- Artifact cards ---- */
+            .artifact-card { margin: 1.6rem 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; overflow: hidden; }
+            .artifact-card > .ac-head { display: flex; align-items: center; gap: 0.7rem; padding: 1rem 1.3rem; border-bottom: 1px solid var(--border); background: rgba(99,102,241,0.05); }
+            .artifact-card > .ac-head i { color: var(--cyan); font-size: 1.15rem; }
+            .artifact-card > .ac-head h3 { margin: 0; font-size: 1.15rem; }
+            .ac-body { padding: 1.2rem 1.3rem; }
+            .ac-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem 1.6rem; margin-bottom: 1rem; }
+            @media (max-width: 720px) { .ac-grid { grid-template-columns: 1fr; } }
+            .ac-field .k { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--cyan); display: block; margin-bottom: 0.2rem; }
+            .ac-field .v { color: #cbd5e1; font-size: 0.94rem; line-height: 1.6; }
+            .ac-means { border-left: 3px solid var(--rose); background: rgba(244,63,94,0.05); padding: 0.7rem 1rem; border-radius: 0 8px 8px 0; color: #fecdd3; font-size: 0.92rem; line-height: 1.6; }
+            .ac-path { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.84rem; }
+            .ac-path th, .ac-path td { text-align: left; padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+            .ac-path th { font-family: 'JetBrains Mono', monospace; font-size: 0.64rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+            .ac-path td { font-family: 'JetBrains Mono', monospace; color: #cbd5e1; }
+            .ac-path .eng { color: #60a5fa; font-weight: 700; font-family: 'Barlow Semi Condensed', sans-serif; }
+            .ac-path .eng.g { color: #fb923c; }
+
+            /* Engine pills */
+            .epill { display: inline-block; font-family: 'JetBrains Mono', monospace; font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase; padding: 0.15rem 0.5rem; border-radius: 5px; margin-left: 0.4rem; vertical-align: middle; }
+            .epill.c { color: #93c5fd; background: rgba(59,130,246,0.15); border: 1px solid rgba(59,130,246,0.3); }
+            .epill.g { color: #fdba74; background: rgba(251,146,60,0.15); border: 1px solid rgba(251,146,60,0.3); }
+            .epill.b { color: #a7f3d0; background: rgba(52,211,153,0.15); border: 1px solid rgba(52,211,153,0.3); }
+
+            /* Cross-reference + comparison tables reuse .technical-table look */
+            table.bf-table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; font-size: 0.88rem; }
+            table.bf-table th, table.bf-table td { text-align: left; padding: 0.55rem 0.8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+            table.bf-table th { color: var(--cyan); font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; }
+            table.bf-table td { color: #cbd5e1; line-height: 1.55; }
+            table.bf-table code, .ac-field code, .ac-means code { font-family: 'JetBrains Mono', monospace; color: #a5b4fc; font-size: 0.86em; }
+            .bf-table-wrap { overflow-x: auto; }
+            /* The wrapper can only scroll something wider than itself. Without a
+               min-width the 100% table squashed instead, breaking code spans
+               mid-token on a phone; below 720px it scrolls as intended. */
+            @media (max-width: 720px) { table.bf-table { min-width: 560px; } }
+
+            /* TOC */
+            .bf-toc { background: rgba(10,12,16,0.55); border: 1px solid var(--border); border-radius: 14px; padding: 1.3rem 1.5rem; margin: 0 0 2.5rem; }
+            .bf-toc h4 { margin: 0 0 0.8rem; font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--cyan); }
+            .bf-toc ol { margin: 0; padding-left: 1.3rem; columns: 2; column-gap: 2rem; }
+            .bf-toc li { margin: 0.3rem 0; }
+            .bf-toc a { color: #cbd5e1; text-decoration: none; }
+            .bf-toc a:hover { color: var(--cyan); }
+            @media (max-width: 720px) { .bf-toc ol { columns: 1; } }
+        </style>
+
+        <!-- Intro -->
+        <section id="intro" class="reveal">
+            <div class="premium-alert">
+                <p>On a modern machine, the browser is not <em>an</em> application — it is <strong>the</strong> application. Email, banking, chat, work, shopping, and half the operating system's own UI now run inside it. That makes the browser the single richest source of evidence on most hosts: it records where a person went, what they typed, what they searched for <em>before they even pressed Enter</em>, what they downloaded, who they logged in as, and what web apps kept in local storage.</p>
+                <p>This guide runs from "what is a browser profile" all the way down to the byte-level stores — SQLite, LevelDB, SNSS (the Session Network Serialization Stream Chromium writes its open tabs to) and the HTTP cache — and covers every artifact worth pulling: how it works, why it exists, how the browser uses it, where it lives on disk, and what it proves. Along the way it sets against each other the two engines that power almost every browser on Earth: <strong>Chromium (Blink)</strong> and <strong>Gecko (Firefox)</strong>.</p>
+            </div>
+
+            <div class="bf-toc">
+                <h4><i class="fas fa-list-ol"></i> What this page covers</h4>
+                <ol>
+                    <li><a href="#engines">The two engines</a></li>
+                    <li><a href="#substrates">Storage substrates</a></li>
+                    <li><a href="#time">Timestamps</a></li>
+                    <li><a href="#crypto">Encryption &amp; secrets</a></li>
+                    <li><a href="#navigation">Navigation and intent</a></li>
+                    <li><a href="#identity">Identity and secrets</a></li>
+                    <li><a href="#webapp">Web-app storage</a></li>
+                    <li><a href="#sessions">Sessions and cache</a></li>
+                    <li><a href="#tracking">Network &amp; tracking</a></li>
+                    <li><a href="#xref">Chromium ↔ Gecko cross-reference</a></li>
+                    <li><a href="#recovery">Recovery &amp; anti-forensics</a></li>
+                    <li><a href="#providers">Search providers &amp; nearby devices</a></li>
+                    <li><a href="#crow-eye">How Crow-Eye parses it</a></li>
+                    <li><a href="#dashboard">Reading the activity dashboard</a></li>
+                    <li><a href="#anatomy">Binary anatomy of every structure</a></li>
+                    <li><a href="#limits">What Crow-Eye does not decode</a></li>
+                    <li><a href="#tables">Every table Crow-Eye writes</a></li>
+                </ol>
+            </div>
+        </section>
+
+        <!-- 1. The two engines -->
+        <section id="engines" class="reveal">
+            <div class="section-label">1 &middot; Foundation</div>
+            <h2 class="section-title">The two engines: Chromium vs Gecko</h2>
+            <div class="kb-section">
+                <p>Nearly every browser an examiner meets is one of two families. <span class="eli5">Chromium</span> (the Blink engine) powers Chrome, Edge, Brave, Opera, Vivaldi, Yandex, and the browser hidden inside Electron apps like Slack, Discord and Teams. <span class="eli5">Gecko</span> powers Mozilla Firefox and its forks (LibreWolf, Waterfox, Tor Browser). These two families cover 99% of the browsers in the wild.</p>
+            </div>
+
+            <p>The deepest difference for a forensic examiner is not how they render pages — it is <strong>how they store data</strong>. Chromium scatters evidence across <strong>many small, single-purpose files</strong> inside a profile folder (one file for history, another for cookies, another for logins, a folder of LevelDB for local storage). Firefox <strong>centralises</strong>: one <code>places.sqlite</code> holds history, downloads <em>and</em> bookmarks together, and a single <code>storage/</code> tree holds all web-app data. Neither is "better" — but the layouts differ enough that both have to be known.</p>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-folder-tree"></i> Profile layout — the same evidence, two shapes</div>
+                <div class="bf-trees">
+                    <div class="bf-tree chromium">
+                        <h4><i class="fab fa-chrome"></i> Chromium (Chrome / Edge / Brave)</h4>
+                        <div class="tree-row"><span class="tw">%LOCALAPPDATA%\</span><span class="tf">Google\Chrome\User Data\</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;├─ <span class="tc">Local State</span> <span class="tw">(master key)</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;└─ <span class="tf">Default\</span> <span class="tw">(a profile)</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">History</span> <span class="tw">(sqlite)</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">Network\Cookies</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">Login Data</span> · <span class="tc">Web Data</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">Bookmarks</span> · <span class="tc">Preferences</span> <span class="tw">(json)</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">Local Storage\leveldb\</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">IndexedDB\</span> · <span class="tc">Sessions\</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ <span class="tc">Cache\Cache_Data\</span></div>
+                        <p class="tree-note">Extra profiles are <code>Profile 1</code>, <code>Profile 2</code>… Edge/Brave swap only the vendor folder (<code>Microsoft\Edge</code>, <code>BraveSoftware\Brave-Browser</code>).</p>
+                    </div>
+                    <div class="bf-tree gecko">
+                        <h4><i class="fab fa-firefox-browser"></i> Gecko (Firefox)</h4>
+                        <div class="tree-row"><span class="tw">%APPDATA%\</span><span class="tf">Mozilla\Firefox\Profiles\</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;└─ <span class="tf">xxxx.default-release\</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">places.sqlite</span> <span class="tw">(history+dl+bkmk)</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">cookies.sqlite</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">formhistory.sqlite</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">logins.json</span> + <span class="tc">key4.db</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">sessionstore.jsonlz4</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;├─ <span class="tc">webappsstore.sqlite</span></div>
+                        <div class="tree-row">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└─ <span class="tc">storage\default\</span> <span class="tw">(LS+IDB)</span></div>
+                        <div class="tree-row"><span class="tw">%LOCALAPPDATA%\</span>…\<span class="tc">cache2\entries\</span></div>
+                        <p class="tree-note">The profile name is random; <code>profiles.ini</code> in the parent maps names to folders and can point outside <code>Profiles\</code>.</p>
+                    </div>
+                </div>
+                <p class="bf-cap">The same seven questions — where did they go, what did they save, who are they — answered by different files in each engine.</p>
+            </div>
+
+            <span class="cap">Table 1</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Concern</th><th>Chromium (Blink)</th><th>Gecko (Firefox)</th></tr></thead>
+                <tbody>
+                    <tr><td>Profile root</td><td><code>User Data\Default</code></td><td><code>Profiles\&lt;rand&gt;.default-release</code></td></tr>
+                    <tr><td>History / downloads</td><td><code>History</code> (sqlite; downloads inside it)</td><td><code>places.sqlite</code> (history+downloads+bookmarks)</td></tr>
+                    <tr><td>Cookies</td><td><code>Network\Cookies</code> (sqlite, encrypted values)</td><td><code>cookies.sqlite</code> (plaintext values)</td></tr>
+                    <tr><td>Saved logins</td><td><code>Login Data</code> (sqlite, DPAPI/os_crypt)</td><td><code>logins.json</code> + <code>key4.db</code> (NSS)</td></tr>
+                    <tr><td>Form/autofill</td><td><code>Web Data</code> (autofill, addresses, cards)</td><td><code>formhistory.sqlite</code></td></tr>
+                    <tr><td>Web-app storage</td><td>LevelDB (<code>Local Storage\leveldb</code>, <code>IndexedDB</code>)</td><td><code>storage\default</code> + <code>webappsstore.sqlite</code></td></tr>
+                    <tr><td>Session/tabs</td><td>SNSS (<code>Sessions\Session_*</code>, <code>Tabs_*</code>)</td><td><code>sessionstore.jsonlz4</code> (mozLz4)</td></tr>
+                    <tr><td>HTTP cache</td><td>Simple or Blockfile (<code>Cache\Cache_Data</code>)</td><td>cache2 (<code>cache2\entries</code>)</td></tr>
+                    <tr><td>Master key</td><td><code>Local State</code> → os_crypt (DPAPI-wrapped)</td><td><code>key4.db</code> (NSS, optional master password)</td></tr>
+                    <tr><td>Timestamps</td><td>WebKit (µs since 1601)</td><td>PRTime (µs since 1970)</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+        <!-- 2. Storage substrates -->
+        <section id="substrates" class="reveal">
+            <div class="section-label">2 &middot; Foundation</div>
+            <h2 class="section-title">Storage substrates: the five containers</h2>
+            <div class="kb-section">
+                <p>Before opening a single artifact, the <em>containers</em> come first. Almost everything a browser stores lives in one of five formats. Recognising the container already settles how to read the file — and, crucially, how to <strong>recover what was "deleted" from it.</strong></p>
+            </div>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-database"></i> The five substrates and what lives in each</div>
+                <div class="bf-substrate">
+                    <div class="sub-card">
+                        <span class="kind">SQLite</span>
+                        <h4>Relational database files</h4>
+                        <p class="arts">History, Cookies, Login Data, Web Data, Favicons, DIPS, Media History (Chromium); places / cookies / formhistory (Firefox). Ships with <code>-wal</code>, <code>-journal</code>, <code>-shm</code> sidecars that hold uncommitted and recently-deleted rows.</p>
+                    </div>
+                    <div class="sub-card">
+                        <span class="kind">LevelDB</span>
+                        <h4>Key-value log + SST tables</h4>
+                        <p class="arts">Local Storage, IndexedDB, Service Worker cache, extension storage, GCM push. A <code>.log</code> write-ahead file plus <code>.ldb</code> tables (snappy-compressed). Deleted keys survive as <strong>tombstones</strong> in the log.</p>
+                    </div>
+                    <div class="sub-card">
+                        <span class="kind">JSON</span>
+                        <h4>Human-readable config</h4>
+                        <p class="arts">Preferences, Secure Preferences, Bookmarks, Local State (Chromium); logins.json (Firefox). Plain text — settings, extension permissions, the DPAPI-wrapped master key, and anti-forensics tells like <code>exit_type</code>.</p>
+                    </div>
+                    <div class="sub-card">
+                        <span class="kind">SNSS / mozLz4</span>
+                        <h4>Session serialization</h4>
+                        <p class="arts">Chromium session &amp; tab state is SNSS command records; Firefox is an LZ4-compressed JSON (<code>sessionstore.jsonlz4</code>). Both hold open tabs, tab order, navigation history and unsubmitted form text.</p>
+                    </div>
+                    <div class="sub-card">
+                        <span class="kind">HTTP cache</span>
+                        <h4>Cached response bodies</h4>
+                        <p class="arts">Chromium Simple Cache (one file per entry) or the older Blockfile (<code>data_0..3</code> + external <code>f_*</code> bodies); Firefox cache2 (<code>entries\&lt;hash&gt;</code> with a trailing metadata block). Holds the URL, headers and the actual bytes served.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="premium-alert" style="border-color: var(--cyan);">
+                <p><strong>Why the sidecars matter.</strong> A SQLite database in <em>WAL mode</em> writes new and changed rows to a <code>-wal</code> file first and only folds them into the main <code>.db</code> at a checkpoint. A collection that takes only <code>History</code> and ignores <code>History-wal</code> misses the most recent browsing — and rows a user "deleted" seconds ago may still be sitting in the WAL. Always collect the sidecars with the database.</p>
+            </div>
+        </section>
+
+        <!-- 3. Timestamps -->
+        <section id="time" class="reveal">
+            <div class="section-label">3 &middot; Foundation</div>
+            <h2 class="section-title">Timestamps: three different zeros</h2>
+            <div class="kb-section">
+                <p>A timestamp is only as good as the <em>epoch</em> it counts from. Browsers use two different origins, and getting them wrong throws every event off by centuries. This is the single most common browser-forensics mistake.</p>
+            </div>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-clock"></i> Where each clock starts counting</div>
+                <div class="bf-epoch">
+                    <div class="epoch-row"><span class="ep-name" style="color:#60a5fa;">WebKit</span><div><div class="ep-bar" style="background:linear-gradient(90deg,#1e3a8a,#60a5fa);"></div><div class="ep-meta">microseconds since <strong>1601-01-01</strong> · Chromium (History, Cookies, Login Data, Downloads)</div></div></div>
+                    <div class="epoch-row"><span class="ep-name" style="color:#fb923c;">PRTime</span><div><div class="ep-bar" style="background:linear-gradient(90deg,#9a3412,#fb923c);"></div><div class="ep-meta">microseconds since <strong>1970-01-01</strong> · Firefox (places, cookies, formhistory)</div></div></div>
+                    <div class="epoch-row"><span class="ep-name" style="color:#34d399;">Unix</span><div><div class="ep-bar" style="background:linear-gradient(90deg,#065f46,#34d399);"></div><div class="ep-meta">seconds since <strong>1970-01-01</strong> · autofill dates, some cookie expiries</div></div></div>
+                </div>
+                <p class="bf-cap">WebKit shares the Windows FILETIME epoch (1601) but counts microseconds, not 100-ns ticks — multiply by 10 to reuse FILETIME math.</p>
+            </div>
+
+            <span class="cap">Table 2</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Format</th><th>Unit</th><th>Convert to UTC</th></tr></thead>
+                <tbody>
+                    <tr><td>WebKit (Chromium)</td><td>µs since 1601</td><td><code>epoch_1601 + (value / 1e6) seconds</code></td></tr>
+                    <tr><td>PRTime (Firefox)</td><td>µs since 1970</td><td><code>epoch_1970 + (value / 1e6) seconds</code></td></tr>
+                    <tr><td>Unix seconds</td><td>s since 1970</td><td><code>epoch_1970 + value seconds</code></td></tr>
+                </tbody>
+            </table>
+            </div>
+            <p>History carries <strong>two</strong> Chromium times worth separating: <code>visit_time</code> dates a <em>single visit</em>, while <code>last_visit_time</code> on the URL row is only the most recent one. The timeline has to plot the per-visit time, or a hundred visits collapse into one dot.</p>
+        </section>
+
+        <!-- 4. Encryption -->
+        <section id="crypto" class="reveal">
+            <div class="section-label">4 &middot; Foundation</div>
+            <h2 class="section-title">Encryption and secrets: why passwords aren't plaintext</h2>
+            <div class="kb-section">
+                <p>Two acronyms run through this section. <strong>DPAPI</strong> is the Windows Data Protection API, the operating system service that encrypts a blob against the logged-on user's credentials so only that user on that machine can decrypt it. <strong>NSS</strong> is Network Security Services, the Mozilla cryptography library Firefox uses instead. Saved passwords and cookie values are encrypted at rest by one or the other. The key chain is what decides exactly what has to be preserved to decrypt them later — and why simply reading <code>Login Data</code> yields ciphertext, not passwords.</p>
+            </div>
+
+            <p>Chromium wraps every secret with a per-profile <strong>os_crypt</strong> key. That key is itself encrypted and stored in <code>Local State</code>. The encryption scheme is written as a prefix on each blob:</p>
+            <ul>
+                <li><strong><code>v10</code> / <code>v11</code></strong> — AES-256-GCM, where the key is protected by Windows <strong>DPAPI</strong> (tied to the user's login). Decryptable while running as that user.</li>
+                <li><strong><code>v20</code> — App-Bound Encryption</strong> — the modern default in Chrome/Edge/Brave. The key is additionally bound to the browser via a <strong>SYSTEM-level elevation service</strong>, so it cannot be decrypted just by being the user. This deliberately breaks the classic "copy Login Data and decrypt" attack.</li>
+                <li><strong><code>dpapi</code></strong> — a bare DPAPI blob (older builds). <strong><code>plaintext</code></strong> — no encryption prefix.</li>
+            </ul>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-key"></i> The Chromium key-wrapping chain</div>
+                <div class="bf-flow">
+                    <div class="flow-node"><span class="fn-k">User</span><span class="fn-t">Windows login</span><span class="fn-d">Seeds the DPAPI master key</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">Local State</span><span class="fn-t">os_crypt key</span><span class="fn-d">Wrapped with DPAPI (v10) or app-bound (v20)</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node warn"><span class="fn-k">v20 only</span><span class="fn-t">Elevation service</span><span class="fn-d">SYSTEM-level unwrap; blocks user-only decryption</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">Value</span><span class="fn-t">AES-GCM blob</span><span class="fn-d">The cookie / password ciphertext in the SQLite row</span></div>
+                </div>
+            </div>
+
+            <p>Firefox does it differently: usernames and passwords live in <code>logins.json</code> as base64 blobs encrypted by <strong>NSS</strong>, and the key material is in <code>key4.db</code> (optionally protected by a master password). Decrypting Firefox logins later requires <code>key4.db</code> — so a sound acquisition copies it alongside <code>logins.json</code>.</p>
+
+            <div class="premium-alert" style="border-color: var(--rose);">
+                <p><strong>Sound practice:</strong> a forensic parser should record the <em>encrypted</em> blob plus the encryption scheme and the wrapped master key, and decrypt in a separate, audited step — never write plaintext credentials into a case database as a side effect of parsing. Preserve, don't crack, at collection time.</p>
+            </div>
+        </section>
+
+        <!-- 5. Navigation & intent -->
+        <section id="navigation" class="reveal">
+            <div class="section-label">5 &middot; The Artifacts</div>
+            <h2 class="section-title">Navigation and intent</h2>
+            <div class="kb-section">
+                <p>This is the heart of browser forensics: not just <em>which</em> pages were open, but the difference between a link that was <strong>clicked</strong> and an address that was <strong>typed</strong> — and even text the user typed into the address bar and then thought better of. Typed navigation is intent.</p>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-clock-rotate-left"></i><h3>Browsing and search history <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">A visits table links each visit to a URL row, recording the time, a <em>transition type</em> (typed, link, reload, form-submit, bookmark), and a <code>from_visit</code> pointer that chains one page to the one that referred it.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To power the back button, autocomplete, and "most visited" tiles — the browser needs to rank and recall where the user has been.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Address-bar suggestions weight typed URLs and frequent sites; the referrer chain rebuilds how a user arrived at a page.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">The referrer chain reconstructs a journey (search → result → download). <em>Typed</em> transitions show deliberate navigation, not an ad redirect.</span></div>
+                    </div>
+                    <div class="ac-means">Keyword search terms are stored separately and survive even when the search URL is truncated — the exact query a user typed is often recoverable.</div>
+                    <table class="ac-path">
+                        <thead><tr><th>Engine</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Chrome</td><td>%LOCALAPPDATA%\Google\Chrome\User Data\Default\History</td></tr>
+                            <tr><td class="eng">Edge</td><td>%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\History</td></tr>
+                            <tr><td class="eng g">Firefox</td><td>%APPDATA%\Mozilla\Firefox\Profiles\&lt;p&gt;\places.sqlite</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-download"></i><h3>Download records <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Each download logs the source URL (and the full redirect chain), the referring page, the local target path, byte counts, start/finish times, and a completion/danger state.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To populate the downloads shelf, resume interrupted transfers, and warn on dangerous files.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Chromium keeps it inside the same <code>History</code> database (<code>downloads</code> + <code>downloads_url_chains</code>); Firefox records it in <code>places.sqlite</code> annotations.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Ties a file on disk to <em>where it came from</em> and <em>when</em> — often the cleanest provenance available for a suspicious executable or document.</span></div>
+                    </div>
+                    <table class="ac-path">
+                        <thead><tr><th>Engine</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Chromium</td><td>…\User Data\Default\History (downloads table)</td></tr>
+                            <tr><td class="eng g">Firefox</td><td>…\Profiles\&lt;p&gt;\places.sqlite (moz_annos)</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-i-cursor"></i><h3>Typed intent: omnibox shortcuts and the network predictor <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v"><strong>Shortcuts</strong> maps address-bar text to the destination the user actually chose. The <strong>Network Action Predictor</strong> records address-bar keystrokes the browser speculatively pre-renders — logging text the user typed <em>even if they never pressed Enter.</em></span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To make the omnibox feel instant: learn what "fac" resolves to, and start loading Facebook before the user finishes typing.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Ranks and pre-connects the most likely completion for the characters typed so far.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Among the strongest "state of mind" evidence a browser holds: intent that was formed and then abandoned still leaves a trace.</span></div>
+                    </div>
+                    <div class="ac-means">There is no Firefox equivalent stored on disk in the same way — this is a genuinely Chromium-specific evidence source.</div>
+                    <table class="ac-path">
+                        <thead><tr><th>Artifact</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Shortcuts</td><td>…\User Data\Default\Shortcuts</td></tr>
+                            <tr><td class="eng">Predictor</td><td>…\User Data\Default\Network Action Predictor</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-star"></i><h3>Favicons, top sites and reading list <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v"><strong>Favicons</strong> links a page URL to its site icon; <strong>Top Sites</strong> caches the most-visited tiles; the <strong>Reading List</strong> stores saved-for-later pages with added/opened times.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">Visual polish and quick access — icons on tabs, tiles on the new-tab page.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v"><strong>Favicons is a deletion survivor:</strong> it retains a domain's icon — and therefore proof the domain was visited — even after the matching rows are cleared from History.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>Favicons</code>, <code>Top Sites</code>, and the <code>reading_list</code> root of the <code>Bookmarks</code> JSON, all in the profile folder.</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 6. Identity & secrets -->
+        <section id="identity" class="reveal">
+            <div class="section-label">6 &middot; The Artifacts</div>
+            <h2 class="section-title">Identity and secrets</h2>
+            <div class="kb-section">
+                <p>Who is behind the keyboard? Cookies, saved logins, autofill, addresses and payment methods answer that — and they are exactly the artifacts protected by the encryption chain from Section 4.</p>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-cookie-bite"></i><h3>Cookies and session tokens <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Per-site name/value pairs with host, path, creation/expiry/last-access times, and secure/httponly/samesite flags. Chromium <em>encrypts</em> the value (see §4); Firefox stores it in the clear.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">HTTP is stateless; cookies carry the "logged-in" state and site preferences between requests.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Sends matching cookies on every request to the site until they expire.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">A live session token can prove an account was authenticated on this machine; creation times date the first login; the cookie file is usually <strong>locked</strong> while the browser runs.</span></div>
+                    </div>
+                    <table class="ac-path">
+                        <thead><tr><th>Engine</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Chromium</td><td>…\User Data\Default\Network\Cookies</td></tr>
+                            <tr><td class="eng g">Firefox</td><td>…\Profiles\&lt;p&gt;\cookies.sqlite</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-user-lock"></i><h3>Saved credentials <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Origin URL, username (clear), and an <em>encrypted</em> password blob, plus created/last-used times and a use counter.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">The built-in password manager, to auto-fill logins.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">The username alone attributes an account to the machine; times show when the login was first saved and last used. The password needs the key chain (§4) to decrypt.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v">Chromium <code>Login Data</code> (sqlite); Firefox <code>logins.json</code> + <code>key4.db</code>.</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-address-card"></i><h3>Autofill, addresses and payment methods <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Form field history (name → value → count), saved postal addresses, and payment cards (name on card, last four, network, expiry — the card number kept as an <em>encrypted</em> blob).</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">One-click form filling at checkout and sign-up.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Real identity data — names, emails, phone numbers, addresses — plus every value ever typed into a form field, with first/last-used dates.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v">Chromium <code>Web Data</code> (<code>autofill</code>, <code>addresses</code> + <code>address_type_tokens</code>, <code>credit_cards</code>); Firefox <code>formhistory.sqlite</code>.</span></div>
+                    </div>
+                    <div class="ac-means">A sound parser stores card metadata and the <em>encrypted</em> number, never the plaintext PAN.</div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 7. Web-app storage -->
+        <section id="webapp" class="reveal">
+            <div class="section-label">7 &middot; The Artifacts</div>
+            <h2 class="section-title">Web-app storage</h2>
+            <div class="kb-section">
+                <p>Modern sites are applications. WhatsApp Web, Slack, crypto wallets and password-manager extensions keep real state on disk — chat fragments, tokens, wallet vaults — in LevelDB and IndexedDB. This is where a lot of the richest, least-expected evidence hides.</p>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-box-archive"></i><h3>Local storage and IndexedDB <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Per-origin key/value (Local Storage) and a full transactional object store (IndexedDB). Chromium keeps both as LevelDB; Firefox uses <code>webappsstore.sqlite</code> and the <code>storage/default/&lt;origin&gt;</code> tree.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To let web apps work offline and remember state without a server round-trip.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Auth tokens, cached messages, draft content, app configuration — keyed by the exact origin that wrote them. Deleted keys often survive as LevelDB <strong>tombstones</strong> in the <code>.log</code>.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>Local Storage\leveldb</code>, <code>IndexedDB\</code> (Chromium); <code>webappsstore.sqlite</code>, <code>storage\default</code> (Firefox).</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-puzzle-piece"></i><h3>Extensions and extension storage <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Installed extensions (manifest, permissions) plus each extension's private LevelDB store under <code>Local Extension Settings\&lt;id&gt;</code> and <code>Extension State</code>.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">Extensions need somewhere isolated to persist their own data.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">This is where <strong>crypto-wallet vaults</strong>, password-manager blobs, and extension OAuth/access tokens live — extremely high-value, and frequently overlooked.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>Extensions\</code>, <code>Local Extension Settings\</code>, <code>Extension State\</code> in the profile.</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-server"></i><h3>Service workers and CacheStorage <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Progressive Web Apps register service workers that cache API responses and assets for offline use, stored under <code>Service Worker\CacheStorage</code>.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">Makes web apps load and work with no network.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Offline copies of API payloads and pages — content that may no longer exist on the live server.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>…\Default\Service Worker\CacheStorage\</code></span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 8. Sessions & cache -->
+        <section id="sessions" class="reveal">
+            <div class="section-label">8 &middot; The Artifacts</div>
+            <h2 class="section-title">Sessions and the HTTP cache</h2>
+            <div class="kb-section">
+                <p>What was on screen when the browser last closed? And what did those pages actually contain? Session state and the disk cache answer both — including tabs a user closed and pages the live web no longer serves.</p>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-window-restore"></i><h3>Active sessions and unsaved form inputs <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Chromium serializes windows, tabs, tab order, per-tab navigation and page state as SNSS command records; Firefox writes an LZ4-compressed JSON snapshot.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To restore the user's tabs after a crash or restart.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">Reconstructs the exact set of open tabs and their order at last shutdown — and can hold <strong>text typed into forms but never submitted</strong>.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>Sessions\Session_*</code> / <code>Tabs_*</code> (Chromium); <code>sessionstore.jsonlz4</code> (Firefox).</span></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-hard-drive"></i><h3>HTTP disk cache <span class="epill c">Chromium</span><span class="epill g">Gecko</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Cached responses store the request URL, HTTP status and headers, and the body bytes. Chromium uses <strong>Simple Cache</strong> (one file per entry) or the older <strong>Blockfile</strong> (<code>data_0..3</code> + external <code>f_*</code> bodies); Firefox uses <strong>cache2</strong> (per-entry file with a trailing metadata block).</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">To avoid re-downloading assets — speed and bandwidth.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">A snapshot of what the user actually <em>saw</em> — images, scripts, JSON, whole pages — frozen at fetch time, often after the live site has changed or gone.</span></div>
+                        <div class="ac-field"><span class="k">Where</span><span class="v"><code>Cache\Cache_Data\</code> (Chromium); <code>cache2\entries\</code> (Firefox, under %LOCALAPPDATA%).</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 9. Network & tracking -->
+        <section id="tracking" class="reveal">
+            <div class="section-label">9 &middot; The Artifacts</div>
+            <h2 class="section-title">Network state and tracking</h2>
+            <div class="kb-section">
+                <p>Beyond pages and logins, the browser keeps low-level network memory — which servers it has spoken to, which enforce HTTPS, and which sites tried to track a user across others. Niche, but decisive in the right case.</p>
+            </div>
+
+            <span class="cap">Table 3</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Artifact</th><th>What it records</th><th>Forensic value</th></tr></thead>
+                <tbody>
+                    <tr><td><strong>Network state</strong> <span class="epill c">C</span></td><td><code>Network Persistent State</code> (alt-svc / HTTP-3 servers), <code>TransportSecurity</code> (HSTS hosts + expiry), <code>Reporting and NEL</code> endpoints.</td><td>Proof a host was contacted even if no page/cookie remains; HSTS entries persist per visited domain.</td></tr>
+                    <tr><td><strong>DIPS</strong> <span class="epill c">C</span></td><td>Bounce-tracking database: per-site first/last user-interaction and storage times.</td><td>A chronology of tracker contact and genuine interaction, site by site.</td></tr>
+                    <tr><td><strong>Push / GCM</strong> <span class="epill c">C</span></td><td>Background push-notification registration tokens between the browser and app servers.</td><td>Links the machine to specific web-app back ends.</td></tr>
+                    <tr><td><strong>Media history</strong> <span class="epill c">C</span></td><td>Playback origins, watch time, last-played times.</td><td>What media was played, where, and for how long.</td></tr>
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+        <!-- 10. Cross-reference -->
+        <section id="xref" class="reveal">
+            <div class="section-label">10 &middot; Reference</div>
+            <h2 class="section-title">Chromium and Gecko cross-reference</h2>
+            <p>The master lookup: one artifact, both engines' homes.</p>
+            <span class="cap">Table 4</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Artifact</th><th>Chromium store / path</th><th>Firefox store / path</th></tr></thead>
+                <tbody>
+                    <tr><td>History &amp; visits</td><td><code>History</code> (urls, visits)</td><td><code>places.sqlite</code> (moz_places, moz_historyvisits)</td></tr>
+                    <tr><td>Downloads</td><td><code>History</code> (downloads)</td><td><code>places.sqlite</code> (moz_annos)</td></tr>
+                    <tr><td>Bookmarks</td><td><code>Bookmarks</code> (JSON)</td><td><code>places.sqlite</code> (moz_bookmarks)</td></tr>
+                    <tr><td>Cookies</td><td><code>Network\Cookies</code> (encrypted)</td><td><code>cookies.sqlite</code> (plaintext)</td></tr>
+                    <tr><td>Saved logins</td><td><code>Login Data</code> + Local State key</td><td><code>logins.json</code> + <code>key4.db</code></td></tr>
+                    <tr><td>Form / autofill</td><td><code>Web Data</code></td><td><code>formhistory.sqlite</code></td></tr>
+                    <tr><td>Local Storage</td><td><code>Local Storage\leveldb</code></td><td><code>webappsstore.sqlite</code> / <code>storage\default</code></td></tr>
+                    <tr><td>IndexedDB</td><td><code>IndexedDB\</code> (LevelDB)</td><td><code>storage\default\&lt;origin&gt;\idb</code></td></tr>
+                    <tr><td>Sessions</td><td><code>Sessions\</code> (SNSS)</td><td><code>sessionstore.jsonlz4</code></td></tr>
+                    <tr><td>HTTP cache</td><td><code>Cache\Cache_Data</code> (Simple/Blockfile)</td><td><code>cache2\entries</code></td></tr>
+                    <tr><td>Settings</td><td><code>Preferences</code> (JSON)</td><td><code>prefs.js</code></td></tr>
+                </tbody>
+            </table>
+            </div>
+        </section>
+
+        <!-- 11. Recovery -->
+        <section id="recovery" class="reveal">
+            <div class="section-label">11 &middot; Deep Dive</div>
+            <h2 class="section-title">Recovery and anti-forensics</h2>
+            <div class="kb-section">
+                <p>"I cleared my history" is rarely the end of the story. Because of how the substrates work, deleted browsing leaves echoes in several places at once.</p>
+            </div>
+            <ul>
+                <li><strong>WAL / journal:</strong> rows deleted just before shutdown may still sit in <code>History-wal</code> — collect the sidecars and read them.</li>
+                <li><strong>Favicons:</strong> the icon database keeps a domain's icon after its History rows are gone — proof of a visit that "clearing history" missed.</li>
+                <li><strong>HTTP cache:</strong> cached page bodies outlive the History entry that referenced them.</li>
+                <li><strong>LevelDB tombstones:</strong> a deleted key is written as a <em>deletion record</em> in the <code>.log</code>, not physically removed — recoverable until compaction.</li>
+                <li><strong>DIPS &amp; network state:</strong> record site contact independently of History.</li>
+                <li><strong>Anti-forensics tells:</strong> <code>Preferences</code> keeps the last <code>exit_type</code> and clear-browsing-data timing — the act of clearing is itself an event.</li>
+            </ul>
+        </section>
+
+        <!-- 12. How Crow-Eye parses -->
+        <!-- 12. Search providers & nearby devices -->
+        <section id="providers" class="reveal">
+            <div class="section-label">12 &middot; The Artifacts</div>
+            <h2 class="section-title">Search providers and nearby devices</h2>
+            <div class="kb-section">
+                <p>Two artifacts sit outside the usual history-and-cookies story, and both get skipped far too
+                    often. One decides <strong>where every address-bar search is sent</strong>; the other records
+                    <strong>hardware the browser found on the local network</strong>. Neither is a page visit, so
+                    neither shows up in a history review &mdash; and that is exactly why they survive one.</p>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-magnifying-glass"></i><h3>Search providers and keywords <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">A <code>keywords</code> table inside <code>Web Data</code> holds every search provider the profile knows: a display name, a <em>keyword</em> trigger, the search URL template with a <code>{searchTerms}</code> placeholder, and usually a suggestion endpoint and favicon URL.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">The omnibox is a search box as well as an address bar. The browser needs a provider list so it knows where to send a query, and which provider to use by default.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Typing a keyword then a space switches provider for that one query; everything else goes to the default. Sites in regular use can silently <em>add</em> themselves to this list via OpenSearch.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">This list is a durable record of the services a user searched through &mdash; including ones never bookmarked and long since removed from history. An entry pointing at an unfamiliar domain is a <strong>search hijack</strong>: every omnibox query was being routed through it.</span></div>
+                    </div>
+                    <div class="ac-means">Do not trust an <code>is_default</code> flag on its own. Chromium records the default by GUID elsewhere, and the parser can only resolve it when that pointer is present &mdash; on plenty of real profiles the flag is <code>0</code> for every row. Read the <em>provider list itself</em>: a rogue entry is visible whether or not it is marked default.</div>
+                    <table class="ac-path">
+                        <thead><tr><th>Engine</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Chrome</td><td>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Web Data</td></tr>
+                            <tr><td class="eng">Edge</td><td>%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Web Data</td></tr>
+                            <tr><td class="eng">Brave</td><td>%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Web Data</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <div class="ac-head"><i class="fas fa-tv"></i><h3>Media router: Cast and DIAL <span class="epill c">Chromium</span></h3></div>
+                <div class="ac-body">
+                    <div class="ac-grid">
+                        <div class="ac-field"><span class="k">How it works</span><span class="v">Chromium's Cast stack keeps its state in a <code>media_router</code> block inside <code>Preferences</code>. It holds a per-profile <strong><code>receiver_id_hash_token</code></strong> &mdash; a stable pseudonymous identifier the browser presents to receivers &mdash; and, when the browser has recorded them, entries for discovered devices.</span></div>
+                        <div class="ac-field"><span class="k">Why it exists</span><span class="v">So "Cast this tab" can find screens again without re-pairing, and so a receiver can recognise the same browser across sessions without a login.</span></div>
+                        <div class="ac-field"><span class="k">How the browser uses it</span><span class="v">Discovery runs over the local network (mDNS/DIAL). The browser only learns about devices that share a network segment with the host &mdash; it cannot see across the internet.</span></div>
+                        <div class="ac-field"><span class="k">What it means</span><span class="v">This is <strong>network-proximity evidence from a browser artifact</strong>. A device entry says the machine was on the same LAN as that hardware. The receiver token is stronger in a different way: it is stable per profile, so the same token appearing in two captures ties them to the same browser profile even if everything else was wiped.</span></div>
+                    </div>
+                    <div class="ac-means">In practice the token is the reliable part. On many profiles Chromium keeps the <code>receiver_id_hash_token</code> but no device list &mdash; so expect rows carrying the token with the device-detail columns empty. An empty device list is not a parsing failure; it means the browser had nothing recorded to hand over.</div>
+                    <table class="ac-path">
+                        <thead><tr><th>Engine</th><th>Path</th></tr></thead>
+                        <tbody>
+                            <tr><td class="eng">Chrome</td><td>%LOCALAPPDATA%\Google\Chrome\User Data\Default\Preferences &rarr; media_router</td></tr>
+                            <tr><td class="eng">Edge</td><td>%LOCALAPPDATA%\Microsoft\Edge\User Data\Default\Preferences &rarr; media_router</td></tr>
+                            <tr><td class="eng">Brave</td><td>%LOCALAPPDATA%\BraveSoftware\Brave-Browser\User Data\Default\Preferences &rarr; media_router</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="premium-alert">
+                <h4><i class="fas fa-lightbulb"></i> Why these two survive a clean-up</h4>
+                <p>Clearing browsing data targets history, cookies and cache. It does not touch the search-provider
+                    list in <code>Web Data</code>, and it does not reset the Cast token in <code>Preferences</code>.
+                    On a host where the history looks suspiciously empty, both artifacts are still sitting there
+                    &mdash; one naming services the user searched through, the other tying the profile to a stable
+                    identifier and, sometimes, to physical hardware.</p>
+            </div>
+        </section>
+
+        <section id="crow-eye" class="reveal">
+            <div class="section-label">13 &middot; In Practice</div>
+            <h2 class="section-title">How Crow-Eye parses it</h2>
+            <div class="kb-section">
+                <p>Everything above is engine behaviour, true of any tool. Here is how Crow-Eye turns it into evidence — the one place this guide talks about the product.</p>
+            </div>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-diagram-project"></i> The browser parsing pipeline</div>
+                <div class="bf-flow">
+                    <div class="flow-node"><span class="fn-k">1 · Discover</span><span class="fn-t">Every user &amp; profile</span><span class="fn-d">All users on the host, or every Users folder collected from a folder or an image; every browser profile, plus Electron apps — adaptively, not one hard-coded path.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">2 · Copy</span><span class="fn-t">Locked files + sidecars</span><span class="fn-d">Live: a backup-semantics copy of locked databases together with their -wal / -journal / -shm. Folders and images: the collected tree, sidecars included.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">3 · Read</span><span class="fn-t">Read-only, per substrate</span><span class="fn-d">SQLite, LevelDB (incl. tombstones), JSON, SNSS and cache parsers — evidence never modified.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">4 · Preserve</span><span class="fn-t">Metadata-only secrets</span><span class="fn-d">Encrypted blobs + the wrapped master key kept for a later audited decrypt; no plaintext written.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">5 · Output</span><span class="fn-t">One case database</span><span class="fn-d">Every row tagged with browser / user / profile provenance, feeding the Timeline, Search and Eye AI.</span></div>
+                </div>
+            </div>
+
+            <p>Cache bodies and IndexedDB blobs are <strong>extracted</strong> into the case folder with a hash-tracked inventory, and each cache entry is walked from its index so the real HTTP status and response headers come with it, and every row carries <em>provenance</em> — which browser, which user, which profile — so two users' <code>Default\History</code> never blur together. The result is a single, open-source, read-only view across Chromium, Gecko and Electron.</p>
+
+        </section>
+
+
+        <!-- 14. Reading the dashboard -->
+        <section id="dashboard" class="reveal">
+            <div class="section-label">14 &middot; Read it</div>
+            <h2 class="section-title">Reading the browser activity dashboard</h2>
+            <div class="kb-section">
+                <p>Parsing writes 37 tables (all listed below). The <strong>Charts</strong> button on any browser tab
+                    opens the same <code>browser_analysis.db</code> as an interactive dashboard, and two rules
+                    hold everywhere in it: <strong>activity type is the colour</strong>, and <strong>the site is
+                    the pivot</strong>. Those two settle how every chart on the page is read.</p>
+            </div>
+
+            <p>Each colour is one kind of browsing, unioned from its Chromium <em>and</em> its Gecko table, so a
+                strip means the same thing whichever engine produced the row. Which browser a colour belongs to is
+                never asked &mdash; the browser is a filter, not a colour.</p>
+            <span class="cap">Table 17</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Colour</th><th>Chromium source</th><th>Gecko source</th><th>What the strip counts</th></tr></thead>
+                <tbody>
+                    <tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:7px;"></span>Visits</td><td><code>browser_history</code></td><td><code>browser_gecko_history</code></td><td>Pages actually loaded</td></tr>
+                    <tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:7px;"></span>Searches &amp; typed</td><td><code>browser_shortcuts</code></td><td>&mdash;</td><td>What was typed into the omnibox &mdash; intent, even for a site never opened</td></tr>
+                    <tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#fbbf24;vertical-align:-1px;margin-right:7px;"></span>Downloads</td><td><code>browser_downloads</code></td><td><code>browser_gecko_downloads</code></td><td>What landed on disk, and whether the browser flagged it</td></tr>
+                    <tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:7px;"></span>Cookies set</td><td><code>browser_cookies</code></td><td><code>browser_gecko_cookies</code></td><td>Session tokens and trackers &mdash; these outlive a cleared history</td></tr>
+                    <tr><td><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#22d3ee;vertical-align:-1px;margin-right:7px;"></span>Cache fetches</td><td><code>browser_cache</code>, <code>browser_service_worker</code></td><td><code>browser_cache</code></td><td>Resources served from disk, with their real HTTP status</td></tr>
+                </tbody>
+            </table>
+            </div>
+
+            <div class="premium-alert" style="border-color: var(--cyan);">
+                <p><strong>Why the site, and not the browser, is the pivot.</strong> Colour already answers
+                    <em>what kind of activity</em>, so a machine with one browser reads exactly like a machine
+                    with six. That frees the vertical axis for the question actually asked of browsing
+                    evidence &mdash; <em>which site</em>. Every URL and every cookie host is folded to a bare
+                    host first, so <code>.example.com</code> from a cookie and
+                    <code>https://example.com/page</code> from a visit land on the same row, and one site's
+                    visits, cookies, cache, downloads and saved login line up side by side.</p>
+            </div>
+
+            <p>The dashboard is two columns. The left column follows one day at a time; the right column stays
+                on the whole selected range, so a single day can be read without losing the shape of the case.</p>
+            <span class="cap">Table 18</span>
+            <div class="bf-table-wrap">
+            <table class="bf-table">
+                <thead><tr><th>Region</th><th>What it shows</th><th>What to read from it</th></tr></thead>
+                <tbody>
+                    <tr><td>Five heat-maps <span style="color:var(--muted);font-size:0.78rem;">across the top</span></td><td>One calendar per activity; a cell is a day, shaded by that activity's record volume, normalised within its own map</td><td>Whether the five kinds of activity rise and fall together. They share an axis, so a column is the same day in all five, and selecting a day selects it in all five at once</td></tr>
+                    <tr><td>Proportion strip</td><td>The selected day's activity mix as one bar</td><td>The day's character at a glance &mdash; a day that is almost all cache is a day of background loading, not browsing</td></tr>
+                    <tr><td><em>By hour</em></td><td>Stacked bars, one colour per activity, across 24 hours</td><td>Working hours against night activity. <strong>Click a bar</strong> to open that hour</td></tr>
+                    <tr><td><em>Top domains</em></td><td>The day's busiest sites, each bar split by activity</td><td>Which sites the day was actually about, and in what way</td></tr>
+                    <tr><td><em>Domain &times; hour</em></td><td>A bubble per site per hour; size is the number of events, colour the activity</td><td>Session shape &mdash; a burst of one site across an hour reads differently from a single visit</td></tr>
+                    <tr><td><em>Domains on this day</em></td><td>Every busy site with its per-activity counts</td><td>Click any row for the full site profile</td></tr>
+                    <tr><td><em>Events on this day</em></td><td>The individual rows: time, activity, site, page title or file, browser and profile</td><td>The evidence itself, oldest first, once the charts have shown where to look</td></tr>
+                    <tr><td>Overview <span style="color:var(--muted);font-size:0.78rem;">right column</span></td><td>Totals, <em>Activity mix</em>, <em>Top domains</em> split typed against followed, <em>What was typed</em>, <em>Downloads</em>, <em>Anti-forensics signals</em> and <em>Records by activity</em></td><td>The whole range rather than one day &mdash; what this machine's browsing looks like overall</td></tr>
+                </tbody>
+            </table>
+            </div>
+
+            <div class="bf-diagram">
+                <div class="diagram-title"><i class="fas fa-hand-pointer"></i> What each click opens</div>
+                <div class="bf-flow">
+                    <div class="flow-node"><span class="fn-k">A day</span><span class="fn-t">The day section</span><span class="fn-d">Selects that day in all five heat-maps and rebuilds every chart beneath them for it.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">An hour bar</span><span class="fn-t">That hour, in detail</span><span class="fn-d">The hour's split by activity, and every site active in it with its browser and per-activity counts.</span></div>
+                    <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+                    <div class="flow-node"><span class="fn-k">A site</span><span class="fn-t">The full site profile</span><span class="fn-d">Every table joined for one host: visits, what was typed to reach it, cookies it set, what it served from cache, what was downloaded from it, and whether a login was saved for it.</span></div>
+                </div>
+            </div>
+
+            <p>Two filters sit in the header and apply to everything below them: a <strong>search</strong> box
+                &mdash; several terms, matched ANY or ALL against URL, title, host and file name &mdash; and a
+                <strong>date dropdown</strong> that narrows the range. Where a case holds more than one browser
+                or more than one profile, a selector for each appears beside them.</p>
+
+            <div class="premium-alert" style="border-color: var(--rose);">
+                <p><strong>No secret is ever drawn.</strong> The dashboard reads the same database as every
+                    other view, and that database deliberately holds encrypted blobs rather than plaintext.
+                    Cookie values, <code>browser_autofill.value</code> and <code>password_encrypted_b64</code>
+                    stay where they are: a saved login appears as <em>a login exists for this host</em>, never
+                    as a credential. A chart must not undo what the parser was careful not to do.</p>
+            </div>
+        </section>
+
+        <!-- 14. Binary anatomy of every decoded structure -->
+        <!-- 14. Binary anatomy: the interactive byte maps -->
+        <section id="anatomy" class="reveal">
+            <div class="section-label">15 &middot; Byte level</div>
+            <h2 class="section-title">Binary anatomy: every structure Crow-Eye decodes</h2>
+            <div class="kb-section">
+                <p>Everything above is behaviour. This is the wire format &mdash; every magic number and byte
+                    layout the parser actually reads. Pick a structure, then click any byte to see which field
+                    it belongs to, what it decodes to, and why it matters.</p>
+                <p><strong>The bytes are real.</strong> Every map below was measured off a live Chromium, Edge or
+                    Firefox profile, and each structure was validated against its own magic number before a
+                    single field was trusted. A decoder that cannot confirm its magic returns nothing rather
+                    than a plausible guess, because a wrong offset in a forensics tool produces convincing
+                    wrong evidence &mdash; three of the offsets on this page were wrong at some point, and each
+                    one decoded to something that looked entirely reasonable.</p>
+                <p>Anywhere a byte could carry real browsing, it has been replaced with a placeholder of
+                    <em>exactly the same length</em>, so every offset shown stays true. Bytes that no field
+                    claims are greyed out and say so when clicked: undocumented space is a finding, not a gap.</p>
+                <p>All Chromium structures are <strong>little-endian</strong>; Firefox cache2 is
+                    <strong>big-endian</strong>. That single difference is the most common source of garbage
+                    values when people write their own parsers.</p>
+            </div>
+            <span class="cap">Figure 1</span>
+            <div class="version-selector" id="bm-tabs" role="tablist"></div>
+
+            <div class="dissection-layout">
+                <div class="map-container">
+                    <div class="scroll-hint"><i class="fas fa-arrows-left-right"></i> scroll the map sideways &mdash; it is sixteen bytes wide</div>
+                    <div class="unified-map" id="bm-map"></div>
+                </div>
+                <div class="dynamic-side">
+                    <span class="panel-label">Live byte selection</span>
+                    <div id="bm-panel">
+                        <div style="text-align:center; padding-top:60px; color:var(--tx3);">
+                            <p style="font-size:48px; margin-bottom:16px;"><i class="fas fa-search-plus"></i></p>
+                            <p>Select any byte in the map to see the field it belongs to.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <h3 id="anatomy-reference">Full dissection reference</h3>
+            <p>The same fields as a table. Both are drawn from one definition, so the map and the table cannot
+                disagree with each other.</p>
+            <span class="cap">Table 5</span>
+            <div class="responsive-table-wrap">
+                <table class="ref-table">
+                    <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>What it is</th></tr></thead>
+                    <tbody id="bm-table"></tbody>
+                </table>
+            </div>
+
+            <h3 id="cache-address">The cache address, bit by bit</h3>
+            <p>One structure on this page is not a run of bytes but a packed 32-bit word, so it gets a table
+                rather than a map. Every entry in a blockfile cache is reached through one of these: it names
+                the file, the block size and the block number in a single integer.</p>
+            <span class="cap">Table 6</span>
+            <div class="responsive-table-wrap">
+                <table class="ref-table">
+                    <thead><tr><th>Bits</th><th>Width</th><th>Field</th><th>What it is</th></tr></thead>
+                    <tbody>
+                        <tr><td>31</td><td>1</td><td>Initialised</td><td>Zero means the address is unused. An address of <code>0x00000000</code> is not block zero &mdash; it is "nothing here", and treating it as a location is how a walk invents entries.</td></tr>
+                        <tr><td>30&ndash;28</td><td>3</td><td>File type</td><td><code>0</code> means the payload lives in a separate <code>f_XXXXXX</code> file. <code>1</code>&ndash;<code>4</code> select <code>data_0</code>&ndash;<code>data_3</code>, whose block sizes are <strong>36 / 256 / 1024 / 4096</strong> bytes.</td></tr>
+                        <tr><td>27&ndash;24</td><td>4</td><td>Blocks &minus; 1</td><td>How many consecutive blocks the payload occupies, stored one less than the real count so four bits can express one to sixteen.</td></tr>
+                        <tr><td>23&ndash;16</td><td>8</td><td>File selector</td><td>Which file of that type, for caches large enough to chain.</td></tr>
+                        <tr><td>15&ndash;0</td><td>16</td><td>Block number</td><td>Index of the first block. The byte offset is <code>8192 + block_number &times; block_size</code> &mdash; the 8192 is the block file header, and omitting it lands mid-record every time.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3 id="value-encodings">Value-level encodings</h3>
+            <p>Below the file formats sit the encodings that individual values use. None of these is a file
+                layout, so none gets a map, but each one turns a correct byte read into a wrong answer when it
+                is missed.</p>
+            <span class="cap">Table 7</span>
+            <div class="responsive-table-wrap">
+                <table class="ref-table">
+                    <thead><tr><th>Encoding</th><th>Literal</th><th>Where</th><th>What goes wrong without it</th></tr></thead>
+                    <tbody>
+                        <tr><td>WebKit time</td><td><code>&micro;s since 1601</code></td><td>Chromium history, cookies, cache</td><td>Read as Unix seconds it lands in 1970; read as FILETIME it is off by a factor of ten.</td></tr>
+                        <tr><td>PRTime</td><td><code>&micro;s since 1970</code></td><td>Firefox places, cookies, forms</td><td>Read as seconds, every Firefox timestamp lands tens of thousands of years out.</td></tr>
+                        <tr><td>Unix, three scales</td><td><code>s / ms / &micro;s</code></td><td>Chromium autofill, Firefox cookie expiry</td><td>Firefox moved <code>moz_cookies.expiry</code> to milliseconds; a seconds-only converter overflowed and silently produced an empty string. Crow-Eye picks the scale by magnitude.</td></tr>
+                        <tr><td>IndexedDB key prefix</td><td><code>byte 0</code></td><td>IndexedDB LevelDB keys</td><td>The first byte packs the byte-widths of the database, object-store and index ids. Assume fixed widths and every id after the first is misread.</td></tr>
+                        <tr><td>Local Storage flag</td><td><code>0x00</code> / <code>0x01</code></td><td>Local Storage LevelDB values</td><td><code>0x00</code> marks UTF-16LE, <code>0x01</code> UTF-8. Decode a UTF-16 value as UTF-8 and it comes out interleaved with NULs.</td></tr>
+                        <tr><td>Chromium secret</td><td><code>v10</code> / <code>v11</code> / <code>v20</code></td><td>Cookies, saved logins</td><td>The prefix names the scheme: v10/v11 are AES-GCM under a DPAPI-wrapped key, v20 is App-Bound. A raw DPAPI blob starts <code>01 00 00 00</code> instead. Crow-Eye classifies and preserves; it never decrypts.</td></tr>
+                        <tr><td>Body sniffing</td><td><code>1F 8B</code></td><td>Cache bodies</td><td>gzip <code>1F 8B</code>, zstd <code>28 B5 2F FD</code>, JPEG <code>FF D8 FF</code>. Used to label a body whose <code>Content-Encoding</code> header did not survive.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- 15. What is not decoded -->
+        <section id="limits" class="reveal">
+            <div class="section-label">16 &middot; Honesty</div>
+            <h2 class="section-title">What Crow-Eye does not decode, and why</h2>
+            <div class="kb-section">
+                <p>A column that is empty proves nothing on its own. It could mean the artifact
+                    held nothing, or it could mean the tool did not look. Those are completely different
+                    findings, and a report that cannot separate them is not evidence. So this section states,
+                    for every column that comes back empty, which of the two it is.</p>
+            </div>
+
+            <h3 id="limits-not-decoded">Genuine limits of the parser</h3>
+            <span class="cap">Table 8</span>
+            <div class="responsive-table-wrap">
+                <table class="kb-table">
+                    <thead><tr><th>What</th><th>Where</th><th>Why</th><th>What to do instead</th></tr></thead>
+                    <tbody>
+                        <tr><td>Window and tab placement</td><td><code>browser_sessions</code></td><td>Placement comes from two commands that <code>Session_*</code> files carry and <code>Tabs_*</code> / <code>Apps_*</code> files often do not. Where they are absent the columns stay NULL rather than being guessed.</td><td>The navigation order within each tab is still intact, and the session file name distinguishes the streams.</td></tr>
+                        <tr><td>Entries the index lost</td><td><code>cache_format = blockfile_scan</code></td><td>These are URL strings recovered from block data that the index hash table did not account for &mdash; an evicted or partly overwritten entry. There is no record to attach a status to.</td><td>Treat them as proof a URL appeared, not as a cache record. The <code>blockfile</code> rows beside them are the real entries.</td></tr>
+                        <tr><td>Request time, Firefox</td><td><code>browser_cache</code> where <code>cache_format = firefox_cache2</code></td><td>cache2 records <code>lastFetched</code> and <code>lastModified</code>, but nothing that means "when the request was sent". Chromium stores both times, Firefox does not.</td><td><code>response_time</code> carries the fetch time. <code>request_time</code> is left empty rather than filled with <code>lastModified</code>, which means something else.</td></tr>
+                        <tr><td>Compressed bodies</td><td><code>browser_cache</code>, <code>browser_service_worker</code></td><td>Bodies are preserved exactly as stored, not decompressed, so the extracted file is byte-for-byte what was on disk.</td><td><code>content_encoding</code> names what would have to be undone &mdash; gzip, br or zstd.</td></tr>
+                        <tr><td>Encrypted secrets</td><td><code>browser_cookies</code>, <code>browser_credentials</code></td><td>Deliberate. Crow-Eye classifies the scheme and preserves the blob; it never decrypts on the analyst's behalf.</td><td>The scheme label plus the key material in <code>browser_metadata</code> is everything a decryption step needs.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <h3 id="limits-empty-source">Empty because the artifact was empty</h3>
+            <p>These columns are decoded correctly and come back blank on most machines because the browser
+                never stored anything in them. On a profile that does use the feature, they fill.</p>
+            <span class="cap">Table 9</span>
+            <div class="responsive-table-wrap">
+                <table class="kb-table">
+                    <thead><tr><th>Column</th><th>Source</th><th>When it fills</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>bank_name</code>, <code>nickname</code></td><td><code>masked_credit_cards</code></td><td>Only for server-side cards the user has labelled. A locally saved card has neither.</td></tr>
+                        <tr><td><code>state</code>, <code>company</code></td><td><code>address_type_tokens</code></td><td>Only when the saved address itself carries those fields &mdash; many addresses are street, city and postcode alone.</td></tr>
+                        <tr><td><code>origin</code></td><td><code>browser_push</code></td><td>Only for a Web Push registration made by a site. A browser feature registration such as tab sharing has a product id, not an origin.</td></tr>
+                        <tr><td><code>response_time</code></td><td><code>browser_service_worker</code></td><td>CacheStorage records the response but not when it was fetched; the entry file's own timestamps are the nearest thing. The ordinary HTTP cache does carry fetch times &mdash; this gap is specific to CacheStorage.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="forensic-text">
+                <strong>The rule behind both tables.</strong> Every decoder on this page fails closed. If a
+                magic number does not match, a length runs past the end of the buffer, or a status code falls
+                outside 100&ndash;599, the decoder returns nothing rather than its best guess. An empty cell in
+                a Crow-Eye output is always either "the artifact held nothing" or "this is listed above" &mdash;
+                never "the parser produced something and nobody checked".
+            </div>
+        </section>
+
+        <!-- 15. Every table Crow-Eye writes -->
+        <section id="tables" class="reveal">
+            <div class="section-label">17 &middot; Reference</div>
+            <h2 class="section-title">Every table Crow-Eye writes</h2>
+            <div class="kb-section">
+                <p>Section 12 ended on "one case database". This is that database, table by table &mdash; all
+                    <strong>37</strong> of them, so nothing in this guide is left without an address in the
+                    product. They live in <code>Target_Artifacts\browser_analysis.db</code>, and the same set is
+                    produced for Chromium, Gecko and Electron targets alike, and for a live system, a collected
+                    folder or a forensic image. On a collected folder or an image, <code>user_name</code> is the
+                    <code>Users</code> folder the profile was found in and <code>sid</code> comes from that
+                    evidence&rsquo;s own SOFTWARE hive when the case holds a single source (otherwise it is
+                    left empty).</p>
+                <p><strong>Every table carries the same seven provenance columns</strong> &mdash;
+                    <code>browser</code>, <code>vendor</code>, <code>user_name</code>, <code>sid</code>,
+                    <code>profile</code>, <code>source_path</code> and <code>parsed_at</code>. That is what keeps
+                    two users' <code>Default\History</code> from blurring together, and it is why the columns
+                    below list only what is specific to each table.</p>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Navigation and intent</h3>
+                <span class="cap">Table 10</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_history</code></td><td>One visit to one URL</td><td><code>History</code> (<code>urls</code> + <code>visits</code>)</td><td><code>url</code>, <code>title</code>, <code>visit_time</code>, <code>transition</code>, <code>from_visit_url</code></td><td>Where the user went and <em>how</em> they got there &mdash; the transition separates a typed URL from a redirect.</td></tr>
+                        <tr><td><code>browser_downloads</code></td><td>One download</td><td><code>History</code> (<code>downloads</code> + URL chain)</td><td><code>target_path</code>, <code>source_url</code>, <code>referrer</code>, <code>danger_type</code>, <code>state</code></td><td>What landed on disk, from where, and whether the browser flagged it. Survives deletion of the file itself.</td></tr>
+                        <tr><td><code>browser_shortcuts</code></td><td>One omnibox shortcut the browser learned</td><td><code>Shortcuts</code></td><td><code>text</code>, <code>fill_into_edit</code>, <code>url</code>, <code>number_of_hits</code></td><td>What the user actually <em>typed</em>, not merely visited &mdash; intent, even for sites never opened.</td></tr>
+                        <tr><td><code>browser_network_predictor</code></td><td>One learned omnibox prefix</td><td><code>Network Action Predictor</code></td><td><code>user_text</code>, <code>hit_count</code>, <code>miss_count</code></td><td>Partial typing the user abandoned &mdash; intent that never became a visit.</td></tr>
+                        <tr><td><code>browser_favicons</code></td><td>One page-to-icon mapping</td><td><code>Favicons</code></td><td><code>page_url</code>, <code>icon_url</code>, <code>icon_domain</code>, <code>last_updated</code></td><td>Corroborates a visit after history is cleared &mdash; favicons are frequently missed by wipers.</td></tr>
+                        <tr><td><code>browser_top_sites</code></td><td>One entry on the new-tab grid</td><td><code>Top Sites</code></td><td><code>url</code>, <code>title</code>, <code>url_rank</code></td><td>A ranked view of habitual destinations, derived independently of the history table.</td></tr>
+                        <tr><td><code>browser_reading_list</code></td><td>One saved-for-later page</td><td><code>Bookmarks</code> (reading-list node)</td><td><code>title</code>, <code>url</code>, <code>date_added</code>, <code>read_status</code></td><td>Deliberate retention of a page, with whether it was ever opened.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Identity and secrets</h3>
+                <span class="cap">Table 11</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_cookies</code></td><td>One cookie</td><td><code>Network\Cookies</code></td><td><code>host_key</code>, <code>name</code>, <code>creation_time</code>, <code>last_access_time</code>, <code>encrypted_value_b64</code></td><td>Which sites held a session and when it was last used. Values stay encrypted &mdash; see the note below.</td></tr>
+                        <tr><td><code>browser_credentials</code></td><td>One saved login</td><td><code>Login Data</code></td><td><code>origin_url</code>, <code>username_value</code>, <code>password_encrypted_b64</code>, <code>times_used</code>, <code>blacklisted</code></td><td>Which accounts exist on which sites. <code>blacklisted</code> marks a site the user explicitly refused to save.</td></tr>
+                        <tr><td><code>browser_autofill</code></td><td>One remembered form field</td><td><code>Web Data</code></td><td><code>field_name</code>, <code>value</code>, <code>count</code>, <code>date_created</code>, <code>date_last_used</code></td><td>Text the user typed into forms &mdash; search terms, usernames, identifiers &mdash; with first and last use.</td></tr>
+                        <tr><td><code>browser_addresses</code></td><td>One saved address profile</td><td><code>Web Data</code></td><td><code>full_name</code>, <code>city</code>, <code>country</code>, <code>phone</code>, <code>email</code></td><td>Identity attribution: name, locality, phone and email bound to the profile. Street-level fields live in a separate Web Data table that is not read yet.</td></tr>
+                        <tr><td><code>browser_payments</code></td><td>One saved card or IBAN</td><td><code>Web Data</code></td><td><code>name_on_card</code>, <code>last_four</code>, <code>network</code>, <code>expiration_month</code>, <code>card_number_encrypted_b64</code></td><td>Financial instruments tied to the user. Only the last four digits are ever in clear.</td></tr>
+                        <tr><td><code>browser_metadata</code></td><td>One profile's crypto &amp; version record</td><td><code>Local State</code> / <code>Preferences</code>; Gecko <code>key4.db</code></td><td><code>os_crypt_key_b64</code>, <code>key_scheme</code>, <code>profile_created</code></td><td>The DPAPI-wrapped master key and its scheme &mdash; what a later, audited decrypt would need.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+                <p class="bf-note"><strong>Nothing above is written in plaintext.</strong> Cookie values, passwords
+                    and card numbers are preserved as base64 of the <em>still-encrypted</em> blob, with
+                    <code>encryption_version</code> recording the scheme (<code>v10</code>/<code>v11</code>,
+                    App-Bound, or NSS). Crow-Eye stores the evidence; it does not silently crack it.</p>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Web-app storage</h3>
+                <span class="cap">Table 12</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_local_storage</code></td><td>One key/value pair for one origin</td><td><code>Local Storage\leveldb</code></td><td><code>origin</code>, <code>key</code>, <code>value</code>, <code>is_deleted</code>, <code>seq</code></td><td>Application state a site kept on the host. <code>is_deleted</code> surfaces LevelDB tombstones &mdash; values the page thought it had erased.</td></tr>
+                        <tr><td><code>browser_indexeddb</code></td><td>One record in one object store</td><td><code>IndexedDB</code> (Gecko: <code>storage\default</code>)</td><td><code>origin</code>, <code>database_name</code>, <code>object_store</code>, <code>key</code>, <code>value</code></td><td>The bulk store behind modern web apps &mdash; cached messages, mail and documents. The object store is recovered by decoding the IndexedDB key prefix, so records carry the store they belong to. Extracted blobs are inventoried in <code>browser_files</code>.</td></tr>
+                        <tr><td><code>browser_extension_storage</code></td><td>One key/value pair owned by an extension</td><td>Local / Sync / Managed <code>Extension Settings</code>, <code>Extension State</code> / <code>Rules</code> / <code>Scripts</code></td><td><code>extension_id</code>, <code>store_kind</code>, <code>key</code>, <code>value</code>, <code>is_deleted</code></td><td>Where crypto-wallet vaults and extension password managers live &mdash; often the highest-value store on the host.</td></tr>
+                        <tr><td><code>browser_service_worker</code></td><td>One resource cached by a service worker</td><td><code>Service Worker\CacheStorage</code></td><td><code>scope</code>, <code>resource_url</code>, <code>request_method</code>, <code>http_status</code>, <code>content_type</code>, <code>content_encoding</code>, <code>server_headers</code>, <code>content_length</code></td><td>Content a site can serve with no network at all &mdash; survives an ordinary cache clear. Each CacheStorage bucket is a Simple Cache instance, keyed by the origin that registered the worker. The response metadata is a protobuf stored <em>after</em> the body, so the status and headers come from there rather than from an HTTP response head.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Sessions and cache</h3>
+                <span class="cap">Table 13</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_sessions</code></td><td>One navigation entry from a saved session</td><td><code>Sessions\Session_*</code> / <code>Tabs_*</code> / <code>Apps_*</code> (SNSS)</td><td><code>session_file</code>, <code>window_index</code>, <code>tab_index</code>, <code>url</code>, <code>title</code>, <code>form_text</code></td><td>What was open at the moment of capture &mdash; including <code>form_text</code>, text typed into a form and never submitted. Placement comes from the <code>SetTabWindow</code> and <code>SetTabIndexInWindow</code> commands, not from the navigation record, whose own index counts page loads within a tab. Streams that carry no placement command leave both columns NULL.</td></tr>
+                        <tr><td><code>browser_cache</code></td><td>One cache record, or a URL recovered from cache data</td><td><code>Cache\Cache_Data</code> (Gecko: <code>cache2\entries</code>)</td><td><code>url</code>, <code>http_status</code>, <code>content_type</code>, <code>content_encoding</code>, <code>server_headers</code>, <code>content_length</code>, <code>cache_format</code></td><td>Page content as it was actually served, with the real response headers. <code>cache_format</code> says which of the two a row is: <code>blockfile</code> and <code>firefox_cache2</code> rows are genuine cache entries walked from the index, carrying status and headers; <code>blockfile_scan</code> rows are URL strings recovered from block data that the index did not account for &mdash; evidence a URL appeared, but not a cache record.</td></tr>
+                        <tr><td><code>browser_media_history</code></td><td>One watched media item</td><td><code>Media History</code></td><td><code>origin</code>, <code>url</code>, <code>watch_time_seconds</code>, <code>position_seconds</code></td><td>Not just that a video page was opened, but how much of it was actually played.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Configuration and inventory</h3>
+                <span class="cap">Table 14</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_bookmarks</code></td><td>One bookmark</td><td><code>Bookmarks</code> (JSON)</td><td><code>folder</code>, <code>name</code>, <code>url</code>, <code>date_added</code>, <code>guid</code></td><td>Deliberate retention, with the folder path showing how the user organised it.</td></tr>
+                        <tr><td><code>browser_preferences</code></td><td>One setting</td><td><code>Preferences</code> / <code>Secure Preferences</code></td><td><code>setting_key</code>, <code>setting_value</code>, <code>category</code></td><td>Proxy, download directory, content permissions and sync state &mdash; configuration that shapes every other artifact.</td></tr>
+                        <tr><td><code>browser_extensions</code></td><td>One installed extension</td><td><code>Extensions\</code> + <code>Secure Preferences</code></td><td><code>extension_id</code>, <code>name</code>, <code>version</code>, <code>permissions</code>, <code>install_time</code>, <code>from_webstore</code></td><td>What code ran inside the browser. <code>from_webstore = false</code> means side-loaded &mdash; a standard persistence route.</td></tr>
+                        <tr><td><code>browser_search_engines</code></td><td>One search provider</td><td><code>Web Data</code> (<code>keywords</code>)</td><td><code>short_name</code>, <code>keyword</code>, <code>url</code>, <code>suggest_url</code>, <code>favicon_url</code></td><td>An injected provider is a classic hijack. Judge it by the list, not by <code>is_default</code> &mdash; that flag is frequently <code>0</code> for every row (&sect;12).</td></tr>
+                        <tr><td><code>browser_files</code></td><td>One artifact copied out of the profile</td><td>(extraction inventory)</td><td><code>artifact</code>, <code>original_path</code>, <code>extracted_path</code>, <code>size</code>, <code>sha1</code>, <code>mtime</code></td><td>The chain of custody for everything pulled into the case folder &mdash; each file hashed where it came from.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Tracking and network state</h3>
+                <span class="cap">Table 15</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_dips</code></td><td>One site tracked for bounce-tracking mitigation</td><td><code>DIPS</code></td><td><code>site</code>, <code>first_site_storage_time</code>, <code>last_user_interaction_time</code></td><td>Chromium's own record of sites that stored data &mdash; including ones the user never knowingly visited, and it outlives a history clear.</td></tr>
+                        <tr><td><code>browser_network_state</code></td><td>One host's network-layer record</td><td><code>Network Persistent State</code>, <code>TransportSecurity</code></td><td><code>source</code>, <code>host_or_key</code>, <code>detail</code>, <code>expiry</code></td><td>HSTS pins and broken-alternative-service entries prove contact with a host even when no page was cached.</td></tr>
+                        <tr><td><code>browser_push</code></td><td>One push-notification registration</td><td><code>GCM Store\Encryption</code> (LevelDB)</td><td><code>app_id</code>, <code>registration_id</code>, <code>source_key</code></td><td>A site or extension registered to receive messages &mdash; a channel that keeps working with the page closed. The registration is recovered from the GCM LevelDB; origin and sender are encoded inside the key and are not split out yet.</td></tr>
+                        <tr><td><code>browser_media_router</code></td><td>One Cast entry &mdash; the per-profile receiver token, or a discovered device</td><td><code>Preferences</code> &rarr; <code>media_router</code></td><td><code>device_name</code>, <code>ip_endpoint</code> (carries the token), device-detail columns when present</td><td>A stable per-profile identifier that links two captures to the same browser; device rows, when Chromium kept them, place the host on a LAN. See &sect;12.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="artifact-card">
+                <h3>Gecko-specific tables</h3>
+                <p class="bf-note">Firefox stores the same evidence in different files, so it gets its own eight
+                    tables rather than being force-fitted into the Chromium schema. <code>browser_cache</code>,
+                    <code>browser_indexeddb</code>, <code>browser_files</code> and <code>browser_metadata</code>
+                    are shared &mdash; Gecko rows land there too, tagged <code>vendor = gecko</code>.</p>
+                <span class="cap">Table 16</span>
+                <div class="bf-table-wrap">
+                <table class="bf-table">
+                    <thead><tr><th>Table</th><th>One row is</th><th>Source on disk</th><th>Key columns</th><th>What it proves</th></tr></thead>
+                    <tbody>
+                        <tr><td><code>browser_gecko_history</code></td><td>One visit</td><td><code>places.sqlite</code></td><td><code>url</code>, <code>title</code>, <code>visit_time</code>, <code>visit_type</code>, <code>from_visit_url</code></td><td>The Firefox equivalent of <code>browser_history</code>, including the referring visit.</td></tr>
+                        <tr><td><code>browser_gecko_bookmarks</code></td><td>One bookmark</td><td><code>places.sqlite</code></td><td><code>folder</code>, <code>title</code>, <code>url</code>, <code>date_added</code>, <code>last_modified</code></td><td>Bookmarks live in the same database as history in Gecko &mdash; one file, three artifact classes.</td></tr>
+                        <tr><td><code>browser_gecko_downloads</code></td><td>One download</td><td><code>places.sqlite</code> (annotations)</td><td><code>url</code>, <code>target_path</code>, <code>start_time</code>, <code>state</code></td><td>Often empty on modern builds &mdash; absence here is a statement about the build, not a parser failure.</td></tr>
+                        <tr><td><code>browser_gecko_cookies</code></td><td>One cookie</td><td><code>cookies.sqlite</code></td><td><code>host</code>, <code>name</code>, <code>value</code>, <code>creation_time</code>, <code>last_accessed</code></td><td>Unlike Chromium, Gecko cookie values are <strong>not</strong> encrypted at rest &mdash; session tokens are readable directly.</td></tr>
+                        <tr><td><code>browser_gecko_credentials</code></td><td>One saved login</td><td><code>logins.json</code> + <code>key4.db</code></td><td><code>hostname</code>, <code>username_encrypted_b64</code>, <code>password_encrypted_b64</code>, <code>times_used</code></td><td>NSS-encrypted; both username <em>and</em> password are protected, unlike Chromium's clear username.</td></tr>
+                        <tr><td><code>browser_gecko_formhistory</code></td><td>One remembered form value</td><td><code>formhistory.sqlite</code></td><td><code>field_name</code>, <code>value</code>, <code>times_used</code>, <code>first_used</code>, <code>last_used</code></td><td>Typed form and search input, with a first/last-use pair.</td></tr>
+                        <tr><td><code>browser_gecko_sessions</code></td><td>One tab entry</td><td><code>recovery.jsonlz4</code> / <code>sessionstore.jsonlz4</code></td><td><code>window_index</code>, <code>tab_index</code>, <code>url</code>, <code>title</code>, <code>form_text</code></td><td>Open tabs and unsubmitted form text, from mozLz4-compressed JSON.</td></tr>
+                        <tr><td><code>browser_gecko_localstorage</code></td><td>One key/value pair</td><td><code>webappsstore.sqlite</code></td><td><code>origin</code>, <code>key</code>, <code>value</code>, <code>source_kind</code></td><td>Gecko keeps local storage in SQLite rather than LevelDB &mdash; no tombstones, but no wear-levelled remnants either.</td></tr>
+                    </tbody>
+                </table>
+                </div>
+            </div>
+
+            <div class="premium-alert">
+                <h4><i class="fas fa-circle-check"></i> Reading an empty table</h4>
+                <p>Several tables can be legitimately empty on a given host &mdash; <code>browser_reading_list</code>,
+                    <code>browser_media_history</code> and <code>browser_gecko_downloads</code> among them. On the
+                    host this reference was checked against, no profile had a <code>Media History</code> database at
+                    all, so that emptiness is a fact about the browser, not the parser. The table is created either
+                    way, which is what separates "the feature was never used" from "this artifact was
+                    never looked at" &mdash; but treat a surprising empty table as something to confirm at the
+                    source, not to assume. <code>browser_service_worker</code> used to sit in this list and did not
+                    belong there: CacheStorage is a Simple Cache, not a LevelDB, and once it is read as one the
+                    table fills.</p>
+            </div>
+        </section>
+
+        <!-- Related -->
+        <section id="related" class="reveal" style="padding-bottom: 6rem;">
+            <div class="section-label">Keep reading</div>
+            <h2 class="section-title">Related masterclasses</h2>
+            <div class="bf-substrate" style="margin-top: 1.5rem;">
+                <a class="sub-card" href="https://crow-eye.com/Eye-Describe/booting-process" style="text-decoration:none;"><span class="kind">Guide</span><span class="sub-card-title">The Windows Booting Process</span><p class="arts">From power-on to login — every stage and the artifacts it leaves.</p></a>
+                <a class="sub-card" href="registry-internals.html" style="text-decoration:none;"><span class="kind">Guide</span><span class="sub-card-title">Windows Registry Internals</span><p class="arts">Hives, cells and the transaction logs that recover a dirty hive.</p></a>
+                <a class="sub-card" href="https://crow-eye.com/eye-describe" style="text-decoration:none;"><span class="kind">Hub</span><span class="sub-card-title">Eye-Describe</span><p class="arts">Every Windows artifact, torn down to the binary.</p></a>
+            </div>
+        </section>
+        <!-- DOWNLOAD CTA -->
+            <section class="reveal" style="padding: 1rem 0 4rem;">
+                <div style="max-width: 720px; margin: 2rem auto 0; background: var(--bg-card); border: 1px solid var(--border); border-radius: 14px; padding: 1.3rem 1.5rem; display: flex; gap: 1.1rem; align-items: center; flex-wrap: wrap;">
+                    <div style="flex: 1; min-width: 280px;">
+                        <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; letter-spacing: 0.15em; text-transform: uppercase; color: var(--cyan); margin-bottom: 0.35rem;">From reading to doing</div>
+                        <h3 style="font-size: 1.15rem; margin-bottom: 0.4rem;">Pull every artifact in this guide with Crow-Eye</h3>
+                        <p style="color: var(--muted); font-size: 0.92rem; line-height: 1.6; margin-bottom: 0.9rem; max-width: 680px;">History, cookies, saved logins, cache, sessions, web-app storage and more — across Chrome, Edge, Brave, Firefox and Electron apps — collected and parsed into one timeline, for free.</p>
+                        <a href="https://crow-eye.com/download" class="btn-primary" style="padding: 0.55rem 1.3rem; font-size: 0.95rem;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+                    </div>
+                </div>
+            </section>
+
+    </main>
+
+    <footer style="border-top: 1px solid var(--border); padding: 4rem 2rem; background: rgba(10, 12, 16, 0.8);">
+        <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto 1.5rem;padding:0 1.5rem;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:0.9rem;opacity:0.85;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+            <a href="https://crow-eye.com/eye-ai">Eye AI — Digital Forensics AI Assistant</a>
+            <a href="https://crow-eye.com/correlation-engine">Windows Correlation Engine</a>
+            <a href="https://crow-eye.com/eye-describe">Eye-Describe — Windows Artifact Anatomy</a>
+            <a href="https://crow-eye.com/sentinel">Crow-Eye Sentinel</a>
+            <a href="https://crow-eye.com/documentation">Documentation</a>
+            <a href="https://crow-eye.com/user-guide">User Guide</a>
+            <a href="https://crow-eye.com/gep">GEP Standard</a>
+            <a href="https://crow-eye.com/download">Download</a>
+        </nav>
+        <div class="container" style="text-align: center; color: var(--muted); font-size: 0.9rem;">
+            <p>© 2026 Crow Eye by <a href="https://www.linkedin.com/in/ghassan-elsman-3b8357222/" target="_blank" style="color: var(--indigo); text-decoration: none;">Ghassan Elsman</a>. All rights reserved.</p>
+        </div>
+    </footer>
+
+    <!-- Byte maps. The bytes in BYTEMAP_DATA were measured off live Chromium,
+         Edge and Firefox profiles; anything that could carry real browsing was
+         replaced with a same-length placeholder so the offsets stay true. -->
+    <script src="bytemap.js"></script>
+    <script>
+window.BYTEMAP_DATA = {
+ "index": {
+  "label": "Blockfile index",
+  "hex": [
+   "C3",
+   "CA",
+   "03",
+   "C1",
+   "00",
+   "00",
+   "03",
+   "00",
+   "E8",
+   "01",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "F8",
+   "00",
+   "00",
+   "00",
+   "04",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "01",
+   "A1",
+   "00",
+   "00",
+   "02",
+   "00",
+   "01",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "2F",
+   "71",
+   "F2",
+   "D8",
+   "3E",
+   "AE",
+   "2F",
+   "00",
+   "58",
+   "B8",
+   "DE",
+   "02",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Index header",
+    "name": "Magic",
+    "offset": 0,
+    "size": 4,
+    "type": "header",
+    "val": "0xC103CAC3",
+    "forensic": "The signature that says this is a Chromium blockfile cache index. Stored little-endian, so the bytes read <strong>C3 CA 03 C1</strong> on disk. A decoder that does not check this will happily read a Simple Cache directory as a blockfile one and produce convincing nonsense."
+   },
+   {
+    "section": "Index header",
+    "name": "Version",
+    "offset": 4,
+    "size": 4,
+    "type": "header",
+    "val": "0x00030000",
+    "forensic": "Major version 3, minor 0. The header grew between versions, which is why the hash table is located by arithmetic rather than a constant."
+   },
+   {
+    "section": "Index header",
+    "name": "Number of entries",
+    "offset": 8,
+    "size": 4,
+    "type": "count",
+    "val": "488",
+    "forensic": "How many cache entries the index accounts for. This is the number an examiner should compare against the rows a parser produces - a walk that returns far fewer has lost entries somewhere."
+   },
+   {
+    "section": "Index header",
+    "name": "Number of bytes",
+    "offset": 12,
+    "size": 4,
+    "type": "size",
+    "val": "0",
+    "forensic": "Total size of the stored bodies. Often zero on a live cache because the browser updates it lazily; an empty value here is not corruption."
+   },
+   {
+    "section": "Index header",
+    "name": "Last file",
+    "offset": 16,
+    "size": 4,
+    "type": "count",
+    "val": "248",
+    "forensic": "The highest external f_XXXXXX file number allocated. Bodies too large for a block live in those separate files."
+   },
+   {
+    "section": "Index header",
+    "name": "This id",
+    "offset": 20,
+    "size": 4,
+    "type": "flags",
+    "val": "4",
+    "forensic": "Identifies the cache instance. Used to spot an index that belongs to a different cache directory than the data files beside it."
+   },
+   {
+    "section": "Index header",
+    "name": "Stats address",
+    "offset": 24,
+    "size": 4,
+    "type": "flags",
+    "val": "0xA1010000",
+    "forensic": "A cache address (the same 32-bit encoding used for every entry) pointing at the statistics block."
+   },
+   {
+    "section": "Index header",
+    "name": "Table length",
+    "offset": 28,
+    "size": 4,
+    "type": "count",
+    "val": "131072",
+    "forensic": "The number of slots in the hash table. <strong>This field is at offset 0x1C, not 0x20.</strong> Reading it one field late returns a plausible number, the table offset lands in the wrong place, and the walk yields zero entries with no error - which is exactly what happened here before it was corrected.",
+    "struct": [
+     {
+      "off": "0x1C",
+      "name": "table_len",
+      "size": "4"
+     },
+     {
+      "off": "file size - table_len x 4",
+      "name": "table start",
+      "size": "derived"
+     }
+    ]
+   },
+   {
+    "section": "Index header",
+    "name": "Crash / dirty flags",
+    "offset": 32,
+    "size": 4,
+    "type": "flags",
+    "val": "-",
+    "forensic": "Set while the cache is open. A non-zero value on an acquired image means the browser did not shut down cleanly, so the index may not account for every entry present in the data files."
+   }
+  ]
+ },
+ "datafile": {
+  "label": "Blockfile data_N",
+  "hex": [
+   "C3",
+   "CA",
+   "04",
+   "C1",
+   "00",
+   "00",
+   "02",
+   "00",
+   "01",
+   "00",
+   "00",
+   "00",
+   "00",
+   "01",
+   "00",
+   "00",
+   "82",
+   "02",
+   "00",
+   "00",
+   "00",
+   "04",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "10",
+   "00",
+   "00",
+   "00",
+   "1F",
+   "00",
+   "00",
+   "00",
+   "05",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "Block file header",
+    "name": "Magic",
+    "offset": 0,
+    "size": 4,
+    "type": "header",
+    "val": "0xC104CAC3",
+    "forensic": "Distinct from the index magic by a single byte - 04 rather than 03. Every data_0 through data_3 file carries it."
+   },
+   {
+    "section": "Block file header",
+    "name": "Version",
+    "offset": 4,
+    "size": 4,
+    "type": "header",
+    "val": "0x00020000",
+    "forensic": "Block file format version 2."
+   },
+   {
+    "section": "Block file header",
+    "name": "This file",
+    "offset": 8,
+    "size": 2,
+    "type": "count",
+    "val": "1",
+    "forensic": "Which data_N this is. Here data_1, whose blocks are 256 bytes - the size that holds an EntryStore record."
+   },
+   {
+    "section": "Block file header",
+    "name": "Next file",
+    "offset": 10,
+    "size": 2,
+    "type": "count",
+    "val": "0",
+    "forensic": "Chains to an overflow file when this one is full. Zero means none."
+   },
+   {
+    "section": "Block file header",
+    "name": "Entry size",
+    "offset": 12,
+    "size": 4,
+    "type": "size",
+    "val": "256",
+    "forensic": "The block size for this file. The four files use <strong>36 / 256 / 1024 / 4096</strong> bytes - a cache address names the file, and the file determines how many bytes a block number skips."
+   },
+   {
+    "section": "Block file header",
+    "name": "Number of entries",
+    "offset": 16,
+    "size": 4,
+    "type": "count",
+    "val": "642",
+    "forensic": "Blocks currently allocated."
+   },
+   {
+    "section": "Block file header",
+    "name": "Max entries",
+    "offset": 20,
+    "size": 4,
+    "type": "count",
+    "val": "1024",
+    "forensic": "Capacity. When it is reached the browser chains to the next file."
+   },
+   {
+    "section": "Block file header",
+    "name": "Empty counters",
+    "offset": 24,
+    "size": 16,
+    "type": "count",
+    "val": "-",
+    "forensic": "Four counters tracking runs of free blocks of length 1 to 4, used by the allocator. They tell an examiner how fragmented the file is."
+   },
+   {
+    "section": "Block file header",
+    "name": "Hints / updating",
+    "offset": 40,
+    "size": 8,
+    "type": "flags",
+    "val": "-",
+    "forensic": "Allocation hints and the in-progress flag."
+   }
+  ]
+ },
+ "entrystore": {
+  "label": "EntryStore record",
+  "hex": [
+   "AB",
+   "D0",
+   "F9",
+   "71",
+   "00",
+   "00",
+   "00",
+   "00",
+   "C1",
+   "01",
+   "00",
+   "90",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "95",
+   "56",
+   "6B",
+   "93",
+   "E6",
+   "B5",
+   "2F",
+   "00",
+   "37",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "4C",
+   "08",
+   "00",
+   "00",
+   "64",
+   "2C",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "08",
+   "06",
+   "02",
+   "B2",
+   "0C",
+   "02",
+   "03",
+   "C2",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "33",
+   "20",
+   "F4",
+   "B2",
+   "68",
+   "74",
+   "74",
+   "70",
+   "73",
+   "3A",
+   "2F",
+   "2F",
+   "65",
+   "78",
+   "61",
+   "6D",
+   "70",
+   "6C",
+   "65",
+   "2E",
+   "74",
+   "65",
+   "73",
+   "74",
+   "2F",
+   "61",
+   "73",
+   "73",
+   "65",
+   "74",
+   "68",
+   "74",
+   "74",
+   "70",
+   "73",
+   "3A",
+   "2F",
+   "2F",
+   "65",
+   "78",
+   "61",
+   "6D",
+   "70",
+   "6C",
+   "65",
+   "2E",
+   "74",
+   "65",
+   "73",
+   "74",
+   "2F",
+   "61",
+   "73",
+   "73",
+   "65",
+   "74",
+   "68",
+   "74",
+   "74"
+  ],
+  "fields": [
+   {
+    "section": "Entry record",
+    "name": "Hash",
+    "offset": 0,
+    "size": 4,
+    "type": "header",
+    "val": "-",
+    "forensic": "Hash of the key. The index hash table is bucketed on this, so an entry is found without reading every record."
+   },
+   {
+    "section": "Entry record",
+    "name": "Next entry",
+    "offset": 4,
+    "size": 4,
+    "type": "flags",
+    "val": "0",
+    "forensic": "Cache address of the next entry in the same hash bucket, or zero at the end of the chain. Following it is how a full walk finds entries the first-level table alone would miss."
+   },
+   {
+    "section": "Entry record",
+    "name": "Rankings node",
+    "offset": 8,
+    "size": 4,
+    "type": "flags",
+    "val": "0x900001C1",
+    "forensic": "Cache address of this entry's node in the LRU list. That node carries the last-used and creation times."
+   },
+   {
+    "section": "Entry record",
+    "name": "Reuse count",
+    "offset": 12,
+    "size": 4,
+    "type": "count",
+    "val": "0",
+    "forensic": "How many times this cached response was served again. A high count distinguishes a resource the user returned to from one fetched once."
+   },
+   {
+    "section": "Entry record",
+    "name": "Refetch count",
+    "offset": 16,
+    "size": 4,
+    "type": "count",
+    "val": "0",
+    "forensic": "How many times the entry was re-downloaded after being evicted."
+   },
+   {
+    "section": "Entry record",
+    "name": "State",
+    "offset": 20,
+    "size": 4,
+    "type": "flags",
+    "val": "0",
+    "forensic": "Zero means normal. Non-zero marks an entry that was being written or doomed when the cache was closed - evidence of an interrupted write."
+   },
+   {
+    "section": "Entry record",
+    "name": "Creation time",
+    "offset": 24,
+    "size": 8,
+    "type": "time",
+    "val": "-",
+    "forensic": "The entry's creation time, in the Chromium epoch: microseconds since 1601-01-01 UTC. Not Unix seconds - a Unix reading lands in 1970."
+   },
+   {
+    "section": "Entry record",
+    "name": "Key length",
+    "offset": 32,
+    "size": 4,
+    "type": "size",
+    "val": "55",
+    "forensic": "Length of the cache key, which is the request URL. Read at <strong>offset 0x20</strong>."
+   },
+   {
+    "section": "Entry record",
+    "name": "Long key address",
+    "offset": 36,
+    "size": 4,
+    "type": "flags",
+    "val": "0",
+    "forensic": "When the key is too long to sit inside the record, this is the cache address holding it. Zero here, so the key is inline at 0x60."
+   },
+   {
+    "section": "Entry record",
+    "name": "Stream sizes",
+    "offset": 40,
+    "size": 16,
+    "type": "size",
+    "val": "-",
+    "forensic": "Four lengths, one per stream. Stream 0 is the HTTP response metadata, stream 1 the body."
+   },
+   {
+    "section": "Entry record",
+    "name": "Stream addresses",
+    "offset": 56,
+    "size": 16,
+    "type": "flags",
+    "val": "0xB2020608 ...",
+    "forensic": "Four cache addresses, one per stream. <strong>Stream 0 is the serialized HttpResponseInfo</strong> - following it is what turns a recovered URL into a response with a real status code, headers, and the times the request was sent and the response arrived (int64 Chromium Times at offsets 12 and 20 of that stream, before the headers begin).",
+    "struct": [
+     {
+      "off": "0x38",
+      "name": "data_addr[0] - metadata",
+      "size": "4"
+     },
+     {
+      "off": "0x3C",
+      "name": "data_addr[1] - body",
+      "size": "4"
+     }
+    ]
+   },
+   {
+    "section": "Entry record",
+    "name": "Flags",
+    "offset": 72,
+    "size": 4,
+    "type": "flags",
+    "val": "-",
+    "forensic": "Entry flags, including whether the body lives in an external file."
+   },
+   {
+    "section": "Entry record",
+    "name": "Padding",
+    "offset": 76,
+    "size": 20,
+    "type": "reserved",
+    "val": "-",
+    "forensic": "Reserved space carrying the record out to 0x60, where the key begins."
+   },
+   {
+    "section": "Cache key",
+    "name": "Key (request URL)",
+    "offset": 96,
+    "size": 55,
+    "type": "name",
+    "val": "https://example.test/asset ...",
+    "forensic": "The cache key is the request URL. <strong>It starts at offset 0x60, not 0x50.</strong> The wrong offset yields a string that begins mid-URL, which still looks like a URL - the failure is silent. The value shown here is a same-length placeholder; the real key on the reference machine is a live browsing URL."
+   }
+  ]
+ },
+ "simple": {
+  "label": "Simple Cache header",
+  "hex": [
+   "30",
+   "5C",
+   "72",
+   "A7",
+   "1B",
+   "6D",
+   "FB",
+   "FC",
+   "05",
+   "00",
+   "00",
+   "00",
+   "26",
+   "00",
+   "00",
+   "00",
+   "3E",
+   "0B",
+   "1E",
+   "5B",
+   "68",
+   "74",
+   "74",
+   "70",
+   "73",
+   "3A",
+   "2F",
+   "2F",
+   "65",
+   "78",
+   "61",
+   "6D",
+   "70",
+   "6C",
+   "65",
+   "2E",
+   "74",
+   "65",
+   "73",
+   "74",
+   "2F",
+   "73",
+   "77",
+   "2E",
+   "6A",
+   "73",
+   "68",
+   "74",
+   "74",
+   "70",
+   "73",
+   "3A",
+   "2F",
+   "2F",
+   "65",
+   "78",
+   "61",
+   "6D"
+  ],
+  "fields": [
+   {
+    "section": "Simple file header",
+    "name": "Magic",
+    "offset": 0,
+    "size": 8,
+    "type": "header",
+    "val": "0xFCFB6D1BA7725C30",
+    "forensic": "A <strong>uint64</strong>, not a uint32. Reading four bytes here matches nothing, which is why the Simple Cache branch silently never fired before this was corrected."
+   },
+   {
+    "section": "Simple file header",
+    "name": "Version",
+    "offset": 8,
+    "size": 4,
+    "type": "header",
+    "val": "5",
+    "forensic": "Entry format version."
+   },
+   {
+    "section": "Simple file header",
+    "name": "Key length",
+    "offset": 12,
+    "size": 4,
+    "type": "size",
+    "val": "38",
+    "forensic": "Length of the key that follows. At offset 12 - offset 16 is the hash, and reading the length from there gives a value in the billions."
+   },
+   {
+    "section": "Simple file header",
+    "name": "Key hash",
+    "offset": 16,
+    "size": 4,
+    "type": "header",
+    "val": "0x5B1E0B3E",
+    "forensic": "Hash of the key, used to confirm the filename matches the content."
+   },
+   {
+    "section": "Cache key",
+    "name": "Key (request URL)",
+    "offset": 20,
+    "size": 38,
+    "type": "name",
+    "val": "https://example.test/sw.js",
+    "forensic": "The key begins immediately after the 20-byte header. Shown here as a same-length placeholder. What follows it in the file is the response <strong>body</strong>, not the metadata - the metadata sits after the body and its EOF record, which is why reading forward from the key returns page content."
+   }
+  ]
+ },
+ "cachestorage": {
+  "label": "CacheStorage metadata",
+  "hex": [
+   "00",
+   "00",
+   "00",
+   "00",
+   "0A",
+   "05",
+   "0A",
+   "03",
+   "47",
+   "45",
+   "54",
+   "12",
+   "69",
+   "08",
+   "C8",
+   "01",
+   "12",
+   "00",
+   "18",
+   "02",
+   "22",
+   "28",
+   "0A",
+   "0C",
+   "43",
+   "6F",
+   "6E",
+   "74",
+   "65",
+   "6E",
+   "74",
+   "2D",
+   "54",
+   "79",
+   "70",
+   "65",
+   "12",
+   "18",
+   "74",
+   "65",
+   "78",
+   "74",
+   "2F",
+   "70",
+   "6C",
+   "61",
+   "69",
+   "6E"
+  ],
+  "fields": [
+   {
+    "section": "Stream 0 prefix",
+    "name": "Zero padding",
+    "offset": 0,
+    "size": 4,
+    "type": "reserved",
+    "val": "-",
+    "forensic": "A short run of zero bytes before the message. A protobuf walk started at offset 0 reads a zero tag and stops immediately, which is why this metadata looked absent rather than merely unparsed."
+   },
+   {
+    "section": "Request",
+    "name": "Tag - request",
+    "offset": 4,
+    "size": 1,
+    "type": "header",
+    "val": "field 1, length-delimited",
+    "forensic": "Protobuf tag byte: field number in the top five bits, wire type in the low three. 0x0A is field 1, wire type 2."
+   },
+   {
+    "section": "Request",
+    "name": "Request length",
+    "offset": 5,
+    "size": 1,
+    "type": "size",
+    "val": "5",
+    "forensic": "Length of the embedded request message."
+   },
+   {
+    "section": "Request",
+    "name": "Method tag",
+    "offset": 6,
+    "size": 1,
+    "type": "header",
+    "val": "field 1",
+    "forensic": "Inside the request message, field 1 is the HTTP method."
+   },
+   {
+    "section": "Request",
+    "name": "Method length",
+    "offset": 7,
+    "size": 1,
+    "type": "size",
+    "val": "3",
+    "forensic": "Three bytes follow."
+   },
+   {
+    "section": "Request",
+    "name": "Method",
+    "offset": 8,
+    "size": 3,
+    "type": "name",
+    "val": "GET",
+    "forensic": "The literal request method. This is the one place CacheStorage records whether the cached response answered a GET or something else."
+   },
+   {
+    "section": "Response",
+    "name": "Tag - response",
+    "offset": 11,
+    "size": 1,
+    "type": "header",
+    "val": "field 2",
+    "forensic": "0x12 is field 2, wire type 2 - the response message."
+   },
+   {
+    "section": "Response",
+    "name": "Response length",
+    "offset": 12,
+    "size": 1,
+    "type": "size",
+    "val": "105",
+    "forensic": "Length of the response message."
+   },
+   {
+    "section": "Response",
+    "name": "Status tag",
+    "offset": 13,
+    "size": 1,
+    "type": "header",
+    "val": "field 1, varint",
+    "forensic": "0x08 is field 1, wire type 0."
+   },
+   {
+    "section": "Response",
+    "name": "HTTP status",
+    "offset": 14,
+    "size": 2,
+    "type": "count",
+    "val": "200",
+    "forensic": "The status code, as a base-128 varint: <strong>C8 01</strong> decodes to 200. There is no <code>HTTP/</code> literal anywhere in a CacheStorage entry, so the status cannot be found by text search the way it can in the blockfile cache."
+   },
+   {
+    "section": "Response",
+    "name": "Status text",
+    "offset": 16,
+    "size": 2,
+    "type": "name",
+    "val": "(empty)",
+    "forensic": "Field 2, length zero - modern responses carry no reason phrase."
+   },
+   {
+    "section": "Response",
+    "name": "Response type",
+    "offset": 18,
+    "size": 2,
+    "type": "flags",
+    "val": "2",
+    "forensic": "Field 3: whether the response was basic, CORS, opaque or a redirect. An opaque response means the service worker could not read the body either."
+   },
+   {
+    "section": "Response",
+    "name": "Header tag",
+    "offset": 20,
+    "size": 1,
+    "type": "header",
+    "val": "field 4",
+    "forensic": "0x22 is field 4, wire type 2 - a repeated header entry."
+   },
+   {
+    "section": "Response",
+    "name": "Header length",
+    "offset": 21,
+    "size": 1,
+    "type": "size",
+    "val": "40",
+    "forensic": "Length of this header's sub-message."
+   },
+   {
+    "section": "Response",
+    "name": "Name tag and length",
+    "offset": 22,
+    "size": 2,
+    "type": "size",
+    "val": "12",
+    "forensic": "Inside a header entry, field 1 is the name and field 2 the value."
+   },
+   {
+    "section": "Response",
+    "name": "Header name",
+    "offset": 24,
+    "size": 24,
+    "type": "name",
+    "val": "Content-...",
+    "forensic": "The first response header. Header names are protocol constants, so they are shown as measured; the values are not reproduced here."
+   }
+  ]
+ },
+ "cache2": {
+  "label": "Firefox cache2 trailer",
+  "hex": [
+   "74",
+   "6F",
+   "70",
+   "00",
+   "32",
+   "36",
+   "35",
+   "00",
+   "00",
+   "00",
+   "00",
+   "04",
+   "00",
+   "00",
+   "00",
+   "14"
+  ],
+  "fields": [
+   {
+    "section": "Metadata tail",
+    "name": "End of the key run",
+    "offset": 0,
+    "size": 8,
+    "type": "name",
+    "val": "... top / 265",
+    "forensic": "Firefox stores its metadata as NUL-separated name/value elements at the END of the entry file. These are the last of them."
+   },
+   {
+    "section": "Metadata tail",
+    "name": "Reserved",
+    "offset": 8,
+    "size": 4,
+    "type": "reserved",
+    "val": "-",
+    "forensic": "Trailing structure before the offset word."
+   },
+   {
+    "section": "Metadata tail",
+    "name": "Metadata offset",
+    "offset": 12,
+    "size": 4,
+    "type": "header",
+    "val": "20",
+    "forensic": "<strong>The last four bytes of the file are a big-endian uint32</strong> giving the byte offset where the metadata begins. Firefox is big-endian here while every Chromium structure on this page is little-endian - reading it the wrong way round gives an offset in the hundreds of millions.<br><br>The metadata header layout itself differs between cache2 versions, so Crow-Eye locates the <code>response-head</code> element <strong>by name</strong> rather than by a fixed offset. An earlier fixed-offset attempt produced fetch counts in the billions - values that parse cleanly and are entirely wrong."
+   }
+  ]
+ },
+ "mozlz4": {
+  "label": "mozLz4 session container",
+  "hex": [
+   "6D",
+   "6F",
+   "7A",
+   "4C",
+   "7A",
+   "34",
+   "30",
+   "00",
+   "6B",
+   "44",
+   "01",
+   "00",
+   "F2",
+   "21",
+   "7B",
+   "22",
+   "76",
+   "65",
+   "72",
+   "73",
+   "69",
+   "6F",
+   "6E",
+   "22",
+   "3A",
+   "5B",
+   "22",
+   "73",
+   "65",
+   "73",
+   "73",
+   "69"
+  ],
+  "fields": [
+   {
+    "section": "mozLz4 header",
+    "name": "Magic",
+    "offset": 0,
+    "size": 8,
+    "type": "header",
+    "val": "mozLz40\\0",
+    "forensic": "Mozilla's own container around a raw LZ4 block, used for <code>sessionstore.jsonlz4</code> and <code>sessionstore-backups/recovery.jsonlz4</code>. It is <strong>not</strong> the standard LZ4 frame format, so ordinary LZ4 tools reject the file."
+   },
+   {
+    "section": "mozLz4 header",
+    "name": "Decompressed size",
+    "offset": 8,
+    "size": 4,
+    "type": "size",
+    "val": "83,051",
+    "forensic": "Little-endian uint32. The LZ4 block decoder needs this up front, because a raw block carries no length of its own."
+   },
+   {
+    "section": "LZ4 block",
+    "name": "Compressed payload",
+    "offset": 12,
+    "size": 20,
+    "type": "name",
+    "val": "{\"version\":[\"sessionrestore\"...",
+    "forensic": "The raw LZ4 block. Decompressed it is JSON holding every open window, tab, the full back/forward history of each, and form field values the user typed but never submitted."
+   }
+  ]
+ },
+ "leveldblog": {
+  "label": "LevelDB log record",
+  "hex": [
+   "9A",
+   "1B",
+   "DC",
+   "35",
+   "17",
+   "00",
+   "01",
+   "01",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "00",
+   "01",
+   "00",
+   "00",
+   "00",
+   "6B",
+   "65",
+   "79",
+   "6B",
+   "65",
+   "79",
+   "6B",
+   "65",
+   "79",
+   "6B",
+   "65",
+   "79",
+   "6B"
+  ],
+  "fields": [
+   {
+    "section": "Physical record",
+    "name": "CRC32",
+    "offset": 0,
+    "size": 4,
+    "type": "header",
+    "val": "0x35DC1B9A",
+    "forensic": "Checksum of the record. Crow-Eye deliberately does not verify it - a partially corrupt store should still yield what it can, rather than returning nothing."
+   },
+   {
+    "section": "Physical record",
+    "name": "Length",
+    "offset": 4,
+    "size": 2,
+    "type": "size",
+    "val": "23",
+    "forensic": "Payload length, little-endian uint16."
+   },
+   {
+    "section": "Physical record",
+    "name": "Record type",
+    "offset": 6,
+    "size": 1,
+    "type": "flags",
+    "val": "1 = FULL",
+    "forensic": "1 FULL, 2 FIRST, 3 MIDDLE, 4 LAST. Records are packed into 32768-byte blocks, and a record too large for the remaining space is split across blocks - so a reader that ignores this type reassembles fragments into garbage."
+   },
+   {
+    "section": "Write batch",
+    "name": "Sequence number",
+    "offset": 7,
+    "size": 8,
+    "type": "time",
+    "val": "1",
+    "forensic": "A monotonically increasing write sequence. It orders operations against each other even when no wall-clock timestamp exists."
+   },
+   {
+    "section": "Write batch",
+    "name": "Operation count",
+    "offset": 15,
+    "size": 4,
+    "type": "count",
+    "val": "1",
+    "forensic": "How many key/value operations this batch contains."
+   },
+   {
+    "section": "Write batch",
+    "name": "Records",
+    "offset": 19,
+    "size": 13,
+    "type": "name",
+    "val": "(placeholder)",
+    "forensic": "Each operation begins with a tag byte: 1 for a put, <strong>0 for a delete</strong>. The log still holds deleted records, which is why reading the write-ahead log recovers Local Storage and IndexedDB values the site has already removed. Shown here as a placeholder - the real bytes are the user's own stored data."
+   }
+  ]
+ },
+ "snss": {
+  "label": "SNSS session record",
+  "hex": [
+   "53",
+   "4E",
+   "53",
+   "53",
+   "03",
+   "00",
+   "00",
+   "00",
+   "09",
+   "00",
+   "00",
+   "88",
+   "49",
+   "F9",
+   "55",
+   "89",
+   "49",
+   "F9",
+   "55",
+   "09",
+   "00",
+   "02",
+   "89",
+   "49",
+   "F9",
+   "55",
+   "00",
+   "00",
+   "00",
+   "00"
+  ],
+  "fields": [
+   {
+    "section": "File header",
+    "name": "Magic",
+    "offset": 0,
+    "size": 4,
+    "type": "header",
+    "val": "SNSS",
+    "forensic": "Chromium's session file signature, in <code>Sessions\\Session_*</code>, <code>Tabs_*</code> and <code>Apps_*</code>."
+   },
+   {
+    "section": "File header",
+    "name": "Version",
+    "offset": 4,
+    "size": 4,
+    "type": "header",
+    "val": "3",
+    "forensic": "Session format version."
+   },
+   {
+    "section": "SetTabWindow",
+    "name": "Record size",
+    "offset": 8,
+    "size": 2,
+    "type": "size",
+    "val": "9",
+    "forensic": "Each record is a uint16 size followed by that many bytes, the first of which is the command id."
+   },
+   {
+    "section": "SetTabWindow",
+    "name": "Command id 0",
+    "offset": 10,
+    "size": 1,
+    "type": "flags",
+    "val": "0",
+    "forensic": "<strong>kCommandSetTabWindow.</strong> This is the command that says which window a tab belonged to - the navigation records do not carry it."
+   },
+   {
+    "section": "SetTabWindow",
+    "name": "Window id",
+    "offset": 11,
+    "size": 4,
+    "type": "count",
+    "val": "1442400648",
+    "forensic": "A session-unique window identifier, not a position. Crow-Eye maps these to 0-based ordinals in first-seen order, which is what the <code>window_index</code> column means."
+   },
+   {
+    "section": "SetTabWindow",
+    "name": "Tab id",
+    "offset": 15,
+    "size": 4,
+    "type": "count",
+    "val": "1442400649",
+    "forensic": "The tab this record places. Joined to the navigation records on this value."
+   },
+   {
+    "section": "SetTabIndexInWindow",
+    "name": "Record size",
+    "offset": 19,
+    "size": 2,
+    "type": "size",
+    "val": "9",
+    "forensic": "Nine bytes follow."
+   },
+   {
+    "section": "SetTabIndexInWindow",
+    "name": "Command id 2",
+    "offset": 21,
+    "size": 1,
+    "type": "flags",
+    "val": "2",
+    "forensic": "<strong>kCommandSetTabIndexInWindow</strong> - the tab's position on the tab strip."
+   },
+   {
+    "section": "SetTabIndexInWindow",
+    "name": "Tab id",
+    "offset": 22,
+    "size": 4,
+    "type": "count",
+    "val": "1442400649",
+    "forensic": "The same tab id as above, which is how the two commands join."
+   },
+   {
+    "section": "SetTabIndexInWindow",
+    "name": "Tab index",
+    "offset": 26,
+    "size": 4,
+    "type": "count",
+    "val": "0",
+    "forensic": "The real tab index. <strong>Not</strong> the index inside kCommandUpdateTabNavigation - that one counts navigations within a tab, so using it as the tab index produces a number that grows with every page load."
+   }
+  ]
+ }
+};
+    ByteMap.mount({
+      mapEl:   document.getElementById("bm-map"),
+      panelEl: document.getElementById("bm-panel"),
+      tableEl: document.getElementById("bm-table"),
+      tabsEl:  document.getElementById("bm-tabs"),
+      variants: window.BYTEMAP_DATA
+    });
+    </script>
+    <script src="../main.js"></script>
+</body>
+
+</html>

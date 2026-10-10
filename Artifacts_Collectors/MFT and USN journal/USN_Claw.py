@@ -47,16 +47,13 @@ try:
     _HAS_WMI = True
 except ImportError:
     _HAS_WMI = False
-    print(f"{COLOR_WARNING}WMI module not available - installing it now...{COLOR_RESET}")
-    try:
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "wmi"])
-        import wmi
-        _HAS_WMI = True
-        print(f"{COLOR_SUCCESS}Successfully installed wmi module{COLOR_RESET}")
-    except Exception as e:
-        print(f"{COLOR_ERROR}Failed to install wmi module: {e}{COLOR_RESET}")
-        print(f"{COLOR_WARNING}Volume discovery will use alternative methods{COLOR_RESET}")
+    # wmi is a Windows package (it wraps COM). Installing it at import time on
+    # Linux failed every start, and a pip install from inside a parser is not
+    # something a forensic tool should do on a machine it is examining anyway:
+    # it is in the Windows requirements and installed with the rest.
+    if os.name == "nt":
+        print(f"{COLOR_WARNING}WMI module not available - volume discovery will use "
+              f"alternative methods{COLOR_RESET}")
 
 # --------- Config ---------
 OUTPUT_DB = "USN_journal.db"
@@ -65,12 +62,12 @@ BATCH_SIZE = 500  # commit after this many records
 COMMIT_FREQUENCY_BYTES = 4 * 1024 * 1024  # or commit when this many bytes processed in a chunk
 
 # --------- Logging ---------
-# Create timestamped log filename
-log_timestamp = get_current_utc().strftime("%Y%m%d_%H%M%S")
-# Create Target_Artifacts directory for logs if it doesn't exist
-target_artifacts_dir = os.path.join(".", "Target_Artifacts")
-os.makedirs(target_artifacts_dir, exist_ok=True)
-log_filename = os.path.join(target_artifacts_dir, f"usn_claw_{log_timestamp}.log")
+# The per-run file is opened by main(), in the folder the database goes to.
+# It used to be opened here, at IMPORT: the offline parser imports this module
+# for its helpers, so every offline USN parse - and the app itself, through the
+# live runner's import - created ./Target_Artifacts in whatever the working
+# folder happened to be and left an empty usn_claw_<time>.log in it.
+log_filename = None
 
 # Detailed per-run file, kept: it is a forensic artifact of the parse and lives
 # beside the databases in Target_Artifacts.
@@ -90,28 +87,50 @@ log_filename = os.path.join(target_artifacts_dir, f"usn_claw_{log_timestamp}.log
 # The handler below is attached to THIS module's logger instead, and records
 # still propagate to root, so a line lands both in the per-run file and in the
 # case log.
-file_handler = logging.FileHandler(log_filename, mode='w', encoding='utf-8')
-file_handler.setLevel(logging.DEBUG)
-file_formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-file_handler.setFormatter(file_formatter)
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
-logger.addHandler(file_handler)
 
 # The detailed file-only channel keeps its own handler, but propagates now: it
 # used to set propagate = False, which made everything written through it
 # invisible to the case log by construction.
 file_logger = logging.getLogger(__name__ + ".detail")
 file_logger.setLevel(logging.DEBUG)
-file_logger.addHandler(file_handler)
 
-# Log the log file location (file only)
-file_logger.info(f"Detailed logging to file: {log_filename}")
-print(f"{COLOR_INFO}Crow Eye USN Journal Parser - Detailed logs: {log_filename}{COLOR_RESET}")
+_run_handler = None
+
+
+def _attach_run_log(directory):
+    """Open this run's detailed log beside its database."""
+    global _run_handler, log_filename
+    _detach_run_log()
+    try:
+        os.makedirs(directory, exist_ok=True)
+        log_filename = os.path.join(
+            directory, "usn_claw_%s.log" % get_current_utc().strftime("%Y%m%d_%H%M%S"))
+        handler = logging.FileHandler(log_filename, mode='w', encoding='utf-8')
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+        logger.addHandler(handler)
+        _run_handler = handler
+        file_logger.info("Detailed logging to file: %s", log_filename)
+    except OSError as exc:
+        logger.warning("USN run log not opened in %s: %s", directory, exc)
+
+
+def _detach_run_log():
+    global _run_handler
+    if _run_handler is not None:
+        logger.removeHandler(_run_handler)
+        try:
+            _run_handler.close()
+        except Exception:
+            pass
+        _run_handler = None
 
 # --------- Windows API constants ----------
-kernel32 = ctypes.windll.kernel32
+# Live USN reading is Windows-only; on Linux the module still imports, for the
+# offline parser that shares its record layouts.
+kernel32 = ctypes.windll.kernel32 if os.name == "nt" else None
 
 GENERIC_READ = 0x80000000
 FILE_SHARE_READ = 0x00000001
@@ -759,6 +778,32 @@ def init_db(db_path=OUTPUT_DB):
 
 
 
+def record_deleted_entry(volume_letter, gap_start, gap_end, cursor, conn):
+    """Record a range of journal entries Windows has already purged.
+
+    The reader calls this when FSCTL_READ_USN_JOURNAL answers
+    ERROR_JOURNAL_ENTRY_DELETED. The deleted_entries table had a schema but no
+    writer - the call raised NameError and ended that volume's parse - so a
+    purged range is now kept as a row: activity happened there and the
+    journal no longer says what.
+    """
+    try:
+        cursor.execute(
+            "INSERT OR IGNORE INTO deleted_entries (volume_letter, gap_start_usn, gap_end_usn, "
+            "gap_size, detection_timestamp, last_known_usn, next_valid_usn, "
+            "forensic_significance, potential_activity, parsed_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (volume_letter, int(gap_start), int(gap_end), int(gap_end) - int(gap_start),
+             get_current_forensic_timestamp(), int(gap_start), int(gap_end),
+             "Journal entries purged by Windows (journal wrap or size limit)",
+             "Unknown: the records for this USN range no longer exist",
+             get_current_forensic_timestamp()))
+        file_logger.info("%s: journal entries %d-%d were purged", volume_letter, gap_start, gap_end)
+    except Exception as exc:
+        file_logger.warning("%s: purged range %s-%s not recorded: %s",
+                            volume_letter, gap_start, gap_end, exc)
+
+
 def detect_usn_journal_version(handle, volume_letter):
     """
     Detect which USN Journal version to use by testing each version
@@ -850,6 +895,20 @@ def read_journal_events(volume_letter, cursor, conn):
         file_logger.info(f"{volume_letter}: First USN: {journal_data.FirstUsn}")
         file_logger.info(f"{volume_letter}: Next USN: {journal_data.NextUsn}")
         file_logger.info(f"{volume_letter}: Lowest Valid USN: {journal_data.LowestValidUsn}")
+        # Into the run's custody record: the journal is read through
+        # FSCTL_READ_USN_JOURNAL, not as a file, so it is identified by its
+        # journal ID and USN range instead of a hash.
+        try:
+            from utils import custody as _custody
+            _rec = _custody.active()
+            if _rec is not None:
+                _rec.add_source(r"\\.\%s:\$Extend\$UsnJrnl:$J" % str(volume_letter).strip(":\\/"),
+                                method="raw_disk (FSCTL_READ_USN_JOURNAL)", times={}, hash_source=False,
+                                note="journal ID %s, USN %s to %s (lowest valid %s)" % (
+                                    journal_data.UsnJournalID, journal_data.FirstUsn,
+                                    journal_data.NextUsn, journal_data.LowestValidUsn))
+        except Exception:
+            pass
         
         # Validate USN range to prevent error 87 (ERROR_INVALID_PARAMETER)
         if journal_data.FirstUsn >= journal_data.NextUsn:
@@ -1117,6 +1176,7 @@ def read_journal_events(volume_letter, cursor, conn):
                                         new_records.append(record)
                                 
                                 # Insert only new records
+                                _count_batch(len(batch_records), len(new_records))
                                 if new_records:
                                     cursor.executemany(
                                         "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1169,6 +1229,7 @@ def read_journal_events(volume_letter, cursor, conn):
                             new_records.append(record)
                     
                     # Insert only new records
+                    _count_batch(len(batch_records), len(new_records))
                     if new_records:
                         cursor.executemany(
                             "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1227,12 +1288,37 @@ def read_usn_journal_for_volume(volume_letter, cursor, conn):
         logger.error(f"Failed to record deleted entry gap: {e}")
 
 # --------- Main ----------
+# Journal records read in the last main() run, and how many were already in
+# the case (same volume and USN) - read by the live collector, which only gets
+# main()'s exit code back.
+LAST_COUNTS = None
+_RUN_COUNTS = {"read": 0, "inserted": 0, "duplicates": 0}
+
+
+def _count_batch(read, inserted):
+    _RUN_COUNTS["read"] += read
+    _RUN_COUNTS["inserted"] += inserted
+    _RUN_COUNTS["duplicates"] += read - inserted
+
+
 def main():
+    """Parse every fixed NTFS volume's journal into ./Target_Artifacts."""
+    # This run's counts only (see MFT_Claw.main).
+    global LAST_COUNTS
+    LAST_COUNTS = None
+    try:
+        return _main()
+    finally:
+        _detach_run_log()
+
+
+def _main():
     # Check for administrator privileges
     if not is_admin():
         logger.error("This script requires administrator privileges to access USN Journal.")
         logger.error("Please run as administrator (right-click -> 'Run as administrator')")
-        return 1  # Return error code instead of exiting
+        # 5, not 1: utils.parse_status.EXIT_ACCESS_DENIED - a refusal, not a crash.
+        return 5
 
     logger.info("Running with administrator privileges")
 
@@ -1246,10 +1332,14 @@ def main():
     # Create Target_Artifacts directory for consistent output location
     target_artifacts_dir = os.path.join(".", "Target_Artifacts")
     os.makedirs(target_artifacts_dir, exist_ok=True)
-    
+    _attach_run_log(target_artifacts_dir)
+
     # Use Target_Artifacts directory for database
     usn_db_path = os.path.join(target_artifacts_dir, "USN_journal.db")
     conn, cursor = init_db(usn_db_path)
+    global LAST_COUNTS
+    for _k in _RUN_COUNTS:
+        _RUN_COUNTS[_k] = 0
     processed_count = 0
     volume_results = {}
 
@@ -1292,6 +1382,10 @@ def main():
             logger.info("  Enable USN Journal with: fsutil usn createjournal m=1000 a=100 <drive>:")
             logger.info("  Then re-run this tool to capture file system activity")
 
+    LAST_COUNTS = {"records": _RUN_COUNTS["read"], "inserted": _RUN_COUNTS["inserted"],
+                   "duplicates": _RUN_COUNTS["duplicates"]}
+    logger.info("Journal records read: %d - new: %d, already in the database: %d",
+                _RUN_COUNTS["read"], _RUN_COUNTS["inserted"], _RUN_COUNTS["duplicates"])
     logger.info("Done.")
     return 0  # Success
 

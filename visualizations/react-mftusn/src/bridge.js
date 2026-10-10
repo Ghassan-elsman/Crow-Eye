@@ -6,99 +6,61 @@
 let bridgePromise = null
 
 function mockBridge() {
-  const CATS = ['create', 'delete', 'rename', 'data', 'meta']
+  // Standalone `npm run dev` only: the shapes the Python bridge returns.
   const pad = (n) => String(n).padStart(2, '0')
-
-  // A short USN window (one day, hour buckets) + a long MFT history.
-  const day = '2026-02-16'
-  const usnEvents = {}
+  const days = []
+  const start = new Date('2026-01-01')
+  for (let i = 0; i < 280; i++) { const d = new Date(start); d.setDate(d.getDate() + i); days.push(d.toISOString().slice(0, 10)) }
+  const flags = ['FILE_CREATE', 'FILE_DELETE', 'RENAME_NEW_NAME', 'DATA_EXTEND', 'BASIC_INFO_CHANGE', 'CLOSE']
+  const series = {}
   const combined = {}
-  CATS.forEach((c, ci) => {
-    const buckets = []
-    for (let h = 0; h < 24; h++) {
-      const key = `${day}T${pad(h)}:00`
-      const v = Math.max(0, Math.round((ci === 4 ? 300 : 90) * Math.abs(Math.sin((h + ci) / 3)) * (0.4 + Math.random())))
-      buckets.push({ key, value: v })
-      combined[key] = (combined[key] || 0) + v
-    }
-    usnEvents[c] = { buckets, max: Math.max(1, ...buckets.map(b => b.value)) }
-  })
-  const mftHistory = []
-  const start = new Date('2024-01-01')
-  for (let i = 0; i < 400; i++) {
-    const d = new Date(start); d.setDate(d.getDate() + i)
-    const iso = d.toISOString().slice(0, 10)
-    mftHistory.push({ day: iso, created: Math.round(200 * Math.abs(Math.sin(i / 9)) * Math.random()),
-      modified: Math.round(340 * Math.abs(Math.cos(i / 7)) * Math.random()) })
+  const mk = (key, scale, from) => {
+    const buckets = days.map((d, i) => ({ key: d, value: i < from ? 0 : Math.round(scale * Math.abs(Math.sin(i / 5)) * Math.random()) }))
+    buckets.forEach(b => { combined[b.key] = (combined[b.key] || 0) + b.value })
+    series[key] = { buckets, max: Math.max(1, ...buckets.map(b => b.value)) }
   }
-
-  const dirsMock = ['Windows/System32', 'Users/Ann/Documents', 'Program Files/App', 'Windows/Temp', '$Extend/$Deleted', 'Users/Ann/Downloads']
-  const extsMock = ['dll', 'exe', 'log', 'tmp', 'png', 'txt', '(none)']
-  const reasonsMock = ['DATA_EXTEND | FILE_CREATE | CLOSE', 'RENAME_NEW_NAME | CLOSE', 'SECURITY_CHANGE | CLOSE',
-    'DATA_OVERWRITE | CLOSE', 'FILE_DELETE | CLOSE', 'BASIC_INFO_CHANGE | CLOSE']
-  const catsOf = (r) => {
-    const s = []
-    if (r.includes('FILE_CREATE')) s.push('create')
-    if (r.includes('FILE_DELETE')) s.push('delete')
-    if (r.includes('RENAME')) s.push('rename')
-    if (/DATA_(OVERWRITE|EXTEND|TRUNCATION)/.test(r)) s.push('data')
-    if (/(BASIC_INFO|SECURITY|OBJECT_ID|INDEXABLE)/.test(r)) s.push('meta')
-    return s
-  }
-
-  const mockEvents = (n) => {
-    const evs = []
-    for (let i = 0; i < n; i++) {
-      const r = reasonsMock[i % reasonsMock.length]
-      const dir = dirsMock[i % dirsMock.length]
-      const ext = extsMock[i % extsMock.length]
-      const h = i % 24
-      evs.push({ rec: 1000 + i, path: `./${dir}/file${i}.${ext}`, fn: `file${i}.${ext}`,
-        t: `${day}T${pad(h)}:${pad(i % 60)}:00+00:00`, hour: h, cats: catsOf(r),
-        size: Math.round(Math.random() * 5e6), deleted: 0 })
-    }
-    return evs
-  }
-  const byHour = Object.fromEntries(CATS.map((c, ci) => [c, Array.from({ length: 24 }, (_, h) => Math.round(60 * Math.abs(Math.sin((h + ci) / 3)) * Math.random()))]))
-  const topDirs = dirsMock.map((d, i) => ({ dir: d, n: 900 - i * 120 }))
-  const topExts = extsMock.map((e, i) => ({ ext: e, n: 800 - i * 90 }))
-
+  mk('mft_created', 120, 0); mk('mft_modified', 220, 0)
+  flags.forEach((f, i) => mk(f, 300 / (i + 1), 250))
+  const rows = [{ key: 'mft_created', label: 'Files created (MFT)', group: 'mft', total: 1 },
+    { key: 'mft_modified', label: 'Files modified (MFT)', group: 'mft', total: 1 }]
+    .concat(flags.map(f => ({ key: f, label: f.replace(/_/g, ' '), group: 'usn', total: 1 })))
+  const ev = (i) => ({ id: `C:${1000 + i}:2`, rec: 1000 + i, name: `file${i}.tmp`,
+    path: `Users/Ann/AppData/Local/Temp/dir${i % 7}/file${i}.tmp`, pathFrom: i % 3 ? 'journal' : 'mft',
+    t: `2026-10-07 ${pad(i % 24)}:${pad(i % 60)}:00`, hour: i % 24, flags: [flags[i % flags.length], 'CLOSE'],
+    cats: [], size: 1234, inMft: i % 3 === 0 })
+  const byHour = Object.fromEntries(flags.map((f, j) => [f, Array.from({ length: 24 }, (_, h) => Math.round(50 * Math.abs(Math.sin((h + j) / 3))))]))
+  const json = (o) => Promise.resolve(JSON.stringify(o))
   return {
-    getMftUsnBounds: () => Promise.resolve(JSON.stringify({
-      hasData: true, mftMin: '2024-01-01', mftMax: '2026-02-16', usnMin: day, usnMax: day,
-      volumes: ['C:', 'D:'], hasVolume: true, hasAds: true,
-    })),
-    getMftUsnTimelines: () => Promise.resolve(JSON.stringify({
-      mftHistory, usnEvents,
-      combined: Object.entries(combined).map(([key, value]) => ({ key, value })).sort((a, b) => a.key < b.key ? -1 : 1),
-      bucket: 'hour',
-    })),
-    getMftUsnOverview: () => Promise.resolve(JSON.stringify({
-      totals: { files: 587975, directories: 133707, withEvents: 10088, deleted: 12, ads: 340,
-        created: 1168, renamed: 833, dataChanged: 1803, deletedEvents: 23 },
-      anomalies: { timestompCandidates: 421, usnGaps: 3, deletedButPresent: 12, ads: 340 },
-      byCategory: { create: 1168, delete: 23, rename: 833, data: 1803, meta: 7150 },
-      topDirs, topExts,
-    })),
-    getMftUsnWindowDetail: (argsJson) => {
-      const a = JSON.parse(argsJson || '{}')
-      return Promise.resolve(JSON.stringify({ events: mockEvents(220), byHour, topDirs, topExts, bucket: a.bucket }))
-    },
-    getMftUsnFileDetail: (argsJson) => {
-      const a = JSON.parse(argsJson || '{}')
-      return Promise.resolve(JSON.stringify({
-        rec: JSON.parse(argsJson || '{}').rec || 1000, path: './Users/Ann/Documents/report.docx', filename: 'report.docx',
-        isDir: 0, deleted: 0, size: 284219,
-        si: { created: '2026-02-10T08:11:04+00:00', modified: '2026-02-16T05:20:00+00:00', accessed: '2026-02-16T05:20:00+00:00', mftChanged: '2026-02-16T05:20:00+00:00' },
-        fnTimes: { created: '2026-02-10T08:11:04+00:00', modified: '2026-02-14T09:02:00+00:00', accessed: '2026-02-16T05:20:00+00:00', mftChanged: '2026-02-16T05:20:00+00:00' },
-        events: [
-          { t: '2026-02-10T08:11:04+00:00', cats: ['create'], reason: 'DATA_EXTEND | FILE_CREATE | CLOSE' },
-          { t: '2026-02-14T09:02:00+00:00', cats: ['data'], reason: 'DATA_OVERWRITE | CLOSE' },
-          { t: '2026-02-16T05:20:00+00:00', cats: ['meta'], reason: 'SECURITY_CHANGE | CLOSE' },
-        ],
-        flags: ['SI vs FN creation differ'],
-      }))
-    },
+    getMftUsnBounds: () => json({ hasData: true, min: days[0], max: days[days.length - 1],
+      usnMin: days[250], usnMax: days[days.length - 1], mftMin: days[0], mftMax: days[days.length - 1],
+      volumes: ['C'], hasVolume: true, hasAds: true }),
+    getMftUsnTimelines: () => json({ rows, series,
+      combined: days.map(d => ({ key: d, value: combined[d] || 0 })),
+      totals: { usnEvents: 5000, mftCreated: 900, mftModified: 1800 } }),
+    getMftUsnOverview: () => json({
+      totals: { files: 200314, directories: 51372, usnEvents: 283585, withEvents: 52006, created: 160515, deletedEvents: 34311 },
+      anomalies: { timestompCandidates: { count: 0, subjects: [] }, usnGaps: { count: 0, subjects: [] },
+        deletedButPresent: { count: 0, subjects: [] }, ads: { count: 0, subjects: [] } },
+      byFlag: Object.fromEntries(flags.map((f, i) => [f, 1000 * (i + 1)])),
+      topDirs: [{ dir: 'Windows/System32', n: 900 }], topExts: [{ ext: 'dll', n: 400 }] }),
+    getMftUsnWindowDetail: () => json({ events: Array.from({ length: 60 }, (_, i) => ev(i)), total: 1200, page: 0, pageSize: 500,
+      byHour, byFlag: Object.fromEntries(flags.map(f => [f, 100])), topDirs: [{ dir: 'Windows/Temp', n: 300 }],
+      topExts: [{ ext: 'tmp', n: 300 }],
+      mft: { created: { total: 3, files: [{ id: 'C:5:5', name: 'a.txt', path: 'Users/Ann/a.txt', t: '2026-10-07 10:00:00' }] },
+        modified: { total: 0, files: [] } } }),
+    getMftUsnDayEvents: (a) => json({ events: Array.from({ length: 40 }, (_, i) => ev(i)), total: 1200,
+      page: JSON.parse(a || '{}').page || 0, pageSize: 500 }),
+    getMftUsnDayFiles: (a) => json({ total: 450, page: JSON.parse(a || '{}').page || 0, pageSize: 200,
+      files: [{ id: 'C:6:1', name: 'b.txt', path: 'Users/Ann/b.txt', t: '2026-10-07 11:00:00' }] }),
+    getMftUsnDayRenames: (a) => json({ total: 2, page: JSON.parse(a || '{}').page || 0, pageSize: 200,
+      rows: [{ id: 'C:1000:2', t: '2026-10-07 10:00:00', old: 'draft.docx', new: 'report.docx',
+        oldDir: 'Users/Ann/Documents', newDir: 'Users/Ann/Documents', move: false }] }),
+    getMftUsnAll: (a) => json({ kind: JSON.parse(a || '{}').kind || 'events', total: 60, pageSize: 500,
+      rows: Array.from({ length: 20 }, (_, i) => ev(i)) }),
+    getMftUsnFileDetail: () => json({ id: 'C:1000:2', rec: 1000, seq: 2, volume: 'C', filename: 'report.docx',
+      path: 'Users/Ann/Documents/report.docx', pathFrom: 'mft', names: ['report.docx'], inMft: true,
+      isDir: 0, deleted: 0, size: 284219, si: {}, fnTimes: {}, flags: [], eventsTotal: 1,
+      events: [{ t: '2026-10-07 10:00:00', flags: ['FILE_CREATE', 'CLOSE'], reason: 'FILE_CREATE | CLOSE' }] }),
     _mock: true,
   }
 }
@@ -116,8 +78,64 @@ export function getBridge() {
   return bridgePromise
 }
 
+// Data getters run off Crow-Eye's GUI thread when the bridge offers callAsync
+// (visualizations/async_bridge.py): the answer comes back on asyncResult, so
+// the window and the loading overlay keep painting during a long query.
+// Anything else (dialog openers), the mock, and an older bridge stay plain
+// synchronous calls. Same block in every dashboard and react-timeline.
+let asyncSeq = 0
+const asyncPending = new Map()
+let asyncHooked = null
+
+function canCallAsync(bridge, method) {
+  return !!(bridge && bridge.callAsync && bridge.asyncResult && /^get/.test(method))
+}
+
+function callViaAsync(bridge, method, args) {
+  if (asyncHooked !== bridge) {
+    asyncHooked = bridge
+    bridge.asyncResult.connect((id, payload) => {
+      const done = asyncPending.get(id)
+      if (done) { asyncPending.delete(id); done(payload) }
+    })
+  }
+  const id = `${method}#${++asyncSeq}`
+  return new Promise((resolve) => {
+    asyncPending.set(id, resolve)
+    bridge.callAsync(method, id, JSON.stringify(args))
+  })
+}
+
+// A slot that raised answers {"__asyncError": ...}: logged, and null to the
+// caller - what the synchronous call gave when its slot raised.
+function parseAnswer(method, raw) {
+  const out = JSON.parse(raw || 'null')
+  if (out && typeof out === 'object' && out.__asyncError) {
+    console.error(`[bridge] ${method}: ${out.__asyncError}`)
+    return null
+  }
+  return out
+}
+
+/** Call a bridge slot and JSON-parse the string result. */
 export async function call(method, arg) {
   const bridge = await getBridge()
-  const raw = arg === undefined ? await bridge[method]() : await bridge[method](arg)
-  return JSON.parse(raw || 'null')
+  const args = arg === undefined ? [] : [arg]
+  const raw = canCallAsync(bridge, method)
+    ? await callViaAsync(bridge, method, args)
+    : await bridge[method](...args)
+  return parseAnswer(method, raw)
+}
+
+// The newest call per key wins. An earlier call still running when the same
+// view asks again (another day clicked, a filter typed) never settles: its
+// .then cannot overwrite the newer answer and its .finally cannot clear the
+// loading overlay the newer call is showing. Calls now return out of order -
+// they run on a thread pool - so this is needed, not cosmetic.
+const latestSeq = new Map()
+export function latest(method, arg, key = method) {
+  const n = (latestSeq.get(key) || 0) + 1
+  latestSeq.set(key, n)
+  const settle = (fn) => (value) => (latestSeq.get(key) === n ? fn(value) : new Promise(() => {}))
+  return call(method, arg).then(settle((v) => v), settle((e) => Promise.reject(e)))
 }

@@ -7,13 +7,16 @@ Reports collection status to user with access method details and real-time progr
 Requirements: 9.1, 9.2, 9.3, 9.4
 """
 
+import logging
 from typing import Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 
 class StatusReporter:
     """
     Reports collection status to user with access method details.
-    
+
     Provides real-time progress updates during collection, including:
     - Current artifact being processed
     - Access method being used (standard, VSS, raw disk)
@@ -25,7 +28,7 @@ class StatusReporter:
     def __init__(self, status_callback: Optional[Callable] = None):
         """
         Initialize status reporter.
-        
+
         Args:
             status_callback: Optional callback function for status updates
         """
@@ -40,19 +43,13 @@ class StatusReporter:
     def display_status(self, message: str):
         """
         Display a status message with safe encoding for Windows console.
-        
+
         Args:
             message: Status message to display
         """
+        logger.info("%s", message)
         if self.status_callback:
             self.status_callback(message)
-        else:
-            try:
-                print(message)
-            except UnicodeEncodeError:
-                # Fallback: replace problematic characters with ASCII equivalents
-                safe_message = message.encode('ascii', 'replace').decode('ascii')
-                print(safe_message)
 
     def report_artifact_collection(
         self,
@@ -63,7 +60,7 @@ class StatusReporter:
     ):
         """
         Report artifact collection progress with access method.
-        
+
         Args:
             artifact_name: Name of the artifact being collected
             status: Current status (e.g., "Collecting...", "Complete", "Failed")
@@ -74,7 +71,7 @@ class StatusReporter:
         if access_method:
             method_display = self._format_access_method(access_method)
             message += f" (via {method_display})"
-        
+
         self.display_status(message)
 
     def report_access_attempt(
@@ -85,7 +82,7 @@ class StatusReporter:
     ):
         """
         Report access attempt in progress.
-        
+
         Args:
             artifact_name: Name of the artifact
             access_method: Access method being attempted
@@ -95,7 +92,7 @@ class StatusReporter:
         message = f"Attempting {artifact_name} via {method_display}"
         if attempt_number > 1:
             message += f" (attempt {attempt_number})"
-        
+
         self.display_status(message)
 
     def report_collection_complete(
@@ -107,7 +104,7 @@ class StatusReporter:
     ):
         """
         Report successful collection with method used.
-        
+
         Args:
             artifact_name: Name of the artifact
             access_method: Access method that succeeded
@@ -117,9 +114,9 @@ class StatusReporter:
         method_display = self._format_access_method(access_method)
         size_formatted = self.format_size(size)
         message = f"[OK] {artifact_name}: {file_count} files ({size_formatted}) via {method_display}"
-        
+
         self.display_status(message)
-        
+
         # Update totals
         self.total_files_collected += file_count
         self.total_bytes_collected += size
@@ -127,7 +124,7 @@ class StatusReporter:
     def report_error(self, artifact_name: str, error_message: str):
         """
         Report an error immediately.
-        
+
         Args:
             artifact_name: Name of the artifact
             error_message: Error message
@@ -138,7 +135,7 @@ class StatusReporter:
     def report_real_time_stats(self):
         """
         Report real-time collection statistics.
-        
+
         Displays total files collected and total bytes collected.
         """
         size_formatted = self.format_size(self.total_bytes_collected)
@@ -155,7 +152,7 @@ class StatusReporter:
     ):
         """
         Report collection completion summary.
-        
+
         Args:
             total_artifacts: Total number of artifacts attempted
             successful: Number of successful collections
@@ -171,22 +168,22 @@ class StatusReporter:
         self.display_status(f"- Total Files: {self.total_files_collected}")
         self.display_status(f"- Total Size: {self.format_size(self.total_bytes_collected)}")
         self.display_status(f"- Duration: {duration_seconds:.2f} seconds")
-        
+
         if access_method_stats:
             self.display_status("\nAccess Methods Used:")
             for method, count in access_method_stats.items():
                 method_display = self._format_access_method(method)
                 self.display_status(f"  * {method_display}: {count} artifacts")
-        
+
         self.display_status("="*60)
 
     def _format_access_method(self, method: str) -> str:
         """
         Format access method for display.
-        
+
         Args:
             method: Access method name (standard, vss, raw_disk)
-            
+
         Returns:
             Formatted method name
         """
@@ -202,10 +199,10 @@ class StatusReporter:
     def format_size(bytes_size: int) -> str:
         """
         Format bytes to human-readable size.
-        
+
         Args:
             bytes_size: Size in bytes
-            
+
         Returns:
             Formatted size string
         """

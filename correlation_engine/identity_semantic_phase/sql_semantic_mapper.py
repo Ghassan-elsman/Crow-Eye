@@ -23,6 +23,40 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 logger = logging.getLogger(__name__)
 
 
+def _utc_now_text():
+    """'YYYY-MM-DD HH:MM:SS' in UTC for the debug log (it wrote local time)."""
+    try:
+        from utils.time_utils import get_current_forensic_timestamp
+        return get_current_forensic_timestamp()
+    except Exception:
+        from datetime import datetime, timezone
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+# Settings -> Semantic Mappings -> "Semantic mapping engine" (GlobalConfig),
+# as (global setting, mapper config key, conversion). They win over the JSON
+# file: the JSON is the shipped default, the Settings page is the analyst.
+_GLOBAL_SETTINGS = (
+    ("semantic_worker_count", "worker_count", lambda v: max(1, int(v))),
+    ("semantic_fts_skip_coverage", "fts_skip_coverage", lambda v: min(1.0, max(0.0, float(v) / 100.0))),
+    ("semantic_candidate_chunk_size", "candidate_chunk_size", lambda v: max(100, int(v))),
+    ("semantic_debug_log", "debug_log", bool),
+)
+
+
+def _default_config_path():
+    """configs/semantic_mapping_config.json beside the application (not the
+    working folder - a frozen build started from elsewhere never found it)."""
+    try:
+        from utils.path_utils import PathUtils
+        path = os.path.join(str(PathUtils.get_app_root()), "configs", "semantic_mapping_config.json")
+        if os.path.exists(path):
+            return path
+    except Exception:
+        pass
+    return os.path.join("configs", "semantic_mapping_config.json")
+
+
 class SQLSemanticMapper:
     """
     SQL-based semantic mapper that uses proper regex pattern matching.
@@ -34,26 +68,37 @@ class SQLSemanticMapper:
     - Not using substring search which caused false positives
     """
     
-    def __init__(self, database_path: str, execution_id: int, config: Dict[str, Any] = None, config_path: Optional[str] = None):
+    def __init__(self, database_path: str, execution_id: int, config: Dict[str, Any] = None, config_path: Optional[str] = None,
+                 cancel_check=None):
         """
         Initialize SQL semantic mapper.
-        
+
         Args:
             database_path: Path to correlation database
             execution_id: Execution ID to process
             config: Optional configuration dictionary (takes precedence over config_path)
             config_path: Optional path to configuration JSON file
+            cancel_check: Optional callable, True once the run was asked to
+                stop. Checked between candidate chunks: the phase ran for most
+                of an hour on a large case and never looked at the flag, so
+                Stop waited 15 s and then killed the thread - no results row,
+                no statistics, no log line.
         """
         self.database_path = database_path
         self.execution_id = execution_id
         self.conn = None
         self.cursor = None
+        self._cancel_check = cancel_check
+        self.cancelled = False
         
         # Load configuration from file or use provided config
+        self._config_file = None
+        self._from_settings = {}
         if config is not None:
             self.config = config
         else:
             self.config = self._load_config(config_path)
+            self._apply_global_settings()
         
         # Validate configuration and log warnings
         warnings = self._validate_config(self.config)
@@ -84,6 +129,18 @@ class SQLSemanticMapper:
         self.cursor.execute("PRAGMA synchronous=NORMAL")
         self.cursor.execute("PRAGMA cache_size=10000")
     
+    def _stop_requested(self) -> bool:
+        """True once the run was asked to stop (remembered in self.cancelled)."""
+        if self.cancelled:
+            return True
+        if self._cancel_check is None:
+            return False
+        try:
+            self.cancelled = bool(self._cancel_check())
+        except Exception:
+            return False
+        return self.cancelled
+
     def close(self):
         """Close database connection and debug log file."""
         if self.conn:
@@ -114,8 +171,10 @@ class SQLSemanticMapper:
         
         # If no config path provided, use default
         if config_path is None:
-            config_path = 'configs/semantic_mapping_config.json'
-        
+            config_path = _default_config_path()
+        if os.path.exists(config_path):
+            self._config_file = os.path.abspath(config_path)
+
         # Try to load configuration from file
         if os.path.exists(config_path):
             try:
@@ -135,6 +194,46 @@ class SQLSemanticMapper:
             logger.info(f"Configuration file {config_path} not found. Using defaults.")
             return default_config
     
+    def _apply_global_settings(self):
+        """Overlay the Settings page's semantic-mapping options on the file's.
+
+        Through read_global_setting - the one place Settings are written
+        (CaseHistoryManager); a value not saved there leaves the file's."""
+        try:
+            from config.case_history_manager import read_global_setting
+        except Exception:
+            return
+        for setting, key, convert in _GLOBAL_SETTINGS:
+            value = read_global_setting(setting, None)
+            if value is None:
+                continue
+            try:
+                self.config[key] = convert(value)
+                self._from_settings[key] = self.config[key]
+            except (TypeError, ValueError):
+                logger.warning(f"[SQL Semantic] Ignoring setting {setting}={value!r}")
+
+    def log_settings_in_force(self, rules_indexed=None, rules_total=None, rules_disabled=None):
+        """The settings this run uses, once, at the start of the phase - so the
+        case log says how a run was configured, not only what it found."""
+        c = self.config
+        src = lambda key: "Settings" if key in self._from_settings else "default"
+        logger.info("[SQL Semantic] Settings in force:")
+        logger.info(f"[SQL Semantic]   options file: {self._config_file or '(none - built-in defaults)'}")
+        for rules_file in (getattr(self, 'rules_files', None) or []):
+            logger.info(f"[SQL Semantic]   rules file: {rules_file}")
+        if rules_total is not None:
+            logger.info(f"[SQL Semantic]   rules: {rules_total} loaded, {rules_indexed} indexed, "
+                        f"{rules_disabled or 0} disabled")
+        logger.info(f"[SQL Semantic]   worker threads: {c.get('worker_count', 4)} ({src('worker_count')})")
+        logger.info(f"[SQL Semantic]   FTS5 prefilter skipped above {c.get('fts_skip_coverage', 0.5):.0%} "
+                    f"coverage ({src('fts_skip_coverage')}), sampled only from "
+                    f"{c.get('fts_min_matches', 20000):,} matches")
+        logger.info(f"[SQL Semantic]   candidates per chunk: {c.get('candidate_chunk_size', 20000):,} "
+                    f"({src('candidate_chunk_size')})")
+        logger.info(f"[SQL Semantic]   detailed debug log: "
+                    f"{'on - ' + self._debug_log_path if self._debug_log_file else 'off'} ({src('debug_log')})")
+
     def _validate_config(self, config: Dict[str, Any]) -> List[str]:
         """
         Validate configuration values and return list of warnings.
@@ -241,23 +340,36 @@ class SQLSemanticMapper:
     
     def _init_debug_logging(self):
         """
-        Initialize debug log file in the case directory.
-        
-        Creates a log file at: {case_directory}/correlation_engine/semantic_mapping_debug.log
+        Initialize the detailed debug log, when the setting asks for it.
+
+        Creates a log file at: {case_directory}/logs/semantic_mapping_debug.log
         
         Handles file I/O errors gracefully by logging warnings and continuing without debug logging.
         """
+        self._debug_log_path = None
+        # Only when asked for (Settings -> Semantic Mappings -> "Detailed
+        # debug log"): one line per rule match, which on a large run is a
+        # large file. It used to be opened on every run, outside the case's
+        # logs folder (<case>/Correlation/correlation_engine/), where neither
+        # Settings -> Logs nor anyone looking for a log would find it.
+        if not self.config.get('debug_log', False):
+            return
         try:
-            # Get log file path from configuration
-            log_file_path = self.config.get('log_file_path', 'correlation_engine/semantic_mapping_debug.log')
-            
-            # Extract case directory from database path
-            # Database path format: {case_directory}/correlation_engine/correlation.db
-            case_directory = os.path.dirname(os.path.dirname(self.database_path))
-            
-            # Build full log file path
-            full_log_path = os.path.join(case_directory, log_file_path)
-            
+            # <case>/logs - the open case's logs folder, else the one beside
+            # this results database (<case>/Correlation/output/...).
+            logs_dir = None
+            try:
+                from utils.logging_setup import current_logs_dir
+                logs_dir = current_logs_dir()
+            except Exception:
+                logs_dir = None
+            if not logs_dir:
+                case_directory = os.path.dirname(os.path.dirname(os.path.dirname(
+                    os.path.abspath(self.database_path))))
+                logs_dir = os.path.join(case_directory, "logs")
+            full_log_path = os.path.join(logs_dir, "semantic_mapping_debug.log")
+            self._debug_log_path = full_log_path
+
             # Create directory if it doesn't exist
             log_dir = os.path.dirname(full_log_path)
             os.makedirs(log_dir, exist_ok=True)
@@ -267,7 +379,7 @@ class SQLSemanticMapper:
             
             # Write header with timestamp
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             self._debug_log_file.write(f"\n{'='*80}\n")
             self._debug_log_file.write(f"[{timestamp}] Semantic Mapping Debug Log - Execution ID: {self.execution_id}\n")
             self._debug_log_file.write(f"{'='*80}\n")
@@ -300,7 +412,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             # Format matched conditions and feathers
             conditions_str = ",".join(matched_conditions) if matched_conditions else "none"
@@ -335,7 +447,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             # Truncate pattern if too long
             pattern_display = pattern[:100] + "..." if len(pattern) > 100 else pattern
@@ -365,7 +477,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             log_entry = (
                 f"[{timestamp}] FTS5_UNAVAILABLE | "
@@ -391,7 +503,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             log_entry = (
                 f"[{timestamp}] FTS5_ZERO_RESULTS | "
@@ -419,7 +531,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             log_entry = (
                 f"[{timestamp}] DATABASE_ERROR | "
@@ -447,7 +559,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             log_entry = (
                 f"[{timestamp}] WORKER_ERROR | "
@@ -480,7 +592,7 @@ class SQLSemanticMapper:
         
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
             
             log_entry = (
                 f"[{timestamp}] SUMMARY | "
@@ -521,7 +633,7 @@ class SQLSemanticMapper:
 
         try:
             from datetime import datetime
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            timestamp = _utc_now_text()
 
             log_entry = (
                 f"[{timestamp}] BATCH_PROGRESS | "
@@ -542,7 +654,7 @@ class SQLSemanticMapper:
         if self._debug_log_file is not None:
             try:
                 from datetime import datetime
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp = _utc_now_text()
                 self._debug_log_file.write(f"[{timestamp}] Debug logging session ended\n")
                 self._debug_log_file.write(f"{'='*80}\n\n")
                 self._debug_log_file.close()
@@ -622,7 +734,7 @@ class SQLSemanticMapper:
         if self._debug_log_file is not None:
             try:
                 from datetime import datetime
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp = _utc_now_text()
                 
                 log_entry = (
                     f"[{timestamp}] VALIDATION_FAIL | "
@@ -749,7 +861,7 @@ class SQLSemanticMapper:
         if self._debug_log_file is not None:
             try:
                 from datetime import datetime
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                timestamp = _utc_now_text()
                 
                 # Truncate pattern if too long
                 pattern_display = pattern[:100] + "..." if len(pattern) > 100 else pattern
@@ -828,6 +940,10 @@ class SQLSemanticMapper:
 
         try:
             for idx, (match_id, feather_records, matched_application) in enumerate(matches_batch):
+                # Stop inside a chunk too: a chunk takes several seconds, and the
+                # window kills a thread that has not stopped after its wait.
+                if idx and idx % 500 == 0 and self._stop_requested():
+                    break
                 try:
                     if not feather_records:
                         continue
@@ -854,6 +970,13 @@ class SQLSemanticMapper:
                         logger.warning(f"[Worker {worker_id}] Non-dict feather_records in match {match_id}: {type(feather_data)}")
                         errors += 1
                         continue
+
+                    # Every value of this match by lower-cased field name, in
+                    # feather / record / key order - built on first use and
+                    # shared by all rules. Strategy 3 used to walk every key
+                    # of every record per rule and condition (387M str.lower
+                    # calls for one wing).
+                    field_index = None
 
                     # Find matching rules
                     matched_rules = set()
@@ -969,17 +1092,21 @@ class SQLSemanticMapper:
                                 # the one that actually matched.
                                 if not condition_met:
                                     field_name_lower = field_name.lower()
-
-                                    def _iter_field_values():
+                                    if field_index is None:
+                                        field_index = {}
                                         for feather_name, feather_content in feather_data.items():
-                                            if not _in_scope(feather_name):
-                                                continue
                                             if isinstance(feather_content, list):
                                                 for record in feather_content:
                                                     if isinstance(record, dict):
                                                         for key, value in record.items():
-                                                            if key.lower() == field_name_lower and value is not None:
-                                                                yield feather_name, str(value)
+                                                            if value is not None:
+                                                                field_index.setdefault(key.lower(), []).append(
+                                                                    (feather_name, value))
+
+                                    def _iter_field_values(_values=field_index.get(field_name_lower, ())):
+                                        for feather_name, value in _values:
+                                            if _in_scope(feather_name):
+                                                yield feather_name, str(value)
 
                                     if operator == "regex":
                                         compiled_pattern = self._get_cached_pattern(pattern, rule_id)
@@ -1087,7 +1214,8 @@ class SQLSemanticMapper:
     def _process_matches_parallel(
         self,
         candidate_matches: List[Tuple],
-        rules: List[Tuple]
+        rules: List[Tuple],
+        quiet: bool = False
     ) -> Tuple[List[Tuple[str, str]], int, Dict[str, set]]:
         """
         Process matches in parallel across worker threads.
@@ -1104,15 +1232,18 @@ class SQLSemanticMapper:
         """
         # Handle empty matches early
         if not candidate_matches:
-            logger.info("[SQL Semantic] No candidate matches to process")
+            if not quiet:
+                logger.info("[SQL Semantic] No candidate matches to process")
             return [], 0, {}
+        # One chunk of a streamed scan (quiet): the scan logs its own progress,
+        # so the per-worker lines would repeat for every chunk.
+        _info = logger.debug if quiet else logger.info
         
         worker_count = self.config.get('worker_count', 4)
         
         # If worker_count is 1, process sequentially (no parallelization)
         if worker_count == 1:
-            logger.info("[SQL Semantic] Processing sequentially (worker_count=1)")
-            logger.info("[SQL Semantic] Processing sequentially with worker_count=1")
+            _info("[SQL Semantic] Processing sequentially (worker_count=1)")
             
             # Create progress tracking for sequential mode
             from threading import Lock
@@ -1138,7 +1269,7 @@ class SQLSemanticMapper:
                     elif time_since_last >= 300: # 5 minutes
                         should_report = True
                     
-                    if should_report and processed_count[0] < total_matches_to_process:
+                    if should_report and not quiet and processed_count[0] < total_matches_to_process:
                         print(f"[SQL Semantic] Progress: {current_pct:.0f}% ({processed_count[0]:,}/{total_matches_to_process:,} matches processed)")
                         print(f"[SQL Semantic] Progress: {current_pct:.0f}% - {processed_count[0]} matches processed")
                         
@@ -1172,8 +1303,7 @@ class SQLSemanticMapper:
             if start_idx < len(candidate_matches):
                 batches.append(candidate_matches[start_idx:end_idx])
         
-        logger.info(f"[SQL Semantic] Processing with {len(batches)} workers ({batch_size} matches per worker)")
-        logger.info(f"[SQL Semantic] Starting parallel processing with {len(batches)} workers")
+        _info(f"[SQL Semantic] Processing with {len(batches)} workers ({batch_size} matches per worker)")
         
         # Calculate total matches for progress tracking
         total_matches_to_process = len(candidate_matches)
@@ -1206,7 +1336,7 @@ class SQLSemanticMapper:
                 elif time_since_last >= 300: # 5 minutes
                     should_report = True
                 
-                if should_report and processed_count[0] < total_matches_to_process:
+                if should_report and not quiet and processed_count[0] < total_matches_to_process:
                     print(f"[SQL Semantic] Worker progress: {current_pct:.0f}% ({processed_count[0]:,}/{total_matches_to_process:,} matches processed)")
                     print(f"[SQL Semantic] Worker progress: {current_pct:.0f}% - {processed_count[0]} matches processed")
                     
@@ -1250,9 +1380,8 @@ class SQLSemanticMapper:
                         with progress_lock:
                             final_pct = (processed_count[0] / total_matches_to_process) * 100
                         
-                        logger.info(f"[SQL Semantic] Worker {worker_id} completed ({completed_workers}/{len(batches)}) - "
+                        _info(f"[SQL Semantic] Worker {worker_id} completed ({completed_workers}/{len(batches)}) - "
                               f"Found {len(results):,} matches - Overall: {final_pct:.0f}%")
-                        logger.info(f"[SQL Semantic] Worker {worker_id} completed with {len(results)} matches")
                         
                     except Exception as e:
                         # Requirement 8.4: Graceful handling of worker thread failures
@@ -1267,8 +1396,7 @@ class SQLSemanticMapper:
             # No monitoring thread to stop
             pass
         
-        logger.info(f"[SQL Semantic] All workers completed - Total matches: {len(all_results):,}")
-        logger.info(f"[SQL Semantic] Parallel processing complete: {len(all_results)} total matches")
+        _info(f"[SQL Semantic] All workers completed - Total matches: {len(all_results):,}")
         
         return all_results, total_errors, aggregated_pattern_counts
 
@@ -1389,6 +1517,16 @@ class SQLSemanticMapper:
         Never removes a candidate. Failures here are non-fatal: the prefilter's
         result is returned unchanged rather than losing the run.
         """
+        known = {row[0] for row in candidate_matches}
+        candidate_matches.extend(self._app_name_extra_candidates(rules, known))
+        return candidate_matches
+
+    def _app_name_extra_candidates(self, rules, known):
+        """The matches whose `matched_application` satisfies a rule pattern and
+        whose id is not in `known` (the candidates already scanned). Takes ids,
+        not rows, so the streamed scan never has to hold its candidates."""
+        candidate_matches = []
+        known = set(known)
         try:
             patterns = []
             for rule_row in rules:
@@ -1406,8 +1544,6 @@ class SQLSemanticMapper:
                         patterns.append(compiled)
             if not patterns:
                 return candidate_matches
-
-            known = {row[0] for row in candidate_matches}
 
             self.cursor.execute("""
                 SELECT DISTINCT m.matched_application
@@ -1451,7 +1587,129 @@ class SQLSemanticMapper:
             logger.warning(
                 "[SQL Semantic] App-name candidate pass failed (%s); "
                 "continuing with the FTS5 candidates only", e)
-            return candidate_matches
+            return []
+
+    @staticmethod
+    def _extract_fts_terms(rules) -> set:
+        """The FTS5 search terms of the rules' regex / contains conditions."""
+        import re
+        fts_terms = set()
+        for rule_id, logic_operator, conditions_json, requires_multi_indicator, min_indicators in rules:
+            try:
+                conditions = json.loads(conditions_json)
+                for cond in conditions:
+                    if cond['operator'] == 'regex' and cond['value'] != '*':
+                        # Extract alternatives from regex (split on |).
+                        #
+                        # Strip group constructs FIRST. A guard such as
+                        # `(?<![A-Za-z0-9])CMD` must not be torn apart here:
+                        # splitting a pattern that contains `(?:a|b)` on `|`
+                        # yields fragments that clean up into junk terms, and
+                        # the real term is lost. Terms are what put a match in
+                        # the candidate set, so losing one silently drops
+                        # matches from the scan entirely.
+                        pattern_text = re.sub(r'\(\?[^)]*\)', '', cond['value'])
+                        alternatives = pattern_text.split('|')
+                        for alt in alternatives:
+                            # Improved cleaning: handle common patterns like CHROME\.EXE
+                            # First, replace escaped dots with spaces to separate words
+                            clean = alt.replace('\\.', ' ')
+                            # Remove other regex special characters but keep the content
+                            clean = re.sub(r'[\\+*?\[\](){}^$.]', '', clean)
+                            # Split on spaces and extract individual words
+                            words = clean.split()
+                            for word in words:
+                                word = word.strip()
+                                # Only add words that are 3+ characters and alphanumeric
+                                if len(word) >= 3 and word.replace('_', '').replace('-', '').isalnum():
+                                    fts_terms.add(word.lower())
+                    elif cond['operator'] == 'contains' and cond['value'] != '*':
+                        # Also extract terms from 'contains' operators
+                        value = cond['value'].strip()
+                        if len(value) >= 3:
+                            fts_terms.add(value.lower())
+            except Exception as e:
+                logger.debug(f"[FTS5] Error extracting terms from rule {rule_id}: {e}")
+                continue
+        return fts_terms
+
+    def _estimate_term_coverage(self, fts_terms, total_matches, sample_size=None):
+        """Share (0..1) of this execution's matches the FTS5 prefilter would
+        keep, from an even sample; None when the run is small (the prefilter
+        costs little there) or nothing could be sampled.
+
+        Whole-token test without stemming, so it can only UNDER-estimate what
+        porter-stemmed FTS5 would keep - the error side is "build the index
+        anyway", never "skip it wrongly"."""
+        import re
+        if total_matches < self.config.get('fts_min_matches', 20000):
+            return None
+        sample_size = sample_size or self.config.get('fts_sample_size', 2000)
+        try:
+            self.cursor.execute("SELECT result_id FROM results WHERE execution_id = ?",
+                                (self.execution_id,))
+            result_ids = [r[0] for r in self.cursor.fetchall()]
+            if not result_ids:
+                return None
+            marks = ",".join("?" * len(result_ids))
+            self.cursor.execute("SELECT MIN(rowid), MAX(rowid) FROM matches WHERE result_id IN (%s)"
+                                % marks, result_ids)
+            lo, hi = self.cursor.fetchone()
+            if lo is None:
+                return None
+            step = max(1, (hi - lo) // sample_size)
+            plain = {t for t in fts_terms if t.isalnum()}
+            joined = [t for t in fts_terms if not t.isalnum()]
+            token_re = re.compile(r"[^\W_]+", re.UNICODE)
+            seen = hits = 0
+            for rowid in range(lo, hi + 1, step):
+                self.cursor.execute(
+                    "SELECT feather_records FROM matches WHERE rowid >= ? AND result_id IN (%s) "
+                    "ORDER BY rowid LIMIT 1" % marks, [rowid] + result_ids)
+                row = self.cursor.fetchone()
+                if row is None:
+                    continue
+                text = (row[0] or "").lower()
+                seen += 1
+                if (plain and not plain.isdisjoint(token_re.findall(text))) or \
+                        any(t in text for t in joined):
+                    hits += 1
+                if seen >= sample_size:
+                    break
+            return (hits / seen) if seen else None
+        except Exception as e:
+            logger.debug(f"[SQL Semantic] Coverage sample failed: {e}")
+            return None
+
+    def _match_streamed(self, sql, params, rules, total_matches):
+        """Run the rules over the candidates `sql` returns, a chunk at a time.
+
+        Returns (results, errors, pattern_match_counts, seen_match_ids). Stops
+        between chunks once the run is asked to stop, keeping what it found."""
+        chunk_size = self.config.get('candidate_chunk_size', 20000)
+        cur = self.conn.cursor()      # its own: other queries must not reset it
+        cur.execute(sql, params)
+        results, errors, counts, seen = [], 0, {}, set()
+        done = 0
+        try:
+            while True:
+                if self._stop_requested():
+                    break
+                chunk = cur.fetchmany(chunk_size)
+                if not chunk:
+                    break
+                found, chunk_errors, chunk_counts = self._process_matches_parallel(chunk, rules, quiet=True)
+                results.extend(found)
+                errors += chunk_errors
+                for pattern, match_ids in chunk_counts.items():
+                    counts.setdefault(pattern, set()).update(match_ids)
+                seen.update(row[0] for row in chunk)
+                done += len(chunk)
+                logger.info(f"[SQL Semantic] Semantic mapping: {done:,} / {total_matches:,} matches scanned, "
+                            f"{len(results):,} labelled")
+        finally:
+            cur.close()
+        return results, errors, counts, seen
 
     def find_matches_with_semantic_rules(self) -> List[Tuple[str, str, str]]:
         """
@@ -1500,20 +1758,42 @@ class SQLSemanticMapper:
         logger.info(f"[SQL Semantic] Total matches in database: {total_matches}")
         logger.info("")
         
-        # STEP 1: Build FTS5 index for fast filtering
-        logger.info("[SQL Semantic] Step 1/2: Building FTS5 index...")
-        fts_available = True
-        
-        try:
-            # Check if FTS5 index already exists (Requirement 6.2)
-            self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='matches_fts'")
-            fts_exists = self.cursor.fetchone() is not None
-            
-            if fts_exists:
-                # Reuse existing FTS5 index
-                logger.info("[SQL Semantic] Reusing existing FTS5 index")
-                logger.info("[SQL Semantic] Reusing existing FTS5 index")
+        # The search terms come first: they decide whether the FTS5 prefilter
+        # is worth building at all.
+        fts_terms = self._extract_fts_terms(rules)
+
+        # On a large run the prefilter filtered nothing and cost most of the
+        # phase: 7.10.2026 (842,334 matches) spent 10 min building the index
+        # and 33 min in one MATCH query that kept 99.8% of the matches, then
+        # 11 min on the rules themselves. A sample says beforehand whether it
+        # can help. Skipping it only ever ADDS candidates - the rule regexes
+        # below still decide every label.
+        use_fts = bool(fts_terms)
+        if use_fts:
+            share = self._estimate_term_coverage(fts_terms, total_matches)
+            threshold = self.config.get('fts_skip_coverage', 0.5)
+            if share is not None and share >= threshold:
+                logger.info(f"[SQL Semantic] FTS5 prefilter skipped: a sample puts {share:.0%} "
+                            f"of the matches in its candidates, so every match is scanned")
+                use_fts = False
+            elif share is not None:
+                logger.info(f"[SQL Semantic] FTS5 prefilter used: a sample puts {share:.0%} "
+                            f"of the matches in its candidates (below {threshold:.0%})")
             else:
+                logger.info("[SQL Semantic] FTS5 prefilter used (run too small to need a sample)")
+
+        # STEP 1: Build FTS5 index for fast filtering
+        fts_available = False
+        if use_fts and self._stop_requested():
+            use_fts = False
+        if use_fts:
+            logger.info("[SQL Semantic] Step 1/2: Building FTS5 index...")
+            try:
+                # Built for THIS execution every time. An index left by an
+                # earlier run was reused as it stood: it held none of this
+                # run's matches, so the MATCH found nothing and the phase fell
+                # back to scanning every match - after paying for the query.
+                self.cursor.execute("DROP TABLE IF EXISTS matches_fts")
                 # Create new FTS5 index with porter stemmer and unicode61 tokenizer (Requirement 6.1)
                 self.cursor.execute("""
                     CREATE VIRTUAL TABLE matches_fts USING fts5(
@@ -1522,7 +1802,7 @@ class SQLSemanticMapper:
                         tokenize='porter unicode61 remove_diacritics 1'
                     )
                 """)
-                
+
                 self.cursor.execute("""
                     INSERT INTO matches_fts(match_id, feather_records)
                     SELECT m.match_id, m.feather_records
@@ -1530,153 +1810,85 @@ class SQLSemanticMapper:
                     INNER JOIN results r ON m.result_id = r.result_id
                     WHERE r.execution_id = ?
                 """, (self.execution_id,))
-                
+
                 fts_count = self.cursor.rowcount
                 self.conn.commit()
                 logger.info(f"[SQL Semantic] FTS5 index built with {fts_count:,} matches")
-                logger.info(f"[SQL Semantic] FTS5 index built with {fts_count} matches")
-        
-        except Exception as e:
-            # FTS5 not available - log warning and fall back to regex matching (Requirement 6.3)
-            fts_available = False
-            logger.info(f"[SQL Semantic] WARNING: FTS5 not available - {str(e)}")
-            logger.info("[SQL Semantic] Falling back to regex-only matching (slower)")
-            logger.warning(f"[SQL Semantic] FTS5 not available: {str(e)} - falling back to regex matching")
-            self._log_fts5_unavailable(str(e))
-        
-        logger.info("")
-        
-        # STEP 2: Extract search terms from rules for FTS5 filtering
-        logger.info("[SQL Semantic] Step 2/2: Matching rules with FTS5 + regex...")
-        
-        import re
-        
-        # Build FTS5 query from all regex patterns with improved term extraction
-        fts_terms = set()
-        for rule_id, logic_operator, conditions_json, requires_multi_indicator, min_indicators in rules:
-            try:
-                conditions = json.loads(conditions_json)
-                for cond in conditions:
-                    if cond['operator'] == 'regex' and cond['value'] != '*':
-                        # Extract alternatives from regex (split on |).
-                        #
-                        # Strip group constructs FIRST. A guard such as
-                        # `(?<![A-Za-z0-9])CMD` must not be torn apart here:
-                        # splitting a pattern that contains `(?:a|b)` on `|`
-                        # yields fragments that clean up into junk terms, and
-                        # the real term is lost. Terms are what put a match in
-                        # the candidate set, so losing one silently drops
-                        # matches from the scan entirely.
-                        pattern_text = re.sub(r'\(\?[^)]*\)', '', cond['value'])
-                        alternatives = pattern_text.split('|')
-                        for alt in alternatives:
-                            # Improved cleaning: handle common patterns like CHROME\.EXE
-                            # First, replace escaped dots with spaces to separate words
-                            clean = alt.replace('\\.', ' ')
-                            # Remove other regex special characters but keep the content
-                            clean = re.sub(r'[\\+*?\[\](){}^$.]', '', clean)
-                            # Split on spaces and extract individual words
-                            words = clean.split()
-                            for word in words:
-                                word = word.strip()
-                                # Only add words that are 3+ characters and alphanumeric
-                                if len(word) >= 3 and word.replace('_', '').replace('-', '').isalnum():
-                                    fts_terms.add(word.lower())
-                    elif cond['operator'] == 'contains' and cond['value'] != '*':
-                        # Also extract terms from 'contains' operators
-                        value = cond['value'].strip()
-                        if len(value) >= 3:
-                            fts_terms.add(value.lower())
+                fts_available = True
+
             except Exception as e:
-                logger.debug(f"[FTS5] Error extracting terms from rule {rule_id}: {e}")
-                continue
-        
-        # Determine which filtering strategy to use
-        if not fts_available:
-            # FTS5 not available - process all matches
-            logger.info("[SQL Semantic] Processing all matches (FTS5 unavailable)")
-            self.cursor.execute("""
-                SELECT m.match_id, m.feather_records, m.matched_application
-                FROM matches m
-                INNER JOIN results r ON m.result_id = r.result_id
-                WHERE r.execution_id = ?
-            """, (self.execution_id,))
-            candidate_matches = self.cursor.fetchall()
-        elif not fts_terms:
-            # No FTS terms extracted - process all matches
-            logger.info("[SQL Semantic] WARNING: No FTS terms extracted, processing all matches")
-            logger.warning("[SQL Semantic] No FTS terms extracted from rules")
-            self.cursor.execute("""
-                SELECT m.match_id, m.feather_records, m.matched_application
-                FROM matches m
-                INNER JOIN results r ON m.result_id = r.result_id
-                WHERE r.execution_id = ?
-            """, (self.execution_id,))
-            candidate_matches = self.cursor.fetchall()
+                # FTS5 not available - log warning and fall back to regex matching (Requirement 6.3)
+                logger.info("[SQL Semantic] Falling back to regex-only matching (slower)")
+                logger.warning(f"[SQL Semantic] FTS5 not available: {str(e)} - falling back to regex matching")
+                self._log_fts5_unavailable(str(e))
         else:
-            # Use FTS5 to filter candidates (Requirement 6.4: limit to 1000 terms)
+            logger.info("[SQL Semantic] Step 1/2: FTS5 prefilter not used")
+
+        logger.info("")
+
+        # STEP 2: the candidates, streamed in chunks. They used to come back in
+        # one fetchall() carrying every match's feather_records - gigabytes on a
+        # large case - before the first rule ran.
+        logger.info("[SQL Semantic] Step 2/2: Matching rules with FTS5 + regex...")
+        if fts_terms:
             logger.info(f"[SQL Semantic] Extracted {len(fts_terms)} FTS5 search terms")
-            logger.info(f"[SQL Semantic] Extracted {len(fts_terms)} FTS5 search terms")
-            
-            # Log sample of terms for debugging
-            sample_terms = list(fts_terms)[:10]
-            logger.debug(f"[SQL Semantic] Sample FTS5 terms: {', '.join(sample_terms)}")
-            
+            logger.debug(f"[SQL Semantic] Sample FTS5 terms: {', '.join(list(fts_terms)[:10])}")
+        else:
+            logger.info("[SQL Semantic] WARNING: No FTS terms extracted, processing all matches")
+
+        all_sql = """
+            SELECT m.match_id, m.feather_records, m.matched_application
+            FROM matches m
+            INNER JOIN results r ON m.result_id = r.result_id
+            WHERE r.execution_id = ?
+        """
+        if fts_available:
+            # Requirement 6.4: limit to 1000 terms
             fts_query = " OR ".join(f'"{term}"' for term in list(fts_terms)[:1000])
-            
             if len(fts_terms) > 1000:
-                logger.info(f"[SQL Semantic] WARNING: Limited FTS5 query to 1000 terms (from {len(fts_terms)})")
                 logger.warning(f"[SQL Semantic] FTS5 query limited to 1000 terms from {len(fts_terms)} total terms")
-            
-            self.cursor.execute("""
+            results, errors, pattern_match_counts, seen = self._match_streamed("""
                 SELECT m.match_id, m.feather_records, m.matched_application
                 FROM matches_fts mf
                 INNER JOIN matches m ON mf.match_id = m.match_id
                 INNER JOIN results r ON m.result_id = r.result_id
                 WHERE r.execution_id = ?
                   AND mf.feather_records MATCH ?
-            """, (self.execution_id, fts_query))
-            
-            candidate_matches = self.cursor.fetchall()
-            
+            """, (self.execution_id, fts_query), rules, total_matches)
+
             # Requirement 6.5: Fallback to all matches if FTS5 returns zero candidates
-            if len(candidate_matches) == 0 and total_matches > 0:
-                logger.info("[SQL Semantic] WARNING: FTS5 returned zero candidates, falling back to all matches")
+            if not seen and total_matches > 0 and not self.cancelled:
                 logger.warning("[SQL Semantic] FTS5 returned zero candidates - falling back to processing all matches")
                 self._log_fts5_zero_results(len(fts_terms))
-                
-                self.cursor.execute("""
-                    SELECT m.match_id, m.feather_records, m.matched_application
-                    FROM matches m
-                    INNER JOIN results r ON m.result_id = r.result_id
-                    WHERE r.execution_id = ?
-                """, (self.execution_id,))
-                candidate_matches = self.cursor.fetchall()
-        
+                results, errors, pattern_match_counts, seen = self._match_streamed(
+                    all_sql, (self.execution_id,), rules, total_matches)
+        else:
+            if not fts_terms:
+                logger.warning("[SQL Semantic] No FTS terms extracted from rules")
+            results, errors, pattern_match_counts, seen = self._match_streamed(
+                all_sql, (self.execution_id,), rules, total_matches)
+
         # The FTS5 prefilter matches whole tokens in feather_records, so a
         # concatenated app name is unreachable through it. matched_application
         # is one indexed column with a few hundred distinct values per case -
         # test it directly and add anything the prefilter could not see.
-        candidate_matches = self._add_app_name_candidates(
-            candidate_matches, rules)
+        candidates = len(seen)
+        if not self.cancelled:
+            extra = self._app_name_extra_candidates(rules, seen)
+            if extra:
+                candidates += len(extra)
+                more, more_errors, more_counts = self._process_matches_parallel(extra, rules, quiet=True)
+                results.extend(more)
+                errors += more_errors
+                for pattern, match_ids in more_counts.items():
+                    pattern_match_counts.setdefault(pattern, set()).update(match_ids)
 
-        coverage_pct = (len(candidate_matches)/total_matches*100) if total_matches > 0 else 0
-        logger.info(f"[SQL Semantic] FTS5 filtered to {len(candidate_matches):,} candidates ({coverage_pct:.1f}%)")
+        coverage_pct = (candidates / total_matches * 100) if total_matches > 0 else 0
+        logger.info(f"[SQL Semantic] FTS5 filtered to {candidates:,} candidates ({coverage_pct:.1f}%)")
+        if self.cancelled:
+            logger.info("[SQL Semantic] Stopped on request - keeping the labels found so far")
         logger.info("")
-        
-        # STEP 3: Apply full regex matching with AND logic (parallel or sequential based on config)
-        worker_count = self.config.get('worker_count', 4)
-        
-        if worker_count > 1:
-            logger.info(f"[SQL Semantic] Applying full regex matching with parallel processing ({worker_count} workers)...")
-        else:
-            logger.info("[SQL Semantic] Applying full regex matching with AND logic...")
-        
-        # Use parallel processing if worker_count > 1, otherwise sequential
-        results, errors, pattern_match_counts = self._process_matches_parallel(
-            candidate_matches, rules
-        )
-        
+
         elapsed = time.time() - start_time
         
         logger.info("")
@@ -2097,7 +2309,10 @@ class SQLSemanticMapper:
             
             # Step 1: Create semantic rules table
             rule_count = self.create_semantic_rules_table(rules)
-            
+            self.log_settings_in_force(
+                rules_indexed=rule_count, rules_total=len(rules),
+                rules_disabled=sum(1 for r in rules if getattr(r, 'disabled', False)))
+
             # Step 2: Find matches using proper regex matching
             matches_with_rules = self.find_matches_with_semantic_rules()
             

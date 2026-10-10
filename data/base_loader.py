@@ -110,7 +110,10 @@ class BaseDataLoader(EnrichmentMixin):
 
         # Default PRAGMAs tuned for fast, read-heavy operations
         default_pragmas: Dict[str, Union[str, int]] = {
-            "cache_size": -10000,  # 10MB cache (negative values mean KB)
+            # 64 MB page cache (negative values mean KB). It only fills as pages
+            # are read; 10 MB was a fraction of one index on an MFT table of
+            # 12M rows, so every page walk went back to the file.
+            "cache_size": -65536,
             "temp_store": "MEMORY",
             "busy_timeout": 30000,  # milliseconds
         }
@@ -146,6 +149,28 @@ class BaseDataLoader(EnrichmentMixin):
             self.logger.error(f"Error counting rows in table '{table_name}': {e}")
             return 0
             
+    def estimate_row_count(self, table_name: str) -> int:
+        """Rows by the rowid range: two index seeks, no scan, 0 when empty.
+
+        Exact when the rowids have no gaps - the case for the parsers'
+        insert-only tables - and an upper bound otherwise; COUNT(*) is the
+        exact answer. (MIN(rowid), MAX(rowid) in ONE query is not a seek: it
+        scanned 12M rows, 8 s.)
+        """
+        if not self.connection:
+            return 0
+        try:
+            lo = self.connection.execute(
+                f"SELECT rowid FROM {table_name} ORDER BY rowid ASC LIMIT 1").fetchone()
+            if lo is None:
+                return 0
+            hi = self.connection.execute(
+                f"SELECT rowid FROM {table_name} ORDER BY rowid DESC LIMIT 1").fetchone()
+            return int(hi[0]) - int(lo[0]) + 1
+        except sqlite3.Error as e:
+            self.logger.error(f"Error estimating rows in table '{table_name}': {e}")
+            return 0
+
     def execute_query(self, query: str, params: Tuple = (), fetch: bool = True) -> List[Dict[str, Any]]:
         """
         Execute a SQL query and return the results.

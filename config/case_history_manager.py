@@ -11,6 +11,50 @@ from typing import List, Optional, Dict, Any
 from .data_models import CaseMetadata, GlobalConfig, CaseConfig
 
 
+def default_config_dir() -> str:
+    """Where Crow-Eye keeps global_config.json and the case history.
+
+    Windows: %APPDATA%\\CrowEye\\config. Elsewhere: $XDG_CONFIG_HOME/crow-eye
+    (~/.config/crow-eye) - it used to be a config_data folder inside the
+    source tree, which a read-only install or a fresh clone loses. An existing
+    config_data is still used, so nothing set there is forgotten.
+    """
+    appdata = os.getenv('APPDATA')
+    if appdata:
+        return os.path.join(appdata, 'CrowEye', 'config')
+    legacy = os.path.normpath(os.path.join(os.path.dirname(__file__), '..', 'config_data'))
+    if os.name == 'nt':
+        return legacy
+    if os.path.isfile(os.path.join(legacy, 'global_config.json')):
+        return legacy
+    xdg = os.getenv('XDG_CONFIG_HOME') or os.path.join(os.path.expanduser('~'), '.config')
+    return os.path.join(xdg, 'crow-eye')
+
+
+def auto_parse_after_collection() -> bool:
+    """Settings -> Parsing -> "Parse automatically after collection" (on by
+    default): the Offline Importer parses after COLLECT, Parse Offline
+    Artifacts scans and parses without asking, and Image Parsing's
+    auto-parse box starts ticked."""
+    return bool(read_global_setting("auto_parse_after_collection", True))
+
+
+def read_global_setting(key: str, default=None):
+    """One value from global_config.json, read without building the manager.
+
+    For parsers, which run in a worker process with no window to ask: they
+    used to open <source>/config/global_config.json - a file nothing writes -
+    so every setting they consulted (snapshot creation among them) was always
+    its default, whatever the analyst had chosen in Settings.
+    """
+    try:
+        path = os.path.join(default_config_dir(), 'global_config.json')
+        with open(path, 'r', encoding='utf-8') as handle:
+            return json.load(handle).get(key, default)
+    except Exception:
+        return default
+
+
 class CaseHistoryManager:
     """Manages case history and configuration persistence."""
     
@@ -22,13 +66,7 @@ class CaseHistoryManager:
                        Defaults to %APPDATA%/CrowEye/config/ on Windows.
         """
         if config_dir is None:
-            # Use %APPDATA%/CrowEye/config/ on Windows
-            appdata = os.getenv('APPDATA')
-            if appdata:
-                config_dir = os.path.join(appdata, 'CrowEye', 'config')
-            else:
-                # Fallback to local directory
-                config_dir = os.path.join(os.path.dirname(__file__), '..', 'config_data')
+            config_dir = default_config_dir()
         
         self.config_dir = Path(config_dir)
         self.config_dir.mkdir(parents=True, exist_ok=True)
@@ -435,13 +473,28 @@ class CaseHistoryManager:
             True if successful, False otherwise
         """
         try:
+            before = {k: getattr(self.global_config, k) for k in kwargs
+                      if hasattr(self.global_config, k)}
             # Update fields
             for key, value in kwargs.items():
                 if hasattr(self.global_config, key):
                     setattr(self.global_config, key, value)
             
             # Save to disk
-            return self._save_global_config(self.global_config)
+            saved = self._save_global_config(self.global_config)
+            # Into the open case's custody ledger: a setting that changes how
+            # evidence is collected (snapshot creation, auto-parse, the time
+            # zone shown) is part of how the case was worked. Secrets are
+            # never written there.
+            try:
+                from utils import custody as _custody
+                changes = _custody.settings_changes(
+                    before, {k: getattr(self.global_config, k) for k in before})
+                if changes and saved:
+                    _custody.ledger(None, "settings changed", scope="global", changes=changes)
+            except Exception:
+                pass
+            return saved
             
         except Exception as e:
             print(f"[Config] Error updating global config: {e}")

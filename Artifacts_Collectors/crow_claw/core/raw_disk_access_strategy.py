@@ -720,6 +720,54 @@ class RawDiskAccessStrategy(FileAccessStrategy):
         return True
 
 
+    def _copy_mft_by_runs(self, device_handle, mft_cluster: int, bytes_per_cluster: int,
+                          boot_sector: bytes, dest_path: str):
+        """Write the whole $MFT (its data size) to ``dest_path`` by following
+        record 0's data runs. Returns the bytes written, or None when the runs
+        could not be read - the caller then falls back to the contiguous read."""
+        import win32file
+        try:
+            from utils.ntfs_runs import mft_layout, read_stream
+        except ImportError as e:
+            self._report_progress(f"MFT: data-run reader unavailable ({e})")
+            return None
+        clusters_per_record = int.from_bytes(boot_sector[0x40:0x41], 'little', signed=True)
+        if clusters_per_record > 0:
+            record_size = clusters_per_record * bytes_per_cluster
+        else:
+            record_size = 1 << (-clusters_per_record)
+
+        def read_at(offset, length):
+            win32file.SetFilePointer(device_handle, offset, win32file.FILE_BEGIN)
+            _hr, data = win32file.ReadFile(device_handle, length)
+            return data
+
+        try:
+            runmap, data_size, _allocated = mft_layout(read_at, mft_cluster,
+                                                       bytes_per_cluster, record_size)
+        except Exception as e:
+            self._report_progress(f"MFT: could not read its data runs ({e}); "
+                                  f"falling back to a contiguous read")
+            return None
+        dest_dir = os.path.dirname(dest_path)
+        if dest_dir:
+            os.makedirs(dest_dir, exist_ok=True)
+        chunk = 4 * 1024 * 1024
+        written = 0
+        last_report = 0
+        self._report_progress(f"MFT: {len(runmap.runs)} data run(s), "
+                              f"{data_size / (1024 * 1024):.1f} MB to copy")
+        with open(dest_path, 'wb') as out:
+            while written < data_size:
+                n = min(chunk, data_size - written)
+                # Whole records only: data_size is a record multiple anyway.
+                out.write(read_stream(read_at, runmap, written, n))
+                written += n
+                if written - last_report >= 64 * 1024 * 1024:
+                    self._report_progress(f"MFT: Read {written / (1024 * 1024):.1f} MB so far...")
+                    last_report = written
+        return written
+
     def read_mft(self, drive_letter: str, dest_path: str) -> 'AccessResult':
         """Read MFT using raw disk access.
 
@@ -825,6 +873,27 @@ class RawDiskAccessStrategy(FileAccessStrategy):
             # Calculate MFT offset
             bytes_per_cluster = bytes_per_sector * sectors_per_cluster
             mft_offset = mft_cluster * bytes_per_cluster
+
+            # Copy the $MFT through its own data runs. It is fragmented on any
+            # volume in use for a while, and the contiguous read below stops at
+            # the first fragment (or copies unrelated clusters after it) - on
+            # one C: drive that kept 205,056 of 3.3 million records.
+            copied = self._copy_mft_by_runs(device_handle, mft_cluster, bytes_per_cluster,
+                                            boot_sector, dest_path)
+            if copied is not None:
+                win32file.CloseHandle(device_handle)
+                device_handle = None
+                self._report_progress(f"MFT: Completed - {copied / (1024 * 1024):.1f} MB collected "
+                                      f"(all data runs)")
+                return AccessResult(
+                    success=True,
+                    source_path=f"{drive_letter}:\\$MFT",
+                    dest_path=dest_path,
+                    strategy_used="raw_disk",
+                    file_size=copied,
+                    duration_seconds=time.time() - start_time,
+                    status="success"
+                )
 
             # Seek to MFT location
             win32file.SetFilePointer(device_handle, mft_offset, win32file.FILE_BEGIN)

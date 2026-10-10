@@ -12,6 +12,9 @@ Responsibilities:
 - Enumerate partitions in images
 """
 
+import logging as _logging_mod
+import re
+_log = _logging_mod.getLogger("image_parsing.image_parser")
 import os
 from typing import List, Optional, Union
 
@@ -149,7 +152,7 @@ class ImageParser:
                         return self.FORMAT_RAW
             except Exception as e:
                 # Log error but continue checking other strategies
-                print(f"[WARNING] Error checking strategy {strategy.__class__.__name__}: {e}")
+                _log.warning(f"Error checking strategy {strategy.__class__.__name__}: {e}")
                 continue
         
         # No strategy could handle the file
@@ -208,14 +211,14 @@ class ImageParser:
                         return strategy
                 except Exception as e:
                     # Log error but continue checking other strategies
-                    print(f"[WARNING] Error checking strategy {strategy.__class__.__name__}: {e}")
+                    _log.warning(f"Error checking strategy {strategy.__class__.__name__}: {e}")
                     continue
             
             # No strategy could handle the file
             # Generate descriptive error message
             detected_format = self.detect_format(file_source)
             error_msg = self._generate_unsupported_format_error(primary_path, detected_format)
-            print(f"[ERROR] {error_msg}")
+            _log.error(f"{error_msg}")
             return None
         
         return None
@@ -248,7 +251,7 @@ class ImageParser:
             strategy = self.get_strategy(file_source=file_source, format_name=format_name)
             
             if strategy is None:
-                print(f"[ERROR] No strategy available for: {primary_path}")
+                _log.error(f"No strategy available for: {primary_path}")
                 return []
             
             # Open the image
@@ -260,7 +263,7 @@ class ImageParser:
             # internal method (this will be refactored when FileSystemAccessor is implemented)
             if hasattr(strategy, '_open_image'):
                 if not strategy._open_image(file_source):
-                    print(f"[ERROR] Failed to open image: {primary_path}")
+                    _log.error(f"Failed to open image: {primary_path}")
                     return []
             
             # Get partitions from the strategy
@@ -273,16 +276,16 @@ class ImageParser:
             if not partitions:
                 synthetic_partition = self._probe_volume_filesystem(strategy)
                 if synthetic_partition:
-                    print(f"[INFO] Structural Identification: Valid Volume Image detected at offset 0.")
+                    _log.info(f"Structural Identification: Valid Volume Image detected at offset 0.")
                     partitions = [synthetic_partition]
                 else:
-                    print(f"[WARNING] Structural Identification: No Partition Table or Filesystem Header found.")
+                    _log.warning(f"Structural Identification: No Partition Table or Filesystem Header found.")
 
             return partitions
         
         except Exception as e:
             error_classification = self.error_handler.classify_error(e, "Partition enumeration")
-            print(f"[ERROR] {error_classification.user_message}")
+            _log.error(f"{error_classification.user_message}")
             return []
     
     def get_image_info(self, file_source: Union[str, List[str]], format_name: str = None) -> Optional[ImageInfo]:
@@ -310,20 +313,20 @@ class ImageParser:
             
             # Check if format is supported
             if detected_format == self.FORMAT_UNKNOWN:
-                print(f"[ERROR] Unknown image format: {primary_path}")
+                _log.error(f"Unknown image format: {primary_path}")
                 return None
             
             # Get strategy
             strategy = self.get_strategy(file_source=file_source, format_name=detected_format)
             
             if strategy is None:
-                print(f"[ERROR] No strategy available for format: {detected_format}")
+                _log.error(f"No strategy available for format: {detected_format}")
                 return None
             
             # Open the image
             if hasattr(strategy, '_open_image'):
                 if not strategy._open_image(file_source):
-                    print(f"[ERROR] Failed to open image: {primary_path}")
+                    _log.error(f"Failed to open image: {primary_path}")
                     return None
             
             # Get image size
@@ -343,12 +346,10 @@ class ImageParser:
                 size_bytes=size_bytes,
                 partitions=partitions
             )
-            
-            return image_info
         
         except Exception as e:
             error_classification = self.error_handler.classify_error(e, "Image info retrieval")
-            print(f"[ERROR] {error_classification.user_message}")
+            _log.error(f"{error_classification.user_message}")
             return None
     
     def _generate_unsupported_format_error(self, file_path: str, detected_format: str) -> str:
@@ -446,7 +447,7 @@ class ImageParser:
                 is_bootable=False
             )
         except Exception as e:
-            print(f"[DEBUG] Volume probing failed: {e}")
+            _log.debug(f"Volume probing failed: {e}")
             return None
 
     def _find_sequential_segments(self, file_path: str) -> List[str]:
@@ -518,7 +519,7 @@ class ImageParser:
         missing = set(expected) - set(seq_nums)
         
         if missing:
-            print(f"[WARNING] Detected missing segments in forensic image sequence: {missing}")
+            _log.warning(f"Detected missing segments in forensic image sequence: {missing}")
 
     def get_supported_formats(self) -> List[str]:
         """

@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NTFS USN Journal Forensics — How the Change Journal Works</title>
+
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+
+    .version-selector { display: flex; gap: 8px; margin-bottom: 32px; flex-wrap: wrap; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; transition: all 0.2s; font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; }
+    .v-tab:hover { border-color: var(--accent); color: var(--tx2); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); box-shadow: 0 0 20px var(--accent-dim); }
+
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* Intro card (animated collapsible) look now lives in anatomy.css. */
+    .intro-icon-tip { display: none; }
+
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 20px; }
+    /* .fact-card look -> anatomy.css */
+    /* .fact-card:hover look -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 8px; }
+    .fact-value { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.1; }
+    .fact-detail { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+
+    .timeline { position: relative; padding-left: 28px; margin-top: 20px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 50%, var(--props-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 22px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+    .timeline-text code { font-family: 'Space Mono', monospace; font-size: 12px; background: var(--bg); padding: 1px 5px; border-radius: 3px; color: var(--accent); }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How the NTFS USN change journal works for forensics: USN_RECORD v2/v3 structure, all 24 reason flags, and gap analysis to reconstruct file activity over time.">
+  <meta name="keywords" content="USN journal, UsnJrnl, NTFS change journal, USN reason codes, file system change history, deleted file evidence">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/usn_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/usn_anatomy">
+  <meta property="og:title" content="NTFS USN Journal Forensics — How the Change Journal Works">
+  <meta property="og:description" content="How the NTFS USN change journal works for forensics: USN_RECORD v2/v3 structure, all 24 reason flags, and gap analysis to reconstruct file activity over time.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="NTFS USN Journal Forensics — How the Change Journal Works">
+  <meta name="twitter:description" content="How the NTFS USN change journal works for forensics: USN_RECORD v2/v3 structure, all 24 reason flags, and gap analysis to reconstruct file activity over time.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "The NTFS USN change journal format and its forensic interpretation",
+      "keywords": "USN journal, UsnJrnl, NTFS change journal, USN reason codes, file system change history, deleted file evidence",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "NTFS USN Journal Forensics — How the Change Journal Works",
+      "description": "How the NTFS USN change journal works for forensics: USN_RECORD v2/v3 structure, all 24 reason flags, and gap analysis to reconstruct file activity over time.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "NTFS USN Journal",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/usn_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "USN Journal Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/usn_anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is the NTFS USN journal?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The Update Sequence Number journal is a running log the file system writes whenever a file or directory changes. Each entry records the file reference, the name at that moment, a timestamp, and a set of reason flags describing what changed."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What can the USN journal prove that the MFT cannot?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "It captures activity that leaves no trace in the current file system. A file created and deleted between two collections has no MFT record left, but its creation, rename and deletion still appear in the journal - often the only remaining evidence the file ever existed."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How far back does the USN journal go?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "It is size-capped and behaves as a circular log, so old entries are overwritten as new ones arrive. On a busy volume the window can be days rather than months, which is why the journal should be collected early in an investigation."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "What are USN reason codes?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Flags describing the change - data written, file created, renamed with the old name, renamed with the new name, deleted, and others. Rename pairs in particular allow a file to be followed through name changes, including a move into the Recycle Bin."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>The NTFS USN Journal: structure, contents and evidential limits</h1>
+      <p class="header-sub">Byte-level walkthrough of <code style="color: var(--accent);">USN_RECORD_V2</code> (Win XP+) and <code style="color: var(--accent);">USN_RECORD_V3</code> (Win 8+) records inside <code style="color: var(--accent);">\$Extend\\$UsnJrnl:$J</code> &mdash; the NTFS change journal that records <em>every</em> file system event Windows observes, including files created and deleted between collections.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#versions">USN Journal history</a></li>
+        <li><a href="#key-facts">USN Journal key facts</a></li>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#reasons">All 24 USN_REASON_* flags</a></li>
+        <li><a href="#sourceinfo-flags">SourceInfo flags</a></li>
+        <li><a href="#file-attributes">FileAttributes &mdash; common bits</a></li>
+        <li><a href="#limits">What a USN record supports, and what it does not</a></li>
+        <li><a href="#anti-forensics">Anti-forensic techniques</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <div class="intro-card collapsed">
+      <div class="intro-icon" aria-label="What is the USN Journal?" title="What is the USN Journal?"><i class="fas fa-info"></i></div>
+      <div class="intro-content">
+        <div class="intro-title">What is the USN Journal?</div>
+        <div class="intro-body">
+          <strong style="color: var(--accent);">TL;DR &mdash;</strong> a kernel-maintained, append-only change log that records <strong>every file-system event</strong> on an NTFS / ReFS volume. For an investigator, it is a <strong>second-by-second timeline</strong> of every file the OS touched.
+          <br><br>
+          The <strong>Update Sequence Number Journal</strong> lives as a sparse alternate data stream at <code>\\$Extend\\$UsnJrnl:$J</code>, where the kernel appends a <strong>USN_RECORD</strong> for every create, delete, rename, write, attribute change, security change, or stream operation it observes. Each record carries a monotonically-increasing <strong>USN</strong> (a 64-bit sequence number that doubles as the byte offset of the record inside <code>:$J</code>), a precise <strong>FILETIME</strong>, the file's <a href="mft_anatomy.html#record">MFT reference</a>, and a <strong>Reason</strong> bitmask describing what changed.
+          <br><br>
+          Where the <a href="mft_anatomy.html#record">MFT</a> records the <em>current</em> state of a file, the USN Journal records <strong>how that state was reached</strong>. Ransomware writes show up as a wall of <code>DATA_OVERWRITE</code> + <code>FILE_DELETE</code>. Staging directories show up as bursts of <code>FILE_CREATE</code>. Renames leave the classic two-record <code>RENAME_OLD_NAME</code> &rarr; <code>RENAME_NEW_NAME</code> pair from which the earlier name can be reconstructed before it became <code>svchost.exe</code>.
+        </div>
+      </div>
+    </div>
+
+    <div class="version-selector" id="version-selector">
+      <div class="v-tab" onclick="setVersion('v2')">USN_RECORD_V2 (Win XP+)</div>
+      <div class="v-tab active" onclick="setVersion('v3')">USN_RECORD_V3 (Win 8+, 128-bit File Reference Number)</div>
+      <div class="v-tab" onclick="setVersion('v4')">USN_RECORD_V4 (Win 10+, range tracking)</div>
+    </div>
+
+    <div class="dissection-layout">
+      <div class="map-container">
+        <div id="view-banner" style="font-family: 'Space Mono'; font-size: 11px; color: var(--identity-color); margin-bottom: 12px;"><i class="fas fa-layer-group"></i> <span id="view-banner-text">USN_RECORD_V3 (Win 8+, 128-bit FILE_ID_128 FRN) &mdash; 112 byte total</span></div>
+        <span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div>
+      </div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);"><p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-search-plus"></i></p><p>Select any field in the map to reveal a deep forensic dive.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="narrative-section reveal">
+      <div class="narrative-title">The Change Log &mdash; NTFS's Tape Recorder</div>
+      <div class="narrative-text">
+        <p>The <a href="mft_anatomy.html#record">MFT</a> records what a file <em>is</em>. The USN Journal records what happened <em>to it</em>. Where the MFT exists at the volume's root as a normal system file, the USN Journal lives quietly inside <code>\\$Extend\\$UsnJrnl</code> as two streams: the small <strong>$Max</strong> stream (journal metadata &mdash; size limits, allocation deltas) and the much larger <strong>$J</strong> stream (the actual records). $J is allocated as a sparse file, so on disk it occupies only its "live window" &mdash; typically the last 32&ndash;512 MB &mdash; but Windows lies to NTFS about the rest of the byte range. Old records simply fall off the front as new ones append to the back.</p>
+        <p>Every USN_RECORD is variable-length: a fixed header (60 bytes in V2, 76 bytes in V3) followed by a UTF-16LE filename. The header is 64-bit-aligned and records the <strong>USN</strong> (which is both the record's identity <em>and</em> its byte offset inside <code>$J</code>), a <strong>FILETIME</strong>, the file's <a href="mft_anatomy.html#record"><strong>MFT reference</strong></a>, the parent directory's <strong>MFT reference</strong>, a <strong>Reason</strong> bitmask, a <strong>SourceInfo</strong> bitmask, the file's current attributes, and the security ID. Investigators read the journal from oldest to newest via the <code>FSCTL_READ_USN_JOURNAL</code> ioctl &mdash; the same call <code>fsutil usn readjournal</code> uses internally.</p>
+        <p>Crow-Eye's <code>USN_Claw.py</code> walks every record into the <code>journal_events</code> table, and records the <em>gaps</em> between unreadable USNs into a separate <code>deleted_entries</code> table &mdash; because each gap represents either records that fell off the front of the journal (volume too busy) or records that were <strong>intentionally erased</strong> by a low-level adversary.</p>
+      </div>
+    </div>
+
+    <div class="narrative-section reveal" style="border-left-color: var(--identity-color);">
+      <div class="narrative-title">How the USN Journal Works &mdash; Kernel-Level Bookkeeping</div>
+      <div class="narrative-text">
+        <p>The USN Journal is <strong>activated by the operating system</strong>, not by user-mode tools. Whenever the NTFS driver processes a write, rename, security change, or any other tracked operation, it composes a USN_RECORD on the stack, copies the file's name out of the file object, and appends the record to <code>$UsnJrnl:$J</code> through the <strong>NTFS log file system</strong>. The append is <em>atomic with respect to the change itself</em> &mdash; a file cannot be renamed without producing the matching <code>RENAME_OLD_NAME</code> + <code>RENAME_NEW_NAME</code> pair (unless the journal is disabled or the kernel is patched).</p>
+        <p><strong>Lifecycle of a single USN_RECORD:</strong></p>
+        <ol style="margin-left: 24px; margin-top: 8px;">
+          <li><strong>Triggering event.</strong> User-mode code calls a Win32 API (<code>WriteFile</code>, <code>MoveFile</code>, <code>SetFileSecurity</code>, &hellip;).</li>
+          <li><strong>Kernel intercept.</strong> The NTFS driver translates the request, but before completing it, it allocates a USN_RECORD inside the next 8-byte-aligned slot of <code>$J</code>.</li>
+          <li><strong>Append.</strong> The record is written with a fresh, monotonically-increasing USN equal to its own byte offset in <code>$J</code>. The reason bitmask <em>accumulates</em> as further operations on the same open handle occur.</li>
+          <li><strong>Close.</strong> When the file handle is closed, a final record with <code>USN_REASON_CLOSE</code> is appended &mdash; the close record carries the union of all reasons that occurred during the handle's lifetime.</li>
+          <li><strong>Sparse eviction.</strong> When <code>$J</code> exceeds <code>MaximumSize</code> (typically 32 MB), the oldest range is deallocated as sparse zeros &mdash; the byte offsets stay valid, but reading them returns zeros. This is why the journal has a <strong>LowestValidUsn</strong>.</li>
+        </ol>
+      </div>
+    </div>
+
+    <!-- HISTORY -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="versions">USN Journal history</h2>
+      <p style="color: var(--tx2); font-size: 15px; line-height: 1.7; margin-bottom: 8px;">Introduced in Windows 2000 alongside NTFS 3.0 and steadily refined since. The on-disk record shape has changed only once (V2 &rarr; V3 in Windows 8).</p>
+      <div class="timeline">
+        <div class="timeline-item">
+          <div class="timeline-year">FEBRUARY 2000</div>
+          <div class="timeline-event">Windows 2000 &mdash; NTFS 3.0 introduces the USN Journal</div>
+          <div class="timeline-text">Microsoft adds the change-journal feature alongside <code>$REPARSE_POINT</code>, <code>$OBJECT_ID</code>, EFS, and disk quotas. Available, but <strong>disabled by default</strong>. Records are <code>USN_RECORD_V2</code>: 60-byte header + variable UTF-16 filename. Activation requires <code>fsutil usn createjournal</code> as Administrator.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">JANUARY 2007</div>
+          <div class="timeline-event">Windows Vista &mdash; USN Journal enabled by default</div>
+          <div class="timeline-text">Microsoft turns the journal on by default on the system volume so the search indexer and the Volume Shadow Copy service can use it. From this point forward, every default Windows install has a populated USN journal on <code>C:</code> &mdash; the single most valuable forensic windfall of the Vista era.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">OCTOBER 2012</div>
+          <div class="timeline-event">Windows 8 &mdash; USN_RECORD_V3 ships</div>
+          <div class="timeline-text">The file reference fields grow from 8 bytes (<code>DWORDLONG</code>) to <strong>16 bytes</strong> (<code>FILE_ID_128</code>) to accommodate ReFS and very large NTFS volumes. The record-header grows from 60 to 76 bytes. <code>USN_REASON_TRANSACTED_CHANGE</code> (0x00400000) and <code>USN_REASON_INTEGRITY_CHANGE</code> (0x00800000) are added for TxF and ReFS integrity streams. Win 8 also adds <code>FSCTL_QUERY_USN_JOURNAL_V2</code>.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">JULY 2015</div>
+          <div class="timeline-event">Windows 10 &mdash; USN_RECORD_V4 + range tracking</div>
+          <div class="timeline-text">A new <code>USN_RECORD_V4</code> variant is introduced for large-file range tracking (used by Storage Spaces dedup). V4 records always come in a batch followed by one V3 record. <code>USN_REASON_DESIRED_STORAGE_CLASS_CHANGE</code> (0x01000000) is added for tiered-storage events.</div>
+        </div>
+        <div class="timeline-item">
+          <div class="timeline-year">2026 &mdash; STILL THE STANDARD</div>
+          <div class="timeline-event">Windows 11 &mdash; V2 and V3 records, same encoding</div>
+          <div class="timeline-text">No format change since Win 10. On modern Windows 11, normal file activity produces <code>USN_RECORD_V3</code> on the system volume, while removable drives and ReFS subvolumes can produce a mix of V2 and V3. <strong>Crow-Eye's parser handles both transparently.</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- KEY FACTS -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="key-facts">USN Journal key facts</h2>
+      <div class="fact-grid">
+        <div class="fact-card">
+          <div class="fact-label">Storage Location</div>
+          <div class="fact-value" style="font-size: 18px;">$UsnJrnl:$J</div>
+          <div class="fact-detail">Sparse ADS on the system file <code>\$Extend\$UsnJrnl</code> (MFT entry inside <code>$Extend</code>).</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Default Max Size</div>
+          <div class="fact-value">~32 MB</div>
+          <div class="fact-detail">The "live window". Older bytes are sparse-zeroed; the file <em>looks</em> petabytes long.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">V2 header size</div>
+          <div class="fact-value">60 B</div>
+          <div class="fact-detail">+ UTF-16 filename + padding to 8-byte alignment.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">V3 header size</div>
+          <div class="fact-value">76 B</div>
+          <div class="fact-detail">Adds two 128-bit FILE_ID_128 fields instead of 64-bit DWORDLONGs.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Reason flags</div>
+          <div class="fact-value">24</div>
+          <div class="fact-detail">Bitmask covering every kind of NTFS / ReFS change event.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">SourceInfo flags</div>
+          <div class="fact-value">4</div>
+          <div class="fact-detail">Filters synthetic events (replication, AV scans, HSM moves).</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">USN = byte offset</div>
+          <div class="fact-value">8 B</div>
+          <div class="fact-detail">The 64-bit USN doubles as the record's literal byte offset in <code>$J</code>.</div>
+        </div>
+        <div class="fact-card">
+          <div class="fact-label">Enable manually</div>
+          <div class="fact-value" style="font-size: 14px; font-family: 'Space Mono';">fsutil usn createjournal</div>
+          <div class="fact-detail">Off by default on non-system NTFS volumes. Admin only.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- FULL LOGICAL DISSECTION TABLE -->
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Offset</th>
+              <th style="width: 60px;">Size</th>
+              <th style="width: 220px;">Field Name</th>
+              <th>Forensic Meaning &amp; Value</th>
+            </tr>
+          </thead>
+          <tbody id="table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- COMPLETE REASON FLAGS TABLE -->
+    <div class="kb-section" style="margin-bottom: 48px;">
+      <h2 id="reasons">All 24 USN_REASON_* flags</h2>
+      <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">The <code>Reason</code> field is a 32-bit bitmask. A single record can carry several flags &mdash; the kernel ORs them together as operations accumulate on an open handle. Order matches Microsoft's <a href="https://learn.microsoft.com/en-us/windows/win32/api/winioctl/ns-winioctl-usn_record_v2">USN_RECORD_V2</a> reference.</p>
+      <span class="cap">Table 2</span>
+      <div class="responsive-table-wrap">
+      <table class="kb-table">
+          <thead><tr><th>Mask</th><th>Name</th><th>Forensic Meaning</th></tr></thead>
+          <tbody>
+            <tr><td style="font-family: 'Space Mono';">0x00000001</td><td style="color: var(--tx);">USN_REASON_DATA_OVERWRITE</td><td>Bytes inside the default unnamed <code>$DATA</code> stream were overwritten.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000002</td><td style="color: var(--tx);">USN_REASON_DATA_EXTEND</td><td>Default stream grew (file was appended to).</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000004</td><td style="color: var(--tx);">USN_REASON_DATA_TRUNCATION</td><td>Default stream shrank.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x00000010</td><td style="color: var(--accent);">USN_REASON_NAMED_DATA_OVERWRITE</td><td>Bytes in a <strong>named</strong> stream (ADS) were overwritten. APT signature: payload-via-ADS modification.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x00000020</td><td style="color: var(--accent);">USN_REASON_NAMED_DATA_EXTEND</td><td>Named stream grew.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x00000040</td><td style="color: var(--accent);">USN_REASON_NAMED_DATA_TRUNCATION</td><td>Named stream shrank.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000100</td><td style="color: var(--tx);">USN_REASON_FILE_CREATE</td><td>File or directory was created. The earliest definitive evidence a file existed.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000200</td><td style="color: var(--tx);">USN_REASON_FILE_DELETE</td><td>File or directory was deleted &mdash; survives the file itself.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000400</td><td style="color: var(--tx);">USN_REASON_EA_CHANGE</td><td>OS/2 extended attribute changed (rare on modern Windows; sometimes by IE).</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00000800</td><td style="color: var(--tx);">USN_REASON_SECURITY_CHANGE</td><td>ACL/ACE/owner changed &mdash; flag when adversaries weaken permissions.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00001000</td><td style="color: var(--tx);">USN_REASON_RENAME_OLD_NAME</td><td>First half of a rename. Filename field carries the <strong>old</strong> name.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00002000</td><td style="color: var(--tx);">USN_REASON_RENAME_NEW_NAME</td><td>Second half of a rename. Filename field carries the <strong>new</strong> name. Pairs with the prior record for the same MFT entry.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00004000</td><td style="color: var(--tx);">USN_REASON_INDEXABLE_CHANGE</td><td>NOT_CONTENT_INDEXED attribute toggled.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00008000</td><td style="color: var(--tx);">USN_REASON_BASIC_INFO_CHANGE</td><td>A file attribute or any timestamp changed &mdash; this is the bit that matters for <strong>timestomping</strong>.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00010000</td><td style="color: var(--tx);">USN_REASON_HARD_LINK_CHANGE</td><td>Hard link added / removed.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00020000</td><td style="color: var(--tx);">USN_REASON_COMPRESSION_CHANGE</td><td>NTFS compression toggled.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00040000</td><td style="color: var(--tx);">USN_REASON_ENCRYPTION_CHANGE</td><td>EFS encryption toggled.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00080000</td><td style="color: var(--tx);">USN_REASON_OBJECT_ID_CHANGE</td><td>$OBJECT_ID attribute changed &mdash; rare; can indicate forensic-tool tampering.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00100000</td><td style="color: var(--tx);">USN_REASON_REPARSE_POINT_CHANGE</td><td>Reparse point added / removed / modified &mdash; symlink/junction creation evidence.</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x00200000</td><td style="color: var(--tx);">USN_REASON_STREAM_CHANGE</td><td>Named stream added, removed, or renamed.</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x00400000</td><td style="color: var(--accent);">USN_REASON_TRANSACTED_CHANGE</td><td>Change applied through a TxF transaction (rare; Win 8+).</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x00800000</td><td style="color: var(--accent);">USN_REASON_INTEGRITY_CHANGE</td><td>ReFS integrity-stream attribute toggled (ReFS only).</td></tr>
+            <tr><td style="font-family: 'Space Mono'; color: var(--accent);">0x01000000</td><td style="color: var(--accent);">USN_REASON_DESIRED_STORAGE_CLASS_CHANGE</td><td>Tiered-storage class change (Storage Spaces Direct / dedup; Win 10+).</td></tr>
+            <tr><td style="font-family: 'Space Mono';">0x80000000</td><td style="color: var(--tx);">USN_REASON_CLOSE</td><td>Handle closed &mdash; carries the union of all reasons during its lifetime.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="color: var(--tx3); font-size: 13px; margin-top: 14px;"><i class="fas fa-circle-info" style="color: var(--accent); margin-right: 6px;"></i> The 6 highlighted rows are the flags that concern alternate data streams and reparse points. Many journal tools report them as a raw hexadecimal value; Crow-Eye resolves each to its <code>USN_REASON_*</code> name in the <code>reason</code> column.</p>
+    </div>
+
+    <!-- SOURCE INFO -->
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="sourceinfo-flags">SourceInfo flags</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">A 32-bit bitmask describing <strong>who or what caused the change</strong>. Useful for filtering synthetic events from real user activity.</p>
+        <span class="cap">Table 3</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Mask</th><th>Name</th><th>Investigative Use</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x00000001</td><td style="color: var(--tx);">USN_SOURCE_DATA_MANAGEMENT</td><td>Hierarchical Storage Management / Remote Storage moved data &mdash; user didn't change anything.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000002</td><td style="color: var(--tx);">USN_SOURCE_AUXILIARY_DATA</td><td>A private side-stream was added (AV checksums, indexing metadata) &mdash; not a real user write.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000004</td><td style="color: var(--tx);">USN_SOURCE_REPLICATION_MANAGEMENT</td><td>DFSR or similar replication agent modified the file.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000008</td><td style="color: var(--tx);">USN_SOURCE_CLIENT_REPLICATION_MANAGEMENT</td><td>OneDrive or similar cloud-sync client touched the file.</td></tr>
+              <tr><td style="font-family: 'Space Mono'; color: var(--tx3);">0x00000000</td><td style="color: var(--tx3);">(none set)</td><td><strong>USER / APPLICATION</strong> &mdash; a real user-mode write. The default case.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="kb-section">
+        <h2 id="file-attributes">FileAttributes &mdash; common bits</h2>
+        <p style="color: var(--tx2); font-size: 14px; margin-bottom: 16px;">Same encoding as the Win32 <code>GetFileAttributes</code> return value. Crow-Eye's parser decodes the bitmask to text using <code>file_attributes_to_text()</code> before storing.</p>
+        <span class="cap">Table 4</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Mask</th><th>Name</th><th>Meaning</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x00000001</td><td style="color: var(--tx);">READONLY</td><td>File is read-only.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000002</td><td style="color: var(--tx);">HIDDEN</td><td>Often abused by droppers in <code>%APPDATA%</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000004</td><td style="color: var(--tx);">SYSTEM</td><td>System file; combined with HIDDEN = classic hiding pattern.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000010</td><td style="color: var(--tx);">DIRECTORY</td><td>Entry is a directory.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000020</td><td style="color: var(--tx);">ARCHIVE</td><td>Set on writes; cleared by backups.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000400</td><td style="color: var(--tx);">REPARSE_POINT</td><td>File carries a <code>$REPARSE_POINT</code> attribute &mdash; symlink / mount / dedup.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00000800</td><td style="color: var(--tx);">COMPRESSED</td><td>NTFS compression on the data stream.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00004000</td><td style="color: var(--tx);">ENCRYPTED</td><td>EFS-encrypted.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x00080000</td><td style="color: var(--tx);">RECALL_ON_DATA_ACCESS</td><td>OneDrive / cloud-tiered file &mdash; data lives elsewhere.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- LIMITS -->
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="limits">What a USN record supports, and what it does not</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">The
+      journal is the most complete record of file-system change on an NTFS volume, and that
+      completeness is exactly what makes it easy to over-read. Three claims it does not carry:</p>
+
+      <div class="myth">
+        <h4>A record names an operation, not a person</h4>
+        <p>There is no user, no SID and no process in a <code>USN_RECORD</code>. The journal is
+        written by the NTFS driver, which records <em>what happened to the file</em> &mdash; not who
+        asked for it. <code>SourceInfo</code> separates a replication or defragmentation write from
+        ordinary activity, which is a statement about the mechanism, not about a person.
+        Attribution needs something beside the journal: a logon session in the event log, a process
+        in Prefetch, an MRU entry in the registry.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A CLOSE record is a summary, not a sequence</h4>
+        <p>When a handle is closed the final record carries the <strong>union</strong> of every
+        reason seen during that handle's lifetime. One row can therefore read
+        <code>FILE_CREATE</code>, <code>DATA_EXTEND</code> and <code>CLOSE</code> at once. Those
+        flags say what happened before the close; they do not say in what order, or how many times,
+        or at what moment each one occurred. Counting a close record's flags as separate events
+        inflates a timeline with activity that was one file operation.</p>
+      </div>
+
+      <div class="myth">
+        <h4>The journal is size-capped, so an absent record proves nothing</h4>
+        <p>When <code>$J</code> passes its <code>MaximumSize</code> the oldest range is deallocated
+        &mdash; the file keeps its sparse start and the records that were there are gone. On a busy
+        volume that window can be days rather than months. A file with no journal entry may never
+        have been touched, or may have been touched before the surviving range begins. The journal
+        answers "what changed while I was watching", never "this did not happen".</p>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75;"><strong style="color: var(--tx);">What
+      it is genuinely good for:</strong> order, and completeness inside its own window. Every
+      tracked NTFS operation appends a record, including the ones that leave no other trace &mdash;
+      a rename, a write to an alternate data stream, a deletion whose MFT record has already been
+      reused for another file. The USN itself is a byte offset into <code>$J</code>, so it rises
+      monotonically on a volume and orders two events even when their timestamps do not, which is
+      what makes it the natural cross-check on a timestomped <code>$STANDARD_INFORMATION</code>.</p>
+    </div>
+
+    <!-- ANTI-FORENSICS -->
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="anti-forensics">Anti-forensic techniques</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">How sophisticated adversaries try to defeat the USN journal &mdash; and how the investigator catches each play:</p>
+      <span class="cap">Table 5</span>
+      <div class="responsive-table-wrap">
+      <table class="kb-table" style="font-size: 15px;">
+          <thead><tr><th>Technique</th><th>Indicator in the USN journal</th><th>Counter-detection</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Journal deletion</td>
+              <td><code>fsutil usn deletejournal /D C:</code> wipes <code>\$Extend\$UsnJrnl:$J</code> entirely. The next <code>FSCTL_QUERY_USN_JOURNAL</code> returns "journal not active".</td>
+              <td>Crow-Eye logs the journal-not-active state per volume. Cross-reference against the <a href="mft_anatomy.html#record">MFT</a>: a recently-modified <code>\$Extend\$UsnJrnl</code> entry with sequence-number bumps proves the journal was rebuilt.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Journal disabling</td>
+              <td>USN_REASON activity stops cold on a system that previously had it &mdash; e.g. system records continue but nothing else.</td>
+              <td>Check the time delta between the last visible USN_REASON_FILE_CREATE/DELETE and the present. A multi-hour or multi-day gap on an active workstation is highly suspicious.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Sparse-window manipulation</td>
+              <td>Adversary writes huge volumes of noise files to push real evidence out of the journal's live window through normal sparse eviction.</td>
+              <td>Look at <code>deleted_entries</code>: massive gap regions with millions of evicted USNs in a short timeframe is itself an IOC. Real volumes rarely churn that fast.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Rename obfuscation</td>
+              <td>Adversary renames a payload back-and-forth (<code>evil.exe</code> &rarr; <code>winupdate.exe</code> &rarr; <code>svchost.exe</code>). Final filename looks legitimate.</td>
+              <td>The journal preserves the full chain of <code>RENAME_OLD_NAME</code> / <code>RENAME_NEW_NAME</code> pairs for the same MFT entry (same FRN). Group by FRN and order by USN &mdash; the historical names tell the real story.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">SourceInfo abuse</td>
+              <td>Some malware uses <code>FSCTL_MARK_HANDLE</code> to set <code>USN_SOURCE_DATA_MANAGEMENT</code> on its writes, hoping defenders filter on "non-zero SourceInfo".</td>
+              <td>The SourceInfo bit requires <code>SE_MANAGE_VOLUME_PRIVILEGE</code>; admin-level malware does have it. Don't blindly trust SourceInfo as "not user activity" &mdash; check the process that opened the file (via ETW or Sysmon).</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Named-stream payload hiding</td>
+              <td>Payload written to a named ADS shows <code>USN_REASON_NAMED_DATA_EXTEND</code> (0x00000020) on an otherwise innocent host file.</td>
+              <td>Flags 0x00000010, 0x00000020 and 0x00000040 are the NAMED_DATA reasons — the journal records a write to a named stream separately from a write to the file's own data. Every named-stream write therefore surfaces as <code>NAMED_DATA_EXTEND</code> in the <code>reason</code> column, which makes hidden payloads queryable rather than invisible.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Timestomping</td>
+              <td><code>USN_REASON_BASIC_INFO_CHANGE</code> (0x00008000) fires on every <code>SetFileTime</code> call &mdash; even when the attacker rolls timestamps backwards.</td>
+              <td>Pivot on FRN: any file whose <a href="mft_anatomy.html#dissection"><code>$MFT</code></a> creation time predates its first USN <code>FILE_CREATE</code>, or has a <code>BASIC_INFO_CHANGE</code> with a backdated timestamp delta, has been timestomped.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+    function HX(s) { return s.replace(/\s+/g, '').match(/.{2}/g).map(b => b.toUpperCase()); }
+
+    // ----- Build realistic USN_RECORD_V2 (60 B header + UTF-16 filename + alignment) -----
+    // Represents a CLOSE event for "notepad.exe" (11 chars) created today.
+    // RecordLength = 0x60 (96) = 60 hdr + 22 filename + 14 alignment padding.
+    const v2Record = [].concat(
+      HX('60000000'),                  // 0x00 RecordLength = 96
+      HX('0200'),                      // 0x04 MajorVersion = 2
+      HX('0000'),                      // 0x06 MinorVersion = 0
+      HX('7E54040000000005'),          // 0x08 FileReferenceNumber (low48=283262, seq=5)
+      HX('05000000000000 05'.replace(/\s+/g,'')),  // 0x10 ParentFileReferenceNumber (root, entry 5, seq 5)
+      HX('48F30C0000000000'),          // 0x18 Usn = 0x0CF348
+      HX('0080ACF1E59EDC01'),          // 0x20 TimeStamp (~2026-04-30)
+      HX('01010080'),                  // 0x28 Reason = DATA_OVERWRITE|FILE_CREATE|CLOSE = 0x80000101
+      HX('00000000'),                  // 0x2C SourceInfo = 0 (USER/APPLICATION)
+      HX('03010000'),                  // 0x30 SecurityId = 0x103
+      HX('20000000'),                  // 0x34 FileAttributes = ARCHIVE
+      HX('1600'),                      // 0x38 FileNameLength = 22 (11 chars * 2)
+      HX('3C00'),                      // 0x3A FileNameOffset = 0x3C (60)
+      // Filename "notepad.exe" at 0x3C
+      HX('6E006F00740065007000610064002E00650078006500'),  // UTF-16LE "notepad.exe" (22 bytes)
+      // Alignment padding to RecordLength=96
+      HX('00 00 00 00 00 00 00 00 00 00 00 00 00 00'.replace(/\s+/g,''))
+    );
+    while (v2Record.length < 96) v2Record.push('00');
+    v2Record.length = 96;
+
+    // ----- Build realistic USN_RECORD_V3 (76 B header + 128-bit FRNs + UTF-16 filename) -----
+    // RecordLength = 0x70 (112) = 76 hdr + 22 filename + 14 alignment.
+    const v3Record = [].concat(
+      HX('70000000'),                  // 0x00 RecordLength = 112
+      HX('0300'),                      // 0x04 MajorVersion = 3
+      HX('0000'),                      // 0x06 MinorVersion = 0
+      // FileReferenceNumber as FILE_ID_128 (LowPart 64-bit, HighPart 64-bit)
+      HX('7E54040000000000'),          // 0x08 FRN.LowPart
+      HX('0000000000000000'),          // 0x10 FRN.HighPart
+      // ParentFileReferenceNumber FILE_ID_128
+      HX('0500000000000000'),          // 0x18 PFRN.LowPart (root, entry 5)
+      HX('0000000000000000'),          // 0x20 PFRN.HighPart
+      HX('48F30C0000000000'),          // 0x28 Usn
+      HX('0080ACF1E59EDC01'),          // 0x30 TimeStamp
+      HX('20000000'),                  // 0x38 Reason = NAMED_DATA_EXTEND (0x20)
+      HX('02000000'),                  // 0x3C SourceInfo = AUXILIARY_DATA
+      HX('03010000'),                  // 0x40 SecurityId
+      HX('20000000'),                  // 0x44 FileAttributes = ARCHIVE
+      HX('1600'),                      // 0x48 FileNameLength = 22
+      HX('4C00'),                      // 0x4A FileNameOffset = 0x4C (76)
+      // Filename "notepad.exe" at 0x4C
+      HX('6E006F00740065007000610064002E00650078006500'),  // UTF-16LE "notepad.exe" (22 bytes)
+      // Alignment padding
+      HX('00 00 00 00 00 00 00 00 00 00 00 00 00 00'.replace(/\s+/g,''))
+    );
+    while (v3Record.length < 112) v3Record.push('00');
+    v3Record.length = 112;
+
+    // ----- Field definitions -----
+    const v2Fields = [
+      // USN_RECORD_COMMON_HEADER — the same 8-byte struct prefix all three USN versions share.
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'RecordLength', offset: 0, size: 4, type: 'header-color', val: '96', forensic: '<strong>UInt32 &mdash; total record length in bytes</strong> including the header, the variable-length filename, and any 8-byte alignment padding. Crow-Eye reads it first at <code>parse_record</code> (USN_Claw.py:472) and uses it to step to the next record in the buffer. Sanity check: <code>RecordLength &le; buffer_remaining</code>.' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MajorVersion', offset: 4, size: 2, type: 'header-color', val: '2', forensic: '<strong>UInt16 &mdash; dispatch key for the record layout.</strong> <code>2</code> = USN_RECORD_V2 (Win XP+, 64-bit FRN). <code>3</code> = USN_RECORD_V3 (Win 8+, 128-bit FRN). <code>4</code> = USN_RECORD_V4 (Win 10+, range tracking). The kernel always begins every USN record with this 8-byte <code>USN_RECORD_COMMON_HEADER</code> &mdash; parsers can safely read it without knowing the major version, then dispatch on this byte (Crow-Eye does so at USN_Claw.py:482-515).' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MinorVersion', offset: 6, size: 2, type: 'header-color', val: '0', forensic: '<strong>UInt16 &mdash; minor format version.</strong> Always 0 in V2 (and in V3 / V4). Microsoft reserves this for backward-compatible additions to the structure (new fields would sit BEFORE the variable-length filename so old parsers continue to work).' },
+
+      // FileReferenceNumber — a single 64-bit DWORDLONG with bit-field semantics.
+      { section: 'FileReferenceNumber (DWORDLONG, 8 B)', name: 'FRN (entry + sequence packed)', offset: 8, size: 8, type: 'hash-color', forensic: '<strong>UInt64 (DWORDLONG) &mdash; the file\'s <a href="mft_anatomy.html#record" style="color: var(--accent); text-decoration: underline;">MFT reference</a>, with two bit-fields packed into one 8-byte word:</strong><br><br><strong>Lower 48 bits</strong> = MFT entry number (the file\'s slot in <code>$MFT</code>)<br><strong>Upper 16 bits</strong> = MFT sequence number (incremented each time the slot is reused; lets parsers detect stale references)<br><br>Crow-Eye stores the raw 8-byte integer as a decimal string in the <code>frn</code> column. <strong>This is the join key between USN events and MFT records</strong> &mdash; pivot any USN event to its current <a href="mft_anatomy.html#record" style="color: var(--accent); text-decoration: underline;">MFT entry</a> by matching FRN. V3 / V4 records widen this to 128 bits (FILE_ID_128); on NTFS the lower 64 bits are identical to this V2 FRN.' },
+
+      // ParentFileReferenceNumber — same shape.
+      { section: 'ParentFileReferenceNumber (DWORDLONG, 8 B)', name: 'ParentFRN (entry + sequence packed)', offset: 16, size: 8, type: 'hash-color', forensic: '<strong>UInt64 &mdash; the parent directory\'s <a href="mft_anatomy.html#record" style="color: var(--accent); text-decoration: underline;">MFT reference</a>.</strong> Same bit-field encoding as FRN: lower 48 bits = parent MFT entry, upper 16 bits = parent sequence. <strong>The gold pivot for path reconstruction:</strong> resolve to the parent\'s current <a href="mft_anatomy.html#dissection" style="color: var(--accent); text-decoration: underline;">$FILE_NAME</a> to get the directory, then chase grandparents back to the root. Even if the file itself has been deleted, the parent directory often still exists in the MFT and can resolve the path.' },
+
+      // Body fields
+      { section: 'USN_RECORD_V2 Body', name: 'Usn', offset: 24, size: 8, type: 'identity-color', forensic: '<strong>UInt64 (signed LONGLONG) &mdash; the record\'s sequence number AND its byte offset inside <code>\\$UsnJrnl:$J</code>.</strong> Monotonically increasing, never reused (until journal recreation). Crow-Eye uses it as part of the PRIMARY KEY (volume_letter, usn) so duplicate ingestion is impossible. Adjacent USNs may not be contiguous &mdash; gaps mean sparse-evicted or deleted records (recorded separately in <code>deleted_entries</code>).' },
+      { section: 'USN_RECORD_V2 Body', name: 'TimeStamp (FILETIME)', offset: 32, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME &mdash; 100-nanosecond intervals since 1601-01-01 UTC.</strong> The exact wall-clock time the kernel wrote this USN record. Crow-Eye converts via <code>filetime_to_datetime()</code> (USN_Claw.py:333-348). <strong>This timestamp is the closest thing NTFS has to a "real" event time</strong> &mdash; it cannot be backdated by user-mode timestomping, only by clock manipulation. V4 records DO NOT have this field; V4 records must be correlated by USN with the trailing V3 record to obtain a timestamp.' },
+      { section: 'USN_RECORD_V2 Body', name: 'Reason', offset: 40, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; what changed.</strong> See the full 24-flag table below. Common combinations:<br><br><code>0x80000100</code> = FILE_CREATE | CLOSE (a fresh file was created and closed)<br><code>0x80000200</code> = FILE_DELETE | CLOSE (a file was deleted)<br><code>0x80000003</code> = DATA_OVERWRITE | DATA_EXTEND | CLOSE (a file was written to)<br><code>0x00001000</code> / <code>0x00002000</code> = RENAME_OLD_NAME / RENAME_NEW_NAME (paired)<br><br>Crow-Eye decodes via <code>reason_to_text()</code> using <code>REASON_MAP</code> (USN_Claw.py:255-274). The enhanced REASON_MAP now decodes all 24 flags including the previously-missing <code>NAMED_DATA_*</code>, <code>TRANSACTED_CHANGE</code>, <code>INTEGRITY_CHANGE</code>, and <code>DESIRED_STORAGE_CLASS_CHANGE</code> bits.' },
+      { section: 'USN_RECORD_V2 Body', name: 'SourceInfo', offset: 44, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; who triggered the change.</strong> Almost always <code>0</code> (user / application). Non-zero values come from <code>FSCTL_MARK_HANDLE</code> and indicate kernel-level / replication / cloud-sync activity. Useful for filtering out background services (search indexer, OneDrive, defender) when hunting for real user activity. Same encoding in V3 and V4.' },
+      { section: 'USN_RECORD_V2 Body', name: 'SecurityId', offset: 48, size: 4, type: 'fileinfo-color', forensic: '<strong>UInt32 &mdash; key into the volume\'s shared <code>$Secure</code> stream</strong>, the same value that lives in <a href="mft_anatomy.html#dissection" style="color: var(--accent); text-decoration: underline;"><code>$STANDARD_INFORMATION.security_id</code></a> on this file. Resolves to an SDDL ACL. Useful for joining USN events to security-descriptor changes on disk. V4 records DO NOT carry this field.' },
+      { section: 'USN_RECORD_V2 Body', name: 'FileAttributes', offset: 52, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 bitmask &mdash; the file\'s current Win32 attributes</strong> (same encoding as <code>GetFileAttributes()</code>). The previous parser stored this as a raw integer; the enhanced parser now decodes the bitmask to pipe-separated text ("ARCHIVE|HIDDEN|raw=0x00000022") via <code>file_attributes_to_text()</code> (USN_Claw.py:242-252) before writing to the <code>file_attributes</code> TEXT column. V4 records DO NOT carry this field.' },
+      { section: 'USN_RECORD_V2 Body', name: 'FileNameLength', offset: 56, size: 2, type: 'identity-color', val: '22', forensic: '<strong>UInt16 &mdash; filename length in BYTES (not characters).</strong> Divide by 2 for UTF-16 character count. Maximum 65534 bytes (32767 chars). V4 records DO NOT have a filename and omit this field.' },
+      { section: 'USN_RECORD_V2 Body', name: 'FileNameOffset', offset: 58, size: 2, type: 'identity-color', val: '60', forensic: '<strong>UInt16 &mdash; offset (from start of record) to the start of the filename.</strong> Always <code>0x3C</code> (60) in V2 &mdash; immediately after the fixed 60-byte header. In V3 it shifts to <code>0x4C</code> (76) because the two FRN fields each grew by 8 bytes. Crow-Eye reads the bytes <code>[offset + fn_off : offset + fn_off + fn_len]</code> and decodes as UTF-16LE (USN_Claw.py:518-524).' },
+      { section: 'Filename', name: 'FileName (UTF-16LE)', offset: 60, size: 22, type: 'string-color', forensic: '<strong>Variable-length UTF-16LE filename.</strong> Not null-terminated &mdash; use FileNameLength to bound the read. For a rename, the OLD_NAME record carries the previous name and the NEW_NAME record carries the new name; same FRN, two records, paired by FRN + adjacent USNs.' },
+      { section: 'Alignment', name: 'Padding to 8-byte boundary', offset: 82, size: 14, type: 'reserved', forensic: '<strong>Zero bytes that pad RecordLength up to the next 8-byte boundary.</strong> The kernel guarantees that the start of every USN record is 8-byte aligned within <code>$J</code>, which is why iteration uses <code>offset += rec_len</code> without further alignment math.' }
+    ];
+
+    const v3Fields = [
+      // USN_RECORD_COMMON_HEADER (first 8 bytes, shared with V4)
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'RecordLength', offset: 0, size: 4, type: 'header-color', val: '112', forensic: '<strong>UInt32 &mdash; total record length in bytes</strong> including header, filename, and alignment padding. Always &le; <code>RecordLength &le; buffer_remaining</code>; Crow-Eye uses it to step to the next record (USN_Claw.py:472).<br><br>V3 records are <strong>16 bytes longer</strong> than V2 records with the same filename length because both FRN fields grew from 8 bytes (DWORDLONG) to 16 bytes (FILE_ID_128).' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MajorVersion', offset: 4, size: 2, type: 'header-color', val: '3', forensic: '<strong>UInt16 &mdash; dispatch key for the record layout.</strong> <code>3</code> indicates USN_RECORD_V3 (Win 8+, 128-bit FRN). The kernel always begins every USN record with this 8-byte <code>USN_RECORD_COMMON_HEADER</code> &mdash; parsers can safely read it without knowing the major version, then dispatch on this byte.' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MinorVersion', offset: 6, size: 2, type: 'header-color', val: '0', forensic: '<strong>UInt16 &mdash; minor format version.</strong> Always 0 in V3. Microsoft reserves this for backward-compatible field additions (new fields would sit BEFORE the variable-length filename).' },
+
+      // FileReferenceNumber - FILE_ID_128 broken into LowPart + HighPart
+      { section: 'FileReferenceNumber (FILE_ID_128, 16 B)', name: 'FRN.LowPart (DWORDLONG)', offset: 8, size: 8, type: 'hash-color', forensic: '<strong>LowPart means:</strong> the <strong>lower (least-significant) 64 bits</strong> of the 128-bit <code>FILE_ID_128</code> structure. Microsoft\'s C struct definition is <code>struct { DWORDLONG LowPart; DWORDLONG HighPart; }</code> &mdash; LowPart comes first in memory, then HighPart sits at offset +8.<br><br><strong>What it carries:</strong> on NTFS volumes this is the <strong>same value as the legacy V2 64-bit FRN</strong>, packed with the same bit-fields:<br>&bull; Lower 48 bits = <a href="mft_anatomy.html#record" style="color: var(--accent); text-decoration: underline;">MFT entry number</a> (file slot in <code>$MFT</code>)<br>&bull; Upper 16 bits = MFT sequence number (incremented on slot reuse)<br><br><strong>This is the join key</strong> between USN events and MFT records &mdash; pivot any USN event back to its current MFT record by matching FRN.LowPart against the MFT entry/sequence pair.<br><br><strong>Why split a 128-bit ID into two 64-bit halves?</strong> Three reasons:<br>1. <strong>CPU register width.</strong> x86/x64 processors max out at 64-bit integer registers &mdash; there is no native 128-bit integer type in C or in the Windows API. Splitting the value into two <code>DWORDLONG</code> (UInt64) halves means each half loads cleanly into one register without needing SIMD instructions or library-level big-integer math.<br>2. <strong>NTFS backward compatibility.</strong> NTFS file references were always 64 bits. By putting the NTFS-shaped value (entry + sequence) in LowPart and zeroing HighPart, older parsers that only know about V2 can read LowPart and continue to function unchanged on NTFS data.<br>3. <strong>ReFS future-proofing.</strong> ReFS uses much larger file IDs that already exceed 64 bits. HighPart is the headroom &mdash; reserved space the API can fill when the underlying filesystem needs more than 64 bits of identity.' },
+      { section: 'FileReferenceNumber (FILE_ID_128, 16 B)', name: 'FRN.HighPart (DWORDLONG)', offset: 16, size: 8, type: 'hash-color', forensic: '<strong>HighPart means:</strong> the <strong>upper (most-significant) 64 bits</strong> of the 128-bit <code>FILE_ID_128</code> structure. Stored immediately after LowPart at offset +8 inside the FILE_ID_128.<br><br><strong>What it carries:</strong><br>&bull; <strong>Always zero on NTFS</strong> &mdash; NTFS file references never exceed 64 bits, so the top half is unused space reserved for the future.<br>&bull; <strong>Non-zero only on ReFS</strong>, where the larger 128-bit ID space accommodates billions of files per volume.<br><br><strong>Why does HighPart exist if it\'s usually zero?</strong> It is the <strong>headroom</strong> that lets the same Windows API span filesystems with very different ID spaces. NTFS gets a backward-compatible 64-bit identity in LowPart with HighPart = 0; ReFS gets a fresh full-128-bit identity using both halves. Without HighPart, ReFS would have needed a parallel API and parsers would have to dispatch on the filesystem.<br><br>Crow-Eye renders the full 128-bit FRN as a 32-hex-digit string via <code>file_id_128_to_str()</code> (USN_Claw.py:350-355), concatenating HighPart then LowPart so a typical NTFS record reads as <code>0000000000000000xxxxxxxxxxxxxxxx</code>.' },
+
+      // ParentFileReferenceNumber - FILE_ID_128 split
+      { section: 'ParentFileReferenceNumber (FILE_ID_128, 16 B)', name: 'ParentFRN.LowPart (DWORDLONG)', offset: 24, size: 8, type: 'hash-color', forensic: '<strong>LowPart means:</strong> the <strong>lower 64 bits</strong> of the parent directory\'s 128-bit FILE_ID_128. Same encoding as FRN.LowPart &mdash; lower 48 bits = parent MFT entry number, upper 16 bits = parent MFT sequence number.<br><br><strong>What it\'s used for:</strong> <strong>the gold pivot for path reconstruction.</strong> Resolve this LowPart to the parent\'s current <a href="mft_anatomy.html#dissection" style="color: var(--accent); text-decoration: underline;">$FILE_NAME</a> attribute to recover the directory the file lived in, then chase grandparents back to the root (record 5). The parent often still exists in the MFT even when the file itself has been deleted, so this is how Crow-Eye reconstructs full paths for deleted entries.<br><br><strong>Why split into Low + High?</strong> Same reasoning as the FileReferenceNumber: x64 registers are 64-bit so each half fits in one register, NTFS\'s 64-bit parent IDs land cleanly in LowPart (HighPart = 0 for backward-compat), and ReFS\'s larger ID space gets to use HighPart when it needs more than 64 bits.' },
+      { section: 'ParentFileReferenceNumber (FILE_ID_128, 16 B)', name: 'ParentFRN.HighPart (DWORDLONG)', offset: 32, size: 8, type: 'hash-color', forensic: '<strong>HighPart means:</strong> the <strong>upper 64 bits</strong> of the parent directory\'s 128-bit FILE_ID_128. Same role as FRN.HighPart &mdash; always zero on NTFS, non-zero on ReFS subvolumes.<br><br><strong>Why it exists:</strong> the <code>FILE_ID_128</code> API needs a single struct shape that can carry parent IDs from any filesystem the OS supports. HighPart is the reserved upper space &mdash; zero when the filesystem (NTFS) only uses 64 bits of identity, populated when the filesystem (ReFS) needs the full 128.' },
+
+      // Variable-position fields
+      { section: 'USN_RECORD_V3 Body', name: 'Usn', offset: 40, size: 8, type: 'identity-color', forensic: '<strong>UInt64 (signed LONGLONG) &mdash; the record\'s sequence number AND its byte offset inside <code>\\$UsnJrnl:$J</code>.</strong> Monotonically increasing; never reused until the journal is recreated. Crow-Eye uses it as part of the PRIMARY KEY (volume_letter, usn) so duplicate ingestion is impossible.<br><br>Gaps in adjacent USNs mean either sparse-evicted records (volume too busy) or intentionally erased records (anti-forensics) &mdash; tracked separately in the <code>deleted_entries</code> table.' },
+      { section: 'USN_RECORD_V3 Body', name: 'TimeStamp (FILETIME)', offset: 48, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME &mdash; 100-nanosecond intervals since 1601-01-01 UTC.</strong> The exact wall-clock time the kernel appended this USN record. Converted via <code>filetime_to_datetime()</code> (USN_Claw.py:333-348). <strong>The closest thing NTFS has to a "real" event time</strong> &mdash; cannot be backdated by user-mode timestomping.' },
+      { section: 'USN_RECORD_V3 Body', name: 'Reason', offset: 56, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; what changed.</strong> Same 24-flag enumeration as V2 (see the full table below). Common compound values: <code>0x80000100</code> (FILE_CREATE | CLOSE), <code>0x80000200</code> (FILE_DELETE | CLOSE), <code>0x80000003</code> (DATA_OVERWRITE | DATA_EXTEND | CLOSE).<br><br>Crow-Eye\'s enhanced REASON_MAP now decodes all 24 flags including the previously-missing <code>NAMED_DATA_*</code> (0x10/0x20/0x40), <code>TRANSACTED_CHANGE</code> (0x00400000), <code>INTEGRITY_CHANGE</code> (0x00800000), and <code>DESIRED_STORAGE_CLASS_CHANGE</code> (0x01000000).' },
+      { section: 'USN_RECORD_V3 Body', name: 'SourceInfo', offset: 60, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; who triggered the change.</strong> Almost always <code>0</code> (user / application). Non-zero values come from <code>FSCTL_MARK_HANDLE</code> and indicate kernel-level / replication / cloud-sync activity. Useful for filtering background services (search indexer, OneDrive, defender) when hunting for real user activity.' },
+      { section: 'USN_RECORD_V3 Body', name: 'SecurityId', offset: 64, size: 4, type: 'fileinfo-color', forensic: '<strong>UInt32 &mdash; key into the volume\'s shared <code>$Secure</code> stream</strong>, the same value carried in <a href="mft_anatomy.html#dissection" style="color: var(--accent); text-decoration: underline;"><code>$STANDARD_INFORMATION.security_id</code></a> on this file. Resolves to an SDDL ACL.' },
+      { section: 'USN_RECORD_V3 Body', name: 'FileAttributes', offset: 68, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 bitmask &mdash; the file\'s current Win32 attributes</strong> (same encoding as <code>GetFileAttributes()</code>). The enhanced parser decodes the bitmask to pipe-separated text form ("ARCHIVE|HIDDEN|raw=0x00000022") via <code>file_attributes_to_text()</code> (USN_Claw.py:242-252).' },
+      { section: 'USN_RECORD_V3 Body', name: 'FileNameLength', offset: 72, size: 2, type: 'identity-color', val: '22', forensic: '<strong>UInt16 &mdash; filename length in BYTES (not characters).</strong> Divide by 2 for UTF-16 character count. Maximum 65534 bytes (32767 chars).' },
+      { section: 'USN_RECORD_V3 Body', name: 'FileNameOffset', offset: 74, size: 2, type: 'identity-color', val: '76', forensic: '<strong>UInt16 = 0x4C (76).</strong> Always immediately after the 76-byte fixed header in V3 (larger than V2\'s 0x3C because the two FILE_ID_128 fields are each 8 bytes wider than the 64-bit V2 versions).' },
+      { section: 'Filename', name: 'FileName (UTF-16LE)', offset: 76, size: 22, type: 'string-color', forensic: '<strong>Variable-length UTF-16LE filename, not null-terminated.</strong> For a rename pair, the OLD_NAME record carries the previous name and the NEW_NAME record carries the new name &mdash; same FRN, two separate records.' },
+      { section: 'Alignment', name: 'Padding to 8-byte boundary', offset: 98, size: 14, type: 'reserved', forensic: '<strong>Zero bytes padding RecordLength up to the next 8-byte boundary.</strong> Required so the start of every USN record in <code>$J</code> sits on an 8-byte boundary.' }
+    ];
+
+    // ----- Build realistic USN_RECORD_V4 (range-tracking, no filename) -----
+    // V4 records are emitted only when range tracking is enabled, for files
+    // above RangeTrackFileSizeThreshold. A change to a big file produces one
+    // or more V4 records followed by exactly one V3 record.
+    // Total = 64 B header + 1 extent (16 B) = 80 B.
+    const v4Record = [].concat(
+      // USN_RECORD_COMMON_HEADER (8 bytes)
+      HX('50000000'),                  // 0x00 RecordLength = 80
+      HX('0400'),                      // 0x04 MajorVersion = 4
+      HX('0000'),                      // 0x06 MinorVersion = 0
+      // FileReferenceNumber (FILE_ID_128 = 16 B)
+      HX('7E54040000000000'),          // 0x08 FRN.LowPart
+      HX('0000000000000000'),          // 0x10 FRN.HighPart
+      // ParentFileReferenceNumber (FILE_ID_128 = 16 B)
+      HX('0500000000000000'),          // 0x18 PFRN.LowPart
+      HX('0000000000000000'),          // 0x20 PFRN.HighPart
+      // Usn
+      HX('48F30C0000000000'),          // 0x28 Usn
+      // Reason + SourceInfo
+      HX('01000000'),                  // 0x30 Reason = DATA_OVERWRITE
+      HX('00000000'),                  // 0x34 SourceInfo = 0
+      // RemainingExtents + NumberOfExtents + ExtentSize
+      HX('00000000'),                  // 0x38 RemainingExtents = 0 (no more after this)
+      HX('0100'),                      // 0x3C NumberOfExtents = 1
+      HX('1000'),                      // 0x3E ExtentSize = 0x10 (16 B per extent)
+      // Extents[0] (USN_RECORD_EXTENT = 16 B)
+      HX('0010000000000000'),          // 0x40 Extent[0].Offset = 0x1000 (4096) bytes into file
+      HX('0008000000000000')           // 0x48 Extent[0].Length = 0x800 (2048) bytes modified
+    );
+    while (v4Record.length < 80) v4Record.push('00');
+    v4Record.length = 80;
+
+    const v4Fields = [
+      // USN_RECORD_COMMON_HEADER (shared with V3)
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'RecordLength', offset: 0, size: 4, type: 'header-color', val: '80', forensic: '<strong>UInt32 &mdash; total V4 record length in bytes</strong> = 64 B fixed header + (NumberOfExtents &times; ExtentSize). For one extent (16 B): 80 B total; for N extents: 64 + 16N bytes. Always &le; <code>RecordLength &le; buffer_remaining</code>; parsers use it to step to the next record.<br><br><strong>V4 records do NOT contain a filename</strong> &mdash; the human-readable name must be correlated by USN with the V3 record that always follows the V4 batch.' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MajorVersion', offset: 4, size: 2, type: 'header-color', val: '4', forensic: '<strong>UInt16 = 4 indicates USN_RECORD_V4.</strong> Introduced in Windows 10 for <strong>range tracking</strong> on files at or above <code>RangeTrackFileSizeThreshold</code>. <strong>V4 records always come in a batch</strong> describing exactly which byte ranges of a large file were modified in a single I/O, followed by exactly <strong>one V3 record</strong> that carries the full filename + final attribute snapshot.<br><br>Parsers that don\'t understand V4 should skip these records and act on the trailing V3 record alone.' },
+      { section: 'USN_RECORD_COMMON_HEADER', name: 'MinorVersion', offset: 6, size: 2, type: 'header-color', val: '0', forensic: '<strong>UInt16 &mdash; minor format version.</strong> Always 0 in V4. Microsoft reserves this for backward-compatible field additions (any new fields would sit BEFORE the variable-length Extents[] tail). Same semantics as the MinorVersion in V2 and V3.' },
+
+      // FRN / Parent FRN (FILE_ID_128)
+      { section: 'FileReferenceNumber (FILE_ID_128, 16 B)', name: 'FRN.LowPart (DWORDLONG)', offset: 8, size: 8, type: 'hash-color', forensic: '<strong>LowPart means:</strong> the <strong>lower (least-significant) 64 bits</strong> of the 128-bit <code>FILE_ID_128</code> structure. Stored first in memory; HighPart follows at offset +8.<br><br><strong>What it carries:</strong> on NTFS, the same value as the V2 64-bit FRN &mdash; lower 48 bits = <a href="mft_anatomy.html#record" style="color: var(--accent); text-decoration: underline;">MFT entry number</a>, upper 16 bits = MFT sequence number.<br><br><strong>Identical to the FRN.LowPart of the V3 wrap-up record</strong> that follows the V4 batch &mdash; use it to correlate the extent records with their matching V3 record (and from there with the file\'s MFT entry).<br><br><strong>Why split a 128-bit ID into two 64-bit halves?</strong> Three reasons:<br>1. <strong>CPU register width.</strong> x86/x64 max integer register is 64 bits &mdash; no native 128-bit type in C or the Windows API. Two <code>DWORDLONG</code> halves load cleanly into two registers without SIMD.<br>2. <strong>NTFS backward compatibility.</strong> NTFS file references are 64-bit; LowPart carries the legacy value untouched so old parsers keep working.<br>3. <strong>ReFS future-proofing.</strong> ReFS already needs more than 64 bits of identity. HighPart is the headroom &mdash; one struct shape covers both filesystems.' },
+      { section: 'FileReferenceNumber (FILE_ID_128, 16 B)', name: 'FRN.HighPart (DWORDLONG)', offset: 16, size: 8, type: 'hash-color', forensic: '<strong>HighPart means:</strong> the <strong>upper (most-significant) 64 bits</strong> of the 128-bit <code>FILE_ID_128</code>. Stored immediately after LowPart at offset +8 inside the FILE_ID_128.<br><br><strong>What it carries:</strong> always zero on NTFS &mdash; file references never exceed 64 bits there, so the top half is reserved space. Non-zero only on ReFS, where the larger ID space accommodates billions of files per volume.<br><br><strong>Why does HighPart exist if it\'s usually zero?</strong> It\'s the <strong>headroom</strong> that lets the same Windows API span filesystems with very different ID spaces: NTFS gets a 64-bit identity in LowPart (HighPart = 0), ReFS gets a full 128-bit identity using both halves. Without HighPart, ReFS would have required a parallel API and parsers would have had to dispatch on the filesystem.' },
+      { section: 'ParentFileReferenceNumber (FILE_ID_128, 16 B)', name: 'ParentFRN.LowPart (DWORDLONG)', offset: 24, size: 8, type: 'hash-color', forensic: '<strong>LowPart means:</strong> the <strong>lower 64 bits</strong> of the parent directory\'s 128-bit FILE_ID_128. Same encoding as FRN.LowPart: lower 48 bits = parent MFT entry, upper 16 bits = parent MFT sequence.<br><br><strong>The gold pivot for path reconstruction</strong> &mdash; resolve to the parent\'s <a href="mft_anatomy.html#dissection" style="color: var(--accent); text-decoration: underline;">$FILE_NAME</a> to recover the directory the file lives in. Identical to ParentFRN.LowPart of the trailing V3 record.<br><br><strong>Why split into Low + High?</strong> Same reasoning as the FileReferenceNumber: x64 registers are 64-bit, NTFS\'s 64-bit parent IDs land in LowPart (HighPart = 0 for backward-compat), and ReFS\'s larger parent IDs use HighPart when they need more than 64 bits.' },
+      { section: 'ParentFileReferenceNumber (FILE_ID_128, 16 B)', name: 'ParentFRN.HighPart (DWORDLONG)', offset: 32, size: 8, type: 'hash-color', forensic: '<strong>HighPart means:</strong> the <strong>upper 64 bits</strong> of the parent directory\'s 128-bit FILE_ID_128. Always zero on NTFS, non-zero on ReFS subvolumes.<br><br><strong>Why it exists:</strong> reserved upper space so a single <code>FILE_ID_128</code> struct can carry parent IDs from any filesystem &mdash; zero when the filesystem (NTFS) only uses 64 bits of identity, populated when the filesystem (ReFS) needs the full 128.' },
+
+      // Usn
+      { section: 'USN_RECORD_V4 Body', name: 'Usn', offset: 40, size: 8, type: 'identity-color', forensic: '<strong>UInt64 (signed LONGLONG) &mdash; the record\'s sequence number AND its byte offset inside <code>\\$UsnJrnl:$J</code>.</strong> Same semantics as in V2/V3. Monotonically increasing; never reused until the journal is recreated. Each V4 record in a batch occupies its own consecutive USN slot, and the trailing V3 record sits at the very next USN after the last V4.<br><br>Crow-Eye uses (volume_letter, usn) as the PRIMARY KEY so duplicate ingestion is impossible. Gaps in USN sequence indicate sparse-evicted or intentionally erased records (tracked separately in <code>deleted_entries</code>).' },
+      { section: 'USN_RECORD_V4 Body', name: 'Reason', offset: 48, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; what changed.</strong> V4 records overwhelmingly carry one of the data-write reasons that produce extent changes worth tracking:<br><br><code>0x00000001</code> DATA_OVERWRITE &mdash; bytes inside the default stream were overwritten in place<br><code>0x00000002</code> DATA_EXTEND &mdash; the file grew at the end<br><code>0x00000004</code> DATA_TRUNCATION &mdash; the file shrank<br><code>0x00000010-0x00000040</code> NAMED_DATA_OVERWRITE/EXTEND/TRUNCATION &mdash; same operations on a named ADS<br><br>Other reason bits can appear too; see the full 24-flag table below. Decoded via <code>reason_to_text()</code> + <code>REASON_MAP</code> in USN_Claw.py.' },
+      { section: 'USN_RECORD_V4 Body', name: 'SourceInfo', offset: 52, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; who triggered the change.</strong> Almost always <code>0</code> (user / application). Non-zero values come from <code>FSCTL_MARK_HANDLE</code> and indicate kernel-level / replication / HSM / cloud-sync activity. Same encoding as the SourceInfo field in V2 and V3. Useful for filtering out background services (search indexer, OneDrive, defender) when hunting for real user activity in the extent stream.' },
+
+      // V4-specific fields
+      { section: 'V4 Range-Tracking Fields', name: 'RemainingExtents', offset: 56, size: 4, type: 'volumes-color', val: '0', forensic: '<strong>UInt32 &mdash; how many MORE V4 records follow this one before the wrap-up V3 record.</strong> A single huge write may emit multiple V4 records (each carrying up to <code>NumberOfExtents</code> extents); RemainingExtents counts down to 0, then a final V3 record is appended with the filename and final attribute state.' },
+      { section: 'V4 Range-Tracking Fields', name: 'NumberOfExtents', offset: 60, size: 2, type: 'volumes-color', val: '1', forensic: '<strong>UInt16 &mdash; how many extents follow this header in THIS record.</strong> A single V4 record can describe multiple non-contiguous byte ranges that were touched in the same I/O.' },
+      { section: 'V4 Range-Tracking Fields', name: 'ExtentSize', offset: 62, size: 2, type: 'volumes-color', val: '16', forensic: '<strong>UInt16 &mdash; size in bytes of each <code>USN_RECORD_EXTENT</code> struct that follows.</strong> Always 16 bytes (8 B Offset + 8 B Length) in current Windows.' },
+
+      // First (and only) extent
+      { section: 'USN_RECORD_EXTENT[0]', name: 'Extent[0].Offset', offset: 64, size: 8, type: 'trace-color', forensic: '<strong>Int64 &mdash; starting byte offset within the file</strong> at which the modified range begins. Combined with Length, this identifies exactly which byte ranges of a multi-GB file were touched, without diffing the whole file.' },
+      { section: 'USN_RECORD_EXTENT[0]', name: 'Extent[0].Length', offset: 72, size: 8, type: 'trace-color', forensic: '<strong>Int64 &mdash; length of the modified range in bytes.</strong> This + Offset is the precise byte range affected by the write. Forensically valuable for ransomware analysis (which sectors were overwritten?) and for tracking targeted edits to database / VMDK files.' }
+    ];
+
+    const versions = {
+      v2: { hex: v2Record, banner: 'USN_RECORD_V2 (60 B header + UTF-16 "notepad.exe") &mdash; 96 byte total', fields: v2Fields },
+      v3: { hex: v3Record, banner: 'USN_RECORD_V3 (76 B header with 128-bit FILE_ID_128 FRN + UTF-16 "notepad.exe") &mdash; 112 byte total', fields: v3Fields },
+      v4: { hex: v4Record, banner: 'USN_RECORD_V4 (Win 10+, range tracking, 64 B header + 1 extent) &mdash; 80 byte total, no filename', fields: v4Fields }
+    };
+
+    let curV = 'v3';
+
+    function setVersion(v) {
+      curV = v;
+      document.querySelectorAll('.v-tab').forEach(t => t.classList.remove('active'));
+      const tabs = document.querySelectorAll('.v-tab');
+      const idx = ['v2', 'v3', 'v4'].indexOf(v);
+      if (tabs[idx]) tabs[idx].classList.add('active');
+      document.getElementById('view-banner-text').textContent = versions[v].banner.replace(/<[^>]+>/g, '');
+      render();
+    }
+
+    function render() {
+      const v = versions[curV];
+      const map = document.getElementById('master-map');
+      const table = document.getElementById('table-body');
+      map.innerHTML = ''; table.innerHTML = '';
+      let curS = ''; let curF = null;
+      // Per-type counter so each color family steps through its palette in
+      // clean order (0,1,2,...) regardless of how other types are interleaved.
+      let typeIdx = {};
+      const fieldShade = new Map();
+
+      v.hex.forEach((b, i) => {
+        const f = v.fields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curS) {
+          const divider = document.createElement('div');
+          divider.className = 'divider-row';
+          divider.textContent = f.section;
+          map.appendChild(divider);
+          curS = f.section;
+          typeIdx = {};
+        }
+        if (f && f !== curF) {
+          curF = f;
+          if (f.type !== 'reserved') {
+            const idx = (typeIdx[f.type] || 0);
+            fieldShade.set(f, idx);
+            typeIdx[f.type] = idx + 1;
+          }
+        }
+        const c = document.createElement('div');
+        c.className = 'byte-cell';
+        c.textContent = b;
+        if (f) {
+          if (f.type === 'reserved') {
+            c.classList.add('reserved');
+          } else {
+            const pal = palettes[f.type] || [{ bg: 'var(--bg2)', fg: 'var(--tx3)' }];
+            const color = pal[fieldShade.get(f) % pal.length];
+            c.style.backgroundColor = color.bg;
+            c.style.color = color.fg;
+          }
+        } else {
+          c.classList.add('reserved');
+        }
+        c.onclick = () => selectField(f, i);
+        map.appendChild(c);
+      });
+
+      v.fields.forEach(f => {
+        const r = document.createElement('tr');
+        r.innerHTML = `<td>0x${f.offset.toString(16).toUpperCase()}</td><td>${f.size}B</td><td style="font-weight:700; color:var(--tx);">${f.name}</td><td>${f.forensic}</td>`;
+        r.onclick = () => selectField(f, f.offset);
+        table.appendChild(r);
+      });
+
+      selectField(v.fields[0], 0);
+    }
+
+    function selectField(f, idx) {
+      if (!f) {
+        document.getElementById('selection-output').innerHTML = `
+          <div class="field-name">Undocumented Byte</div>
+          <div class="meta-box"><span class="meta-lbl">Offset</span><div class="meta-v">0x${idx.toString(16).toUpperCase()}</div></div>
+          <div class="forensic-text"><strong>Forensic Insight:</strong> This byte is alignment padding or sits between documented structures.</div>
+        `;
+        return;
+      }
+      const v = versions[curV];
+      const s = f.offset, e = f.offset + f.size - 1;
+      const fieldBytes = v.hex.slice(s, e + 1);
+      document.querySelectorAll('.byte-cell').forEach((c, i) => c.classList.toggle('active', i >= s && i <= e));
+
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      document.getElementById('selection-output').innerHTML = `
+        <div class="field-name">${f.name}</div>
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx); font-family: 'Space Mono'; font-size: 13px;">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2); font-family: 'Space Mono'; font-size: 13px;">${asciiString}</div>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px;">
+          <div class="meta-box"><span class="meta-lbl">Offset</span><div class="meta-v" style="font-family: 'Space Mono';">0x${s.toString(16).toUpperCase()}</div></div>
+          <div class="meta-box"><span class="meta-lbl">Size</span><div class="meta-v">${f.size}B</div></div>
+        </div>
+        <div class="forensic-text">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+    }
+
+    window.onload = () => { setVersion('v3'); initIntroTooltip(); };
+
+    // "What is the USN Journal?" intro-card behaviour. The whole card IS the
+    // tooltip: starts collapsed, expands on load, minimizes after 60s, and
+    // toggles on click. Once the user clicks, auto-collapse is cancelled.
+    function initIntroTooltip() {
+      const card = document.querySelector('.intro-card');
+      const icon = document.querySelector('.intro-icon');
+      if (!card || !icon) return;
+      let autoCollapseTimer = null;
+      let userTookOver = false;
+      const expand   = () => card.classList.remove('collapsed');
+      const collapse = () => card.classList.add('collapsed');
+      setTimeout(() => {
+        expand();
+        autoCollapseTimer = setTimeout(() => { if (!userTookOver) collapse(); }, 60000);
+      }, 600);
+      const handleToggle = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        userTookOver = true;
+        if (autoCollapseTimer) { clearTimeout(autoCollapseTimer); autoCollapseTimer = null; }
+        card.classList.contains('collapsed') ? expand() : collapse();
+      };
+      icon.addEventListener('click', handleToggle);
+      card.addEventListener('click', (e) => {
+        if (!card.classList.contains('collapsed')) return;
+        if (icon.contains(e.target)) return;
+        handleToggle(e);
+      });
+    }
+  </script>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Replay the file-system timeline with Crow-Eye</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">Crow-Eye parses <code>$Extend\$UsnJrnl:$J</code> into a second-by-second record of every create, rename, delete, and write — the change log that survives even when the files themselves are long gone.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is the NTFS USN journal?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">The Update Sequence Number journal is a running log the file system writes whenever a file or directory changes. Each entry records the file reference, the name at that moment, a timestamp, and a set of reason flags describing what changed.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What can the USN journal prove that the MFT cannot?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">It captures activity that leaves no trace in the current file system. A file created and deleted between two collections has no MFT record left, but its creation, rename and deletion still appear in the journal - often the only remaining evidence the file ever existed.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">How far back does the USN journal go?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">It is size-capped and behaves as a circular log, so old entries are overwritten as new ones arrive. On a busy volume the window can be days rather than months, which is why the journal should be collected early in an investigation.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What are USN reason codes?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Flags describing the change - data written, file created, renamed with the old name, renamed with the new name, deleted, and others. Rename pairs in particular allow a file to be followed through name changes, including a move into the Recycle Bin.</p>
+      </div>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:16px 20px;margin:8px auto 40px;max-width:820px;">
+      <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--trace-color);margin-bottom:4px;">See it in the dashboard</div>
+      <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;margin:0;">The <strong>Charts</strong> button on the MFT and USN table tabs opens the correlated
+        <strong>MFT/USN activity dashboard</strong> &mdash; the USN reason-category timeline over the journal window, a per-file change timeline, and a
+        Standard-Info vs File-Name view for timestomping. It is documented in
+        <a href="mft_anatomy.html#dashboard">Reading the MFT/USN dashboard</a>.</p>
+    </div>
+  </div>
+
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script>
+</body>
+</html>

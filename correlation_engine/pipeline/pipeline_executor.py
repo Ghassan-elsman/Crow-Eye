@@ -15,6 +15,41 @@ from ..engine.engine_selector import EngineSelector, EngineType
 from ..engine.base_engine import FilterConfig, BaseCorrelationEngine
 from ..wings.core.wing_model import Wing, FeatherSpec, CorrelationRules
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Stored in a cancelled execution's warnings; the results viewer reads it back
+# to label the run CANCELLED.
+CANCELLED_WARNING = "Execution cancelled by user"
+
+
+def _say(*args, **kwargs):
+    """print(), and the same line in correlation.log.
+
+    The executor reported only through print(): the Correlation Engine window
+    shows stdout, so the run looked logged, but nothing of it reached the
+    case log - not the wings run, not the errors, not the totals. Rules of
+    ``=`` and ``-`` stay console-only.
+    """
+    print(*args, **kwargs)
+    text = " ".join(str(a) for a in args).strip()
+    if not text or not set(text) - set("=- "):
+        return
+    if "DEBUG:" in text:
+        logger.debug(text)
+        return
+    try:
+        from utils.parse_logging import line_level
+        level = line_level(text)
+    except Exception:
+        level = logging.INFO
+    if "[FAIL]" in text:
+        level = logging.ERROR
+    elif "[WARN]" in text or text.lstrip().startswith("! "):
+        level = max(level, logging.WARNING)
+    logger.log(level, text)
+
 
 class _StatsView:
     """Adapts a plain statistics dict to the DatabaseErrorHandler interface.
@@ -82,7 +117,7 @@ class PipelineExecutor:
         self.errors: List[str] = []
         self.warnings: List[str] = []
 
-        print(f"[PipelineExecutor] Creating engine: {engine_type}")
+        _say(f"[PipelineExecutor] Creating engine: {engine_type}")
 
         try:
             # Create engine with shared integrations (dependency injection)
@@ -90,22 +125,22 @@ class PipelineExecutor:
                 pipeline_config=pipeline_config,
                 engine_type=engine_type
             )
-            print(f"[PipelineExecutor] Engine created successfully: {type(self.engine).__name__}")
+            _say(f"[PipelineExecutor] Engine created successfully: {type(self.engine).__name__}")
         except Exception as e:
             # Only log errors, not routine messages
             import logging
             logging.warning(f"Failed to create {engine_type} engine with integrations: {e}")
-            print(f"[PipelineExecutor] WARNING: Failed to create {engine_type} engine: {e}")
+            _say(f"[PipelineExecutor] WARNING: Failed to create {engine_type} engine: {e}")
             try:
                 self.engine = EngineSelector.create_engine(
                     config=pipeline_config,
                     engine_type=engine_type,
                     filters=self.filters
                 )
-                print(f"[PipelineExecutor] Engine created (without integrations): {type(self.engine).__name__}")
+                _say(f"[PipelineExecutor] Engine created (without integrations): {type(self.engine).__name__}")
             except Exception as e2:
                 logging.warning(f"Failed to create {engine_type} engine: {e2}, falling back to identity_based")
-                print(f"[PipelineExecutor] WARNING: Falling back to IDENTITY_BASED: {e2}")
+                _say(f"[PipelineExecutor] WARNING: Falling back to IDENTITY_BASED: {e2}")
                 self.engine = EngineSelector.create_engine(
                     config=pipeline_config,
                     engine_type=EngineType.IDENTITY_BASED,
@@ -197,7 +232,7 @@ class PipelineExecutor:
             if config_manager:
                 config_manager.register_observer(self._on_config_changed)
             
-            print("[PipelineExecutor] Shared integrations created and registered as observers")
+            _say("[PipelineExecutor] Shared integrations created and registered as observers")
             
         except Exception as e:
             import logging
@@ -215,7 +250,7 @@ class PipelineExecutor:
             new_config: New configuration
         """
         try:
-            print("[PipelineExecutor] Configuration changed, reloading integrations...")
+            _say("[PipelineExecutor] Configuration changed, reloading integrations...")
             
             # Reload integrations
             if self.scoring_integration:
@@ -224,7 +259,7 @@ class PipelineExecutor:
             if self.semantic_integration:
                 self.semantic_integration.reload_configuration()
             
-            print("[PipelineExecutor] Integrations reloaded successfully")
+            _say("[PipelineExecutor] Integrations reloaded successfully")
             
         except Exception as e:
             import logging
@@ -314,18 +349,18 @@ class PipelineExecutor:
             self.config.run_group_id = str(uuid.uuid4())
 
         if self.verbose:
-            print(f"Executing Pipeline: {self.config.pipeline_name}")
-            print("=" * 60)
+            _say(f"Executing Pipeline: {self.config.pipeline_name}")
+            _say("=" * 60)
         
         # Step 1: Create feathers (if configured)
         feather_paths = {}
         if self.config.auto_create_feathers:
             if self.verbose:
-                print("\nStep 1: Creating Feathers...")
+                _say("\nStep 1: Creating Feathers...")
             feather_paths = self._create_feathers()
         else:
             if self.verbose:
-                print("\nStep 1: Skipping feather creation (using existing feathers)")
+                _say("\nStep 1: Skipping feather creation (using existing feathers)")
             # Use paths from feather configs
             # Map by BOTH config_name AND feather_name for compatibility
             for feather_config in self.config.feather_configs:
@@ -334,13 +369,13 @@ class PipelineExecutor:
         
         # Check for cancellation
         if self._cancelled:
-            print("\n[WARN] Execution cancelled before wing execution")
+            _say("\n[WARN] Execution cancelled before wing execution")
             return self._build_cancelled_summary(start_time)
         
         # Step 2: Execute wings (if configured)
         if self.config.auto_run_correlation:
             if self.verbose:
-                print("\nStep 2: Executing Wings...")
+                _say("\nStep 2: Executing Wings...")
 
             # Pre-flight: surface unsupported operators / missing fields BEFORE
             # the evaluator silently logger.warnings them. Non-fatal; rules
@@ -354,7 +389,7 @@ class PipelineExecutor:
                         f"{issue['kind']} — {issue['detail']}"
                     )
                 if self.verbose:
-                    print(f" Pre-flight flagged {len(self._rule_preflight_issues)} rule issue(s)")
+                    _say(f" Pre-flight flagged {len(self._rule_preflight_issues)} rule issue(s)")
 
             # Detect circular dependencies and missing references
             dep_report = self._detect_circular_dependencies(feather_paths)
@@ -364,19 +399,19 @@ class PipelineExecutor:
 
             if dep_report['errors']:
                 if self.verbose:
-                    print(" Dependency validation errors:")
+                    _say(" Dependency validation errors:")
                     for error in dep_report['errors']:
-                        print(f" [FAIL] {error}")
+                        _say(f" [FAIL] {error}")
                 for error in dep_report['errors']:
                     self.errors.append(error)
 
             if dep_report['errors'] and not runnable:
                 # Nothing can run. This is the case the halt was written for.
                 if self.verbose:
-                    print(" Halting execution: no wing has all of its feathers")
+                    _say(" Halting execution: no wing has all of its feathers")
             else:
                 if unsatisfiable and self.verbose:
-                    print(f" Skipping {len(unsatisfiable)} wing(s) with missing feathers; "
+                    _say(f" Skipping {len(unsatisfiable)} wing(s) with missing feathers; "
                           f"running the remaining {runnable}")
                 # Generate dependency graph
                 if self.config.output_directory:
@@ -385,24 +420,24 @@ class PipelineExecutor:
                     graph_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(graph_path, 'w') as f:
                         f.write(dot_graph)
-                    print(f" Dependency graph saved to: {graph_path}")
+                    _say(f" Dependency graph saved to: {graph_path}")
                 
                 # Execute wings (with cancellation support)
                 self._execute_wings(feather_paths)
         else:
             if self.verbose:
-                print("\nStep 2: Skipping correlation (manual execution required)")
+                _say("\nStep 2: Skipping correlation (manual execution required)")
         
         # Check for cancellation
         if self._cancelled:
-            print("\n[WARN] Execution cancelled - saving partial results")
+            _say("\n[WARN] Execution cancelled - saving partial results")
             return self._build_cancelled_summary(start_time)
         
         # Step 3: Generate report (if configured)
         execution_id = None
         if self.config.generate_report:
             if self.verbose:
-                print("\nStep 3: Generating Report...")
+                _say("\nStep 3: Generating Report...")
             execution_id = self._generate_report()
         
         # Calculate execution time
@@ -484,20 +519,20 @@ class PipelineExecutor:
         }
         
         if self.verbose:
-            print("\n" + "=" * 60)
+            _say("\n" + "=" * 60)
             if self._cancelled:
-                print(f"Pipeline Execution Cancelled (Partial Results Saved)")
+                _say(f"Pipeline Execution Cancelled (Partial Results Saved)")
             else:
-                print(f"Pipeline Execution Complete!")
-            print(f"Time: {execution_time:.2f} seconds")
-            print(f"Feathers Used: {summary['feathers_used']}")
-            print(f"Wings: {len(self.results)}")
-            print(f"Total Matches: {summary['total_matches']}")
+                _say(f"Pipeline Execution Complete!")
+            _say(f"Time: {execution_time:.2f} seconds")
+            _say(f"Feathers Used: {summary['feathers_used']}")
+            _say(f"Wings: {len(self.results)}")
+            _say(f"Total Matches: {summary['total_matches']}")
         
         if self.errors and self.verbose:
-            print(f"Errors: {len(self.errors)}")
+            _say(f"Errors: {len(self.errors)}")
         if self.warnings and self.verbose:
-            print(f"Warnings: {len(self.warnings)}")
+            _say(f"Warnings: {len(self.warnings)}")
         
         return summary
     
@@ -642,7 +677,13 @@ class PipelineExecutor:
     def _build_cancelled_summary(self, start_time: float) -> Dict[str, Any]:
         """Build summary for cancelled execution."""
         execution_time = time.time() - start_time
-        
+
+        # Into the execution row too (_generate_report saves self.warnings), so
+        # a run loaded later still says it was stopped - the cancel was only
+        # ever in the summary returned here, which nothing keeps.
+        if CANCELLED_WARNING not in self.warnings:
+            self.warnings.append(CANCELLED_WARNING)
+
         # Save partial results if any
         execution_id = None
         if self.results and self.config.generate_report:
@@ -676,7 +717,7 @@ class PipelineExecutor:
         
         for i, feather_config in enumerate(self.config.feather_configs, 1):
             if self.verbose:
-                print(f" [{i}/{len(self.config.feather_configs)}] Creating {feather_config.feather_name}...")
+                _say(f" [{i}/{len(self.config.feather_configs)}] Creating {feather_config.feather_name}...")
             
             try:
                 # In a real implementation, this would:
@@ -697,13 +738,13 @@ class PipelineExecutor:
                 feather_paths[feather_config.feather_name] = feather_config.output_database
                 
                 if self.verbose:
-                    print(f" [OK] Created: {feather_config.output_database}")
+                    _say(f" [OK] Created: {feather_config.output_database}")
                 
             except Exception as e:
                 error_msg = f"Failed to create feather {feather_config.feather_name}: {str(e)}"
                 self.errors.append(error_msg)
                 if self.verbose:
-                    print(f" [FAIL] Error: {str(e)}")
+                    _say(f" [FAIL] Error: {str(e)}")
         
         return feather_paths
 
@@ -724,9 +765,9 @@ class PipelineExecutor:
 
         if validation_report['errors']:
             if self.verbose:
-                print(" Pre-execution validation errors:")
+                _say(" Pre-execution validation errors:")
                 for error in validation_report['errors']:
-                    print(f" [FAIL] {error}")
+                    _say(f" [FAIL] {error}")
             for error in validation_report['errors']:
                 if error not in self.errors:
                     self.errors.append(error)
@@ -735,9 +776,9 @@ class PipelineExecutor:
 
         if validation_report['warnings']:
             if self.verbose:
-                print(" Pre-execution validation warnings:")
+                _say(" Pre-execution validation warnings:")
                 for warning in validation_report['warnings']:
-                    print(f" ! {warning}")
+                    _say(f" ! {warning}")
             for warning in validation_report['warnings']:
                 self.warnings.append(warning)
         
@@ -749,32 +790,32 @@ class PipelineExecutor:
                 if message not in self.warnings:
                     self.warnings.append(message)
                 if self.verbose:
-                    print(f"\n [{i}/{len(self.config.wing_configs)}] Skipping Wing: "
+                    _say(f"\n [{i}/{len(self.config.wing_configs)}] Skipping Wing: "
                           f"{wing_config.wing_name} (missing {absent})")
                 continue
 
             if self.verbose:
-                print(f"\n [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
-                print(f" Wing ID: {wing_config.wing_id}")
-                print(f" Feathers in wing: {len(wing_config.feathers)}")
+                _say(f"\n [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
+                _say(f" Wing ID: {wing_config.wing_id}")
+                _say(f" Feathers in wing: {len(wing_config.feathers)}")
             
             # NEW: Log filter configuration
             if self.verbose and (self.filters.time_period_start or self.filters.time_period_end):
-                print(f" Time Period Filter:")
+                _say(f" Time Period Filter:")
                 if self.filters.time_period_start:
-                    print(f" Start: {self.filters.time_period_start}")
+                    _say(f" Start: {self.filters.time_period_start}")
                 if self.filters.time_period_end:
-                    print(f" End: {self.filters.time_period_end}")
+                    _say(f" End: {self.filters.time_period_end}")
             
             if self.verbose and self.filters.identity_filters:
-                print(f" Identity Filters: {', '.join(self.filters.identity_filters)}")
-                print(f" Case Sensitive: {self.filters.case_sensitive}")
+                _say(f" Identity Filters: {', '.join(self.filters.identity_filters)}")
+                _say(f" Case Sensitive: {self.filters.case_sensitive}")
             
             # List all feathers in this wing
             if self.verbose:
                 for feather_ref in wing_config.feathers:
                     feather_display_name = feather_ref.feather_config_name or feather_ref.feather_id
-                    print(f" • {feather_display_name} ({feather_ref.artifact_type})")
+                    _say(f" • {feather_display_name} ({feather_ref.artifact_type})")
             
             try:
                 # Convert WingConfig to Wing (with validation)
@@ -782,7 +823,7 @@ class PipelineExecutor:
             except ValueError as e:
                 # Validation failed - skip this wing
                 if self.verbose:
-                    print(f" [FAIL] Configuration validation failed: {str(e)}")
+                    _say(f" [FAIL] Configuration validation failed: {str(e)}")
                 continue
             
             try:
@@ -856,7 +897,7 @@ class PipelineExecutor:
                         wing_feather_paths[feather_key] = resolved_path
                         # Log resolved path for debugging
                         if self.verbose and self.config.output_directory:
-                            print(f" Resolved {feather_key} via {resolution_method}: {resolved_path}")
+                            _say(f" Resolved {feather_key} via {resolution_method}: {resolved_path}")
                     else:
                         error_msg = (
                             f"Feather database not found for wing '{wing_config.wing_name}', "
@@ -864,7 +905,7 @@ class PipelineExecutor:
                         )
                         self.errors.append(error_msg)
                         if self.verbose:
-                            print(f" [FAIL] {error_msg}")
+                            _say(f" [FAIL] {error_msg}")
                 
                 if len(wing_feather_paths) < wing.correlation_rules.minimum_matches:
                     warning_msg = (
@@ -873,7 +914,7 @@ class PipelineExecutor:
                     )
                     self.warnings.append(warning_msg)
                     if self.verbose:
-                        print(f" ! {warning_msg}")
+                        _say(f" ! {warning_msg}")
                     continue
                 
                 # Create execution record BEFORE wing execution for streaming support
@@ -903,13 +944,13 @@ class PipelineExecutor:
                     
                     # Now set output directory with execution_id for streaming
                     self.engine.set_output_directory(self.config.output_directory, execution_id)
-                    print(f"[Pipeline] Streaming enabled with execution_id={execution_id}")
+                    _say(f"[Pipeline] Streaming enabled with execution_id={execution_id}")
                 
                 # Execute wing
                 result = self.engine.execute_wing(wing, wing_feather_paths)
                 
                 # DEBUG: Verify matches before appending
-                print(f"[Pipeline] DEBUG: Appending result '{result.wing_name}' with {len(result.matches)} matches")
+                _say(f"[Pipeline] DEBUG: Appending result '{result.wing_name}' with {len(result.matches)} matches")
                 
                 self.results.append(result)
 
@@ -934,7 +975,7 @@ class PipelineExecutor:
                 error_msg = f"Failed to execute wing {wing_config.wing_name}: {str(e)}"
                 self.errors.append(error_msg)
                 if self.verbose:
-                    print(f" [FAIL] Error: {str(e)}")
+                    _say(f" [FAIL] Error: {str(e)}")
     
     def _validate_feather_wing_linkages(self, feather_paths: Dict[str, str]) -> Dict[str, Any]:
         """
@@ -1241,7 +1282,7 @@ class PipelineExecutor:
             finally:
                 conn.close()
         except Exception as e:
-            print(f"[Pipeline] Could not look up run_group_id for resume: {e}")
+            _say(f"[Pipeline] Could not look up run_group_id for resume: {e}")
             return None
 
     def _reconcile_identity_wing(self, execution_id: Optional[int]) -> None:
@@ -1260,11 +1301,11 @@ class PipelineExecutor:
                 getattr(self.config, 'run_group_id', None),
                 execution_id
             )
-            print(f"[Pipeline] Identity run registry updated: {stats}")
+            _say(f"[Pipeline] Identity run registry updated: {stats}")
         except Exception as e:
             warning = f"Identity reconciliation failed (non-fatal): {e}"
             self.warnings.append(warning)
-            print(f"[Pipeline] WARNING: {warning}")
+            _say(f"[Pipeline] WARNING: {warning}")
 
     def _generate_report(self) -> Optional[int]:
         """
@@ -1279,7 +1320,7 @@ class PipelineExecutor:
         if not self.config.output_directory:
             self.warnings.append("No output directory specified, skipping report generation")
             if self.verbose:
-                print(" [WARN] WARNING: No output directory set, results will not be saved!")
+                _say(" [WARN] WARNING: No output directory set, results will not be saved!")
             return None
         
         try:
@@ -1296,9 +1337,9 @@ class PipelineExecutor:
             if streaming_used:
                 # Streaming mode: matches already saved, just update execution record
                 execution_id = self._execution_id
-                print(f"\n Finalizing streaming results...")
-                print(f" " + "=" * 60)
-                print(f" [OK] Matches already saved via streaming mode")
+                _say(f"\n Finalizing streaming results...")
+                _say(f" " + "=" * 60)
+                _say(f" [OK] Matches already saved via streaming mode")
                 
                 # Write each result row from the finished CorrelationResult
                 # before rolling the totals up.
@@ -1319,7 +1360,7 @@ class PipelineExecutor:
                             warning = (f"Could not finalize result row for wing "
                                        f"'{getattr(r, 'wing_name', '?')}': {e}")
                             self.warnings.append(warning)
-                            print(f"[Pipeline] WARNING: {warning}")
+                            _say(f"[Pipeline] WARNING: {warning}")
 
                 # Update execution record with final statistics. Its totals are
                 # derived from the result rows, so this must run after they are
@@ -1335,13 +1376,13 @@ class PipelineExecutor:
                     )
             else:
                 # Non-streaming mode: save everything to database
-                print(f"\n Saving results to database...")
-                print(f" " + "=" * 60)
+                _say(f"\n Saving results to database...")
+                _say(f" " + "=" * 60)
                 
                 # DEBUG: Verify matches before saving
-                print(f"[Pipeline] DEBUG: Saving {len(self.results)} result(s) to database")
+                _say(f"[Pipeline] DEBUG: Saving {len(self.results)} result(s) to database")
                 for i, r in enumerate(self.results):
-                    print(f"[Pipeline] DEBUG: Result {i+1}: {r.wing_name} - {len(r.matches)} matches")
+                    _say(f"[Pipeline] DEBUG: Result {i+1}: {r.wing_name} - {len(r.matches)} matches")
                 
                 with ResultsDatabase(str(db_file)) as db:
                     execution_id = db.save_execution(
@@ -1363,30 +1404,34 @@ class PipelineExecutor:
                     )
 
             # Cross-wing identity reconciliation (identity engine only).
-            # Streaming runs already reconciled per wing in _execute_wings;
-            # this covers the non-streaming path and is idempotent otherwise.
-            self._reconcile_identity_wing(execution_id)
+            # Streaming runs already reconciled per wing in _execute_wings, so
+            # only the non-streaming path needs it here. Run again, it merged
+            # every identity a second time for nothing ("0 new / 52,820
+            # merged", 6 s a wing) - and on a stopped run that delay pushed the
+            # window past its wait into killing the thread.
+            if not streaming_used:
+                self._reconcile_identity_wing(execution_id)
 
             # Get run name from database for display
             with ResultsDatabase(str(db_file)) as db:
                 exec_metadata = db.get_execution_metadata(execution_id)
                 run_name = exec_metadata.get('run_name', f'Execution_{execution_id}') if exec_metadata else f'Execution_{execution_id}'
             
-            print(f" " + "=" * 60)
-            print(f" [OK] Results saved to database: {db_file.name}")
-            print(f" [OK] Execution ID: {execution_id}")
-            print(f" [OK] Run Name: {run_name}")
-            print(f" [OK] Total matches: {sum(r.total_matches for r in self.results):,}")
-            print(f" [OK] Wings executed: {len(self.results)}")
-            print(f" Database location: {db_file.absolute()}")
-            print(f" Tables: executions, results, matches")
+            _say(f" " + "=" * 60)
+            _say(f" [OK] Results saved to database: {db_file.name}")
+            _say(f" [OK] Execution ID: {execution_id}")
+            _say(f" [OK] Run Name: {run_name}")
+            _say(f" [OK] Total matches: {sum(r.total_matches for r in self.results):,}")
+            _say(f" [OK] Wings executed: {len(self.results)}")
+            _say(f" Database location: {db_file.absolute()}")
+            _say(f" Tables: executions, results, matches")
             
             return execution_id
             
         except Exception as e:
             error_msg = f"Failed to generate report: {str(e)}"
             self.errors.append(error_msg)
-            print(f" [FAIL] Error: {str(e)}")
+            _say(f" [FAIL] Error: {str(e)}")
             import traceback
             traceback.print_exc()
             return None
@@ -1411,7 +1456,7 @@ class PipelineExecutor:
         Args:
             reason: Reason for cancellation (for logging)
         """
-        print(f"\n[WARN] Cancellation requested: {reason}")
+        _say(f"\n[WARN] Cancellation requested: {reason}")
         self._cancelled = True
         
         # Also propagate to the engine if it supports cancellation

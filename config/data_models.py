@@ -5,6 +5,15 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 
 
+def default_cases_dir() -> str:
+    """Where new cases go until the analyst picks somewhere: C:/Cases on
+    Windows, ~/Cases elsewhere (there is no C: on Linux)."""
+    import os
+    if os.name == 'nt':
+        return 'C:/Cases'
+    return os.path.join(os.path.expanduser('~'), 'Cases')
+
+
 @dataclass
 class CaseMetadata:
     """Metadata for a forensic investigation case."""
@@ -81,6 +90,21 @@ class GlobalConfig:
     # evidence lost. Off, the parser still uses existing snapshots and falls
     # back to raw disk and then to an NtSaveKeyEx export.
     parser_allow_snapshot_creation: bool = True
+    # Parse automatically once a collection finishes: the Offline Importer's
+    # COLLECT, the main window's Parse Offline Artifacts scan, and the default
+    # of Image Parsing's "Parse automatically after extraction". Off, every one
+    # of them stops at a ready Parse button.
+    auto_parse_after_collection: bool = True
+    # Settings -> Semantic Mappings -> "Semantic mapping engine": how the
+    # semantic phase runs (read by sql_semantic_mapper through
+    # read_global_setting). Worker threads for the rules; the share of
+    # matches (percent) above which the FTS5 prefilter is skipped because it
+    # cannot filter; candidates matched per chunk; and the detailed per-rule
+    # debug log in <case>/logs.
+    semantic_worker_count: int = 4
+    semantic_fts_skip_coverage: int = 50
+    semantic_candidate_chunk_size: int = 20000
+    semantic_debug_log: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -94,7 +118,12 @@ class GlobalConfig:
             'identity_semantic_phase_enabled': self.identity_semantic_phase_enabled,
             'wings_semantic_mapping_enabled': self.wings_semantic_mapping_enabled,
             'cascade_tree_expansion_enabled': self.cascade_tree_expansion_enabled,
-            'parser_allow_snapshot_creation': self.parser_allow_snapshot_creation
+            'parser_allow_snapshot_creation': self.parser_allow_snapshot_creation,
+            'auto_parse_after_collection': self.auto_parse_after_collection,
+            'semantic_worker_count': self.semantic_worker_count,
+            'semantic_fts_skip_coverage': self.semantic_fts_skip_coverage,
+            'semantic_candidate_chunk_size': self.semantic_candidate_chunk_size,
+            'semantic_debug_log': self.semantic_debug_log
         }
     
     @classmethod
@@ -106,7 +135,7 @@ class GlobalConfig:
         
         return cls(
             version=data.get('version', '1.0'),
-            default_case_directory=data.get('default_case_directory', 'C:/Cases'),
+            default_case_directory=data.get('default_case_directory', default_cases_dir()),
             recent_cases_display_count=data.get('recent_cases_display_count', 10),
             max_history_size=data.get('max_history_size', 200),
             theme=data.get('theme', 'cyberpunk_dark'),
@@ -114,7 +143,12 @@ class GlobalConfig:
             identity_semantic_phase_enabled=data.get('identity_semantic_phase_enabled', True),
             wings_semantic_mapping_enabled=data.get('wings_semantic_mapping_enabled', True),
             cascade_tree_expansion_enabled=data.get('cascade_tree_expansion_enabled', True),
-            parser_allow_snapshot_creation=data.get('parser_allow_snapshot_creation', True)
+            parser_allow_snapshot_creation=data.get('parser_allow_snapshot_creation', True),
+            auto_parse_after_collection=data.get('auto_parse_after_collection', True),
+            semantic_worker_count=data.get('semantic_worker_count', 4),
+            semantic_fts_skip_coverage=data.get('semantic_fts_skip_coverage', 50),
+            semantic_candidate_chunk_size=data.get('semantic_candidate_chunk_size', 20000),
+            semantic_debug_log=data.get('semantic_debug_log', False)
         )
     
     @classmethod
@@ -122,7 +156,7 @@ class GlobalConfig:
         """Create default global configuration."""
         return cls(
             version='1.0',
-            default_case_directory='C:/Cases',
+            default_case_directory=default_cases_dir(),
             recent_cases_display_count=10,
             max_history_size=200,
             theme='cyberpunk_dark',
@@ -130,7 +164,8 @@ class GlobalConfig:
             identity_semantic_phase_enabled=True,
             wings_semantic_mapping_enabled=True,
             cascade_tree_expansion_enabled=True,
-            parser_allow_snapshot_creation=True
+            parser_allow_snapshot_creation=True,
+            auto_parse_after_collection=True
         )
 
 

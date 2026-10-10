@@ -848,18 +848,6 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `data_type` | TEXT |
 
 
-### Table: `filename_changes`
-
-| Column | Type |
-|---|---|
-| `record_number` | INTEGER |
-| `old_filename` | TEXT |
-| `volume_letter` | TEXT |
-| `new_filename` | TEXT |
-| `change_timestamp` | TEXT |
-| `namespace` | TEXT |
-
-
 ## Database: `mft_usn_correlated_analysis.db`
 
 ### Table: `mft_usn_correlated`
@@ -899,6 +887,42 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `filename_change_timeline` | TEXT |
 | `namespace_evolution` | TEXT |
 | `created_at` | TEXT |
+
+`reconstructed_path` is set on journal-only rows too (`has_mft_record = 0`): the
+journal's name under its parent folder, the folder taken from the MFT or, when
+the folder is gone, named from the journal's own records. A path segment
+`[Reused Parent: N]` means the folder record now holds another folder (the
+parent's sequence number no longer matches); `[Unknown Parent: N]` means no
+source names it. `filename_change_timeline` lists the file's renames
+("time old -> new", from `filename_changes`); `namespace_evolution` lists the
+record's OTHER current names - hard links and a POSIX name beside the Win32
+one ("POSIX: name"), never the 8.3 alias. File identity is volume_letter +
+mft_record_number + mft_sequence_number; the table repeats a file once per
+journal event, so count files with DISTINCT over those three.
+
+### Table: `filename_changes`
+
+One row per RENAME: the journal's RENAME_OLD_NAME record paired with the
+RENAME_NEW_NAME that follows it for the same file (volume + file reference).
+`old_parent_path` / `new_parent_path` are the folders; `is_move` = 1 when the
+rename moved the file to another folder. The MFT keeps current names only, so
+this table is the name history. A rename whose other half fell outside the
+journal's window is not recorded.
+
+| Column | Type |
+|---|---|
+| `volume_letter` | TEXT |
+| `mft_record_number` | INTEGER |
+| `mft_sequence_number` | INTEGER |
+| `rename_time` | TEXT |
+| `old_name` | TEXT |
+| `new_name` | TEXT |
+| `old_parent_path` | TEXT |
+| `new_parent_path` | TEXT |
+| `is_move` | INTEGER |
+| `usn_old` | INTEGER |
+| `usn_new` | INTEGER |
+| `parsed_at` | TEXT |
 
 
 ## Database: `prefetch_data.db`

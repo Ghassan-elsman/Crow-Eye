@@ -30,10 +30,23 @@ class Progress_Reporter(QThread):
     # One artifact's parse outcome (utils.parse_status.ArtifactOutcome as a
     # dict), produced in the collector process and recorded by the GUI.
     parse_status_reported = pyqtSignal(object)
+
+    # One parser's progress event (utils.parse_logging.ArtifactRun.emit):
+    # start / file / now / records / warning / line / done, for the
+    # parsing dialog's checklist.
+    artifact_progress = pyqtSignal(object)
+
+    # The collector made (or deleted) the run's shadow copy: (action, id).
+    # The GUI keeps the IDs so it can delete them itself if it ever has to
+    # kill the collector before the collector cleans up.
+    shadow_copy_event = pyqtSignal(str, str)
     
-    def __init__(self, message_queue: multiprocessing.Queue):
+    def __init__(self, message_queue: multiprocessing.Queue, process=None):
         super().__init__()
         self.message_queue = message_queue
+        # The collector process, when known: if it dies without sending DONE
+        # (killed, crashed in C code) the reporter must still end.
+        self.process = process
         self._is_running = True
 
     def run(self):
@@ -68,16 +81,61 @@ class Progress_Reporter(QThread):
                         self.task_completed.emit(msg.get("task_id", ""), msg.get("result"))
                     elif msg_type == "parse_status":
                         self.parse_status_reported.emit(msg.get("outcome") or {})
+                    elif msg_type == "log_records":
+                        # A worker process's log records, batched: filed
+                        # under the case here, where case logging is set up.
+                        from utils.parse_logging import forward_log_records
+                        forward_log_records(msg)
+                    elif msg_type == "log_record":
+                        from utils.parse_logging import forward_log_record
+                        forward_log_record(msg)
+                    elif msg_type == "artifact_progress":
+                        self.artifact_progress.emit(msg.get("event") or {})
                     elif msg_type == "task_error":
                         self.task_error.emit(msg.get("task_id", ""), msg.get("error", ""), msg.get("traceback", ""))
+                    elif msg_type in ("shadow_copy_created", "shadow_copy_deleted"):
+                        self.shadow_copy_event.emit(msg_type.rsplit("_", 1)[1], msg.get("id") or "")
                 elif isinstance(msg, str) and msg == "DONE":
                     break
                     
             except queue.Empty:
+                if self.process is not None:
+                    try:
+                        alive = self.process.is_alive()
+                    except Exception:
+                        alive = False
+                    if not alive:
+                        self._drain_after_exit()
+                        break
                 continue
-            except Exception as e:
-                # Silently catch malformed messages or connection drops to keep thread alive
-                pass
+            except (EOFError, BrokenPipeError, ConnectionError, OSError):
+                # The manager behind the queue is gone (shut down on cancel):
+                # every further get() fails at once. Looping here used to spin
+                # a core at 100% for the rest of the session.
+                break
+            except Exception:
+                # A malformed message: skip it, keep reading.
+                continue
+
+    def _drain_after_exit(self):
+        """Deliver what the dead process managed to queue, then stop."""
+        for _ in range(10000):
+            try:
+                msg = self.message_queue.get_nowait()
+            except Exception:
+                return
+            if isinstance(msg, dict) and msg.get("type") == "log_message":
+                self.log_updated.emit(msg.get("message", ""))
+            elif isinstance(msg, dict) and msg.get("type") == "parse_status":
+                self.parse_status_reported.emit(msg.get("outcome") or {})
+            elif isinstance(msg, dict) and msg.get("type") == "log_records":
+                from utils.parse_logging import forward_log_records
+                forward_log_records(msg)
+            elif isinstance(msg, dict) and msg.get("type") == "log_record":
+                from utils.parse_logging import forward_log_record
+                forward_log_record(msg)
+            elif isinstance(msg, dict) and msg.get("type") in ("shadow_copy_created", "shadow_copy_deleted"):
+                self.shadow_copy_event.emit(msg["type"].rsplit("_", 1)[1], msg.get("id") or "")
 
     def stop(self):
         """Gracefully stops the reporter thread."""

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import SourceTimeline from './SourceTimeline.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import DaySection from './DaySection.jsx'
@@ -70,8 +70,8 @@ export default function App() {
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getLnkTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
-      call('getLnkOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
+      latest('getLnkTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
+      latest('getLnkOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
     }, 180)
     return () => clearTimeout(debounce.current)
   }, [filterArgs, bounds])
@@ -89,13 +89,13 @@ export default function App() {
     if (!selectedDay) { setDayDetail(null); return }
     setDayLoading(true)
     setLoadMsg('Loading the selected period…')
-    call('getLnkDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
+    latest('getLnkDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
   }, [selectedDay, filterArgs])
 
   useEffect(() => {
     if (!openTarget) { setTargetDetail(null); return }
     setTargetLoading(true)
-    call('getLnkTargetDetail', JSON.stringify({ target: openTarget })).then(setTargetDetail).finally(() => setTargetLoading(false))
+    latest('getLnkTargetDetail', JSON.stringify({ target: openTarget })).then(setTargetDetail).finally(() => setTargetLoading(false))
   }, [openTarget])
 
   function addTerm(e) {

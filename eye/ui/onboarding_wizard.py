@@ -1,1458 +1,1129 @@
 """
-Onboarding Wizard for EYE AI Forensic Assistant
+Eye AI setup - connecting the Eye to a language model.
 
-This module provides a first-time setup wizard for configuring the LLM backend.
-The wizard guides users through:
-1. Welcome screen with capabilities overview
-2. Integration type selection (Local CLI, Local API, Cloud API)
-3. Dynamic credential input based on selected integration
-4. Connectivity validation
-5. Configuration save
+Opens the first time the Eye is started (and from Settings -> Eye AI ->
+Change backend). Four steps, shown in a step bar at the top:
 
+1. Welcome     - what the Eye does with the model.
+2. Connection  - local command-line agent, local API server, or cloud API.
+3. Backend     - the provider, its address / executable / key, and the model.
+4. Test & save - a live connection test, then save.
+
+What it guarantees:
+
+* **An API key is written to the credential store only after it worked.**
+  The test (and model detection) run through an in-memory overlay of the
+  store, so a mistyped key is never left behind as the saved one.
+* **It opens on what is configured.** Connection type, provider, endpoint,
+  executable and model are pre-filled; a stored key is said ("a key is
+  stored - leave blank to keep it"), never shown.
+* **Problems are said in the window, not in a stack of message boxes.**
+  Missing fields and an unusual key format are named under the form; the
+  test result (with the reason when it fails) is shown on the last step.
+* **Nothing slow runs on the GUI thread** - the connection test and the
+  diagnostics each run on a worker thread.
 """
 
+import time
+
 from PyQt5.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QRadioButton, QLineEdit, QGroupBox, QMessageBox, QTextEdit,
-    QButtonGroup, QWidget, QStackedWidget, QFormLayout, QComboBox,
-    QInputDialog
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QRadioButton,
+    QLineEdit, QMessageBox, QWidget, QStackedWidget, QFormLayout, QComboBox,
+    QFrame, QFileDialog, QButtonGroup, QCheckBox
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QThread
-from PyQt5.QtGui import QPalette, QColor, QFont
-import json
-from pathlib import Path
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
+from PyQt5.QtGui import QPalette, QColor
 
-from styles import CrowEyeStyles
+from styles import CrowEyeStyles, Colors
 
+
+# ----------------------------------------------------------------------------
+# Plain helpers (no Qt) - unit-tested
+# ----------------------------------------------------------------------------
+
+PROVIDER_LABELS = {
+    "openrouter": "OpenRouter",
+    "gemini": "Gemini (Google AI Studio)",
+    "nvidia": "NVIDIA",
+    "openai": "OpenAI",
+    "anthropic": "Anthropic",
+    "deepseek": "DeepSeek",
+    "kimi": "Kimi (Moonshot)",
+    "groq": "Groq",
+    "mistral": "Mistral",
+    "xai": "xAI (Grok)",
+    # local command-line agents
+    "gemini_cli": "Gemini CLI", "llama": "LLaMA (llama.cpp)", "claude_code": "Claude Code",
+    "jules_cli": "Jules CLI", "gpt_cli": "GPT CLI", "ollama_cli": "Ollama",
+    "custom_cli": "Custom command-line agent",
+    # local API servers
+    "ollama": "Ollama server", "lm_studio": "LM Studio", "vllm": "vLLM",
+}
+
+# What a key from each provider starts with, and where to get one.
+KEY_PREFIXES = {
+    "openai": ("sk-",), "gemini": ("AIza",), "anthropic": ("sk-ant-",),
+    "deepseek": ("sk-",), "kimi": ("sk-",), "openrouter": ("sk-or-",),
+    "nvidia": ("nvapi-",), "groq": ("gsk_",), "xai": ("xai-",),
+}
+KEY_SOURCES = {
+    "openrouter": "openrouter.ai/keys", "nvidia": "build.nvidia.com",
+    "groq": "console.groq.com", "gemini": "aistudio.google.com/apikey",
+    "openai": "platform.openai.com/api-keys", "anthropic": "console.anthropic.com",
+    "deepseek": "platform.deepseek.com", "kimi": "platform.moonshot.ai",
+    "mistral": "console.mistral.ai", "xai": "console.x.ai",
+}
+
+CLOUD_ORDER = ("openrouter", "gemini", "nvidia", "openai", "anthropic",
+               "deepseek", "kimi", "groq", "mistral", "xai")
+
+INTEGRATIONS = (
+    ("local_cli", "Local command-line agent",
+     "A model run on this machine through a command-line tool. Nothing leaves "
+     "the machine - suitable for air-gapped work.",
+     "Ollama, local LLaMA, Gemini CLI"),
+    ("local_api", "Local API server",
+     "A model served over HTTP on this machine or your local network.",
+     "LM Studio, vLLM, Ollama server"),
+    ("cloud_api", "Cloud API",
+     "A hosted model reached over the internet with an API key.",
+     "OpenRouter, Google Gemini, NVIDIA, OpenAI, Anthropic, DeepSeek, Kimi, Groq, Mistral, xAI"),
+)
+
+STEPS = (("welcome", "Welcome"), ("connection", "Connection"),
+         ("backend", "Backend & model"), ("test", "Test & save"))
+
+
+def provider_label(backend):
+    return PROVIDER_LABELS.get(backend, (backend or "").replace("_", " ").title())
+
+
+def key_format_warning(backend, key):
+    """'' when the key looks like the provider's, else a sentence saying what
+    it usually starts with. Advice only: prefixes change, the test decides."""
+    prefixes = KEY_PREFIXES.get(backend)
+    if not key or not prefixes or key.startswith(prefixes):
+        return ""
+    where = KEY_SOURCES.get(backend)
+    return ("%s keys usually start with '%s' - check it was copied whole%s."
+            % (provider_label(backend), prefixes[0],
+               (" (get one at %s)" % where) if where else ""))
+
+
+def missing_fields(config, key_stored=False):
+    """Names of the fields that must be filled before a test can mean anything."""
+    kind = config.get("integration_type")
+    missing = []
+    if not kind:
+        return ["connection type"]
+    if not config.get("backend"):
+        missing.append("backend")
+    if kind == "local_api":
+        if not (config.get("api_endpoint") or "").strip():
+            missing.append("API endpoint")
+        if not (config.get("model_name") or "").strip():
+            missing.append("model")
+    elif kind == "cloud_api":
+        if not (config.get("api_key") or "").strip() and not key_stored:
+            missing.append("API key")
+        if not (config.get("model_name") or "").strip():
+            missing.append("model")
+    return missing
+
+
+def explain_failure(detail, kind):
+    """A failed test, in words an examiner can act on."""
+    d = (detail or "").lower()
+    if any(s in d for s in ("401", "unauthor", "invalid api key", "incorrect api key",
+                            "permission", "403", "forbidden")):
+        return "The provider refused the API key. Check it is complete and active."
+    if any(s in d for s in ("404", "not found", "does not exist", "model_not_found")):
+        return "The provider does not offer that model name. Use Detect or Common Models."
+    if any(s in d for s in ("timed out", "timeout")):
+        return "No answer in time. The server may be busy, or unreachable from here."
+    if any(s in d for s in ("connection", "refused", "resolve", "dns", "unreachable",
+                            "getaddrinfo", "max retries")):
+        if kind == "local_api":
+            return "Nothing answered at that address. Is the server running, with a model loaded?"
+        return "Could not reach the provider. Check the internet connection or proxy."
+    if any(s in d for s in ("not found in path", "no such file", "cannot find", "winerror 2")):
+        return "The executable was not found. Browse to it, or check it is on PATH."
+    if detail:
+        return detail.splitlines()[0][:300]
+    if kind == "local_cli":
+        return "The agent did not respond. Check the executable path and that a model is installed."
+    if kind == "local_api":
+        return "The server did not respond. Check the endpoint and that a model is loaded."
+    return "The provider did not respond. Check the key, the model and the connection."
+
+
+class _OverlayCredentials:
+    """The credential store as the router sees it, with the key being tried
+    held in memory only. A key that fails its test is never written - the old
+    wizard stored it before testing, so a typo stayed behind as the saved key."""
+
+    def __init__(self, base, overrides=None):
+        self._base = base
+        self._over = dict(overrides or {})
+
+    def get_credential(self, key, timeout=2.0):
+        if key in self._over:
+            return self._over[key]
+        return self._base.get_credential(key, timeout) if self._base else None
+
+    def has_cached_credential(self, key):
+        return key in self._over or bool(self._base and self._base.has_cached_credential(key))
+
+    def store_credential(self, key, value):
+        self._over[key] = value
+
+    def delete_credential(self, key):
+        self._over.pop(key, None)
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+
+def stored_key_exists(credential_manager, backend):
+    """Is a key for `backend` already in the credential store? Quick: the
+    in-memory cache first, then a short keychain lookup."""
+    if not credential_manager or not backend:
+        return False
+    name = "%s_api_key" % backend
+    try:
+        if credential_manager.has_cached_credential(name):
+            return True
+        return bool(credential_manager.get_credential(name, timeout=0.6))
+    except Exception:
+        return False
+
+
+# ----------------------------------------------------------------------------
+# Workers
+# ----------------------------------------------------------------------------
 
 class _WizardConnectivityWorker(QThread):
-    """Run the setup wizard's connectivity check OFF the GUI thread.
+    """The connection test, off the GUI thread. Emits done(ok, detail, ms).
 
-    Does the GUI-less half of the old ``validate_connectivity()``: store the
-    API key (if any), build a ``ModelRouter`` and ping the backend. Emits
-    ``done(ok, detail)`` — the wizard's slot shows the result on the GUI
-    thread. Running off-thread lets the "Validating…" indicator animate and
-    keeps the window responsive (a dead network / bad key can no longer freeze
-    it). Operates on the wizard's live ``config`` dict so the CLI
-    auto-model-switch side effect persists exactly as before. Never touches Qt
-    widgets here. ``detail`` is the exception text on error, "" on a clean
-    negative result — the slot uses that to pick the error dialog.
-    """
-    done = pyqtSignal(bool, str)
+    Runs on the wizard's live ``config`` dict, so a local CLI agent's
+    auto-selected model (ModelRouter.validate_connectivity) carries into the
+    save. The key under test reaches the router through an overlay - nothing
+    is stored here."""
+    done = pyqtSignal(bool, str, int)
 
-    def __init__(self, config, credential_manager):
+    def __init__(self, config, credential_manager, api_key=None):
         super().__init__()
         self._config = config
         self._credential_manager = credential_manager
+        self._api_key = api_key
+
+    def run(self):
+        started = time.monotonic()
+        try:
+            overrides = {}
+            if self._api_key:
+                overrides["%s_api_key" % self._config.get("backend")] = self._api_key
+            creds = _OverlayCredentials(self._credential_manager, overrides)
+            from eye.services.model_router import ModelRouter
+            router = ModelRouter(self._config, creds)
+            ok = bool(router.validate_connectivity())
+            self.done.emit(ok, "", int((time.monotonic() - started) * 1000))
+        except Exception as e:
+            self.done.emit(False, str(e), int((time.monotonic() - started) * 1000))
+
+
+class _DiagnosticsWorker(QThread):
+    """System diagnostics off the GUI thread (they import every SDK)."""
+    done = pyqtSignal(object, str)
+
+    def __init__(self, config_manager, credential_manager):
+        super().__init__()
+        self._cm, self._cred = config_manager, credential_manager
 
     def run(self):
         try:
-            api_key = self._config.get("api_key")
-            if api_key:
-                key_name = f"{self._config['backend']}_api_key"
-                self._credential_manager.store_credential(key_name, api_key)
-
-            from eye.services.model_router import ModelRouter
-            router = ModelRouter(self._config, self._credential_manager)
-            ok = bool(router.validate_connectivity())
-            self.done.emit(ok, "")
+            from eye.services.diagnostics import SystemDiagnostics
+            self.done.emit(SystemDiagnostics(self._cm, self._cred).run_full_check(), "")
         except Exception as e:
-            self.done.emit(False, str(e))
+            self.done.emit(None, str(e))
+
+
+# ----------------------------------------------------------------------------
+# Styling
+# ----------------------------------------------------------------------------
+
+# The site's tokens (ui/site_theme.py). The wizard keeps its own rules below
+# (page titles, cards, the selected option card, the link button) as the
+# window sheet's extra; everything else - inputs, combos, lists, check boxes,
+# scroll bars - comes from the site sheet, buttons from its role family.
+try:
+    from ui import site_theme as _site
+except Exception:                                   # pragma: no cover
+    _site = None
+_BG = "#0A0C10"
+try:
+    from pathlib import Path as _Path
+    import correlation_engine.gui.crow_eye_icons as _icons
+    _DOWN_ICON = (_Path(_icons.__file__).parent / "icons" / "down.svg").as_posix()
+except Exception:
+    _DOWN_ICON = ""
+_CARD = "#0F172A"
+_BORDER = "rgba(255, 255, 255, 0.14)"
+_ACCENT = "#A5B4FC"
+_TEXT = "#E2E8F0"
+_MUTED = "#94A3B8"
+_WARN, _OK, _BAD = "#FBBF24", "#4ADE80", "#FDA4AF"
+
+_WIZARD_STYLE = f"""
+QWidget#wizardBody {{ background-color: {_BG}; }}
+QLabel#pageTitle {{ color: #F8FAFC; font-size: 20px; font-weight: 800; }}
+QLabel#pageIntro {{ color: {_MUTED}; font-size: 13px; }}
+QLabel#fieldLabel {{ color: {_TEXT}; font-size: 13px; font-weight: 600; }}
+QLabel#hint {{ color: {_MUTED}; font-size: 12px; }}
+QLabel#formMessage {{ color: {_WARN}; font-size: 12px; font-weight: 600; }}
+QFrame#card, QFrame#optionCard {{ background-color: {_CARD}; border: 1px solid {_BORDER}; border-radius: 14px; }}
+QFrame#optionCard[selected="true"] {{ border: 2px solid #6366F1; background-color: #111A33; }}
+QFrame#optionCard:hover {{ border: 1px solid rgba(99, 102, 241, 0.55); }}
+QFrame#card QLabel, QFrame#optionCard QLabel {{ background: transparent; border: none; }}
+QRadioButton {{ color: {_TEXT}; font-size: 14px; font-weight: 700; spacing: 10px; background: transparent; }}
+QPushButton#linkButton {{ background: transparent; color: {_MUTED}; border: none; font-size: 12px;
+                          text-decoration: underline; padding: 4px; min-width: 0; }}
+QPushButton#linkButton:hover {{ color: {_ACCENT}; }}
+"""
+
+
+def _wizard_sheet(dialog):
+    """The site sheet plus the wizard's own rules, before the children exist."""
+    if _site is not None:
+        _site.begin_site_theme(dialog, extra=_WIZARD_STYLE)
+    else:
+        dialog.setStyleSheet(_WIZARD_STYLE)
+
+
+def _variant(button, variant):
+    """A button in the site's role family (also at run time: Next <-> Save)."""
+    if _site is None:
+        return
+    button.setStyleSheet("")
+    _site.restyle(button, variant)
 
 
 class CloudAPIWarningDialog(QDialog):
-    """
-    Warning dialog for cloud API usage.
-    
-    Displays a security warning when users select Public Cloud APIs integration,
-    informing them that case data will be transmitted over the internet and that
-    organizational approval may be required.
-    
-    """
-    
+    """Said once, before a cloud provider is configured: case data will be
+    sent over the internet, which may need approval."""
+
     def __init__(self, parent=None):
-        """
-        Initialize cloud API warning dialog.
-        
-        Args:
-            parent: Parent widget (typically OnboardingWizard)
-        """
         super().__init__(parent)
-        self.setWindowTitle("Cloud API Security Warning")
-        self.setMinimumWidth(500)
-        
-        # Apply dark theme styling
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                background: transparent;
-            }
-            QPushButton {
-                background-color: #1E293B;
-                color: #E5E7EB;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-                min-width: 120px;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                border: 1px solid #00FFFF;
-            }
-            QPushButton:pressed {
-                background-color: #475569;
-            }
-        """)
-        
+        self.setWindowTitle("Cloud API - before you continue")
+        self.setMinimumWidth(520)
+        _wizard_sheet(self)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(30, 30, 30, 30)
-        layout.setSpacing(20)
-        
-        # Warning icon
-        from correlation_engine.gui.crow_eye_icons import apply_status_to_label
-        warning_icon = QLabel()
-        apply_status_to_label(warning_icon, "warning", "", size_px=48)
-        warning_icon.setStyleSheet("background: transparent;")
-        warning_icon.setAlignment(Qt.AlignCenter)
-        layout.addWidget(warning_icon)
-        
-        # Warning text with bold formatting
-        warning_text = QLabel(
-            "<p style='text-align: center;'><b style='font-size: 14pt; color: #F59E0B;'>SECURITY WARNING</b></p>"
-            "<p style='font-size: 11pt; line-height: 1.6;'>"
-            "<b>Using Cloud APIs means transmitting sensitive case data over the internet.</b><br><br>"
-            "Organizational approval may be required.<br><br>"
-            "Ensure you have authorization before proceeding."
-            "</p>"
-        )
-        warning_text.setWordWrap(True)
-        warning_text.setTextFormat(Qt.RichText)
-        warning_text.setStyleSheet("background: transparent;")
-        layout.addWidget(warning_text)
-        
-        # Button layout
-        button_layout = QHBoxLayout()
-        button_layout.setSpacing(12)
-        
-        cancel_btn = QPushButton("Go Back")
-        cancel_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #6B7280;
-                color: white;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: #4B5563;
-            }
-            QPushButton:pressed {
-                background-color: #374151;
-            }
-        """)
-        cancel_btn.clicked.connect(self.reject)
-        
-        proceed_btn = QPushButton("I Understand, Proceed")
-        proceed_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #F59E0B;
-                color: white;
-                border: none;
-            }
-            QPushButton:hover {
-                background-color: #D97706;
-            }
-            QPushButton:pressed {
-                background-color: #B45309;
-            }
-        """)
-        proceed_btn.clicked.connect(self.accept)
-        
-        button_layout.addStretch()
-        button_layout.addWidget(cancel_btn)
-        button_layout.addWidget(proceed_btn)
-        
-        layout.addLayout(button_layout)
+        layout.setContentsMargins(28, 26, 28, 22)
+        layout.setSpacing(16)
+        try:
+            from correlation_engine.gui.crow_eye_icons import apply_status_to_label
+            icon = QLabel()
+            apply_status_to_label(icon, "warning", "", size_px=40)
+            icon.setAlignment(Qt.AlignCenter)
+            layout.addWidget(icon)
+        except Exception:
+            pass
+        title = QLabel("Case data will leave this machine")
+        title.setObjectName("pageTitle")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        body = QLabel(
+            "With a cloud API, the questions you ask and the evidence the Eye reads to "
+            "answer them are sent to the provider over the internet.\n\n"
+            "Your organisation may need to approve this before it is used on a case. "
+            "A local agent or a local API server keeps everything on this machine.")
+        body.setWordWrap(True)
+        body.setObjectName("pageIntro")
+        layout.addWidget(body)
+        row = QHBoxLayout()
+        row.addStretch()
+        back = QPushButton("Go back")
+        _variant(back, "ghost")
+        back.clicked.connect(self.reject)
+        go = QPushButton("I understand, continue")
+        _variant(go, "warning")              # a choice with a consequence
+        go.clicked.connect(self.accept)
+        row.addWidget(back)
+        row.addWidget(go)
+        layout.addLayout(row)
 
 
 class OnboardingWizard(QDialog):
+    """Connect the Eye to a language model (see the module docstring).
+
+    ``start_step="backend"`` opens on the Backend step when a connection type
+    is already configured - Settings -> Eye AI -> Change backend.
     """
-    Configuration wizard for first-time EYE setup.
-    
-    Multi-page wizard that guides users through LLM backend configuration:
-    - Welcome screen explaining EYE capabilities
-    - Integration type selection (Local CLI, Local API Server, Cloud API)
-    - Dynamic credential input based on selected type
-    - Connectivity validation using ModelRouter
-    - Configuration save using ConfigManager and CredentialManager
-    
-    """
-    
-    configuration_complete = pyqtSignal(dict)  # Emits config on completion
-    
-    def __init__(self, config_manager, credential_manager, model_router, parent=None):
-        """
-        Initialize onboarding wizard.
-        
-        Args:
-            config_manager: ConfigManager instance for saving configuration
-            credential_manager: CredentialManager instance for storing API keys
-            model_router: ModelRouter instance for connectivity validation
-            parent: Parent widget (typically the main window)
-        """
+
+    configuration_complete = pyqtSignal(dict)
+
+    def __init__(self, config_manager, credential_manager, model_router, parent=None,
+                 start_step=None):
         super().__init__(parent)
-        
-        # Set window flags for independent styling
         self.setWindowFlags(self.windowFlags() | Qt.Window)
-        
-        # Store service instances
         self.config_manager = config_manager
         self.credential_manager = credential_manager
         self.model_router = model_router
-        
-        # Configuration state
+
         self.config = {
-            "integration_type": None,
-            "backend": None,
-            "model_name": "",
-            "executable_path": "",
-            "api_endpoint": "",
-            "last_validated": None
+            "integration_type": None, "backend": None, "model_name": "",
+            "executable_path": "", "api_endpoint": "", "last_validated": None,
         }
-        
-        # Load existing configuration if available
         try:
-            existing_config = self.config_manager.load_config()
-            if existing_config:
-                self.config.update(existing_config)
-                # Ensure integration_type is preserved even if it was inferred previously
-                if "integration_type" in existing_config:
-                    self.config["integration_type"] = existing_config["integration_type"]
+            existing = self.config_manager.load_config() if self.config_manager else None
+            if existing:
+                self.config.update(existing)
         except Exception as e:
-            # If config is invalid or fails to load, start fresh
-            print(f"[Warning] Failed to load existing EYE config: {e}")
-        
-        # Current page index
-        self.current_page = 0
-        
+            print(f"[Warning] Failed to load the existing Eye configuration: {e}")
+        self.config.pop("api_key", None)
+
+        self._cloud_acknowledged = self.config.get("integration_type") == "cloud_api"
+        self._built_for = None            # (integration) the backend form was built for
+        self._tested = None               # fingerprint of the settings that passed a test
+        self._testing = False
+        self._fields = {}
+
         self._init_ui()
-        self._apply_styling()
-        self.show_welcome_screen()
-    
+        if start_step == "backend" and self.config.get("integration_type"):
+            self._go(2)
+        else:
+            self._go(0)
+
+    # ---- layout ---------------------------------------------------------------
     def _init_ui(self):
-        """Initialize the user interface components."""
-        self.setWindowTitle("EYE Assistant Setup Wizard")
-        self.setMinimumSize(900, 700)
-        self.resize(1000, 750)
-        
-        # Main layout
-        main_layout = QVBoxLayout(self)
-        main_layout.setSpacing(0)
-        main_layout.setContentsMargins(0, 0, 0, 0)
-        
-        # Stacked widget for pages
-        self.pages = QStackedWidget()
-        main_layout.addWidget(self.pages, 1)
-        
-        # Navigation buttons
-        nav_layout = QHBoxLayout()
-        nav_layout.setContentsMargins(16, 12, 16, 16)
-        nav_layout.setSpacing(12)
-        
-        self.diag_button = QPushButton("Diagnostics")
-        self.diag_button.setFixedHeight(40)
-        self.diag_button.setMinimumWidth(120)
-        self.diag_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4B5563;
-                color: #E5E7EB;
-                border: 1px solid #6B7280;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 10pt;
-            }
-            QPushButton:hover {
-                background-color: #374151;
-                border-color: #9CA3AF;
-            }
-        """)
-        self.diag_button.clicked.connect(self._on_run_diagnostics)
-        nav_layout.addWidget(self.diag_button)
-
-        # Import external evidence (SQLite / CSV / JSON) — second entry point for
-        # the same import flow exposed on the Eye's top bar. Reuses the parent
-        # EyeWindow handler so there is a single implementation.
-        self.import_evidence_button = QPushButton("Import Evidence")
-        self.import_evidence_button.setFixedHeight(40)
-        self.import_evidence_button.setMinimumWidth(140)
-        self.import_evidence_button.setStyleSheet("""
-            QPushButton {
-                background-color: #4B5563;
-                color: #E5E7EB;
-                border: 1px solid #6B7280;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 10pt;
-            }
-            QPushButton:hover {
-                background-color: #374151;
-                border-color: #9CA3AF;
-            }
-        """)
-        self.import_evidence_button.setToolTip(
-            "Import external forensics evidence (SQLite, CSV, JSON — or a report, "
-            "e-mail export, or browser-tool output, stored verbatim) into the open case")
-        self.import_evidence_button.clicked.connect(self._on_import_evidence)
-        nav_layout.addWidget(self.import_evidence_button)
-
-        # View the imported-evidence ledger (hashes + integrity) — opens the same
-        # Imported Evidence window as the Eye top bar's "Evidence" button.
-        self.view_evidence_button = QPushButton("View Evidence")
-        self.view_evidence_button.setFixedHeight(40)
-        self.view_evidence_button.setMinimumWidth(140)
-        self.view_evidence_button.setStyleSheet(self.import_evidence_button.styleSheet())
-        self.view_evidence_button.setToolTip(
-            "Open the Imported Evidence window — every imported database/document "
-            "with SHA-256 hashes and live integrity verification")
-        self.view_evidence_button.clicked.connect(self._on_view_evidence)
-        nav_layout.addWidget(self.view_evidence_button)
-
-        nav_layout.addStretch()
-        
-        self.back_button = QPushButton("Back")
-        self.back_button.setFixedHeight(40)
-        self.back_button.setMinimumWidth(120)
-        self.back_button.setStyleSheet("""
-            QPushButton {
-                background-color: #6B7280;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 11pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #4B5563;
-            }
-            QPushButton:pressed {
-                background-color: #374151;
-            }
-            QPushButton:disabled {
-                background-color: #374151;
-                color: #9CA3AF;
-            }
-        """)
-        self.back_button.clicked.connect(self._on_back)
-        self.back_button.setEnabled(False)
-        nav_layout.addWidget(self.back_button)
-        
-        self.next_button = QPushButton("Next")
-        self.next_button.setFixedHeight(40)
-        self.next_button.setMinimumWidth(120)
-        self.next_button.setStyleSheet("""
-            QPushButton {
-                background-color: #10B981;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-size: 11pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:pressed {
-                background-color: #047857;
-            }
-            QPushButton:disabled {
-                background-color: #374151;
-                color: #9CA3AF;
-            }
-        """)
-        self.next_button.clicked.connect(self._on_next)
-        nav_layout.addWidget(self.next_button)
-        
-        main_layout.addLayout(nav_layout)
-    
-    def _apply_styling(self):
-        """Apply comprehensive dark theme styling to the wizard."""
-        # Set palette for backup styling
+        self.setWindowTitle("Eye AI - connect a language model")
+        self.setMinimumSize(860, 640)
+        self.resize(920, 700)
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
+        palette.setColor(QPalette.Window, QColor(_BG))
+        palette.setColor(QPalette.WindowText, QColor(_TEXT))
         self.setPalette(palette)
-        
-        # Main dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-            QLineEdit {
-                background: #1E293B;
-                border: 1px solid #334155;
-                padding: 8px;
-                color: #F8FAFC;
-                font-size: 10pt;
-                border-radius: 4px;
-            }
-            QLineEdit:focus {
-                border: 2px solid #00FFFF;
-            }
-            QRadioButton {
-                color: #E5E7EB;
-                font-size: 10pt;
-                spacing: 8px;
-            }
-            QRadioButton::indicator {
-                width: 18px;
-                height: 18px;
-            }
-            QRadioButton::indicator:unchecked {
-                border: 2px solid #6B7280;
-                border-radius: 9px;
-                background: #1E293B;
-            }
-            QRadioButton::indicator:checked {
-                border: 2px solid #00FFFF;
-                border-radius: 9px;
-                background: #00FFFF;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style + "\n" + CrowEyeStyles.SCROLLBAR_STYLE)
-    
-    def show_welcome_screen(self):
-        """
-        Display welcome screen with capabilities overview.
-        
-        Shows EYE's key features and benefits to help users understand
-        what they're configuring.
-        
-        """
+        _wizard_sheet(self)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        header = QFrame()
+        header.setStyleSheet(f"QFrame {{ background-color: {_CARD}; border-bottom: 1px solid {_BORDER}; }}")
+        hl = QVBoxLayout(header)
+        hl.setContentsMargins(32, 18, 32, 14)
+        hl.setSpacing(12)
+        brand = QLabel("Eye AI setup")
+        brand.setStyleSheet(f"color: {_ACCENT}; font-size: 15px; font-weight: 700; background: transparent;"
+                            f" border: none;")
+        hl.addWidget(brand)
+        steps = QHBoxLayout()
+        steps.setSpacing(8)
+        self._step_labels = []
+        for i, (_key, name) in enumerate(STEPS):
+            lab = QLabel("%d  %s" % (i + 1, name))
+            lab.setAlignment(Qt.AlignCenter)
+            self._step_labels.append(lab)
+            steps.addWidget(lab, 1)
+        hl.addLayout(steps)
+        outer.addWidget(header)
+
+        self.pages = QStackedWidget()
+        body = QWidget()
+        body.setObjectName("wizardBody")
+        bl = QVBoxLayout(body)
+        bl.setContentsMargins(36, 26, 36, 10)
+        bl.addWidget(self.pages)
+        outer.addWidget(body, 1)
+
+        for builder in (self._page_welcome, self._page_connection, self._page_backend,
+                        self._page_test):
+            self.pages.addWidget(builder())
+
+        footer = QFrame()
+        footer.setStyleSheet(f"QFrame {{ background-color: {_CARD}; border-top: 1px solid {_BORDER}; }}")
+        fl = QHBoxLayout(footer)
+        fl.setContentsMargins(28, 12, 28, 14)
+        fl.setSpacing(10)
+        self.diag_button = QPushButton("Run diagnostics")
+        self.diag_button.setObjectName("linkButton")
+        self.diag_button.setCursor(Qt.PointingHandCursor)
+        self.diag_button.setToolTip("Check the installed AI SDKs, the configuration and the environment")
+        self.diag_button.clicked.connect(self._on_run_diagnostics)
+        fl.addWidget(self.diag_button)
+        fl.addStretch()
+        self.cancel_button = QPushButton("Cancel")
+        _variant(self.cancel_button, "ghost")
+        self.cancel_button.clicked.connect(self.reject)
+        self.back_button = QPushButton("Back")
+        _variant(self.back_button, "ghost")
+        self.back_button.clicked.connect(self._on_back)
+        self.next_button = QPushButton("Next")
+        _variant(self.next_button, "primary")
+        self.next_button.setDefault(True)
+        self.next_button.clicked.connect(self._on_next)
+        for b in (self.cancel_button, self.back_button, self.next_button):
+            fl.addWidget(b)
+        outer.addWidget(footer)
+
+    def _title(self, layout, text, intro=None):
+        t = QLabel(text)
+        t.setObjectName("pageTitle")
+        layout.addWidget(t)
+        if intro:
+            i = QLabel(intro)
+            i.setObjectName("pageIntro")
+            i.setWordWrap(True)
+            layout.addWidget(i)
+
+    def _page_welcome(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 40, 40, 20)
-        layout.setSpacing(20)
-        
-        # Title
-        title = QLabel("Welcome to EYE AI Forensic Assistant")
-        title.setStyleSheet(
-            "font-size: 18pt; font-weight: bold; color: #00FFFF; background: transparent;"
-        )
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
-        
-        # Subtitle
-        subtitle = QLabel("Enhanced Yield Engine for Digital Forensic Investigations")
-        subtitle.setStyleSheet(
-            "font-size: 12pt; color: #9CA3AF; background: transparent;"
-        )
-        subtitle.setAlignment(Qt.AlignCenter)
-        layout.addWidget(subtitle)
-        
-        layout.addSpacing(20)
-        
-        # Capabilities overview
-        capabilities_text = """
-<div style='color: #E5E7EB; font-size: 11pt; line-height: 1.6;'>
-<p><b style='color: #00FFFF;'>EYE brings AI-powered analysis to your forensic investigations:</b></p>
+        lay = QVBoxLayout(page)
+        lay.setSpacing(14)
+        self._title(lay, "Connect the Eye to a language model",
+                    "The Eye answers questions about the case by reading its parsed artifacts "
+                    "and asking a language model to reason over them. Pick the model it uses "
+                    "here; you can change it any time in Settings -> Eye AI.")
+        card = QFrame()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(20, 16, 20, 16)
+        points = QLabel(
+            "<div style='line-height:1.55'>"
+            "<b style='color:#A5B4FC'>What the Eye does</b><br>"
+            "&bull; Answers questions in plain language, with the rows it used as evidence.<br>"
+            "&bull; Reads the case read-only - the evidence databases are never changed.<br>"
+            "&bull; Records what was sent to the model, for the chain of custody.<br><br>"
+            "<b style='color:#A5B4FC'>Three ways to connect</b><br>"
+            "&bull; <b>Local command-line agent</b> - everything stays on this machine.<br>"
+            "&bull; <b>Local API server</b> - LM Studio, vLLM or Ollama on this machine or the LAN.<br>"
+            "&bull; <b>Cloud API</b> - a hosted model, reached with an API key.</div>")
+        points.setWordWrap(True)
+        points.setTextFormat(Qt.RichText)
+        cl.addWidget(points)
+        lay.addWidget(card)
+        lay.addStretch()
+        return page
 
-<ul style='margin-left: 20px;'>
-<li><b>Natural Language Querying:</b> Ask questions in plain English instead of writing complex SQL queries</li>
-<li><b>Intelligent Analysis:</b> Get forensic insights and artifact interpretation from AI</li>
-<li><b>Semantic Mapping:</b> Create rules to identify malicious patterns with AI assistance</li>
-<li><b>Evidence Integrity:</b> Read-only database access ensures your evidence remains untouched</li>
-<li><b>Flexible Deployment:</b> Works with local models (air-gapped) or cloud APIs</li>
-<li><b>Human-in-the-Loop:</b> You maintain control with approval workflows for sensitive operations</li>
-</ul>
-
-<p style='margin-top: 20px;'><b style='color: #00FFFF;'>This wizard will help you configure your preferred AI backend.</b></p>
-</div>
-        """
-        
-        capabilities = QLabel(capabilities_text)
-        capabilities.setWordWrap(True)
-        capabilities.setTextFormat(Qt.RichText)
-        capabilities.setStyleSheet("background: transparent;")
-        layout.addWidget(capabilities)
-        
-        layout.addStretch()
-        
-        # Add page to stack
-        self.pages.addWidget(page)
-        self.pages.setCurrentWidget(page)
-        page.setProperty("wizard_step", "welcome")
-
-        # Update navigation
-        self.back_button.setEnabled(False)
-        self.next_button.setEnabled(True)
-        self.next_button.setText("Next")
-    
-    def show_integration_selection(self):
-        """
-        Display integration type selection with three backend options.
-        
-        Presents three integration types:
-        - Local/Offline CLI Agents (Ollama, LLaMA, Gemini CLI)
-        - Local API Servers (LM Studio, vLLM)
-        - Public Cloud APIs (OpenAI, Anthropic, Gemini)
-        
-        """
+    def _page_connection(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 40, 40, 20)
-        layout.setSpacing(20)
-        
-        # Title
-        title = QLabel("Select Integration Type")
-        title.setStyleSheet(
-            "font-size: 16pt; font-weight: bold; color: #00FFFF; background: transparent;"
-        )
-        layout.addWidget(title)
-        
-        # Description
-        desc = QLabel(
-            "Choose how EYE will connect to an AI model. Your choice depends on your "
-        )
-        desc.setWordWrap(True)
-        desc.setStyleSheet("font-size: 10pt; color: #9CA3AF; background: transparent;")
-        layout.addWidget(desc)
-        
-        layout.addSpacing(10)
-        
-        # Radio button group
-        self.integration_group = QButtonGroup()
-        
-        # Option 1: Local CLI Agents
-        cli_group = self._create_integration_option(
-            "local_cli",
-            "Local/Offline CLI Agents",
-            "Run AI models locally using command-line tools. Perfect for air-gapped environments.",
-            "Supports: Ollama, Local LLaMA, Gemini CLI"
-        )
-        layout.addWidget(cli_group)
-        
-        # Option 2: Local API Servers
-        api_group = self._create_integration_option(
-            "local_api",
-            "Local API Servers",
-            "Connect to AI models running on your local network via HTTP API.",
-            "Supports: LM Studio, vLLM"
-        )
-        layout.addWidget(api_group)
-        
-        # Option 3: Cloud APIs
-        cloud_group = self._create_integration_option(
-            "cloud_api",
-            "Public Cloud APIs",
-            "Use cloud-based AI services. Requires internet connection and API keys.",
-            "Supports: OpenAI, Anthropic, Google Gemini",
-            warning="Using Cloud APIs means transmitting case data over the internet. Organizational approval may be required."
-        )
-        layout.addWidget(cloud_group)
-        
-        layout.addStretch()
-        
-        # Add page to stack
-        self.pages.addWidget(page)
-        self.pages.setCurrentWidget(page)
-        page.setProperty("wizard_step", "integration")
+        lay = QVBoxLayout(page)
+        lay.setSpacing(12)
+        self._title(lay, "How should the Eye reach the model?",
+                    "Choose by where the model runs. Only the cloud option sends case data "
+                    "off this machine.")
+        self.integration_group = QButtonGroup(self)
+        self._option_cards = {}
+        for value, title, desc, supports in INTEGRATIONS:
+            card = QFrame()
+            card.setObjectName("optionCard")
+            card.setCursor(Qt.PointingHandCursor)
+            cl = QVBoxLayout(card)
+            cl.setContentsMargins(18, 14, 18, 14)
+            cl.setSpacing(4)
+            radio = QRadioButton(title)
+            radio.toggled.connect(lambda on, v=value: on and self._on_integration_selected(v))
+            self.integration_group.addButton(radio)
+            cl.addWidget(radio)
+            d = QLabel(desc)
+            d.setWordWrap(True)
+            d.setObjectName("pageIntro")
+            d.setContentsMargins(26, 0, 0, 0)
+            cl.addWidget(d)
+            s = QLabel("Works with: " + supports)
+            s.setWordWrap(True)
+            s.setObjectName("hint")
+            s.setContentsMargins(26, 0, 0, 0)
+            cl.addWidget(s)
+            if value == "cloud_api":
+                w = QLabel("Sends case data over the internet - organisational approval may be required.")
+                w.setWordWrap(True)
+                w.setStyleSheet(f"color: {_WARN}; font-size: 12px; font-weight: 600;")
+                w.setContentsMargins(26, 4, 0, 0)
+                cl.addWidget(w)
+            card.mousePressEvent = lambda _e, r=radio: r.setChecked(True)
+            self._option_cards[value] = (card, radio)
+            lay.addWidget(card)
+        lay.addStretch()
+        current = self.config.get("integration_type")
+        if current in self._option_cards:
+            self._option_cards[current][1].setChecked(True)
+        return page
 
-        # Update navigation
-        self.back_button.setEnabled(True)
-        self.next_button.setEnabled(False)  # Enable when selection is made
-        self.next_button.setText("Next")
-    
-    def _create_integration_option(self, value, title, description, supports, warning=None):
-        """
-        Create a styled integration option group box.
-        
-        Args:
-            value: Integration type value (local_cli, local_api, cloud_api)
-            title: Display title
-            description: Description text
-            supports: Supported backends text
-            warning: Optional warning message
-            
-        Returns:
-            QGroupBox containing the option
-        """
-        group = QGroupBox()
-        group.setStyleSheet("""
-            QGroupBox {
-                border: 2px solid #334155;
-                border-radius: 8px;
-                padding-top: 10px;
-                margin-top: 0px;
-                background: #111827;
-            }
-            QGroupBox:hover {
-                border: 2px solid #00FFFF;
-            }
-        """)
-        
-        layout = QVBoxLayout()
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(8)
-        
-        # Radio button with title
-        radio = QRadioButton(title)
-        radio.setStyleSheet("font-size: 12pt; font-weight: bold; color: #00FFFF;")
-        radio.toggled.connect(lambda checked: self._on_integration_selected(value) if checked else None)
-        self.integration_group.addButton(radio)
-        layout.addWidget(radio)
-        
-        # Description
-        desc_label = QLabel(description)
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("font-size: 10pt; color: #E5E7EB; background: transparent; margin-left: 26px;")
-        layout.addWidget(desc_label)
-        
-        # Supports
-        supports_label = QLabel(f"<i>{supports}</i>")
-        supports_label.setStyleSheet("font-size: 9pt; color: #9CA3AF; background: transparent; margin-left: 26px;")
-        layout.addWidget(supports_label)
-        
-        # Warning (if provided)
-        if warning:
-            warning_label = QLabel(warning)
-            warning_label.setWordWrap(True)
-            warning_label.setStyleSheet(
-                "font-size: 9pt; font-weight: bold; color: #F59E0B; "
-                "background: #1E1B16; padding: 8px; border-radius: 4px; margin-left: 26px; margin-top: 8px;"
-            )
-            layout.addWidget(warning_label)
-        
-        group.setLayout(layout)
-        return group
-    
-    def _on_integration_selected(self, integration_type):
-        """
-        Handle integration type selection.
-        
-        Args:
-            integration_type: Selected integration type (local_cli, local_api, cloud_api)
-        """
-        self.config["integration_type"] = integration_type
-        self.next_button.setEnabled(True)
-    
-    def show_credential_input(self, integration_type):
-        """
-        Display dynamic credential input form based on selected integration type.
-        
-        Shows different input fields depending on the integration type:
-        - Local CLI: executable path, model name
-        - Local API: API endpoint, model name
-        - Cloud API: backend selection, API key, model name
-        
-        Args:
-            integration_type: The selected integration type (local_cli, local_api, cloud_api)
-            
-        """
+    def _page_backend(self):
         page = QWidget()
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(40, 40, 40, 20)
-        layout.setSpacing(20)
-        
-        # Title
-        title = QLabel("Configure Backend")
-        title.setStyleSheet(
-            "font-size: 16pt; font-weight: bold; color: #00FFFF; background: transparent;"
-        )
-        layout.addWidget(title)
-        
-        # Form layout
-        form_group = QGroupBox()
-        form_group.setStyleSheet("""
-            QGroupBox {
-                border: 2px solid #334155;
-                border-radius: 8px;
-                padding-top: 20px;
-                margin-top: 10px;
-                background: #111827;
-            }
-        """)
-        
-        form_layout = QFormLayout()
-        form_layout.setContentsMargins(20, 20, 20, 20)
-        form_layout.setSpacing(16)
-        form_layout.setLabelAlignment(Qt.AlignRight)
-        
-        # Store input widgets for validation
-        self.input_widgets = {}
-        
-        if integration_type == "local_cli":
-            # Local CLI configuration
-            from eye.backends.backend_registry import LOCAL_CLI_BACKENDS
-            self._add_backend_selector(form_layout, LOCAL_CLI_BACKENDS)
-            self._add_text_input(form_layout, "executable_path", "Executable Path:", 
-                                 placeholder="/usr/local/bin/ollama")
-            self._add_text_input(form_layout, "model_name", "Model Name:", 
-                                 placeholder="llama2")
-            
-        elif integration_type == "local_api":
-            # Local API configuration. Ollama belongs here too — the router has
-            # always supported it as a local SERVER, but the wizard only offered
-            # it as a CLI agent, so a LAN Ollama could not be configured at setup.
-            from eye.backends.backend_registry import LOCAL_SERVER_BACKENDS
-            self._add_backend_selector(form_layout, LOCAL_SERVER_BACKENDS)
-            self._add_text_input(form_layout, "api_endpoint", "API Endpoint:",
-                                 placeholder="http://localhost:1234 (LM Studio) · http://localhost:11434 (Ollama)")
-            self._add_text_input(form_layout, "model_name", "Model Name:", 
-                                 placeholder="local-model")
-            
-        elif integration_type == "cloud_api":
-            # Cloud API configuration. Ordered common-first (investigators most often
-            # bring OpenRouter / Google AI Studio / NVIDIA keys).
-            from eye.backends.backend_registry import CLOUD_API_BACKENDS
-            # Ordered common-first; the `moonshot`/`grok` aliases are omitted
-            # because `kimi`/`xai` are the same providers under their primary ids.
-            self._add_backend_selector(form_layout, [
-                bk for bk in (
-                    "openrouter", "gemini", "nvidia", "openai", "anthropic",
-                    "deepseek", "kimi", "groq", "mistral", "xai",
-                ) if bk in CLOUD_API_BACKENDS
-            ])
-            self._add_text_input(form_layout, "api_key", "API Key:",
-                                 placeholder="sk-or-… (OpenRouter) · AIza… (Google AI Studio) · nvapi-… (NVIDIA) · sk-… · gsk_… · xai-…",
-                                 password=True)
-            self._add_text_input(form_layout, "model_name", "Model Name:",
-                                 placeholder="e.g. claude-opus-4-8 — or click Detect / Common Models")
-        
-        form_group.setLayout(form_layout)
-        layout.addWidget(form_group)
-        
-        layout.addStretch()
-        
-        # Add page to stack
-        self.pages.addWidget(page)
-        self.pages.setCurrentWidget(page)
-        page.setProperty("wizard_step", "credential")
+        lay = QVBoxLayout(page)
+        lay.setSpacing(12)
+        self._backend_title = QLabel()
+        self._backend_title.setObjectName("pageTitle")
+        lay.addWidget(self._backend_title)
+        self._backend_intro = QLabel()
+        self._backend_intro.setObjectName("pageIntro")
+        self._backend_intro.setWordWrap(True)
+        lay.addWidget(self._backend_intro)
+        self._form_card = QFrame()
+        self._form_card.setObjectName("card")
+        self._form_layout = QFormLayout(self._form_card)
+        self._form_layout.setContentsMargins(20, 18, 20, 18)
+        self._form_layout.setHorizontalSpacing(16)
+        self._form_layout.setVerticalSpacing(12)
+        self._form_layout.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lay.addWidget(self._form_card)
+        self.form_message = QLabel("")
+        self.form_message.setObjectName("formMessage")
+        self.form_message.setWordWrap(True)
+        lay.addWidget(self.form_message)
+        lay.addStretch()
+        return page
 
-        # Update navigation
-        self.back_button.setEnabled(True)
-        self.next_button.setEnabled(True)
-        self.next_button.setText("Validate & Save")
-    
-    def _add_backend_selector(self, form_layout, backends):
-        """
-        Add backend selection radio buttons to form.
-        
-        Args:
-            form_layout: QFormLayout to add to
-            backends: List of backend names
-        """
-        label = QLabel("Backend:")
-        label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
-        
-        backend_widget = QWidget()
-        backend_layout = QVBoxLayout(backend_widget)
-        backend_layout.setContentsMargins(0, 0, 0, 0)
-        backend_layout.setSpacing(8)
-        
-        self.backend_group = QButtonGroup()
+    def _page_test(self):
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setSpacing(14)
+        self._title(lay, "Test the connection, then save",
+                    "The Eye sends one short request to the model. Nothing is saved until "
+                    "the test passes - including the API key.")
+        card = QFrame()
+        card.setObjectName("card")
+        cl = QVBoxLayout(card)
+        cl.setContentsMargins(20, 16, 20, 16)
+        self.summary_label = QLabel()
+        self.summary_label.setTextFormat(Qt.RichText)
+        self.summary_label.setWordWrap(True)
+        cl.addWidget(self.summary_label)
+        lay.addWidget(card)
+        row = QHBoxLayout()
+        self.test_button = QPushButton("Test connection")
+        _variant(self.test_button, "primary")
+        self.test_button.clicked.connect(self._begin_validation)
+        row.addWidget(self.test_button)
+        row.addStretch()
+        lay.addLayout(row)
+        self.status_label = QLabel("Not tested yet.")
+        self.status_label.setWordWrap(True)
+        self.status_label.setTextFormat(Qt.RichText)
+        self.status_label.setStyleSheet(f"color: {_MUTED}; font-size: 13px;")
+        lay.addWidget(self.status_label)
+        lay.addStretch()
+        return page
 
-        # Friendly display names (the raw ids like "xai"/"deepseek" title-case badly).
-        provider_labels = {
-            "openrouter": "OpenRouter",
-            "gemini": "Gemini (Google AI Studio)",
-            "nvidia": "NVIDIA",
-            "openai": "OpenAI",
-            "anthropic": "Anthropic",
-            "deepseek": "DeepSeek",
-            "kimi": "Kimi (Moonshot)",
-            "groq": "Groq",
-            "mistral": "Mistral",
-            "xai": "xAI (Grok)",
-        }
-
-        for backend in backends:
-            radio = QRadioButton(provider_labels.get(backend, backend.replace("_", " ").title()))
-            radio.toggled.connect(lambda checked, b=backend: self._on_backend_selected(b) if checked else None)
-            self.backend_group.addButton(radio)
-            backend_layout.addWidget(radio)
-        
-        # Select first by default
-        self.backend_group.buttons()[0].setChecked(True)
-        self.config["backend"] = backends[0]
-        
-        form_layout.addRow(label, backend_widget)
-    
-    def _on_backend_selected(self, backend):
-        """
-        Handle backend selection.
-        
-        Args:
-            backend: Selected backend name
-        """
-        self.config["backend"] = backend
-    
-    def _add_text_input(self, form_layout, key, label_text, placeholder="", password=False):
-        """
-        Add text input field to form.
-        
-        Args:
-            form_layout: QFormLayout to add to
-            key: Configuration key
-            label_text: Label text
-            placeholder: Placeholder text
-            password: Whether to use password mode
-        """
-        label = QLabel(label_text)
-        label.setStyleSheet("font-size: 10pt; font-weight: bold; color: #E5E7EB;")
-        
-        input_field = QLineEdit()
-        input_field.setPlaceholderText(placeholder)
-        input_field.setMinimumWidth(300)
-        if password:
-            input_field.setEchoMode(QLineEdit.Password)
-        
-        input_field.textChanged.connect(lambda text: self._on_input_changed(key, text))
-        
-        # Set initial value if present in config
-        if self.config.get(key):
-            input_field.setText(self.config[key])
-        
-        self.input_widgets[key] = input_field
-        form_layout.addRow(label, input_field)
-        
-        # Add "Detect Models" button for cloud API model name field
-        if key == "model_name" and self.config.get("integration_type") == "cloud_api":
-            from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
-            detect_button = QPushButton("Detect Available Models")
-            detect_button.setIcon(CrowEyeIcons.search())
-            detect_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #0EA5E9;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 16px;
-                    font-size: 10pt;
-                    margin-top: 8px;
-                }
-                QPushButton:hover {
-                    background-color: #0284C7;
-                }
-                QPushButton:pressed {
-                    background-color: #0369A1;
-                }
-            """)
-            detect_button.clicked.connect(self._detect_models)
-            form_layout.addRow("", detect_button)
-
-            # Offline quick-pick of current curated models (e.g. the latest
-            # Claude IDs) — no API key or network round-trip required.
-            common_button = QPushButton("Common Models")
-            common_button.setIcon(CrowEyeIcons.clipboard())
-            common_button.setStyleSheet("""
-                QPushButton {
-                    background-color: #334155;
-                    color: white;
-                    border: none;
-                    border-radius: 4px;
-                    padding: 8px 16px;
-                    font-size: 10pt;
-                    margin-top: 4px;
-                }
-                QPushButton:hover { background-color: #475569; }
-                QPushButton:pressed { background-color: #1E293B; }
-            """)
-            common_button.clicked.connect(self._show_common_models)
-            form_layout.addRow("", common_button)
-    
-    def _on_input_changed(self, key, value):
-        """
-        Handle input field changes.
-        
-        Args:
-            key: Configuration key
-            value: New value
-        """
-        self.config[key] = value
-    
-    def _detect_models(self):
-        """
-        Detect available models using the provided API key and ModelRouter.
-        
-        Queries the API to list available models based on the selected backend
-        and displays them in a dialog for the user to select from.
-        """
-        backend = self.config.get("backend")
-        
-        # Get API key from input field
-        api_key_widget = self.input_widgets.get("api_key", None)
-        api_key = api_key_widget.text().strip() if api_key_widget else ""
-        
-        if not api_key:
-            QMessageBox.warning(
-                self,
-                "API Key Required",
-                f"Please enter your {backend.title()} API key first before detecting models."
-            )
-            return
-
-        # Heuristic validation for API key format
-        if backend == "openai" and not api_key.startswith("sk-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "OpenAI API keys usually start with 'sk-'.\n\nPlease check your key.")
-            return
-        elif backend == "gemini" and not api_key.startswith("AIza"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "Gemini API keys usually start with 'AIza'.\n\nPlease check your key.")
-            return
-        elif backend == "anthropic" and not api_key.startswith("sk-ant-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "Anthropic API keys usually start with 'sk-ant-'.\n\nPlease check your key.")
-            return
-        elif backend == "deepseek" and not api_key.startswith("sk-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "DeepSeek API keys usually start with 'sk-'.\n\nPlease check your key.")
-            return
-        elif backend == "kimi" and not api_key.startswith("sk-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "Kimi (Moonshot) API keys usually start with 'sk-'.\n\nPlease check your key.")
-            return
-        elif backend == "openrouter" and not api_key.startswith("sk-or-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "OpenRouter API keys usually start with 'sk-or-'.\n\nGet one at openrouter.ai/keys.")
-            return
-        elif backend == "nvidia" and not api_key.startswith("nvapi-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "NVIDIA API keys usually start with 'nvapi-'.\n\nGet one at build.nvidia.com.")
-            return
-        elif backend == "groq" and not api_key.startswith("gsk_"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "Groq API keys usually start with 'gsk_'.\n\nGet one at console.groq.com.")
-            return
-        elif backend == "xai" and not api_key.startswith("xai-"):
-            QMessageBox.warning(self, "Invalid API Key Format",
-                               "xAI (Grok) API keys usually start with 'xai-'.\n\nPlease check your key.")
-            return
-        # Mistral keys are bare tokens with no fixed prefix — only non-empty is checked.
-
-        try:
-            # Temporarily store key for validation
-            key_name = f"{backend}_api_key"
-            self.credential_manager.store_credential(key_name, api_key)
-            
-            # Use ModelRouter to fetch models dynamically
-            from eye.services.model_router import ModelRouter
-            temp_router = ModelRouter(self.config, self.credential_manager)
-            
-            available_models = temp_router.backend.list_models()
-
-            from eye.services.context_window_registry import curated_models, recommended_models
-
-            if not available_models:
-                # Live discovery came back empty. For a CLOUD provider with a curated
-                # catalog, don't dead-end a valid key — offer the common models so the
-                # investigator can still pick one and proceed (detection can be flaky
-                # across SDK versions / network conditions). Only local servers, which
-                # genuinely have nothing loaded, get the hard error.
-                curated = curated_models(backend)
-                if curated:
-                    QMessageBox.information(
-                        self, "Using Common Models",
-                        f"Couldn't fetch the live model list for {backend.replace('_', ' ').title()} "
-                        "right now (network or key permissions). Showing the common models "
-                        "instead — you can type an exact model name too.")
-                    self._show_model_selection_dialog(
-                        list(curated),
-                        recommended=recommended_models(backend),
-                        title=f"Common {backend.replace('_', ' ').title()} Models")
-                    return
-
-                backend_title = backend.title()
-                if "LM Studio" in backend_title or "Ollama" in backend_title:
-                    help_text = (
-                        f"No models were found for {backend_title}.\n\n"
-                        "Please ensure:\n"
-                        "1. The local server is running.\n"
-                        "2. At least one model is loaded into memory (RAM/VRAM).\n"
-                        "3. The API endpoint address is correct."
-                    )
-                else:
-                    help_text = (
-                        f"No supported models were found for {backend_title}.\n\n"
-                        "Please check your API key and internet connection."
-                    )
-
-                QMessageBox.warning(self, "No Models Found", help_text)
-                return
-
-            # Merge curated IDs the API may not list yet (brand-new models) and
-            # highlight the recommended ones at the top of the dialog.
-            merged = list(available_models)
-            for m in curated_models(backend):
-                if m not in merged:
-                    merged.append(m)
-            self._show_model_selection_dialog(
-                merged,
-                recommended=recommended_models(backend),
-                title=f"Select {backend.replace('_', ' ').title()} Model"
-            )
-            
-        except Exception as e:
-            # Provide more detailed error information to help with troubleshooting
-            error_details = str(e)
-            if "401" in error_details or "Unauthorized" in error_details:
-                error_msg = "Authentication failed (401). Please verify your API key is correct and active."
-            elif "dns" in error_details.lower() or "connection" in error_details.lower():
-                error_msg = "Network error. Please check your internet connection and DNS settings."
+    # ---- step bar / navigation -----------------------------------------------------
+    def _go(self, index):
+        if index == 2:
+            self._build_backend_form()
+        if index == 3:
+            self._refresh_summary()
+        self.pages.setCurrentIndex(index)
+        for i, lab in enumerate(self._step_labels):
+            if i == index:
+                css = "color: #FFFFFF; background: #6366F1; font-weight: 700;"
+            elif i < index:
+                css = f"color: {_ACCENT}; background: rgba(99, 102, 241, 0.16); font-weight: 600;"
             else:
-                error_msg = f"Failed to detect available models:\n\n{error_details}"
+                css = "color: #64748B; background: #131C31; font-weight: 600;"
+            lab.setStyleSheet(css + " border: none; border-radius: 12px; padding: 5px 10px;"
+                                    " font-size: 12px;")
+        self.back_button.setEnabled(index > 0 and not self._testing)
+        if index == 3:
+            self.next_button.setText("Save")
+            _variant(self.next_button, "primary")
+            self.next_button.setEnabled(self._tested == self._fingerprint())
+        else:
+            self.next_button.setText("Next")
+            _variant(self.next_button, "primary")
+            self.next_button.setEnabled(index != 1 or bool(self.config.get("integration_type")))
 
-            QMessageBox.critical(
-                self,
-                "Detection Failed",
-                f"{error_msg}\n\n"
-                "Tip: Ensure you are using the correct key for the selected backend."
-            )
+    def _on_integration_selected(self, integration_type):
+        self.config["integration_type"] = integration_type
+        for value, (card, _radio) in getattr(self, "_option_cards", {}).items():
+            card.setProperty("selected", "true" if value == integration_type else "false")
+            card.style().unpolish(card)
+            card.style().polish(card)
+        if self.pages.currentIndex() == 1:
+            self.next_button.setEnabled(True)
+
+    def _on_next(self):
+        step = self.pages.currentIndex()
+        if step == 0:
+            self._go(1)
+        elif step == 1:
+            if not self.config.get("integration_type"):
+                return
+            if self.config["integration_type"] == "cloud_api" and not self._cloud_acknowledged:
+                if CloudAPIWarningDialog(self).exec_() != QDialog.Accepted:
+                    return
+                self._cloud_acknowledged = True
+            self._go(2)
+        elif step == 2:
+            self._collect_fields()
+            missing = missing_fields(self._config_with_key(), self._key_stored())
+            if missing:
+                self.form_message.setText("Still needed: " + ", ".join(missing) + ".")
+                return
+            self.form_message.setText("")
+            self._go(3)
+        elif step == 3:
+            if self._tested == self._fingerprint():
+                self._save()
+
+    def _on_back(self):
+        if self.pages.currentIndex() > 0 and not self._testing:
+            if self.pages.currentIndex() == 2:
+                self._collect_fields()
+            self._go(self.pages.currentIndex() - 1)
+
+    # ---- the backend form ---------------------------------------------------------
+    def _backends_for(self, kind):
+        from eye.backends import backend_registry as reg
+        if kind == "local_cli":
+            return list(reg.LOCAL_CLI_BACKENDS)
+        if kind == "local_api":
+            return list(reg.LOCAL_SERVER_BACKENDS)
+        return [b for b in CLOUD_ORDER if b in reg.CLOUD_API_BACKENDS]
+
+    def _build_backend_form(self):
+        kind = self.config.get("integration_type")
+        if self._built_for == kind:
+            self._update_key_hint()
+            return
+        self._built_for = kind
+        while self._form_layout.rowCount():
+            self._form_layout.removeRow(0)
+        self._fields = {}
+        titles = {
+            "local_cli": ("Local command-line agent",
+                          "Point the Eye at the agent's executable. Leave the model empty to use "
+                          "the agent's default (the first installed model is picked)."),
+            "local_api": ("Local API server",
+                          "The address the server listens on, and the model it has loaded."),
+            "cloud_api": ("Cloud API",
+                          "The provider, your API key for it, and the model to use."),
+        }
+        title, intro = titles.get(kind, ("Backend", ""))
+        self._backend_title.setText(title)
+        self._backend_intro.setText(intro)
+
+        backends = self._backends_for(kind)
+        combo = QComboBox()
+        for b in backends:
+            combo.addItem(provider_label(b), b)
+        current = self.config.get("backend")
+        idx = combo.findData(current) if current in backends else 0
+        combo.setCurrentIndex(max(0, idx))
+        self.config["backend"] = combo.currentData()
+        combo.currentIndexChanged.connect(lambda _i: self._on_backend_selected(combo.currentData()))
+        self._fields["backend"] = combo
+        self._add_row("Provider" if kind == "cloud_api" else "Backend", combo)
+
+        if kind == "local_cli":
+            path = self._line("executable_path", "e.g. C:\\Program Files\\Ollama\\ollama.exe")
+            browse = QPushButton("Browse...")
+            _variant(browse, "ghost")
+            browse.clicked.connect(self._browse_executable)
+            self._add_row("Executable", self._hbox(path, browse))
+            self._add_row("Model", self._model_row(detect=False),
+                          "Optional - empty uses the agent's default model.")
+        elif kind == "local_api":
+            self._add_row("API endpoint", self._line(
+                "api_endpoint", "http://localhost:1234 (LM Studio) - http://localhost:11434 (Ollama)"))
+            self._add_row("Model", self._model_row(detect=True))
+        else:
+            key = self._line("api_key", "Paste the API key", password=True)
+            show = QCheckBox("Show")
+            show.toggled.connect(lambda on: key.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
+            self._add_row("API key", self._hbox(key, show))
+            self._key_hint = QLabel()
+            self._key_hint.setObjectName("hint")
+            self._key_hint.setWordWrap(True)
+            self._form_layout.addRow("", self._key_hint)
+            key.textChanged.connect(lambda _t: self._update_key_hint())
+            self._add_row("Model", self._model_row(detect=True))
+            self._update_key_hint()
+
+    def _add_row(self, label, widget, hint=None):
+        lab = QLabel(label)
+        lab.setObjectName("fieldLabel")
+        self._form_layout.addRow(lab, widget)
+        if hint:
+            h = QLabel(hint)
+            h.setObjectName("hint")
+            self._form_layout.addRow("", h)
+
+    @staticmethod
+    def _hbox(*widgets):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+        for x in widgets:
+            h.addWidget(x, 1 if isinstance(x, QLineEdit) else 0)
+        return w
+
+    def _line(self, key, placeholder, password=False):
+        edit = QLineEdit()
+        edit.setPlaceholderText(placeholder)
+        if password:
+            edit.setEchoMode(QLineEdit.Password)
+        elif self.config.get(key):
+            edit.setText(str(self.config.get(key)))
+        edit.textChanged.connect(lambda _t: self._invalidate_test())
+        self._fields[key] = edit
+        return edit
+
+    def _model_row(self, detect):
+        model = self._line("model_name", "e.g. a model id - or use Detect / Common models")
+        parts = [model]
+        if detect:
+            d = QPushButton("Detect")
+            d.setToolTip("Ask the provider or server which models it offers")
+            _variant(d, "ghost")
+            d.clicked.connect(self._detect_models)
+            parts.append(d)
+            if self.config.get("integration_type") == "cloud_api":
+                c = QPushButton("Common models")
+                c.setToolTip("A built-in list - no key or network needed")
+                _variant(c, "ghost")
+                c.clicked.connect(self._show_common_models)
+                parts.append(c)
+        return self._hbox(*parts)
+
+    def _on_backend_selected(self, backend):
+        self.config["backend"] = backend
+        self._invalidate_test()
+        self._update_key_hint()
+
+    def _key_stored(self):
+        if self.config.get("integration_type") != "cloud_api":
+            return False
+        return stored_key_exists(self.credential_manager, self.config.get("backend"))
+
+    def _update_key_hint(self):
+        hint = getattr(self, "_key_hint", None)
+        if hint is None or self.config.get("integration_type") != "cloud_api":
+            return
+        backend = self.config.get("backend")
+        typed = self._fields.get("api_key").text().strip() if self._fields.get("api_key") else ""
+        warn = key_format_warning(backend, typed)
+        if warn:
+            hint.setText(warn)
+            hint.setStyleSheet(f"color: {_WARN}; font-size: 12px;")
+            return
+        hint.setStyleSheet(f"color: {_MUTED}; font-size: 12px;")
+        if typed:
+            hint.setText("Kept in the Windows credential store once the test passes - never in a file.")
+        elif self._key_stored():
+            hint.setText("A key for %s is already stored - leave this empty to keep it."
+                         % provider_label(backend))
+        else:
+            where = KEY_SOURCES.get(backend)
+            hint.setText("Get a key at %s." % where if where else "")
+
+    def _browse_executable(self):
+        path, _f = QFileDialog.getOpenFileName(self, "Choose the agent's executable", "",
+                                               "Programs (*.exe *.bat *.cmd);;All files (*)")
+        if path:
+            self._fields["executable_path"].setText(path)
+
+    def _collect_fields(self):
+        for key, w in self._fields.items():
+            if key == "backend":
+                self.config["backend"] = w.currentData()
+            elif key == "api_key":
+                continue                    # held in the field, never in self.config
+            else:
+                self.config[key] = w.text().strip()
+
+    def _typed_key(self):
+        w = self._fields.get("api_key")
+        return w.text().strip() if w else ""
+
+    def _config_with_key(self):
+        c = dict(self.config)
+        if self._typed_key():
+            c["api_key"] = self._typed_key()
+        return c
+
+    def _fingerprint(self):
+        c = self._config_with_key()
+        return tuple(str(c.get(k) or "") for k in
+                     ("integration_type", "backend", "model_name", "executable_path",
+                      "api_endpoint", "api_key"))
+
+    def _invalidate_test(self):
+        self._tested = None
+
+    # ---- step 4: test and save ---------------------------------------------------------
+    def _refresh_summary(self):
+        c = self.config
+        kind = dict((v, t) for v, t, _d, _s in INTEGRATIONS).get(c.get("integration_type"), "-")
+        rows = [("Connection", kind), ("Backend", provider_label(c.get("backend")))]
+        if c.get("integration_type") == "local_cli":
+            rows.append(("Executable", c.get("executable_path") or "(on PATH)"))
+        if c.get("integration_type") == "local_api":
+            rows.append(("Endpoint", c.get("api_endpoint")))
+        if c.get("integration_type") == "cloud_api":
+            rows.append(("API key", "entered now - stored after the test passes" if self._typed_key()
+                         else "the stored key"))
+        rows.append(("Model", c.get("model_name") or "(the agent's default)"))
+        html = "<table cellspacing='0' cellpadding='4'>" + "".join(
+            "<tr><td style='color:#94A3B8; padding-right:18px'>%s</td><td><b>%s</b></td></tr>"
+            % (k, _esc(v)) for k, v in rows) + "</table>"
+        warn = key_format_warning(c.get("backend"), self._typed_key())
+        if warn:
+            html += "<p style='color:#FBBF24'>%s</p>" % _esc(warn)
+        self.summary_label.setText(html)
+        if self._tested != self._fingerprint():
+            self._set_status("Not tested yet.", _MUTED)
+
+    def _set_status(self, text, color, rich=False):
+        self.status_label.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 600;")
+        self.status_label.setText(text if rich else _esc(text))
+
+    def _begin_validation(self):
+        """Run the connection test on a worker thread; the result is shown in
+        the window (no modal progress box)."""
+        if self._testing:
+            return
+        self._testing = True
+        self._tested = None
+        self.test_button.setEnabled(False)
+        self.back_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self._dots = 0
+        self._spin = QTimer(self)
+        self._spin.timeout.connect(self._tick)
+        self._spin.start(350)
+        self._tick()
+        worker = _WizardConnectivityWorker(self.config, self.credential_manager,
+                                           api_key=self._typed_key() or None)
+        self._validation_worker = worker
+        self._test_fp = self._fingerprint()
+        worker.done.connect(self._on_validation_done)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
+    def _tick(self):
+        self._dots = (self._dots + 1) % 4
+        self._set_status("Testing the connection to %s%s"
+                         % (provider_label(self.config.get("backend")), "." * (self._dots + 1)),
+                         _ACCENT)
+
+    def _on_validation_done(self, ok, detail, ms=0):
+        if getattr(self, "_spin", None):
+            self._spin.stop()
+        self._testing = False
+        self.test_button.setEnabled(True)
+        self.back_button.setEnabled(True)
+        backend = provider_label(self.config.get("backend"))
+        if ok:
+            # A local agent may have picked its model during the test - shown,
+            # and the tested settings are what gets saved.
+            w = self._fields.get("model_name")
+            if w is not None and (w.text().strip() != (self.config.get("model_name") or "")):
+                w.blockSignals(True)
+                w.setText(self.config.get("model_name") or "")
+                w.blockSignals(False)
+            self._tested = self._fingerprint()
+            self._refresh_summary()
+            model = self.config.get("model_name") or "default model"
+            self._set_status("&#10003;&nbsp; Connected to %s - %s answered in %.1f s. Click Save."
+                             % (_esc(backend), _esc(model), ms / 1000.0), _OK, rich=True)
+        else:
+            self._tested = None
+            reason = explain_failure(detail, self.config.get("integration_type"))
+            self._set_status("&#10007;&nbsp; Could not connect to %s. %s<br>"
+                             "<span style='color:#94A3B8; font-weight:400'>Go Back to change a "
+                             "setting, then test again.</span>" % (_esc(backend), _esc(reason)),
+                             _BAD, rich=True)
+        self.next_button.setEnabled(self._tested == self._fingerprint())
+
+    def _save(self):
+        config = dict(self.config)
+        if self._typed_key():
+            config["api_key"] = self._typed_key()
+        self.save_configuration(config)
+
+    def save_configuration(self, config):
+        """Save the settings (configs/eye_config.json) and, when one was
+        typed, the API key (OS credential store), then close."""
+        try:
+            api_key = config.pop("api_key", None)
+            from datetime import datetime, timezone
+            config["last_validated"] = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            self.config_manager.save_config(config)
+            if api_key:
+                self.credential_manager.store_credential("%s_api_key" % config["backend"], api_key)
+            self.configuration_complete.emit(config)
+            self.accept()
+        except Exception as e:
+            self._set_status("Could not save the configuration: %s" % e, _BAD)
+
+    # ---- models ------------------------------------------------------------------------
+    def _router_for_discovery(self):
+        self._collect_fields()
+        overrides = {}
+        if self._typed_key():
+            overrides["%s_api_key" % self.config.get("backend")] = self._typed_key()
+        from eye.services.model_router import ModelRouter
+        return ModelRouter(dict(self.config), _OverlayCredentials(self.credential_manager, overrides))
+
+    def _detect_models(self):
+        """Ask the provider / server for its models (the key under test is used
+        from memory - it is not stored)."""
+        backend = self.config.get("backend")
+        if self.config.get("integration_type") == "cloud_api" and not (
+                self._typed_key() or self._key_stored()):
+            self.form_message.setText("Enter the API key first - the provider lists models only "
+                                      "for a valid key.")
+            return
+        self.form_message.setText("Asking %s for its models..." % provider_label(backend))
+        self.form_message.repaint()
+        from eye.services.context_window_registry import curated_models, recommended_models
+        try:
+            available = self._router_for_discovery().backend.list_models() or []
+        except Exception as e:
+            available = []
+            self.form_message.setText(explain_failure(str(e), self.config.get("integration_type")))
+            if not curated_models(backend):
+                return
+        merged = list(available)
+        for m in curated_models(backend):
+            if m not in merged:
+                merged.append(m)
+        if not merged:
+            self.form_message.setText(
+                "No models found. Is the server running with a model loaded?"
+                if self.config.get("integration_type") == "local_api"
+                else "No models found - check the key, or type the model name.")
+            return
+        if not available:
+            self.form_message.setText("The live list was not available - showing the built-in list.")
+        else:
+            self.form_message.setText("")
+        self._show_model_selection_dialog(merged, recommended=recommended_models(backend),
+                                          title="Models - %s" % provider_label(backend))
 
     def _show_common_models(self):
-        """Offline quick-pick: show the curated model catalog for the selected
-        backend (no API key/network needed). Falls back to a hint when the
-        backend has no built-in list (e.g. OpenAI/Gemini — use Detect Models)."""
         backend = self.config.get("backend")
         from eye.services.context_window_registry import curated_models, recommended_models
         models = curated_models(backend)
         if not models:
-            QMessageBox.information(
-                self,
-                "No Built-in List",
-                f"No built-in model list for {(backend or 'this backend').replace('_', ' ').title()}.\n\n"
-                "Use 'Detect Available Models' to fetch the live list from the API."
-            )
+            self.form_message.setText("No built-in list for %s - use Detect."
+                                      % provider_label(backend))
             return
-        self._show_model_selection_dialog(
-            list(models),
-            recommended=recommended_models(backend),
-            title=f"Common {backend.replace('_', ' ').title()} Models",
-        )
+        self._show_model_selection_dialog(list(models), recommended=recommended_models(backend),
+                                          title="Common models - %s" % provider_label(backend))
 
-    # Remove the old specific detection methods as they are now redundant
-    def _detect_gemini_models(self): pass
-    def _detect_openai_models(self): pass
-    def _detect_anthropic_models(self): pass
-    
-    def _show_model_selection_dialog(self, models, recommended=None, title="Select Model", info_text=None):
-        """
-        Show a dialog to select from available models.
-        
-        Args:
-            models: List of available model names
-            recommended: List of recommended model names
-            title: Dialog title
-            info_text: Optional info text to display
-        """
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QListWidget, QPushButton, QLabel
-        
+    def _show_model_selection_dialog(self, models, recommended=None, title="Select Model",
+                                     info_text=None):
+        from PyQt5.QtWidgets import QListWidget, QListWidgetItem
         dialog = QDialog(self)
         dialog.setWindowTitle(title)
-        dialog.setMinimumWidth(500)
-        dialog.setMinimumHeight(400)
-        dialog.setStyleSheet("""
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QListWidget {
-                background-color: #1E293B;
-                color: #E5E7EB;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                padding: 8px;
-                font-size: 10pt;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-radius: 4px;
-            }
-            QListWidget::item:hover {
-                background-color: #334155;
-            }
-            QListWidget::item:selected {
-                background-color: #0EA5E9;
-                color: white;
-            }
-            QPushButton {
-                background-color: #10B981;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-                min-width: 120px;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:pressed {
-                background-color: #047857;
-            }
-        """)
-        
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(16)
-        
-        # Title
-        title_label = QLabel(f"Found {len(models)} available models:")
-        title_label.setStyleSheet("font-size: 12pt; font-weight: bold; color: #00FFFF;")
-        layout.addWidget(title_label)
-        
-        # Info text
-        if info_text:
-            info_label = QLabel(info_text)
-            info_label.setStyleSheet("font-size: 9pt; color: #9CA3AF; margin-bottom: 8px;")
-            layout.addWidget(info_label)
-        
-        # Model list
-        model_list = QListWidget()
-        
-        # Add recommended models first
-        if recommended:
-            from PyQt5.QtWidgets import QListWidgetItem
-            from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
-            for model in recommended:
-                if model in models:
-                    model_list.addItem(QListWidgetItem(CrowEyeIcons.star(), f"{model} (Recommended)"))
-                    models.remove(model)
-        
-        # Add remaining models
-        for model in sorted(models):
-            model_list.addItem(model)
-        
-        layout.addWidget(model_list)
-        
-        # Select button
-        select_button = QPushButton("Select Model")
-        select_button.clicked.connect(dialog.accept)
-        layout.addWidget(select_button)
-        
-        # Show dialog
-        if dialog.exec_() == QDialog.Accepted:
-            selected_items = model_list.selectedItems()
-            if selected_items:
-                selected_model = selected_items[0].text()
-                # Strip the " (Recommended)" suffix if present
-                selected_model = selected_model.replace(" (Recommended)", "")
-                
-                # Update model name input field
-                if "model_name" in self.input_widgets:
-                    self.input_widgets["model_name"].setText(selected_model)
-                    self.config["model_name"] = selected_model
-                    
-                    QMessageBox.information(
-                        self,
-                        "Model Selected",
-                        f"Selected model: {selected_model}\n\n"
-                        "You can now proceed to validate and save your configuration."
-                    )
-    
-    def _begin_validation(self):
-        """Start connectivity validation on a worker thread and show a busy
-        'Validating…' indicator so the investigator sees it start.
+        dialog.setMinimumSize(520, 440)
+        _wizard_sheet(dialog)
+        lay = QVBoxLayout(dialog)
+        lay.setContentsMargins(20, 18, 20, 18)
+        head = QLabel("%d models" % len(models))
+        head.setObjectName("pageTitle")
+        lay.addWidget(head)
+        filt = QLineEdit()
+        filt.setPlaceholderText("Filter...")
+        lay.addWidget(filt)
+        lst = QListWidget()
+        rec = [m for m in (recommended or []) if m in models]
+        for m in rec:
+            item = QListWidgetItem("%s  (recommended)" % m)
+            item.setData(Qt.UserRole, m)
+            lst.addItem(item)
+        for m in sorted(x for x in models if x not in rec):
+            item = QListWidgetItem(m)
+            item.setData(Qt.UserRole, m)
+            lst.addItem(item)
+        filt.textChanged.connect(lambda t: [lst.item(i).setHidden(t.lower() not in lst.item(i).text().lower())
+                                            for i in range(lst.count())])
+        lst.itemDoubleClicked.connect(lambda _i: dialog.accept())
+        lay.addWidget(lst, 1)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton("Cancel")
+        _variant(cancel, "ghost")
+        cancel.clicked.connect(dialog.reject)
+        pick = QPushButton("Use this model")
+        _variant(pick, "primary")
+        pick.clicked.connect(dialog.accept)
+        row.addWidget(cancel)
+        row.addWidget(pick)
+        lay.addLayout(row)
+        if dialog.exec_() == QDialog.Accepted and lst.selectedItems():
+            chosen = lst.selectedItems()[0].data(Qt.UserRole)
+            if "model_name" in self._fields:
+                self._fields["model_name"].setText(chosen)
+            self.config["model_name"] = chosen
+            self.form_message.setText("")
 
-        The check runs off the GUI thread (``_WizardConnectivityWorker``), so
-        the modal progress dialog animates and the window stays responsive even
-        while a slow/bad endpoint blocks. ``_on_validation_done`` finishes the
-        flow (result dialog + save) back on the GUI thread.
-        """
-        # Re-entrancy guard: ignore extra clicks while a check is in flight.
-        if getattr(self, "_validating", False):
+    # ---- diagnostics -------------------------------------------------------------------
+    def _on_run_diagnostics(self):
+        if getattr(self, "_diag_worker", None) is not None:
             return
-        self._validating = True
-
-        from PyQt5.QtWidgets import QProgressDialog
-
-        backend = self.config.get("backend") or "the backend"
-        self.back_button.setEnabled(False)
-        self.next_button.setEnabled(False)
-        self.next_button.setText("Validating…")
-
-        self._validation_progress = QProgressDialog(
-            f"Validating connection to {backend}…", None, 0, 0, self
-        )
-        self._validation_progress.setWindowTitle("Validating")
-        self._validation_progress.setCancelButton(None)          # not cancellable
-        self._validation_progress.setWindowModality(Qt.WindowModal)
-        self._validation_progress.setMinimumDuration(0)          # show immediately
-        self._validation_progress.setAutoClose(False)
-        self._validation_progress.setAutoReset(False)
-        self._validation_progress.show()
-
-        worker = _WizardConnectivityWorker(self.config, self.credential_manager)
-        self._validation_worker = worker
-        worker.done.connect(self._on_validation_done)
+        self.diag_button.setText("Running diagnostics...")
+        self.diag_button.setEnabled(False)
+        worker = _DiagnosticsWorker(self.config_manager, self.credential_manager)
+        self._diag_worker = worker
+        worker.done.connect(self._on_diagnostics_done)
         worker.finished.connect(worker.deleteLater)
-        worker.finished.connect(lambda: setattr(self, "_validation_worker", None))
         worker.start()
 
-    def _on_validation_done(self, ok, detail):
-        """GUI-thread slot: dismiss the indicator, restore the buttons, then
-        show the result (same wording as before) and save on success."""
-        progress = getattr(self, "_validation_progress", None)
-        if progress is not None:
-            progress.close()
-            self._validation_progress = None
-
-        self.back_button.setEnabled(True)
-        self.next_button.setEnabled(True)
-        self.next_button.setText("Validate & Save")
-        self._validating = False
-
-        backend = self.config.get("backend")
-        if ok:
-            QMessageBox.information(
-                self,
-                "Connectivity Validated",
-                f"Successfully connected to {backend}!\n\n"
-                "Your configuration will now be saved."
-            )
-            self.save_configuration(self.config.copy())
-        elif detail:
-            QMessageBox.critical(
-                self,
-                "Validation Error",
-                f"An error occurred during connectivity validation:\n\n{detail}\n\n"
-                "Please check your configuration and try again."
-            )
-        else:
-            QMessageBox.warning(
-                self,
-                "Connectivity Failed",
-                f"Failed to connect to {backend}.\n\n"
-                "Please check your configuration and try again.\n\n"
-                "Troubleshooting:\n"
-                "- Verify the executable path or API endpoint is correct\n"
-                "- Ensure the service is running\n"
-                "- Check your API key if using cloud services"
-            )
-
-    def _on_import_evidence(self):
-        """Delegate to the main Eye window's evidence-import flow (single shared path)."""
-        parent = self.parent()
-        if parent is not None and hasattr(parent, "_on_add_evidence"):
-            parent._on_add_evidence()
-        else:
-            QMessageBox.information(
-                self, "Import Evidence",
-                "Open a case in the Eye first, then import external evidence."
-            )
-
-    def _on_view_evidence(self):
-        """Open the Imported Evidence window (hashes + integrity) — shared path."""
-        parent = self.parent()
-        if parent is not None and hasattr(parent, "_open_evidence_window"):
-            parent._open_evidence_window()
-        else:
-            QMessageBox.information(
-                self, "Imported Evidence",
-                "Open a case in the Eye first to view its imported evidence."
-            )
-
-    def _on_run_diagnostics(self):
-        """Perform system diagnostics and show results."""
-        from eye.services.diagnostics import SystemDiagnostics
-        from PyQt5.QtWidgets import QProgressDialog
-        
-        progress = QProgressDialog("Running System Integrity Check...", None, 0, 0, self)
-        progress.setWindowTitle("Diagnostics")
-        progress.setWindowModality(Qt.WindowModal)
-        progress.show()
-        
-        try:
-            diagnostics = SystemDiagnostics(self.config_manager, self.credential_manager)
-            results = diagnostics.run_full_check()
-            progress.close()
-            self._show_diagnostics_results(results)
-        except Exception as e:
-            progress.close()
-            QMessageBox.critical(self, "Diagnostics Error", f"Failed to run diagnostics: {str(e)}")
+    def _on_diagnostics_done(self, results, error):
+        self._diag_worker = None
+        self.diag_button.setText("Run diagnostics")
+        self.diag_button.setEnabled(True)
+        if error or not results:
+            QMessageBox.warning(self, "Diagnostics", "Diagnostics could not run:\n\n%s" % error)
+            return
+        self._show_diagnostics_results(results)
 
     def _show_diagnostics_results(self, results):
-        """Show diagnostic results in a styled dialog."""
-        from PyQt5.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QPushButton, QLabel
-        
+        from PyQt5.QtWidgets import QTextEdit
         dialog = QDialog(self)
-        dialog.setWindowTitle("System Integrity Report")
-        dialog.setMinimumSize(600, 500)
-        dialog.setStyleSheet("background-color: #0B1220; color: #E5E7EB;")
-        
-        layout = QVBoxLayout(dialog)
-        
-        title = QLabel("EYE System Diagnostics")
-        title.setStyleSheet("font-size: 14pt; font-weight: bold; color: #00FFFF; margin-bottom: 10px;")
-        layout.addWidget(title)
-        
+        dialog.setWindowTitle("Eye AI diagnostics")
+        dialog.setMinimumSize(620, 520)
+        _wizard_sheet(dialog)
+        lay = QVBoxLayout(dialog)
+        lay.setContentsMargins(20, 18, 20, 18)
+        t = QLabel("Eye AI diagnostics")
+        t.setObjectName("pageTitle")
+        lay.addWidget(t)
         report = QTextEdit()
         report.setReadOnly(True)
-        report.setStyleSheet("""
-            QTextEdit {
-                background-color: #1E293B;
-                color: #E5E7EB;
-                border: 1px solid #334155;
-                font-family: 'Consolas', 'Monaco', monospace;
-                font-size: 10pt;
-                padding: 10px;
-            }
-        """)
-        
-        # Build the report text
-        text = "<h2>INTEGRITY CHECK RESULTS</h2><hr>"
-        
-        # UI
-        ui = results["ui"]
-        color = "#10B981" if ui["status"] == "PASS" else "#EF4444"
-        text += f"<p><b style='color:{color}'>[{ui['status']}] {ui['name']}</b><br>{ui['message']}</p>"
-        
-        # SDKs
-        text += "<h3>Backend SDKs</h3><ul>"
-        for sdk in results["sdks"]:
-            color = "#10B981" if sdk["status"] == "PASS" else "#F59E0B"
-            text += f"<li><span style='color:{color}'>{sdk['name']}</span>: {sdk['message']}</li>"
-        text += "</ul>"
-        
-        # Config
-        cfg = results["config"]
-        color = "#10B981" if cfg["status"] == "PASS" else "#F59E0B"
-        text += f"<h3>Configuration</h3><p><b style='color:{color}'>[{cfg['status']}]</b> {cfg['message']}</p>"
-        
-        # Env
-        env = results["environment"]
-        text += f"<h3>Environment</h3><p>Python: {env['python_version']}<br>Platform: {env['platform']}<br>CWD: {env['cwd']}</p>"
-        
-        report.setHtml(text)
-        layout.addWidget(report)
-        
-        close_btn = QPushButton("Close")
-        close_btn.setStyleSheet("background-color: #334155; color: white; padding: 8px; border-radius: 4px;")
-        close_btn.clicked.connect(dialog.accept)
-        layout.addWidget(close_btn)
-        
+        if _site is not None:
+            report.setStyleSheet(_site.log_view_sheet())
+            _site.keep_style(report)
+
+        def mark(status):
+            return "#10B981" if status == "PASS" else "#F59E0B"
+        ui = results.get("ui", {})
+        html = "<p><b style='color:%s'>[%s] %s</b><br>%s</p>" % (
+            mark(ui.get("status")), ui.get("status"), _esc(ui.get("name")), _esc(ui.get("message")))
+        html += "<h3>Backend SDKs</h3><ul>" + "".join(
+            "<li><span style='color:%s'>%s</span>: %s</li>"
+            % (mark(s.get("status")), _esc(s.get("name")), _esc(s.get("message")))
+            for s in results.get("sdks", [])) + "</ul>"
+        cfg = results.get("config", {})
+        html += "<h3>Configuration</h3><p><b style='color:%s'>[%s]</b> %s</p>" % (
+            mark(cfg.get("status")), cfg.get("status"), _esc(cfg.get("message")))
+        env = results.get("environment", {})
+        html += "<h3>Environment</h3><p>Python %s<br>%s</p>" % (
+            _esc(env.get("python_version")), _esc(env.get("platform")))
+        report.setHtml(html)
+        lay.addWidget(report, 1)
+        close = QPushButton("Close")
+        _variant(close, "ghost")
+        close.clicked.connect(dialog.accept)
+        lay.addWidget(close, 0, Qt.AlignRight)
         dialog.exec_()
 
-    def save_configuration(self, config):
-        """
-        Save configuration using ConfigManager and CredentialManager.
-        
-        Saves non-sensitive settings to eye_config.json and stores
-        API keys securely in OS-native credential storage.
-        
-        Args:
-            config: Configuration dictionary to save
-            
-        """
-        try:
-            # Extract API key if present (for cloud APIs)
-            api_key = config.pop("api_key", None)
-            
-            # Add timestamp
-            from datetime import datetime
-            config["last_validated"] = datetime.now().isoformat()
-            
-            # Save non-sensitive config to JSON
-            self.config_manager.save_config(config)
-            
-            # Save API key to secure storage if provided
-            if api_key:
-                key_name = f"{config['backend']}_api_key"
-                self.credential_manager.store_credential(key_name, api_key)
-            
-            # Emit completion signal
-            self.configuration_complete.emit(config)
-            
-            # Show success message
-            QMessageBox.information(
-                self,
-                "Configuration Saved",
-                "Your EYE configuration has been saved successfully!\n\n"
-                "You can now start using the AI assistant."
-            )
-            
-            # Close wizard
-            self.accept()
-            
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Save Error",
-                f"Failed to save configuration:\n\n{str(e)}\n\n"
-                "Please try again or contact support."
-            )
-    
-    def _on_next(self):
-        """Handle Next button click.
 
-        Dispatch on the current page's logical step (stamped via the
-        ``wizard_step`` property), NOT on the stack index. Pages are appended
-        cumulatively and never removed, so a Back-then-Next cycle pushes the
-        credential page to index 3+; a numeric-index dispatch then matched no
-        branch and the "Validate & Save" click was silently ignored.
-        """
-        step = self.pages.currentWidget().property("wizard_step")
-
-        if step == "welcome":
-            # Welcome -> Integration Selection
-            self.show_integration_selection()
-
-        elif step == "integration":
-            # Integration Selection -> Credential Input
-            if self.config["integration_type"]:
-                # Show warning dialog for cloud API selection
-                if self.config["integration_type"] == "cloud_api":
-                    warning_dialog = CloudAPIWarningDialog(self)
-                    if warning_dialog.exec_() == QDialog.Accepted:
-                        # User acknowledged warning, proceed to credential input
-                        self.show_credential_input(self.config["integration_type"])
-                    # If rejected, stay on current page
-                else:
-                    # For local integrations, proceed directly
-                    self.show_credential_input(self.config["integration_type"])
-
-        elif step == "credential":
-            # Credential Input -> Validate & Save (threaded, with a busy indicator)
-            self._begin_validation()
-    
-    def _on_back(self):
-        """Handle Back button click."""
-        current_index = self.pages.currentIndex()
-        
-        if current_index > 0:
-            self.pages.setCurrentIndex(current_index - 1)
-
-            # Update navigation from the landed page's logical step (the
-            # previous stack page is always an earlier step, so its state is
-            # preserved) rather than fragile index arithmetic.
-            landed = self.pages.currentWidget().property("wizard_step")
-            self.back_button.setEnabled(landed != "welcome")
-            self.next_button.setEnabled(True)
-            self.next_button.setText(
-                "Validate & Save" if landed == "credential" else "Next"
-            )
+def _esc(text):
+    s = "" if text is None else str(text)
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")

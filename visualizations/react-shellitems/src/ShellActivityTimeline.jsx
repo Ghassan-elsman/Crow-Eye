@@ -9,6 +9,7 @@ ChartJS.register(LinearScale, CategoryScale, PointElement, Tooltip, ScatterContr
 
 // Shared geometry so the sticky hour ruler and the bubble chart line up exactly.
 const Y_AXIS_W = 150
+const LABEL_CHARS = Math.floor((Y_AXIS_W - 8) / (12 * 0.56))
 const PAD_RIGHT = 12
 const ROW = 26
 const RULER_H = 30
@@ -18,6 +19,18 @@ const X_SPAN = X_MAX - X_MIN
 const RULER_HOURS = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22]
 const hourLeftPct = (h) => ((h - X_MIN) / X_SPAN) * 100
 
+
+// The axis is a fixed width (it must match the sticky ruler), and chart.js
+// draws a longer label past the canvas edge, so a name lost its start
+// ('sbarbitrator64.exe' for an Xbox service). Cut in the middle instead: the
+// start and the end (extension, TLD, last folder) stay readable; the full
+// name is in the tooltip.
+function shortLabel(s, max) {
+  s = String(s ?? '')
+  if (s.length <= max) return s
+  const tail = Math.min(10, Math.floor(max / 3))
+  return s.slice(0, max - tail - 1) + '\u2026' + s.slice(-tail)
+}
 function radius(value, max) {
   if (!value || value <= 0) return 0
   return 4 + 13 * Math.sqrt(value / (max || 1))   // area ~ value
@@ -109,12 +122,13 @@ export default function ShellActivityTimeline({ data }) {
         grid: { color: 'rgba(99,102,241,0.10)', tickLength: 0 } },
       y: { type: 'category', labels, offset: true,
         afterFit: (s) => { s.width = Y_AXIS_W },
-        ticks: { color: '#cbd5e1', font: { size: 12 } }, grid: { color: 'rgba(99,102,241,0.10)' } },
+        ticks: { color: '#cbd5e1', font: { size: 12 },
+          callback(v) { return shortLabel(this.getLabelForValue(v), LABEL_CHARS) } }, grid: { color: 'rgba(99,102,241,0.10)' } },
     },
   }), [labels])
 
   if (!points.length) {
-    return <div className="detail-none small">No timed shell items on this day.</div>
+    return <div className="detail-none small">No timed items on this day.</div>
   }
 
   const innerH = Math.max(200, items.length * ROW)
@@ -128,7 +142,7 @@ export default function ShellActivityTimeline({ data }) {
 
       <div className="atl-scroll" style={{ height: scrollH }}>
         <div className="atl-hourbar" style={{ height: RULER_H }}>
-          <div className="atl-hb-spacer" style={{ width: Y_AXIS_W }}>Shell item</div>
+          <div className="atl-hb-spacer" style={{ width: Y_AXIS_W }}>Item</div>
           <div className="atl-hb-track" style={{ marginRight: PAD_RIGHT }}>
             {RULER_HOURS.map(h => (
               <span key={h} className="atl-hb-tick" style={{ left: `${hourLeftPct(h)}%` }}>

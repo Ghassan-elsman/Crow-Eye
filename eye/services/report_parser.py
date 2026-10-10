@@ -10,6 +10,7 @@ and converts them to ReportBlock objects for import into ReportEngine.
 from typing import List, Dict, Any, Optional
 from bs4 import BeautifulSoup
 import base64
+import json
 import os
 import logging
 from datetime import datetime

@@ -34,6 +34,8 @@ import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from styles import CrowEyeStyles
 from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
+from ui.site_theme import (set_variant, set_status, set_role, restyle, keep_style,
+                           log_view_sheet, font as site_font)
 
 
 # Crow-Eye's application-wide busy state (ui/busy_guard.py). The engine also
@@ -152,6 +154,10 @@ class CorrelationEngineWrapper(QObject):
     
     progress_updated = pyqtSignal(int, int, str) # wing_index, total, status
     anchor_progress_updated = pyqtSignal(int, int) # NEW: anchor_index, total_anchors
+    # What the engine is doing right now ("Loading mft_usn", "Correlating
+    # identities") with done / total - the long phases used to show only
+    # "0/1 (0.0%)" for as long as an hour.
+    phase_progress = pyqtSignal(int, int, str)
     execution_completed = pyqtSignal(dict) # results summary
     wing_completed = pyqtSignal(dict) # NEW: Signal for individual wing completion
     execution_failed = pyqtSignal(str) # error message
@@ -214,6 +220,11 @@ class CorrelationEngineWrapper(QObject):
             from ..engine.progress_tracking import ProgressEventType
             
             if event.event_type == ProgressEventType.WINDOW_PROGRESS:
+                phase = (getattr(event, 'additional_data', None) or {}).get('phase_progress')
+                if phase:
+                    self.phase_progress.emit(int(phase.get('done', 0)), int(phase.get('total', 0)),
+                                             str(phase.get('label', '')))
+                    return
                 # Update progress bar based on window progress
                 progress = event.overall_progress
                 if progress.total_windows > 0:
@@ -250,6 +261,27 @@ class CorrelationEngineWrapper(QObject):
                 self.anchor_progress_updated.emit(anchors_processed, total_anchors)
     
     def run(self):
+        """Execute correlation in worker thread - runs wings sequentially.
+
+        The results database's SHA-256 before and after the whole run (all
+        wings) goes into the case's custody ledger.
+        """
+        try:
+            from pathlib import Path as _Path
+            from utils import custody as _custody
+            out = getattr(self.pipeline_config, "output_directory", None)
+            change = _custody.database_change(
+                str(_Path(out) / "correlation_results.db") if out else None, "correlation",
+                pipeline=getattr(self.pipeline_config, "pipeline_name", None),
+                wings=len(getattr(self, "selected_wings", None) or []))
+        except Exception:
+            change = None
+        if change is None:
+            return self._run_wings()
+        with change:
+            return self._run_wings()
+
+    def _run_wings(self):
         """Execute correlation in worker thread - runs wings sequentially"""
         try:
             # Clear wing summaries from previous execution
@@ -631,7 +663,7 @@ class ExecutionControlWidget(QWidget):
         layout = QFormLayout()
         
         self.pipeline_name_label = QLabel("No pipeline loaded")
-        self.pipeline_name_label.setStyleSheet("font-weight: bold;")
+        self.pipeline_name_label.setFont(site_font("ui", 13, QFont.Bold))
         layout.addRow("Pipeline:", self.pipeline_name_label)
         
         self.feather_count_label = QLabel("0")
@@ -655,32 +687,13 @@ class ExecutionControlWidget(QWidget):
         
         # Instructions
         info_label = QLabel("Select which Wings to execute:")
-        info_label.setStyleSheet("color: #888; font-size: 9pt;")
+        set_role(info_label, "muted")
         layout.addWidget(info_label)
         
         # Wing list with checkboxes
         self.wing_list = QListWidget()
         self.wing_list.setMaximumHeight(120)
         self.wing_list.itemChanged.connect(self._update_selected_count)
-        self.wing_list.setStyleSheet("""
-            QListWidget {
-                background-color: #1e293b;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E5E7EB;
-                font-size: 9pt;
-            }
-            QListWidget::item {
-                padding: 5px;
-                border-bottom: 1px solid #334155;
-            }
-            QListWidget::item:hover {
-                background-color: #334155;
-            }
-            QListWidget::item:selected {
-                background-color: #3B82F6;
-            }
-        """)
         layout.addWidget(self.wing_list)
         
         # Buttons
@@ -696,13 +709,20 @@ class ExecutionControlWidget(QWidget):
         deselect_all_btn.setIcon(CrowEyeIcons.delete())
         deselect_all_btn.clicked.connect(self._deselect_all_wings)
         deselect_all_btn.setMaximumWidth(120)
+        set_variant(select_all_btn, "ghost")
+        set_variant(deselect_all_btn, "ghost")
+        # The site's button font is uppercase and tracked: let the cap grow
+        # to the label so "Select All" is not clipped to "SELECT AL".
+        for b in (select_all_btn, deselect_all_btn):
+            b.setMaximumWidth(max(b.maximumWidth(), b.sizeHint().width()))
         button_layout.addWidget(deselect_all_btn)
         
         button_layout.addStretch()
         
         # Selected count label
         self.selected_count_label = QLabel("0/0 selected")
-        self.selected_count_label.setStyleSheet("color: #00d9ff; font-weight: bold;")
+        self.selected_count_label.setFont(site_font("ui", 13, QFont.Bold))
+        set_status(self.selected_count_label, "info")
         button_layout.addWidget(self.selected_count_label)
         
         layout.addLayout(button_layout)
@@ -725,8 +745,9 @@ class ExecutionControlWidget(QWidget):
         browse_btn = QPushButton("Browse...")
         browse_btn.setIcon(CrowEyeIcons.folder())
         browse_btn.clicked.connect(self._browse_output_dir)
+        set_variant(browse_btn, "ghost")
         layout.addWidget(browse_btn)
-        
+
         group.setLayout(layout)
         return group
     
@@ -744,27 +765,7 @@ class ExecutionControlWidget(QWidget):
         self.execute_btn.setIcon(CrowEyeIcons.play())
         self.execute_btn.setEnabled(False)
         self.execute_btn.setMinimumHeight(35)
-        self.execute_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #10B981, stop:0.5 #059669, stop:1 #10B981);
-                color: white;
-                border: 2px solid #047857;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #34D399, stop:0.5 #10B981, stop:1 #34D399);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: 2px solid #374151;
-            }
-        """)
+        set_variant(self.execute_btn, "primary")
         self.execute_btn.clicked.connect(self._start_execution)
         layout.addWidget(self.execute_btn)
         
@@ -772,27 +773,7 @@ class ExecutionControlWidget(QWidget):
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setMinimumHeight(30)
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #EF4444, stop:1 #DC2626);
-                color: white;
-                border: 2px solid #B91C1C;
-                border-radius: 4px;
-                font-size: 9pt;
-                font-weight: bold;
-                padding: 4px 12px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F87171, stop:1 #EF4444);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: #374151;
-            }
-        """)
+        set_variant(self.cancel_btn, "danger")
         self.cancel_btn.clicked.connect(self._cancel_execution)
         layout.addWidget(self.cancel_btn)
         
@@ -800,27 +781,7 @@ class ExecutionControlWidget(QWidget):
         self.load_results_btn = QPushButton("Load Last Results")
         self.load_results_btn.setIcon(CrowEyeIcons.history())
         self.load_results_btn.setMinimumHeight(30)
-        self.load_results_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #3B82F6, stop:1 #2563EB);
-                color: white;
-                border: 2px solid #1D4ED8;
-                border-radius: 4px;
-                font-size: 9pt;
-                font-weight: bold;
-                padding: 4px 12px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #60A5FA, stop:1 #3B82F6);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: #374151;
-            }
-        """)
+        set_variant(self.load_results_btn, "ghost")
         self.load_results_btn.clicked.connect(self._load_last_results)
         layout.addWidget(self.load_results_btn)
         
@@ -844,25 +805,6 @@ class ExecutionControlWidget(QWidget):
         self.progress_bar.setMaximumHeight(24)
         
         # Apply enhanced progress bar styling
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                background-color: #1E293B;
-                border: 2px solid #475569;
-                border-radius: 6px;
-                text-align: center;
-                color: #FFFFFF;
-                font-size: 10pt;
-                font-weight: 600;
-                font-family: 'Segoe UI', 'Roboto', sans-serif;
-            }
-            QProgressBar::chunk {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #00D9FF, stop:0.15 #00FFFF, stop:0.3 #10B981, 
-                    stop:0.5 #00FFFF, stop:0.7 #10B981, stop:0.85 #00FFFF, stop:1 #00D9FF);
-                border-radius: 4px;
-                margin: 1px;
-            }
-        """)
         
         layout.addWidget(self.progress_bar)
         
@@ -870,34 +812,19 @@ class ExecutionControlWidget(QWidget):
         self.status_label = QLabel("Ready to execute")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setMaximumHeight(20) # Compact status
-        self.status_label.setStyleSheet("font-weight: bold; color: #00d9ff;")
+        self.status_label.setFont(site_font("ui", 13, QFont.Bold))
+        set_status(self.status_label, "info")
         layout.addWidget(self.status_label)
         
-        # Terminal output (takes all remaining space). Styling pulls from
-        # the canonical Crow-Eye palette via the Colors tokens so the log
-        # matches every other dark-canvas widget in the app.
-        try:
-            from styles import Colors as _Colors
-            _bg = _Colors.BG_TABLES
-            _fg = _Colors.ACCENT_CYAN
-            _border = _Colors.BORDER_SUBTLE
-        except ImportError:
-            _bg, _fg, _border = "#0B1220", "#00FFFF", "#334155"
+        # Terminal output (takes all remaining space): the loading dialog's
+        # log well - site mono font, the same background and hairline.
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setMinimumHeight(300)
-        self.log_output.setFont(QFont("Consolas", 9))
-        self.log_output.setStyleSheet(f"""
-            QTextEdit {{
-                font-family: 'Consolas', 'Courier New', monospace;
-                font-size: 9pt;
-                background-color: {_bg};
-                color: {_fg};
-                border: 1px solid {_border};
-                border-radius: 6px;
-                padding: 5px 5px 30px 5px;
-            }}
-        """)
+        self.log_output.setFont(site_font("mono", 12))
+        self.log_output.setStyleSheet(log_view_sheet()
+                                      + " QTextEdit { padding: 5px 5px 30px 5px; }")
+        keep_style(self.log_output)
         # Set document margins for extra bottom space
         self.log_output.document().setDocumentMargin(8)
         layout.addWidget(self.log_output, stretch=1) # Terminal gets all stretch
@@ -908,28 +835,13 @@ class ExecutionControlWidget(QWidget):
         # bracketed tags like [WARN], [ERROR], [Rule pre-flight],
         # [Evidence accounting]) so the analyst doesn't lose them when
         # the log scrolls away. Same source, separate sink.
-        try:
-            from styles import CrowEyeStyles as _CrowEyeStyles
-            _group_style = _CrowEyeStyles.GROUP_BOX
-            _list_bg = _Colors.BG_PANELS
-            _list_text = _Colors.TEXT_PRIMARY
-        except Exception:
-            _group_style = ""
-            _list_bg = "#1E293B"
-            _list_text = "#E2E8F0"
-
         self.diagnostics_group = QGroupBox("Diagnostics (filtered from log)")
-        self.diagnostics_group.setStyleSheet(_group_style)
         diag_layout = QVBoxLayout(self.diagnostics_group)
         diag_layout.setContentsMargins(8, 14, 8, 8)
         diag_layout.setSpacing(4)
 
         self.diagnostics_list = QListWidget()
-        self.diagnostics_list.setStyleSheet(
-            f"QListWidget {{ background-color: {_list_bg}; color: {_list_text}; "
-            f"border: 1px solid {_border}; border-radius: 4px; padding: 4px; "
-            f"font-family: 'Consolas', 'Courier New', monospace; font-size: 9pt; }}"
-        )
+        self.diagnostics_list.setFont(site_font("mono", 12))
         self.diagnostics_list.setMaximumHeight(140)
         self.diagnostics_list.setAlternatingRowColors(True)
         diag_layout.addWidget(self.diagnostics_list)
@@ -1059,7 +971,7 @@ class ExecutionControlWidget(QWidget):
         # Engine description (more compact)
         self.engine_description = QLabel()
         self.engine_description.setWordWrap(True)
-        self.engine_description.setStyleSheet("color: #888; font-size: 8pt; padding: 3px;")
+        set_role(self.engine_description, "muted")
         self.engine_description.setMaximumHeight(40)
         layout.addWidget(self.engine_description)
         
@@ -1085,7 +997,7 @@ class ExecutionControlWidget(QWidget):
         
         # Info label at top
         info_label = QLabel("Tip: Filter correlation to specific time period")
-        info_label.setStyleSheet("color: #888; font-size: 8pt;")
+        set_role(info_label, "muted")
         layout.addWidget(info_label)
         
         # Start time (more compact)
@@ -1096,10 +1008,6 @@ class ExecutionControlWidget(QWidget):
         self.start_datetime.setCalendarPopup(True)
         self.start_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.start_datetime.setDateTime(QDateTime.currentDateTime().addYears(-1))
-        # Apply dark theme to calendar popup
-        if self.start_datetime.calendarWidget():
-            self.start_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
-        self.start_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
         start_layout.addWidget(self.start_datetime, stretch=1)
         
         self.start_enabled = QCheckBox("Enable")
@@ -1118,10 +1026,6 @@ class ExecutionControlWidget(QWidget):
         self.end_datetime.setCalendarPopup(True)
         self.end_datetime.setDisplayFormat("yyyy-MM-dd HH:mm")
         self.end_datetime.setDateTime(QDateTime.currentDateTime())
-        # Apply dark theme to calendar popup
-        if self.end_datetime.calendarWidget():
-            self.end_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
-        self.end_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
         end_layout.addWidget(self.end_datetime, stretch=1)
         
         self.end_enabled = QCheckBox("Enable")
@@ -1143,7 +1047,7 @@ class ExecutionControlWidget(QWidget):
         # Info label
         info_label = QLabel("Enter identities to search for (one per line). Supports wildcards (* and ?).")
         info_label.setWordWrap(True)
-        info_label.setStyleSheet("color: #888; font-size: 8pt;")
+        set_role(info_label, "muted")
         layout.addWidget(info_label)
         
         # Identity input
@@ -1228,7 +1132,9 @@ class ExecutionControlWidget(QWidget):
             # No wings in pipeline - show message
             info_item = QListWidgetItem("[WARN] No Wings configured in this pipeline")
             info_item.setFlags(Qt.ItemIsEnabled) # Not selectable
-            info_item.setForeground(Qt.yellow)
+            from ui.site_theme import STATUS_COLORS
+            from PyQt5.QtGui import QColor
+            info_item.setForeground(QColor(STATUS_COLORS["warn"]))
             self.wing_list.addItem(info_item)
             
             # Disable execute button
@@ -1480,6 +1386,10 @@ class ExecutionControlWidget(QWidget):
                 self._queue_progress_event,
                 Qt.QueuedConnection
             )
+            self.engine_wrapper.phase_progress.connect(
+                self._update_phase_progress,
+                Qt.QueuedConnection
+            )
             self.engine_wrapper.wing_completed.connect(
                 self._on_wing_completed,
                 Qt.QueuedConnection
@@ -1557,9 +1467,16 @@ class ExecutionControlWidget(QWidget):
                 # Set cancellation flag on wrapper immediately (Requirement 8.1)
                 self.engine_wrapper.cancel()
                 
-                # Give it time to save partial results (Requirement 8.4 - within 2 seconds)
+                # Give it time to save partial results. The engine checks the
+                # flag between read batches, identities and semantic-mapping
+                # chunks, then saves the run's statistics and totals - which
+                # takes longer than the 15 s this used to allow, so a run
+                # stopped in the semantic phase was killed mid-save and left
+                # with no statistics at all. Wait for it (the window stays
+                # responsive meanwhile); terminate() only as a last resort
+                # (killing a thread mid-write can corrupt the results DB).
                 self.worker_thread.quit()
-                if not self.worker_thread.wait(2000): # Wait up to 2 seconds (Requirement 8.4)
+                if not self._wait_for_worker(self.CANCEL_WAIT_SECONDS):
                     self._batched_log.append_text("[WARN] Force terminating execution...")
                     self._batched_log.flush()
                     self.worker_thread.terminate()
@@ -1583,7 +1500,11 @@ class ExecutionControlWidget(QWidget):
                 elif hasattr(self.engine_wrapper.executor, 'stats'):
                     partial_results_count = getattr(self.engine_wrapper.executor.stats, 'total_identities', 0)
             
-            if partial_results_count > 0:
+            # The wings the run got through, saved before it stopped: their
+            # results open, marked CANCELLED, instead of nothing at all.
+            stopped_summary = self._stopped_run_summary()
+
+            if partial_results_count > 0 and stopped_summary is None:
                 QMessageBox.information(
                     self,
                     "Execution Cancelled",
@@ -1596,13 +1517,59 @@ class ExecutionControlWidget(QWidget):
             else:
                 self._batched_log.append_text("[OK] Partial results have been saved to database")
                 self._batched_log.flush()
-            
+
             self.status_label.setText("Paused - Click Resume to continue")
-            
+
             # Change button to Resume
             self._switch_to_resume_mode()
-            
+
             self._cleanup_thread()
+
+            if stopped_summary is not None:
+                self._on_execution_completed(stopped_summary)
+                # _on_execution_completed resets the button; a stopped run
+                # can still be resumed.
+                self._switch_to_resume_mode()
+
+    # How long Stop waits for the run to stop by itself and save what it has.
+    CANCEL_WAIT_SECONDS = 180
+
+    def _wait_for_worker(self, seconds):
+        """Wait up to `seconds` for the worker thread to end, keeping the window
+        responsive. True if it ended."""
+        import time as _time
+        from PyQt5.QtWidgets import QApplication
+        deadline = _time.monotonic() + seconds
+        while _time.monotonic() < deadline:
+            if self.worker_thread.wait(100):
+                return True
+            QApplication.processEvents()
+        return self.worker_thread.wait(0)
+
+    def _stopped_run_summary(self):
+        """The completion summary of a run stopped after it saved something:
+        the wings it ran, marked cancelled. None when nothing was saved."""
+        wrapper = self.engine_wrapper
+        wings = [w for w in (getattr(wrapper, '_wing_summaries', None) or [])
+                 if isinstance(w, dict) and w.get('execution_id')]
+        if not wings:
+            return None
+        for w in wings:
+            w['cancelled'] = True
+        last = wings[-1]
+        return {
+            'pipeline_name': getattr(getattr(wrapper, 'pipeline_config', None), 'pipeline_name', None),
+            'total_wings_executed': len(wings),
+            'total_matches_all_wings': sum(w.get('total_matches', 0) or 0 for w in wings),
+            'execution_times': [w.get('execution_time', 0) for w in wings],
+            'wing_summaries': wings,
+            'execution_complete': False,
+            'cancelled': True,
+            'execution_id': last.get('execution_id'),
+            'database_path': last.get('database_path'),
+            'engine_type': last.get('engine_type', 'identity_based'),
+            'run_group_id': last.get('run_group_id'),
+        }
     
     def _resume_execution(self):
         """Resume paused execution."""
@@ -1677,157 +1644,35 @@ class ExecutionControlWidget(QWidget):
         from .crow_eye_icons import CrowEyeIcons
         self.cancel_btn.setText("Resume")
         self.cancel_btn.setIcon(CrowEyeIcons.play())
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #10B981, stop:1 #059669);
-                color: white;
-                border: 2px solid #047857;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #34D399, stop:1 #10B981);
-                border: 2px solid #059669;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #059669, stop:1 #047857);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: 2px solid #374151;
-            }
-        """)
+        restyle(self.cancel_btn, "primary")
         self.cancel_btn.setEnabled(True)
         self.cancel_btn.setToolTip("Resume paused execution from where it left off")
     
     def _switch_to_cancel_mode(self):
         """Switch resume button back to cancel mode with enhanced styling."""
         self.cancel_btn.setText("Cancel")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #EF4444, stop:1 #DC2626);
-                color: white;
-                border: 2px solid #B91C1C;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F87171, stop:1 #EF4444);
-                border: 2px solid #DC2626;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #DC2626, stop:1 #B91C1C);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: 2px solid #374151;
-            }
-        """)
+        restyle(self.cancel_btn, "danger")
         self.cancel_btn.setEnabled(False) # Will be enabled when execution starts
         self.cancel_btn.setToolTip("Cancel execution and save partial results")
     
     def _switch_to_pausing_mode(self):
         """Switch button to pausing mode with animated styling."""
         self.cancel_btn.setText("Pausing...")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F59E0B, stop:1 #D97706);
-                color: white;
-                border: 2px solid #B45309;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FBBF24, stop:1 #F59E0B);
-            }
-            QPushButton:disabled {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F59E0B, stop:1 #D97706);
-                color: white;
-                border: 2px solid #B45309;
-            }
-        """)
+        restyle(self.cancel_btn, "warning")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setToolTip("Pausing execution and saving partial results...")
     
     def _switch_to_cancelling_mode(self):
         """Switch button to cancelling mode with animated styling (Requirement 8.3)."""
         self.cancel_btn.setText("Cancelling...")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F59E0B, stop:1 #D97706);
-                color: white;
-                border: 2px solid #B45309;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #FBBF24, stop:1 #F59E0B);
-            }
-            QPushButton:disabled {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F59E0B, stop:1 #D97706);
-                color: white;
-                border: 2px solid #B45309;
-            }
-        """)
+        restyle(self.cancel_btn, "warning")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.setToolTip("Cancelling execution and saving partial results...")
     
     def _switch_to_executing_mode(self):
         """Switch button to executing mode with enhanced styling."""
         self.cancel_btn.setText("Cancel")
-        self.cancel_btn.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #EF4444, stop:1 #DC2626);
-                color: white;
-                border: 2px solid #B91C1C;
-                border-radius: 6px;
-                font-size: 10pt;
-                font-weight: bold;
-                padding: 6px 16px;
-                min-height: 30px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #F87171, stop:1 #EF4444);
-                border: 2px solid #DC2626;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #DC2626, stop:1 #B91C1C);
-            }
-            QPushButton:disabled {
-                background: #4B5563;
-                color: #9CA3AF;
-                border: 2px solid #374151;
-            }
-        """)
+        restyle(self.cancel_btn, "danger")
         self.cancel_btn.setEnabled(True)
         self.cancel_btn.setToolTip("Cancel execution and save partial results")
     
@@ -1851,6 +1696,16 @@ class ExecutionControlWidget(QWidget):
             logger.error(f"Error updating progress: {e}", exc_info=True)
             # Continue processing - don't crash the UI
     
+    def _update_phase_progress(self, done: int, total: int, label: str):
+        """The engine's current phase on the bar and the status line."""
+        try:
+            if total > 0:
+                self._update_anchor_progress(done, total)
+            pct = (done / total * 100.0) if total else 0.0
+            self.status_label.setText(f"{label}: {done:,} / {total:,} ({pct:.0f}%)")
+        except Exception as e:
+            logger.error(f"Error showing phase progress: {e}", exc_info=True)
+
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
         Update progress bar based on anchor processing.
@@ -1947,11 +1802,17 @@ class ExecutionControlWidget(QWidget):
                 logger.error(f"Invalid summary type: {type(summary)}")
                 summary = {} # Use empty dict as fallback
             
+            stopped = bool(summary.get('cancelled'))
+
             # Set to determinate mode and show complete
             self.progress_bar.setMaximum(100)
             self.progress_bar.setValue(100)
-            self.progress_bar.setFormat("Complete")
-            apply_status_to_label(self.status_label, "OK", "All wings executed successfully")
+            self.progress_bar.setFormat("Stopped" if stopped else "Complete")
+            if stopped:
+                apply_status_to_label(self.status_label, "WARN",
+                                      "Stopped - the saved results are loading, marked CANCELLED")
+            else:
+                apply_status_to_label(self.status_label, "OK", "All wings executed successfully")
             
             # Reset button to default state
             self._switch_to_cancel_mode()
@@ -1981,12 +1842,21 @@ class ExecutionControlWidget(QWidget):
             # reference destroys the window.
             self._completion_box = QMessageBox(self)
             self._completion_box.setIcon(QMessageBox.Information)
-            self._completion_box.setWindowTitle("Execution Complete")
-            self._completion_box.setText(
-                f"All wings executed successfully!\n\n"
-                f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
-                f"Results are loading into their tabs."
-            )
+            if stopped:
+                self._completion_box.setWindowTitle("Execution Stopped")
+                self._completion_box.setText(
+                    f"The run was stopped.\n\n"
+                    f"Wings saved: {summary.get('total_wings_executed', 0)}\n\n"
+                    f"What it saved is loading into the results, marked CANCELLED. "
+                    f"Resume continues the run."
+                )
+            else:
+                self._completion_box.setWindowTitle("Execution Complete")
+                self._completion_box.setText(
+                    f"All wings executed successfully!\n\n"
+                    f"Total Wings: {summary.get('total_wings_executed', 0)}\n\n"
+                    f"Results are loading into their tabs."
+                )
             self._completion_box.setStandardButtons(QMessageBox.Ok)
             self._completion_box.setWindowModality(Qt.NonModal)
             self._completion_box.setAttribute(Qt.WA_DeleteOnClose)
@@ -2158,33 +2028,28 @@ class ExecutionControlWidget(QWidget):
             events = self._event_queue.dequeue_batch(max_count=30)
             
             if events:
-                # Process only the most recent event for display
-                latest_event = events[-1]
-                
-                # Validate event structure
-                if not isinstance(latest_event, dict):
-                    logger.error(f"Invalid event type: {type(latest_event)}")
-                    return
-                
-                if 'args' not in latest_event:
-                    logger.error(f"Missing 'args' in event: {latest_event}")
-                    return
-                
-                args = latest_event.get('args', ())
-                
-                # Call the original progress update handler with the latest event
-                try:
-                    if len(args) == 3:
-                        # This is a progress_updated signal (wing_index, total_wings, status)
-                        self._update_progress(*args)
-                    elif len(args) == 2:
-                        # This is an anchor_progress_updated signal (anchor_index, total_anchors)
-                        self._update_anchor_progress(*args)
-                    else:
-                        logger.warning(f"Unexpected event args length: {len(args)}")
-                except Exception as e:
-                    logger.error(f"Error processing progress event: {e}", exc_info=True)
-                    # Continue processing - don't let one bad event break everything
+                # The most recent event of EACH kind: a wing-status event and
+                # an anchor event arriving in the same batch used to keep only
+                # the last one, so "Executing Wing 1 of 3" never showed.
+                latest = {}
+                for event in events:
+                    if not isinstance(event, dict) or 'args' not in event:
+                        logger.error(f"Invalid progress event: {event!r}")
+                        continue
+                    latest[len(event.get('args', ()))] = event.get('args', ())
+                for size in (3, 2):
+                    args = latest.get(size)
+                    if args is None:
+                        continue
+                    try:
+                        if size == 3:
+                            # progress_updated (wing_index, total_wings, status)
+                            self._update_progress(*args)
+                        else:
+                            # anchor_progress_updated (anchor_index, total_anchors)
+                            self._update_anchor_progress(*args)
+                    except Exception as e:
+                        logger.error(f"Error processing progress event: {e}", exc_info=True)
         except Exception as e:
             logger.error(f"Error in event queue processing: {e}", exc_info=True)
             # Continue processing - don't crash the UI thread
@@ -2467,7 +2332,8 @@ class ExecutionControlWidget(QWidget):
         # Description
         desc_label = QLabel(desc)
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #888; margin: 10px;")
+        desc_label.setContentsMargins(10, 10, 10, 10)
+        set_role(desc_label, "muted")
         layout.addWidget(desc_label)
         
         # Features list

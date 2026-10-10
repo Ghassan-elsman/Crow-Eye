@@ -30,7 +30,12 @@ License: Open Source
 import os
 import logging
 from typing import Tuple, List, Optional
-from ctypes import WinDLL, wintypes
+try:
+    from ctypes import WinDLL, wintypes
+except (ImportError, ValueError):
+    # Linux: signatures are read from the file itself; the API path is
+    # Windows-only and _init_windows_api already tolerates its absence.
+    WinDLL = wintypes = None
 import subprocess
 
 # Configure logging

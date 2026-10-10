@@ -410,6 +410,84 @@
       }
     },
     {
+      "name": "query_user_behavior",
+      "description": "WHAT DID THE PEOPLE ON THIS COMPUTER DO. Runs Crow-Eye's User Behavior Analytics (81 rules over every parsed artifact: sign-ins and sign-outs, programs opened, files opened / created / renamed / deleted, downloads and uploads, USB devices, websites, persistence and services, log clearing and other anti-forensics) and returns BEHAVIOUR - one plain sentence per event with who, when, how sure, and the evidence rows behind it. Use it for 'what did <user> do on <day>', 'who signed in and when', 'what was downloaded or run that evening', 'anything suspicious this week' - questions about people and activity rather than about one artifact. Pick any day or range; the analysis runs once per case and every later call is fast. Each event's 'actor_basis' says how the person was attributed and 'caveat' what the artifact cannot prove; 'signed_in_user' only says who was signed in, never who acted. Events are interpretations: confirm a claim against its evidence (database, table, rowids) with query_database before stating it as fact. 'rules_unavailable' lists behaviours that could not be looked for because their artifact was not parsed - their absence is not evidence of absence.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "day": {
+            "type": "string",
+            "description": "One calendar day, 'YYYY-MM-DD' (UTC). The simplest way to ask about a day."
+          },
+          "start_time": {
+            "type": "string",
+            "description": "Range start, 'YYYY-MM-DD HH:MM:SS' (UTC). Use with end_time."
+          },
+          "end_time": {
+            "type": "string",
+            "description": "Range end, 'YYYY-MM-DD HH:MM:SS' (UTC)."
+          },
+          "around": {
+            "type": "string",
+            "description": "A moment to centre on, 'YYYY-MM-DD HH:MM:SS' (UTC)."
+          },
+          "window_minutes": {
+            "type": "integer",
+            "description": "Minutes either side of `around`. Default 30."
+          },
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Only these people (account names). Also returns what happened while they were signed in, labelled as such."
+          },
+          "activities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "e.g. ['logon','file_download','execution','anti_forensics','usb_device','file_deleted']."
+          },
+          "severities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Any of 'critical', 'suspicious', 'notable', 'routine'."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "UBA rule ids, e.g. ['interactive_logon','failed_logon']."
+          },
+          "search": {
+            "type": "string",
+            "description": "Free text matched against the description, actor and details."
+          },
+          "summary_only": {
+            "type": "boolean",
+            "description": "Only the counts by activity, person and severity for the window - a first look before asking for events."
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "description": "Oldest first (default) to read the story forwards, or newest first."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Maximum events to return. Default 100, at most 300."
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "name": "query_correlation_results",
       "description": "Find time-based or identity-based correlations between events.",
       "parameters": {

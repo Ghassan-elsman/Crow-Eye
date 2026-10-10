@@ -49,7 +49,8 @@ NOT_FETCHED_BY_THE_BRIDGE = {
     ("mft_file_names", "modified"),
     ("mft_file_names", "accessed"),
     ("mft_file_names", "mft_modified"),
-    ("filename_changes", "change_timestamp"),
+    # Renames: read by Eye's time sweep; the lane draws the journal records.
+    ("filename_changes", "rename_time"),
     # Supplementary SRUM tables. `getSrumEnergyData` exists as a slot but the
     # React app never calls it, and `srum_app_timeline` has no lane at all.
     ("srum_energy_usage", "timestamp"),
@@ -71,7 +72,7 @@ def _map_driven_tables():
     """
     tables = set()
     for m in re.finditer(
-            r'_mapped_(?:rows|query)\(\s*\n?\s*(?:"[^"]+",\s*)?'
+            r'_mapped_(?:rows|query|time_columns)\(\s*\n?\s*(?:"[^"]+",\s*)?'
             r'"(\w+)",\s*"(\w+)"', BRIDGE_SRC):
         tables.add(m.group(2))
     # `getEventLogData` loops over EVENT_LOG_TABLES rather than naming each.

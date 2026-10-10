@@ -985,7 +985,11 @@ class QueryProcessor:
             v_res = self.cm.database_service.execute_query(log_db, "SELECT COUNT(*) as c FROM SecurityLogs WHERE EventID=4776")
             
             # Detect Remote Desktop / Network logons (Logon Type 3 or 10 in description)
-            r_res = self.cm.database_service.execute_query(log_db, "SELECT COUNT(*) as c FROM SecurityLogs WHERE EventID=4624 AND (EventDescription LIKE '%Logon Type: 3%' OR EventDescription LIKE '%Logon Type: 10%')")
+            # Offline rows carry the EventData as "LogonType: 3"; the older
+            # "Logon Type: 3" form is kept for message-rendered text.
+            _remote = ("(EventDescription LIKE '%LogonType: 3;%' OR EventDescription LIKE '%LogonType: 10;%' "
+                       "OR EventDescription LIKE '%Logon Type: 3%' OR EventDescription LIKE '%Logon Type: 10%')")
+            r_res = self.cm.database_service.execute_query(log_db, "SELECT COUNT(*) as c FROM SecurityLogs WHERE EventID=4624 AND " + _remote)
             
             s_count = s_res.get("data", [{}])[0].get("c", 0) if s_res.get("success") and s_res.get("data") else 0
             f_count = f_res.get("data", [{}])[0].get("c", 0) if f_res.get("success") and f_res.get("data") else 0
@@ -1008,7 +1012,7 @@ class QueryProcessor:
                 )
                 
                 # Table with detailed remote connections
-                remote_query = "SELECT EventTimestampUTC, EventID, User, ComputerName, EventDescription FROM SecurityLogs WHERE EventID=4624 AND (EventDescription LIKE '%Logon Type: 3%' OR EventDescription LIKE '%Logon Type: 10%') ORDER BY EventTimestampUTC DESC"
+                remote_query = "SELECT EventTimestampUTC, EventID, User, ComputerName, EventDescription FROM SecurityLogs WHERE EventID=4624 AND " + _remote + " ORDER BY EventTimestampUTC DESC"
                 safe_add_table(log_db, remote_query, "Remote Access & Network Logons (Type 3/10)")
                 
                 # --- ENHANCED 4648 PARSING ---
@@ -1054,8 +1058,8 @@ class QueryProcessor:
                     "pie"
                 )
         
-        safe_add_table(pref_db, "SELECT executable_name, run_count, last_executed, (SELECT source_path FROM prefetch_data pd2 WHERE pd2.executable_name = prefetch_data.executable_name LIMIT 1) as full_path FROM prefetch_data ORDER BY last_executed DESC", "Recent Prefetch Executions (App Names & Paths)")
-        safe_add_table(am_db, "SELECT name, version, publisher, install_date, path FROM InventoryApplication ORDER BY install_date DESC", "Amcache: Installed Applications & Binary Paths")
+        safe_add_table(pref_db, "SELECT executable_name, run_count, last_executed, filename AS prefetch_file FROM prefetch_data ORDER BY last_executed DESC", "Recent Prefetch Executions (App Names & Prefetch Files)")
+        safe_add_table(am_db, "SELECT name, version, publisher, install_date, root_dir_path AS path FROM InventoryApplication ORDER BY install_date DESC", "Amcache: Installed Applications & Install Folders")
         
         # SRUM (Long-term activity)
         if srum_db:
@@ -1214,14 +1218,14 @@ class QueryProcessor:
              self.cm.report_engine.add_data_table("Internal Protocol List", ["Type", "Name", "Details", "Status"], remote_sw, "Detected Remote Control & Communication Protocols")
 
         if reg_db:
-            safe_add_table(reg_db, "SELECT name, row_data as data, type, key_path FROM machine_run UNION SELECT name, row_data as data, type, key_path FROM user_run", "Active Persistence Keys (Run/RunOnce)")
+            safe_add_table(reg_db, "SELECT 'HKLM' AS hive, name, row_data AS data, type FROM machine_run UNION SELECT 'HKCU' AS hive, name, row_data AS data, type FROM user_run", "Active Persistence Keys (Run/RunOnce)")
             safe_add_table(reg_db, "SELECT display_name, service_name, status, image_path, start_type FROM SystemServices WHERE start_type IN (2, 3)", "Critical System Services (Auto & Manual Start)")
 
         # --- 5. USER ACTIVITY & INTENT ---
         emit_step("tool_call", "Analyzing User Intent...", "active")
         if reg_db:
             safe_add_table(reg_db, "SELECT command, access_date FROM RunMRU ORDER BY access_date DESC", "Recent Win+R Commands (RunMRU)")
-            safe_add_table(reg_db, "SELECT name as filename, data as folder FROM RecentDocs ORDER BY data DESC", "Recently Accessed Documents (RecentDocs)")
+            safe_add_table(reg_db, "SELECT name AS filename, subkey AS extension, user_name, key_last_write FROM RecentDocs ORDER BY key_last_write DESC", "Recently Accessed Documents (RecentDocs)")
             safe_add_table(reg_db, "SELECT url, title, visit_count, last_visit FROM BrowserHistory ORDER BY last_visit DESC", "Extracted Browser History")
         
         # LNK & JumpLists
@@ -3192,7 +3196,7 @@ class QueryProcessor:
     # Investigative (read) tools whose use signals proactive investigation.
     _INVESTIGATIVE_TOOLS = {
         "query_database", "search_artifacts", "query_correlation_results",
-        "query_timeline",
+        "query_timeline", "query_user_behavior",
         "list_case_files", "get_schema", "query_threat_intel",
         "query_living_off_the_land_intel",
     }

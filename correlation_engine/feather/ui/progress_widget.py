@@ -7,6 +7,18 @@ from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QProgressBar
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
+try:
+    from ui.site_theme import font as _site_font
+except Exception:                       # standalone, without Crow-Eye's ui package
+    _site_font = None
+
+
+def _font(kind, pt, weight=QFont.Normal):
+    """The site font (Barlow / JetBrains Mono) at the size it was, in px."""
+    if _site_font is None:
+        return QFont("Consolas", pt, weight)
+    return _site_font(kind, round(pt * 4 / 3), weight)
+
 
 class ProgressWidget(QWidget):
     """Custom progress widget with cyberpunk styling."""
@@ -23,8 +35,7 @@ class ProgressWidget(QWidget):
         # Status label
         self.status_label = QLabel("Processing...")
         self.status_label.setAlignment(Qt.AlignCenter)
-        font = QFont("Consolas", 12, QFont.Bold)
-        self.status_label.setFont(font)
+        self.status_label.setFont(_font("ui", 12, QFont.Bold))
         layout.addWidget(self.status_label)
         
         # Progress bar
@@ -38,8 +49,7 @@ class ProgressWidget(QWidget):
         # Stats label
         self.stats_label = QLabel("")
         self.stats_label.setAlignment(Qt.AlignCenter)
-        stats_font = QFont("Consolas", 10)
-        self.stats_label.setFont(stats_font)
+        self.stats_label.setFont(_font("mono", 10))
         layout.addWidget(self.stats_label)
         
         # Timer label

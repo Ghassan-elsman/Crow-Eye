@@ -281,7 +281,7 @@ export const FORENSIC_TS_FIELDS = [
   // $SI and $FN, from mft_usn_correlated and mft_records/mft_file_names.
   'si_modification_time', 'si_access_time', 'si_mft_entry_change_time',
   'fn_creation_time', 'fn_modification_time', 'fn_access_time',
-  'fn_mft_entry_change_time', 'change_timestamp',
+  'fn_mft_entry_change_time', 'change_timestamp', 'rename_time',
   'created_time', 'modified_time', 'accessed_time', 'mft_modified_time',
   'created', 'modified', 'accessed', 'mft_modified',
   // AmCache's normalised columns - the raw ones hold MM/DD/YYYY text and,

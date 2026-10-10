@@ -25,6 +25,7 @@ class Process_Manager:
                 
         self.manager = self.context.Manager()
         self._processes = []
+        self._jobs = []
 
     def run_parser_task(
         self,
@@ -51,25 +52,70 @@ class Process_Manager:
         )
         process.start()
         self._processes.append(process)
-        
+        # Everything the collector starts - its pool workers, esentutl,
+        # vssadmin - joins this job, so cancel or close can end all of it.
+        # Terminating the collector alone left its pool workers running.
+        try:
+            from utils.concurrency.process_tree import JobObject
+            job = JobObject()
+            if job.assign(process.pid):
+                self._jobs.append(job)
+            else:
+                job.close()
+        except Exception:
+            pass
+
         return TaskHandle(message_queue=message_queue, process=process)
 
-    def shutdown(self):
-        """Clean up all managed resources gracefully."""
+    def kill_tree(self, grace: float = 3.0):
+        """End every managed process and everything it started, now."""
+        from utils.concurrency.process_tree import kill_tree
+        for job in self._jobs:
+            job.terminate()
+        for p in self._processes:
+            try:
+                kill_tree(p.pid, grace=grace)
+            except Exception:
+                pass
+            try:
+                p.join(timeout=2)
+            except Exception:
+                pass
+
+    def any_alive(self) -> bool:
+        return any(p.is_alive() for p in self._processes)
+
+    def shutdown(self, grace: float = 1.0, kill: bool = True):
+        """Clean up all managed resources.
+
+        ``grace``: seconds a process gets to finish on its own (a cancelled
+        collection stops between artifacts, deletes its shadow copy and closes
+        its custody record - a half-written database is worse than a few
+        seconds' wait). After that the whole process TREE is ended, not just
+        the collector: its pool workers used to be left running.
+        """
         for p in self._processes:
             if p.is_alive():
-                # Try to join first (maybe it's finishing)
-                p.join(timeout=1)
-                if p.is_alive():
-                    p.terminate()
-                    p.join(timeout=2)
+                p.join(timeout=max(0.0, grace))
+        if kill and self.any_alive():
+            self.kill_tree(grace=2.0)
+        for job in self._jobs:
+            job.close()
+        self._jobs.clear()
         self._processes.clear()
-        
+
         # Shutdown the manager last
         if hasattr(self, 'manager'):
             try:
-                # On Windows, manager shutdown can sometimes be noisy if 
+                # On Windows, manager shutdown can sometimes be noisy if
                 # children are still cleaning up.
                 self.manager.shutdown()
+            except Exception:
+                pass
+            proc = getattr(self.manager, "_process", None)
+            try:
+                if proc is not None and proc.is_alive():
+                    proc.terminate()
+                    proc.join(timeout=2)
             except Exception:
                 pass

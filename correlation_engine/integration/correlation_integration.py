@@ -69,9 +69,8 @@ class CorrelationIntegration:
     
     Methods:
         show_correlation_dialog(): Launch the Correlation Engine GUI
-        _apply_crow_eye_styles(): Apply Crow-Eye dark theme to Correlation Engine
-        _apply_inline_dark_theme(): Fallback inline dark theme application
-    
+        _reusable_window(): The engine window already open for this case, if any
+
     Integration Flow:
         1. Initialize with reference to Crow-Eye main window
         2. When show_correlation_dialog() is called:
@@ -80,8 +79,7 @@ class CorrelationIntegration:
            c. Load default wings
            d. Create default pipeline
            e. Launch Correlation Engine GUI
-           f. Apply Crow-Eye styling
-           g. Set default directories
+           f. Set default directories
     
     Example:
         >>> # In Crow-Eye initialization
@@ -94,8 +92,8 @@ class CorrelationIntegration:
         - Requires PyQt5 for GUI components
         - Configuration Manager is optional but recommended
         - Automatically creates directory structure in case folder
-        - Applies Crow-Eye dark theme for consistent UI
-    
+        - The engine window styles itself (ui/site_theme.py, the site look)
+
     See Also:
         - case_initializer.py: Case initialization logic
         - default_wings_loader.py: Default wings loading
@@ -134,8 +132,9 @@ class CorrelationIntegration:
         """
         self.main_window = main_window
         self.correlation_window = None
+        self._window_case_root = None
         self.config_manager = None
-        
+
         # Initialize Configuration Manager if available
         if CONFIG_MANAGER_AVAILABLE:
             self.config_manager = ConfigurationManager.get_instance()
@@ -152,10 +151,9 @@ class CorrelationIntegration:
         2. Get parent widget from Crow-Eye for proper window parenting
         3. Get case directory from Crow-Eye
         4. Initialize case with default wings, feathers, and pipeline
-        5. Create and configure Correlation Engine main window
-        6. Apply Crow-Eye dark theme styling
-        7. Set default directories for feathers, wings, pipelines, and results
-        8. Show the Correlation Engine window
+        5. Create the Correlation Engine main window (or reuse the open one)
+        6. Set default directories for feathers, wings, pipelines, and results
+        7. Show the Correlation Engine window
         
         Directory Structure Created:
             case_root/
@@ -177,7 +175,7 @@ class CorrelationIntegration:
             - All errors are logged with stack traces for debugging
         
         GUI Integration:
-            - Applies Crow-Eye dark theme for consistent appearance
+            - The window carries the site look itself (set before its children)
             - Sets parent widget for proper window management
             - Configures default directories based on case location
             - Enables file monitoring for automatic config refresh
@@ -197,12 +195,12 @@ class CorrelationIntegration:
             - Requires case to be loaded in Crow-Eye (case_paths must be set)
             - Creates directory structure automatically if it doesn't exist
             - Configuration Manager integration is optional but recommended
-            - Window can be launched multiple times (creates new instance each time)
-        
+            - Re-launching for the same case raises the window already open
+
         See Also:
             - case_initializer.py: Case initialization logic
             - gui/main_window.py: Correlation Engine main window
-            - _apply_crow_eye_styles(): Styling application
+            - _reusable_window(): Window reuse
         """
         try:
             # Import the main GUI window (correct class name is MainWindow)
@@ -258,16 +256,18 @@ class CorrelationIntegration:
                     import traceback
                     traceback.print_exc()
             
-            # Create and show the correlation engine window
-            self.correlation_window = MainWindow()
-            
-            # Apply Crow-Eye dark theme styles
-            self._apply_crow_eye_styles()
-            
-            # Set parent if available
-            if parent_widget:
-                self.correlation_window.setParent(parent_widget, self.correlation_window.windowFlags())
-            
+            # One engine window: re-opening raises the one already open for
+            # this case. It styles itself (the site look, set before its
+            # children exist), so nothing is applied over it here.
+            window = self._reusable_window(case_root)
+            if window is None:
+                window = MainWindow()
+                # Set parent if available
+                if parent_widget:
+                    window.setParent(parent_widget, window.windowFlags())
+            self.correlation_window = window
+            self._window_case_root = case_root
+
             # If we have a case directory, set it as the default location
             if case_root:
                 # Use Configuration Manager to create directory structure
@@ -370,220 +370,34 @@ class CorrelationIntegration:
             import traceback
             traceback.print_exc()
     
-    def _apply_crow_eye_styles(self):
+    def _reusable_window(self, case_root):
+        """The engine window already open for this case, or None to build one.
+
+        A window for another case is closed (its closeEvent auto-saves) and
+        released - unless a correlation is still running in it, then it is
+        kept: closing it would pull the widgets out from under the worker.
         """
-        Apply Crow-Eye dark theme to the correlation window.
-        
-        Attempts to load the Crow-Eye stylesheet from the correlation engine's
-        style file. If the file is not found, falls back to inline dark theme.
-        
-        Style File Location:
-            correlation_engine/gui/crow_eye_styles.qss
-        
-        Fallback Behavior:
-            If style file is not found or cannot be loaded, applies inline
-            dark theme using _apply_inline_dark_theme()
-        
-        Theme Features:
-            - Dark background (#0F172A)
-            - Cyan accents (#00FFFF)
-            - Green buttons (#00FF00)
-            - Consistent with Crow-Eye main application
-        
-        Returns:
-            None
-        
-        Raises:
-            None: All exceptions are caught and logged
-        
-        Notes:
-            - Requires self.correlation_window to be set
-            - Style file path is relative to this file's location
-            - Prints status messages for debugging
-        
-        See Also:
-            - _apply_inline_dark_theme(): Fallback styling method
-            - gui/crow_eye_styles.qss: Main stylesheet file
-        """
-        if not hasattr(self, 'correlation_window') or self.correlation_window is None:
-            return
-        
+        window = self.correlation_window
+        if window is None:
+            return None
         try:
-            # Try to load from the correlation engine's style file first
-            # Now we're inside correlation_engine/integration, so go up one level then to gui
-            style_file = Path(__file__).parent.parent / "gui" / "crow_eye_styles.qss"
-            
-            if style_file.exists():
-                with open(style_file, 'r') as f:
-                    stylesheet = f.read()
-                self.correlation_window.setStyleSheet(stylesheet)
-                print(f"[Correlation] Applied Crow-Eye styles from: {style_file}")
-            else:
-                # Fallback: Apply inline dark theme
-                print(f"[Correlation] Style file not found at {style_file}, applying inline dark theme")
-                self._apply_inline_dark_theme()
-                
-        except Exception as e:
-            print(f"[Correlation] Error applying styles: {e}")
-            # Fallback to inline styles
-            self._apply_inline_dark_theme()
-    
-    def _apply_inline_dark_theme(self):
-        """
-        Apply inline dark theme stylesheet matching Crow-Eye.
-        
-        This is a fallback method used when the external stylesheet file
-        cannot be loaded. It applies a comprehensive dark theme that matches
-        the Crow-Eye application's appearance.
-        
-        Theme Components:
-            - Main windows and widgets: Dark blue background (#0F172A)
-            - Text: Light gray (#E2E8F0)
-            - Tabs: Dark with cyan highlight for selected
-            - Buttons: Green (#00FF00) with hover effects
-            - Input fields: Dark with blue focus border
-            - Lists/Tables: Dark with alternating rows
-            - Menus: Dark with hover effects
-        
-        Color Palette:
-            - Primary Background: #0F172A (Dark blue)
-            - Secondary Background: #1E293B (Lighter blue)
-            - Accent: #00FFFF (Cyan)
-            - Button: #00FF00 (Green)
-            - Text: #E2E8F0 (Light gray)
-            - Border: #334155 (Medium gray)
-        
-        Returns:
-            None
-        
-        Raises:
-            None: Stylesheet application is safe
-        
-        Notes:
-            - Applied to self.correlation_window
-            - Matches Crow-Eye main application styling
-            - Comprehensive coverage of all Qt widgets
-            - Prints confirmation message when applied
-        
-        See Also:
-            - _apply_crow_eye_styles(): Primary styling method
-            - gui/crow_eye_styles.qss: External stylesheet file
-        """
-        dark_theme = """
-        /* Crow-Eye Dark Theme for Correlation Engine */
-        QMainWindow, QWidget {
-            background-color: #0F172A;
-            color: #E2E8F0;
-            font-family: 'Segoe UI', sans-serif;
-        }
-        
-        QTabWidget::pane {
-            border: 1px solid #334155;
-            background: #1E293B;
-            border-radius: 8px;
-        }
-        
-        QTabBar::tab {
-            background: #1E293B;
-            color: #94A3B8;
-            border: 1px solid #334155;
-            padding: 12px 24px;
-            font-weight: 600;
-            border-top-left-radius: 6px;
-            border-top-right-radius: 6px;
-        }
-        
-        QTabBar::tab:selected {
-            background-color: #0B1220;
-            color: #00FFFF;
-            border-bottom: 2px solid #00FFFF;
-        }
-        
-        QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
-        }
-        
-        QLineEdit, QTextEdit, QPlainTextEdit {
-            background-color: #1E293B;
-            color: #F1F5F9;
-            border: 1px solid #334155;
-            border-radius: 4px;
-            padding: 6px;
-        }
-        
-        QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
-            border: 1px solid #3B82F6;
-            background-color: #263449;
-        }
-        
-        QPushButton {
-            background-color: #00FF00;
-            color: #000000;
-            border: none;
-            border-radius: 4px;
-            padding: 8px 16px;
-            font-weight: bold;
-        }
-        
-        QPushButton:hover {
-            background-color: #00CC00;
-        }
-        
-        QPushButton:pressed {
-            background-color: #009900;
-        }
-        
-        QListWidget, QTreeWidget, QTableWidget {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            border: 1px solid #334155;
-            alternate-background-color: #0F172A;
-        }
-        
-        QGroupBox {
-            border: 1px solid #334155;
-            border-radius: 4px;
-            margin-top: 8px;
-            padding-top: 8px;
-            color: #E2E8F0;
-        }
-        
-        QGroupBox::title {
-            color: #00FFFF;
-            subcontrol-origin: margin;
-            left: 10px;
-            padding: 0 5px;
-        }
-        
-        QLabel {
-            color: #E2E8F0;
-        }
-        
-        QMenuBar {
-            background-color: #1E293B;
-            color: #E2E8F0;
-        }
-        
-        QMenuBar::item:selected {
-            background-color: #334155;
-        }
-        
-        QMenu {
-            background-color: #1E293B;
-            color: #E2E8F0;
-            border: 1px solid #334155;
-        }
-        
-        QMenu::item:selected {
-            background-color: #334155;
-        }
-        
-        QStatusBar {
-            background-color: #1E293B;
-            color: #94A3B8;
-        }
-        """
-        
-        self.correlation_window.setStyleSheet(dark_theme)
-        print("[Correlation] Applied inline dark theme")
+            import sip
+            if sip.isdeleted(window):
+                return None
+        except Exception:
+            pass
+        if self._window_case_root == case_root:
+            return window
+        ec = getattr(window, "execution_control", None)
+        worker = getattr(ec, "worker_thread", None)
+        try:
+            if worker is not None and worker.isRunning():
+                print("[Correlation] A correlation is still running - keeping its window")
+                return window
+        except RuntimeError:
+            pass
+        window.close()
+        if window.isVisible():                  # the unsaved-changes prompt said no
+            return window
+        window.deleteLater()
+        return None

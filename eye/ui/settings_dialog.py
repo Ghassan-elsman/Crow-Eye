@@ -66,9 +66,7 @@ class ContextWindowSettingsDialog(QDialog):
         
         # Title
         title = QLabel("Context Window Configuration")
-        title.setStyleSheet(
-            "font-size: 16pt; font-weight: bold; color: #00FFFF; background: transparent;"
-        )
+        self._title_label = title
         main_layout.addWidget(title)
         
         # Tab widget
@@ -119,196 +117,20 @@ class ContextWindowSettingsDialog(QDialog):
         main_layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """Apply comprehensive dark theme styling."""
-        # Set palette
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-        
-        # Dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-            QTabWidget::pane {
-                border: 1px solid #334155;
-                background: #111827;
-                border-radius: 4px;
-            }
-            QTabBar::tab {
-                background: #1E293B;
-                color: #9CA3AF;
-                padding: 10px 20px;
-                border: 1px solid #334155;
-                border-bottom: none;
-                border-top-left-radius: 4px;
-                border-top-right-radius: 4px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background: #111827;
-                color: #00FFFF;
-                border-bottom: 2px solid #00FFFF;
-            }
-            QTabBar::tab:hover {
-                background: #334155;
-                color: #E5E7EB;
-            }
-            QSpinBox, QComboBox {
-                background: #1E293B;
-                border: 1px solid #334155;
-                padding: 6px;
-                color: #F8FAFC;
-                font-size: 10pt;
-                border-radius: 4px;
-                min-width: 150px;
-            }
-            QSpinBox:focus, QComboBox:focus {
-                border: 2px solid #00FFFF;
-            }
-            QSpinBox::up-button, QSpinBox::down-button {
-                background: #334155;
-                border: none;
-                width: 16px;
-            }
-            QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-                background: #475569;
-            }
-            QComboBox::drop-down {
-                border: none;
-                background: #334155;
-                width: 20px;
-            }
-            QComboBox::down-arrow {
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 6px solid #9CA3AF;
-                margin-right: 6px;
-            }
-            QCheckBox {
-                color: #E5E7EB;
-                font-size: 10pt;
-                spacing: 8px;
-            }
-            QCheckBox::indicator {
-                width: 18px;
-                height: 18px;
-                border: 2px solid #6B7280;
-                border-radius: 3px;
-                background: #1E293B;
-            }
-            QCheckBox::indicator:checked {
-                background: #00FFFF;
-                border: 2px solid #00FFFF;
-            }
-            QCheckBox::indicator:hover {
-                border: 2px solid #00FFFF;
-            }
-            QGroupBox {
-                border: 2px solid #334155;
-                border-radius: 6px;
-                margin-top: 12px;
-                padding-top: 12px;
-                background: #111827;
-                font-weight: bold;
-                color: #00FFFF;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 4px 8px;
-                background: #111827;
-                color: #00FFFF;
-            }
-            QPushButton {
-                background-color: #1E293B;
-                color: #E5E7EB;
-                border: 1px solid #334155;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #334155;
-                border: 1px solid #00FFFF;
-            }
-            QPushButton:pressed {
-                background-color: #475569;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style + "\n" + CrowEyeStyles.SCROLLBAR_STYLE)
-        
-        # Button-specific styles
-        self.save_button.setStyleSheet("""
-            QPushButton {
-                background-color: #10B981;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #059669;
-            }
-            QPushButton:pressed {
-                background-color: #047857;
-            }
-        """)
-        
-        self.cancel_button.setStyleSheet("""
-            QPushButton {
-                background-color: #6B7280;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #4B5563;
-            }
-            QPushButton:pressed {
-                background-color: #374151;
-            }
-        """)
-        
-        self.reset_button.setStyleSheet("""
-            QPushButton {
-                background-color: #F59E0B;
-                color: white;
-                border: none;
-                border-radius: 6px;
-                padding: 10px 20px;
-                font-size: 10pt;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #D97706;
-            }
-            QPushButton:pressed {
-                background-color: #B45309;
-            }
-        """)
-    
+        """The site's look (ui/site_theme.py): the loading dialog's fonts,
+        cards, pill tabs and buttons - one sheet for the whole dialog."""
+        from ui.site_theme import apply_site_theme, set_role, set_variant, scrollable_tabs
+        # A page taller than the window scrolls (its rows used to be squeezed
+        # until the spin boxes clipped their own numbers).
+        scrollable_tabs(self.tabs)
+        set_variant(self.save_button, "primary")
+        set_variant(self.cancel_button, "ghost")
+        set_variant(self.reset_button, "ghost")
+        for w in (self.save_button, self.cancel_button, self.reset_button):
+            w.setFixedHeight(36)
+        apply_site_theme(self)
+        set_role(self._title_label, "title")
+
     def _create_backend_tab(self):
         """Create Backend Selection tab."""
         tab = QWidget()
@@ -454,6 +276,7 @@ class ContextWindowSettingsDialog(QDialog):
         summary_layout.addWidget(self.budget_sum_label)
         
         self.budget_remaining_label = QLabel("Remaining: 0 tokens")
+        self.budget_remaining_label.setProperty("keepStyle", True)  # coloured by budget
         self.budget_remaining_label.setStyleSheet("font-weight: bold; color: #10B981; background: transparent;")
         summary_layout.addWidget(self.budget_remaining_label)
         
@@ -462,6 +285,7 @@ class ContextWindowSettingsDialog(QDialog):
             "font-weight: bold; color: #F59E0B; background: transparent;"
         )
         self.budget_warning_label.setWordWrap(True)
+        self.budget_warning_label.setProperty("keepStyle", True)  # amber = over budget
         summary_layout.addWidget(self.budget_warning_label)
         
         summary_group.setLayout(summary_layout)

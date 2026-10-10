@@ -25,6 +25,142 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Shadow copies THIS process created on the target.
+#
+# A snapshot is a change to the machine under examination: it takes shadow
+# storage, can push older snapshots (evidence) out of it, and stays until
+# something deletes it. Crow-Eye used to create one and leave it behind
+# forever. Every snapshot created here is now recorded in the chain of custody
+# and deleted when the collection or parse that needed it is done - by the
+# caller, or by the atexit hook if the process ends first. Only snapshots whose
+# ShadowID this process got back from Create() are ever deleted; snapshots
+# that were already on the machine are evidence and are never touched.
+# ---------------------------------------------------------------------------
+try:
+    from utils import custody as _custody
+except Exception:                                   # standalone Crow-Claw
+    _custody = None
+
+_CREATED = []          # [{"id", "volume", "created_utc", "command"}]
+_ATEXIT = False
+
+_SHADOW_ID = re.compile(r'ShadowID\s*[:=]\s*"?(\{[0-9A-Fa-f-]{36}\})"?')
+
+
+def _utc_now_iso():
+    import datetime as _dt
+    return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _note_process(command, purpose, returncode=None):
+    if _custody is not None:
+        _custody.note_process(command, purpose=purpose, returncode=returncode)
+
+
+def created_shadow_copy_ids():
+    """IDs of the snapshots this process created and has not deleted yet."""
+    return [c["id"] for c in _CREATED]
+
+
+def _register_created(shadow_id, volume, command):
+    global _ATEXIT
+    entry = {"id": shadow_id, "volume": volume, "created_utc": _utc_now_iso(), "command": command}
+    _CREATED.append(entry)
+    if _custody is not None:
+        _custody.note_shadow_copy("created", shadow_copy_id=shadow_id, volume=volume,
+                                  created_utc=entry["created_utc"], command=command)
+    if not _ATEXIT:
+        import atexit
+        atexit.register(delete_created_shadow_copies)
+        _ATEXIT = True
+    logger.info("[ShadowCopyManager] Created shadow copy %s on %s (deleted when done)",
+                shadow_id, volume)
+
+
+def delete_created_shadow_copies():
+    """Delete every snapshot this process created. Returns {id: ok}.
+
+    Deleted one by one, by the ShadowID that Create() returned - never "the
+    newest" and never /all, so a snapshot that was on the machine before
+    Crow-Eye ran cannot be the one removed.
+    """
+    results = {}
+    while _CREATED:
+        entry = _CREATED.pop()
+        results[entry["id"]] = _delete_one(entry["id"], entry.get("volume"))
+    return results
+
+
+def delete_shadow_copies_by_id(ids, volume=None):
+    """Delete these snapshots - and only these. Returns {id: ok}.
+
+    For the GUI after a parse it had to kill: the collector recorded which
+    snapshot it created, then died before deleting it. Only IDs a Crow-Eye run
+    recorded as created are ever passed here.
+    """
+    return {sid: _delete_one(sid, volume) for sid in ids if sid}
+
+
+def _delete_one(sid, volume=None):
+    command = ["vssadmin", "delete", "shadows", "/shadow=%s" % sid, "/quiet"]
+    ok, detail = False, ""
+    try:
+        res = subprocess.run(command, capture_output=True, text=True, timeout=60,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        ok = res.returncode == 0
+        detail = (res.stderr or res.stdout or "").strip()[:500]
+        _note_process(command, "delete the shadow copy Crow-Eye created", res.returncode)
+    except Exception as e:                     # vssadmin missing or timed out
+        detail = str(e)
+    if not ok:
+        # Client SKUs without vssadmin delete fall back to WMI.
+        ps = ("Get-CimInstance Win32_ShadowCopy | Where-Object { $_.ID -eq '%s' } "
+              "| Remove-CimInstance" % sid)
+        ps_cmd = ["powershell", "-NoProfile", "-Command", ps]
+        try:
+            res = subprocess.run(ps_cmd, capture_output=True, text=True, timeout=60,
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            ok = res.returncode == 0 and not (res.stderr or "").strip()
+            detail = (res.stderr or detail or "").strip()[:500]
+            _note_process(ps_cmd, "delete the shadow copy Crow-Eye created", res.returncode)
+        except Exception as e:
+            detail = "%s; %s" % (detail, e)
+    if _custody is not None:
+        _custody.note_shadow_copy("deleted" if ok else "delete-failed", shadow_copy_id=sid,
+                                  volume=volume, command=" ".join(command),
+                                  ok=ok, detail=None if ok else detail)
+    if ok:
+        logger.info("[ShadowCopyManager] Deleted shadow copy %s", sid)
+    else:
+        logger.error("[ShadowCopyManager] Could not delete shadow copy %s: %s - it is "
+                     "still on the target and is recorded as left behind", sid, detail)
+    return ok
+
+
+def create_run_snapshot(volume="C:"):
+    """Create ONE shadow copy of ``volume`` for a whole parse. Returns its ID or None.
+
+    A live Parse All runs its parsers in several processes. Each used to reach
+    the VSS strategy on its own; now the collector makes one snapshot up front
+    and every worker reads from it (vss_access_strategy.register_shared_snapshots),
+    and only the collector deletes it. Recorded in this process's _CREATED, so
+    delete_created_shadow_copies() removes it at the end like any other.
+    """
+    volume = (volume or "C:").rstrip("\\")[:2]
+    before = set(created_shadow_copy_ids())
+    try:
+        from .vss_diagnostics import VSSDiagnostics
+        result = ShadowCopyManager(VSSDiagnostics()).create_shadow_copy(volume=volume, timeout=120)
+    except Exception as e:
+        logger.warning("[ShadowCopyManager] Run snapshot of %s not created: %s", volume, e)
+        return None
+    if not getattr(result, "success", False):
+        return None
+    new = [i for i in created_shadow_copy_ids() if i not in before]
+    return new[-1] if new else None
+
+
 @dataclass
 class VssAdminResult:
     """Result from executing a vssadmin command.
@@ -151,7 +287,7 @@ class ShadowCopyManager:
         """
         self.diagnostics = diagnostics
         self.creation_attempts: Dict[str, int] = {}  # Track attempts per volume
-        logger.info("[ShadowCopyManager] Initialized with VSSDiagnostics integration")
+        logger.debug("[ShadowCopyManager] Initialized with VSSDiagnostics integration")
     
     def create_shadow_copy(
         self,
@@ -336,7 +472,13 @@ class ShadowCopyManager:
                 # Get the newly created shadow copy
                 shadow_status_after = self.diagnostics.check_shadow_copies(volume)
                 new_shadow = shadow_status_after.most_recent
-                
+                # The ID Create() handed back is the one to delete later; the
+                # "most recent" is only a fallback when the output had none.
+                m = _SHADOW_ID.search(vssadmin_result.stdout or "")
+                sid = m.group(1) if m else getattr(new_shadow, "shadow_copy_id", None)
+                if sid:
+                    _register_created(sid, volume, vssadmin_result.command)
+
                 duration = time.time() - start_time
                 logger.info(
                     f"[ShadowCopyManager] Shadow copy creation succeeded for volume {volume} "
@@ -354,6 +496,19 @@ class ShadowCopyManager:
                     remediation_steps=[]
                 )
             else:
+                adopted = self._adopt_created_by_id(volume, vssadmin_result, shadow_status_before)
+                if adopted is not None:
+                    duration = time.time() - start_time
+                    return ShadowCopyCreationResult(
+                        success=True,
+                        shadow_copy=adopted,
+                        duration_seconds=duration,
+                        pre_creation_checks=pre_checks,
+                        vssadmin_result=vssadmin_result,
+                        error=None,
+                        diagnostics=None,
+                        remediation_steps=[]
+                    )
                 logger.error("[ShadowCopyManager] Shadow copy creation reported success but verification failed")
                 # Fall through to error handling
         
@@ -425,7 +580,8 @@ class ShadowCopyManager:
         if not service_status.is_running:
             if service_status.can_start:
                 warnings.append(f"VSS service is not running: {service_status.status_message}")
-                logger.warning(f"[ShadowCopyManager] VSS service not running but can be started")
+                # Normal: the service starts on demand when a snapshot is made.
+                logger.info(f"[ShadowCopyManager] VSS service not running; it starts on demand")
             else:
                 blocking_issues.append(f"VSS service is not running: {service_status.status_message}")
                 logger.warning(f"[ShadowCopyManager] VSS service not running and cannot be started")
@@ -530,7 +686,12 @@ class ShadowCopyManager:
                         text=True,
                         timeout=10
                     )
-                    
+                    # Starting a service changes the target; it goes in the record.
+                    _note_process(["net", "start", "VSS"],
+                                  "start the Volume Shadow Copy service", result.returncode)
+                    if result.returncode == 0 and _custody is not None:
+                        _custody.footprint("service", "Volume Shadow Copy (VSS) service started")
+
                     if result.returncode == 0:
                         logger.info("[ShadowCopyManager] Successfully started VSS service")
                         successful_fixes.append(fix_name)
@@ -594,7 +755,9 @@ class ShadowCopyManager:
                 text=True,
                 timeout=timeout
             )
-            
+            _note_process(["powershell", "-Command", powershell_command],
+                          "create a shadow copy of %s" % volume_path, result.returncode)
+
             duration = time.time() - start_time
             
             logger.debug(
@@ -650,7 +813,9 @@ class ShadowCopyManager:
                 text=True,
                 timeout=timeout
             )
-            
+            _note_process(["wmic", "shadowcopy", "call", "create", f"Volume={volume_path}"],
+                          "create a shadow copy of %s" % volume_path, wmic_result.returncode)
+
             wmic_duration = time.time() - wmic_start
             total_duration = time.time() - start_time
             
@@ -706,6 +871,72 @@ class ShadowCopyManager:
                 command="powershell/wmic shadow copy creation"
             )
     
+    def _adopt_created_by_id(self, volume, vssadmin_result, status_before):
+        """Create() succeeded but the snapshot count did not rise: decide by ID.
+
+        Windows keeps a limited number of snapshots in shadow storage; when it
+        is full, creating one EVICTS the oldest, so the count stays level or
+        even falls (4 -> 3 on one live run). The count check then called the
+        creation a failure, the new snapshot was never registered as Crow-Eye's
+        own, the workers found it and recorded it as "used-existing" - and it
+        was never deleted, left on the target for good.
+
+        The ShadowID that Create() handed back is the authority. If that ID is
+        on the volume now, the snapshot is ours: it is registered (so it is
+        deleted when the run ends) and the eviction is written into the chain
+        of custody, naming the older snapshot that Windows removed. Returns the
+        ShadowCopy, or None when the ID is not there.
+        """
+        m = _SHADOW_ID.search(vssadmin_result.stdout or "")
+        if not m:
+            return None
+        sid = m.group(1)
+        after = self.diagnostics.check_shadow_copies(volume)
+        if after.error_message:
+            # The listing failed, not necessarily the creation: Create() said
+            # it made this one, so it is registered - deleting an ID that is
+            # not there only fails, and is recorded as such.
+            _register_created(sid, volume, vssadmin_result.command)
+            self._custody_warn("Shadow copy %s was reported created on %s, but the snapshot list "
+                               "could not be read to confirm it (%s). It is treated as Crow-Eye's "
+                               "and deleted when the run ends." % (sid, volume, after.error_message))
+            return after.most_recent
+
+        def _key(s):
+            return (getattr(s, "shadow_copy_id", "") or "").strip("{}").lower()
+
+        mine = [s for s in (after.shadow_copies or []) if _key(s) == sid.strip("{}").lower()]
+        if not mine:
+            return None
+        _register_created(sid, volume, vssadmin_result.command)
+        after_keys = {_key(s) for s in (after.shadow_copies or [])}
+        evicted = [s for s in (getattr(status_before, "shadow_copies", None) or [])
+                   if _key(s) not in after_keys]
+        gone = "; ".join("%s (created %s)" % (s.shadow_copy_id, s.creation_time) for s in evicted)
+        msg = ("Shadow copy %s was created on %s, but the volume's snapshot count went from %d to "
+               "%d: Windows removed %s to make room for it%s. The new snapshot is deleted when the "
+               "run ends; the removed one cannot be brought back."
+               % (sid, volume, getattr(status_before, "count", 0), after.count,
+                  "an older snapshot" if not evicted else
+                  ("%d older snapshot(s)" % len(evicted)),
+                  (" - " + gone) if gone else ""))
+        logger.warning("[ShadowCopyManager] %s", msg)
+        self._custody_warn(msg)
+        if _custody is not None:
+            for s in evicted:
+                _custody.note_shadow_copy("evicted-by-windows", shadow_copy_id=s.shadow_copy_id,
+                                          volume=volume, created_utc=s.creation_time, ok=True,
+                                          detail="removed by Windows when %s was created" % sid)
+        return mine[0]
+
+    @staticmethod
+    def _custody_warn(message):
+        if _custody is not None:
+            try:
+                _custody.warn(message)
+            except Exception:
+                pass
+
     def _verify_creation_success(self, volume: str, before_count: int) -> bool:
         """Verify that a new shadow copy was actually created.
         
@@ -798,12 +1029,14 @@ class ShadowCopyManager:
                 technical_details=f"Return code: {returncode}\nStdout: {stdout}\nStderr: {stderr}",
                 user_friendly_message=(
                     "Shadow copy creation failed due to insufficient disk space. "
-                    "Free up disk space or increase VSS shadow storage allocation."
+                    "Do not free space on the machine under examination: deleted files "
+                    "and unallocated clusters are evidence. Raw disk access reads locked "
+                    "files without a snapshot."
                 ),
                 remediation_steps=[
-                    "Free up disk space by deleting unnecessary files",
-                    "Increase VSS shadow storage: vssadmin resize shadowstorage /for=C: /maxsize=10GB",
-                    "Delete old shadow copies: vssadmin delete shadows /for=C: /oldest"
+                    "Leave this volume as it is - deleting files or shadow copies destroys evidence",
+                    "Collect the locked files by raw disk access, which needs no shadow storage",
+                    "Only with the case owner's approval: vssadmin resize shadowstorage /for=C: /maxsize=10GB"
                 ],
                 is_retryable=True
             )
@@ -816,12 +1049,13 @@ class ShadowCopyManager:
                 technical_details=f"Return code: {returncode}\nStdout: {stdout}\nStderr: {stderr}",
                 user_friendly_message=(
                     "Shadow copy creation failed because the maximum number of shadow copies "
-                    "has been reached. Delete old shadow copies or increase the quota."
+                    "has been reached. The existing shadow copies are evidence - each one is "
+                    "an earlier state of the volume - and must not be deleted to make room."
                 ),
                 remediation_steps=[
-                    "Delete old shadow copies: vssadmin delete shadows /for=C: /oldest",
-                    "Delete all shadow copies: vssadmin delete shadows /for=C: /all",
-                    "Increase VSS quota: vssadmin resize shadowstorage /for=C: /maxsize=UNBOUNDED"
+                    "Do not delete existing shadow copies: they are evidence",
+                    "Collect the locked files by raw disk access, which needs no new snapshot",
+                    "Image the existing shadow copies if earlier states of the volume matter to the case"
                 ],
                 is_retryable=True
             )
@@ -943,9 +1177,9 @@ class ShadowCopyManager:
                 remediation.append("Or use: sc start VSS")
             
             elif "disk space" in issue_lower or "quota" in issue_lower:
-                remediation.append("Free up disk space by deleting unnecessary files")
-                remediation.append("Increase VSS quota: vssadmin resize shadowstorage /for=C: /maxsize=10GB")
-                remediation.append("Delete old shadow copies: vssadmin delete shadows /for=C: /oldest")
+                remediation.append("Leave this volume as it is - deleting files or shadow copies destroys evidence")
+                remediation.append("Collect the locked files by raw disk access, which needs no shadow storage")
+                remediation.append("Only with the case owner's approval: vssadmin resize shadowstorage /for=C: /maxsize=10GB")
             
             elif "provider" in issue_lower:
                 remediation.append("Check VSS providers: vssadmin list providers")

@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { call } from './bridge.js'
+import { call, latest } from './bridge.js'
 import SourceTimeline from './SourceTimeline.jsx'
 import OverviewPanel from './OverviewPanel.jsx'
 import DaySection from './DaySection.jsx'
 import DateDropdown from './DateDropdown.jsx'
-import { SOURCES, LOCATIONS } from './format.js'
+import { SOURCES, LOCATIONS, SOURCE_LABEL } from './format.js'
 import { IconDatabase } from './Icons.jsx'
 import InsightPanel from './InsightPanel.jsx'
 import ItemDetailPanel from './ItemDetailPanel.jsx'
@@ -55,6 +55,11 @@ export default function App() {
   const [itemDetail, setItemDetail] = useState(null)
   const [itemLoading, setItemLoading] = useState(false)
 
+  // The table whose Charts button opened (or re-focused) the dashboard. It is
+  // HIGHLIGHTED, not filtered: every source stays on the one strip, so the
+  // user-activity sources are read together. "Show only" filters on request.
+  const [focusSrc, setFocusSrc] = useState('')
+
   const debounce = useRef(null)
   const filterArgs = useMemo(() => ({ terms, mode, ...range, source, location, volume }), [terms, mode, range, source, location, volume])
 
@@ -65,9 +70,13 @@ export default function App() {
     (async () => {
       try {
         const f = await call('getShellItemsFocus')
-        if (f?.source) setSource(f.source)
+        if (f?.source) setFocusSrc(f.source)
       } catch (e) { console.warn('[shellitems] focus source unavailable', e) }
     })()
+    // A second Charts click re-focuses this window instead of opening another
+    // (ShellItemsDialog.set_focus runs this).
+    window.__crowFocus = (src) => { setSource(''); setFocusSrc(src || '') }
+    return () => { delete window.__crowFocus }
   }, [])
 
   useEffect(() => {
@@ -85,8 +94,8 @@ export default function App() {
     setLoadMsg('Re-reading the case for this range…')
     clearTimeout(debounce.current)
     debounce.current = setTimeout(() => {
-      call('getShellItemsTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
-      call('getShellItemsOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
+      latest('getShellItemsTimeline', JSON.stringify(filterArgs)).then(setTimeline).catch((e) => { setTimeline({ sources: {}, combined: [] }); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setTlLoading(false))
+      latest('getShellItemsOverview', JSON.stringify(filterArgs)).then(setOverview).catch((e) => { setOverview(null); setLoadErr(String(e && e.message || e) || 'that query failed') }).finally(() => setOvLoading(false))
     }, 180)
     return () => clearTimeout(debounce.current)
   }, [filterArgs, bounds])
@@ -104,14 +113,14 @@ export default function App() {
     if (!selectedDay) { setDayDetail(null); setDayActivity(null); return }
     setDayLoading(true)
     setLoadMsg('Loading the selected period…')
-    call('getShellItemsDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
-    call('getShellItemsDayActivity', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayActivity).catch((e) => { setDayActivity(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
+    latest('getShellItemsDayDetail', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayDetail).finally(() => setDayLoading(false))
+    latest('getShellItemsDayActivity', JSON.stringify({ day: selectedDay, ...filterArgs })).then(setDayActivity).catch((e) => { setDayActivity(null); setLoadErr(String(e && e.message || e) || 'that query failed') })
   }, [selectedDay, filterArgs])
 
   useEffect(() => {
     if (openItem === null || openItem === undefined) { setItemDetail(null); return }
     setItemLoading(true)
-    call('getShellItemsItemDetail', JSON.stringify({ id: openItem })).then(setItemDetail).finally(() => setItemLoading(false))
+    latest('getShellItemsItemDetail', JSON.stringify({ id: openItem })).then(setItemDetail).finally(() => setItemLoading(false))
   }, [openItem])
 
   function addTerm(e) {
@@ -127,7 +136,7 @@ export default function App() {
     return (
       <div className="app empty-state"><div>
         <div className="empty-icon"><IconDatabase size={54} /></div>
-        <h2>No shell-item data in this case</h2>
+        <h2>No shell-item or registry activity data in this case</h2>
         <p>Parse the Registry for the current case (Shellbags, RecentDocs, the ComDlg32 MRUs…), then reopen this chart.</p>
       </div></div>
     )
@@ -137,9 +146,9 @@ export default function App() {
     return (
       <div className="app loading-screen">
         <div className="loading-box">
-          <div className="loading-brand"><span className="brand-mark">SHELL ITEMS</span><span className="brand-title">navigation</span></div>
+          <div className="loading-brand"><span className="brand-mark">USER ACTIVITY</span><span className="brand-title">shell items &amp; registry</span></div>
           <div className="loading-dots" aria-hidden="true"><span /><span /><span /></div>
-          <div className="loading-title">Reading user-navigation & MRU history…</div>
+          <div className="loading-title">Reading what the user browsed, opened and ran…</div>
         </div>
       </div>
     )
@@ -151,8 +160,8 @@ export default function App() {
     <div className="app">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">SHELL ITEMS</span>
-          <span className="brand-title">navigation</span>
+          <span className="brand-mark">USER ACTIVITY</span>
+          <span className="brand-title">shell items &amp; registry</span>
           {bounds?.minDate && <span className="brand-range">{bounds.minDate} &rarr; {bounds.maxDate}</span>}
         </div>
         <div className="filters inline">
@@ -191,11 +200,25 @@ export default function App() {
 
       <div className="dash">
         <LoadingOverlay show={tlLoading || ovLoading || dayLoading} error={loadErr}
-          brand={['SHELL ITEMS', 'navigation']}
+          brand={['USER ACTIVITY', 'shell items & registry']}
           message={loadMsg} />
         <div className="dash-left">
           <section className="hm-section">
-            <SourceTimeline timeline={timeline} selectedDay={selectedDay}
+            {focusSrc && (
+              <div className="focus-banner">
+                <span>
+                  Opened from <b>{SOURCE_LABEL[focusSrc] || focusSrc}</b>
+                  {(timeline?.sources?.[focusSrc]?.max || 0) > 0
+                    ? ' - highlighted below, with every other source on the same timeline.'
+                    : ' - it has no dated items in this range; its rows are listed under All items.'}
+                </span>
+                {source !== focusSrc
+                  ? <button className="focus-btn" onClick={() => setSource(focusSrc)}>Show only {SOURCE_LABEL[focusSrc] || focusSrc}</button>
+                  : <button className="focus-btn" onClick={() => setSource('')}>Show all sources</button>}
+                <button className="focus-btn ghost" onClick={() => setFocusSrc('')}>Clear highlight</button>
+              </div>
+            )}
+            <SourceTimeline timeline={timeline} selectedDay={selectedDay} focus={focusSrc}
               onSelectDay={(d) => { setOpenItem(null); setSelectedDay(d) }} />
           </section>
 

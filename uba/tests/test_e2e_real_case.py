@@ -5,10 +5,13 @@ import pytest
 
 from uba.engine.behavior_engine import BehaviorEngine
 
-REAL_CASE = r"C:/Users/Ghass/OneDrive/Documents/Discord 2 26.6.26/Target_Artifacts"
+# A parsed case's Target_Artifacts folder, named by CROW_EYE_UBA_TEST_CASE.
+# Not written into the test: a path here is one machine's private case.
+REAL_CASE = os.environ.get("CROW_EYE_UBA_TEST_CASE", "")
 
 pytestmark = pytest.mark.skipif(
-    not os.path.isdir(REAL_CASE), reason="real case not present on this machine")
+    not REAL_CASE or not os.path.isdir(REAL_CASE),
+    reason="set CROW_EYE_UBA_TEST_CASE to a parsed case's Target_Artifacts folder")
 
 
 def _event_logs_populated():
@@ -240,32 +243,31 @@ def test_all_activity_bearing_tables_are_covered(engine):
         "ApplicationLogs",
 
         # ---- browser_analysis.db ----
-        # UBA reads history, downloads, preferences, extensions, credentials,
-        # payments, addresses, cookies and DIPS. The rest are populated in a
+        # UBA reads history (both engines), downloads (both engines), address-
+        # bar entries, sessions, media history, preferences, extensions,
+        # credentials, payments, addresses, cookies (both engines), DIPS, and -
+        # for presence only, counted and never read - extension storage, the
+        # collected-profile list and its files. The rest are populated in a
         # real case but are not behaviour, or are not yet modelled. Listed
         # with the reason rather than left to fail the first time this suite is
-        # pointed at a case that has browser data - the case it currently uses
-        # has none, so these would otherwise go unnoticed until then.
+        # pointed at a case that has browser data.
         #
         # Content caches and web storage - what a site left behind, not what
         # the person did:
-        "browser_cache", "browser_local_storage", "browser_indexeddb",
-        "browser_gecko_localstorage", "browser_extension_storage",
+        "browser_cache", "browser_indexeddb", "browser_gecko_localstorage",
         "browser_service_worker", "browser_push", "browser_favicons",
-        # Collection bookkeeping, not activity:
-        "browser_files", "browser_metadata",
+        # Never read, for privacy: what a person typed into forms and the
+        # values autofill keeps. A rule may count rows; none reads them.
+        "browser_autofill", "browser_gecko_formhistory",
         # Inert in practice: no is_default, no date_created, no usage_count,
         # so no honest default-search-hijack rule can be written from it.
         # See uba/engine/extractors/browser.py.
         "browser_search_engines",
         # Activity-bearing, no extractor written yet. Stated as the truth
         # rather than called non-activity - each is outstanding work:
-        "browser_bookmarks", "browser_gecko_bookmarks", "browser_sessions",
-        "browser_gecko_sessions", "browser_top_sites", "browser_shortcuts",
-        "browser_autofill", "browser_gecko_formhistory", "browser_gecko_cookies",
-        "browser_gecko_downloads", "browser_network_predictor",
-        "browser_network_state", "browser_media_router", "browser_media_history",
-        "browser_reading_list",
+        "browser_bookmarks", "browser_gecko_bookmarks", "browser_top_sites",
+        "browser_network_predictor", "browser_network_state",
+        "browser_media_router", "browser_reading_list",
     }
 
     # Collect extractor table references from the engine source.

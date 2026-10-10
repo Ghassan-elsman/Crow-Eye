@@ -9,6 +9,26 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
+# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
+
+def _look(widget, role=None, status=None, variant=None):
+    """A role / meaning colour / button variant through the window sheet."""
+    if _site is None:
+        return widget
+    widget.setStyleSheet("")
+    if role:
+        _site.set_role(widget, role)
+    if status:
+        _site.set_status(widget, status)
+    if variant:
+        _site.set_variant(widget, variant)
+    return widget
+
 
 class AnchorPriorityWidget(QWidget):
     """Widget for managing anchor priority list"""
@@ -27,7 +47,7 @@ class AnchorPriorityWidget(QWidget):
         info_label = QLabel(
             "Drag items to reorder priority (higher = preferred as anchor)"
         )
-        info_label.setStyleSheet("color: #666; font-size: 8pt;")
+        _look(info_label, role="muted")
         layout.addWidget(info_label)
         
         # List widget
@@ -52,6 +72,7 @@ class AnchorPriorityWidget(QWidget):
         
         reset_btn = QPushButton("Reset to Default")
         reset_btn.clicked.connect(self.reset_to_default)
+        _look(reset_btn, variant="ghost")
         button_layout.addWidget(reset_btn)
         
         button_layout.addStretch()

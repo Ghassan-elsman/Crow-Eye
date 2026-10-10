@@ -5,6 +5,8 @@ Abstraction layer for file system access via the dissect ecosystem.
 Provides consistent interface regardless of image format.
 """
 
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.file_system_accessor")
 import os
 from typing import List, Optional
 from datetime import datetime
@@ -38,7 +40,7 @@ try:
     DISSECT_AVAILABLE = True
 except ImportError:
     DISSECT_AVAILABLE = False
-    print("Warning: dissect not available - file system access will be limited")
+    _log.warning("Warning: dissect not available - file system access will be limited")
 
 
 class FileSystemAccessor:
@@ -85,7 +87,7 @@ class FileSystemAccessor:
                     if vol.offset == partition_offset:
                         self.fs_info = open_fs(vol)
                         self.current_partition_offset = partition_offset
-                        print(f"[INFO] Successfully opened partition via Volume System at offset {partition_offset}")
+                        _log.info(f"Successfully opened partition via Volume System at offset {partition_offset}")
                         return True
             except Exception:
                 pass
@@ -97,16 +99,16 @@ class FileSystemAccessor:
                 # Deterministically attempt to open as a raw filesystem
                 self.fs_info = open_fs(self.img_info)
                 self.current_partition_offset = partition_offset
-                print(f"[INFO] Successfully opened direct filesystem at offset {partition_offset}")
+                _log.info(f"Successfully opened direct filesystem at offset {partition_offset}")
                 return True
             except Exception as e:
-                print(f"[DEBUG] Direct filesystem mount failed at {partition_offset}: {e}")
+                _log.debug(f"Direct filesystem mount failed at {partition_offset}: {e}")
                 
-            print(f"[ERROR] Could not identify a valid filesystem at offset {partition_offset}")
+            _log.error(f"Could not identify a valid filesystem at offset {partition_offset}")
             return False
             
         except Exception as e:
-            print(f"[ERROR] Critical failure during partition mount at {partition_offset}: {e}")
+            _log.error(f"Critical failure during partition mount at {partition_offset}: {e}")
             return False
     
     def list_directory(self, path: str = "/") -> List[FileMetadata]:
@@ -139,11 +141,11 @@ class FileSystemAccessor:
                     file_meta = self._extract_metadata(entry, path)
                     files.append(file_meta)
                 except Exception as e:
-                    print(f"[WARNING] Could not access file {name}: {e}")
+                    _log.warning(f"Could not access file {name}: {e}")
                     continue
         
         except Exception as e:
-            print(f"[ERROR] Failed to list directory {path}: {e}")
+            _log.error(f"Failed to list directory {path}: {e}")
         
         return files
     
@@ -214,7 +216,8 @@ class FileSystemAccessor:
             # Silently fail if we can't set timestamps (e.g. permission issues on dest)
             pass
 
-    def read_file_streaming(self, path: str, dest_path: str, chunk_size: int = 1024*1024) -> int:
+    def read_file_streaming(self, path: str, dest_path: str, chunk_size: int = 1024*1024,
+                            compact: bool = True, hasher=None) -> int:
         """
         Read file using streaming to minimize memory usage, handles NTFS streams.
         Specifically optimized for USN Journal compaction (skips leading sparse zeros).
@@ -223,6 +226,11 @@ class FileSystemAccessor:
             path: Source file path within the image (can include :stream_name)
             dest_path: Destination file path on local system
             chunk_size: Size of chunks to read (default: 1MB)
+            compact: skip leading all-zero blocks of $J and of streams over
+                100 MB. False copies byte for byte - required for any file
+                whose offsets matter (browser cache blocks, databases).
+            hasher: optional hashlib object, fed every byte written - so the
+                copy is hashed as it is made instead of read back afterwards.
             
         Returns:
             Total bytes read
@@ -288,31 +296,51 @@ class FileSystemAccessor:
                 # SPECIAL COMPACTION LOGIC for USN Journal or large sparse streams
                 # Find the first non-zero block to avoid gigabytes of leading zeros
                 # USN ($J) is almost always sparse at the beginning
-                if stream_name == '$J' or (logical_size > 100*1024*1024):
-                    print(f"[INFO] Applying compaction logic to large/sparse stream: {path} (Logical size: {logical_size})")
+                if compact and (stream_name == '$J' or (logical_size > 100*1024*1024)):
+                    _log.info(f"Applying compaction logic to large/sparse stream: {path} (Logical size: {logical_size})")
                     
-                    # Find start of data
+                    # Find the first page that holds data. The probe steps 5 MB
+                    # but reads one chunk at each step, so it can land past the
+                    # true start: the data may begin anywhere in the 4 MB it did
+                    # not read. It used to seek straight to where the probe hit,
+                    # dropping up to 4 MB of the oldest USN records. Now the gap
+                    # behind the hit is read too, and extraction starts at the
+                    # first non-zero 4 KB page (USN records are page-aligned).
                     pos = 0
                     limit = logical_size
                     found_data = False
-                    
-                    # Search in moderate steps (5MB) to avoid missing small buffers but save time
                     step = 5 * 1024 * 1024
+                    prev = 0
                     while pos < limit:
                         src_file.seek(pos)
                         check_data = src_file.read(min(chunk_size, limit - pos))
                         if not check_data: break
-                        
-                        if any(check_data):
+                        if check_data.lstrip(b"\0"):
                             found_data = True
-                            print(f"[INFO] Found data start at offset {pos}. Beginning extraction...")
-                            src_file.seek(pos)
                             break
+                        prev = pos + len(check_data)
                         pos += step
-                    
+
                     if not found_data:
-                        print(f"[WARNING] No data found in entire stream {path}")
+                        _log.warning(f"No data found in entire stream {path}")
                         return 0
+
+                    # Everything before `prev` is known zero; rescan from there.
+                    start = pos
+                    scan = prev
+                    while scan <= pos:
+                        src_file.seek(scan)
+                        block = src_file.read(min(chunk_size, limit - scan))
+                        if not block:
+                            break
+                        rest = block.lstrip(b"\0")
+                        if rest:
+                            first = scan + (len(block) - len(rest))
+                            start = first - (first % 4096)
+                            break
+                        scan += len(block)
+                    _log.info(f"Found data start at offset {start}. Beginning extraction...")
+                    src_file.seek(start)
 
                 # Standard streaming (contributing from potentially seeked position)
                 while True:
@@ -320,6 +348,8 @@ class FileSystemAccessor:
                     if not data:
                         break
                     dest_file.write(data)
+                    if hasher is not None:
+                        hasher.update(data)
                     bytes_read_total += len(data)
             
             # After extraction, preserve forensic timestamps
@@ -389,9 +419,9 @@ class FileSystemAccessor:
                             self.read_file_streaming(source_path, target_path)
                             files_extracted += 1
                         except Exception as e:
-                            print(f"[WARNING] Failed to extract {filename} in {root_path}: {e}")
+                            _log.warning(f"Failed to extract {filename} in {root_path}: {e}")
                 except Exception as e:
-                    print(f"[ERROR] Could not get entry for {root_path}: {e}")
+                    _log.error(f"Could not get entry for {root_path}: {e}")
             
             # Fix directory timestamps in reverse order (deepest first)
             # This ensures that setting subfolder times doesn't mess up parent folder times
@@ -405,7 +435,7 @@ class FileSystemAccessor:
                         
             return files_extracted
         except Exception as e:
-            print(f"[ERROR] recursive extraction of {image_dir_path} failed: {e}")
+            _log.error(f"recursive extraction of {image_dir_path} failed: {e}")
             return files_extracted
     
     def get_metadata(self, path: str) -> FileMetadata:

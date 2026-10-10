@@ -384,6 +384,12 @@ class PartitionWindow(QDialog):
         
         self.init_ui()
         self.load_partition_data()
+
+        # Roles for what the inline sheets said; Refresh is the main action
+        from ui.site_theme import apply_site_theme, set_variant
+        apply_site_theme(self)
+        set_variant(self._refresh_btn, "primary")
+        set_variant(self._close_btn, "ghost")
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -398,14 +404,10 @@ class PartitionWindow(QDialog):
         except Exception:
             pass
         
-        # Set window style
-        self.setStyleSheet("""
-            QDialog {
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #0a0a0a, stop:0.5 #0F172A, stop:1 #0a0a0a);
-                color: #E2E8F0;
-            }
-        """)
+        # The site look, set before the widgets exist (ui/site_theme.py). The
+        # partition map keeps its own colours: the colour is the partition type.
+        from ui.site_theme import begin_site_theme
+        begin_site_theme(self)
         
         # Main layout
         main_layout = QVBoxLayout(self)
@@ -419,14 +421,9 @@ class PartitionWindow(QDialog):
         # Separator
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
-        separator.setStyleSheet("""
-            QFrame {
-                background-color: #00FFFF;
-                border: none;
-                height: 2px;
-                margin: 10px 0;
-            }
-        """)
+        separator.setStyleSheet("QFrame { background-color: rgba(99, 102, 241, 0.45); border: none;"
+                                " max-height: 1px; margin: 6px 0; }")
+        separator.setProperty("keepStyle", True)
         main_layout.addWidget(separator)
         
         # Disk visualization area (scrollable)
@@ -492,6 +489,7 @@ class PartitionWindow(QDialog):
         button_layout = QHBoxLayout()
         
         refresh_btn = QPushButton("Refresh Analysis")
+        self._refresh_btn = refresh_btn
         refresh_btn.setStyleSheet("""
             QPushButton {
                 background-color: #10B981;
@@ -518,6 +516,7 @@ class PartitionWindow(QDialog):
         button_layout.addStretch()
         
         close_btn = QPushButton("Close")
+        self._close_btn = close_btn
         close_btn.setStyleSheet("""
             QPushButton {
                 background-color: #3B82F6;
@@ -788,6 +787,9 @@ class PartitionWindow(QDialog):
 
     def populate_partition_table(self, disks):
         """Populate the partition details table"""
+        # Off while filling: with sorting on, a refresh re-sorted after every
+        # setItem and moved rows under the cells still being written.
+        self.partition_table.setSortingEnabled(False)
         self.partition_table.setRowCount(0)
         
         # Sort disks and partitions for consistent display

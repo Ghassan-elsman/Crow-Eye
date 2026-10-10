@@ -5,6 +5,8 @@ This module implements the E01AccessStrategy for accessing E01/Ex01 (Expert Witn
 disk images using the dissect ecosystem for file system access.
 """
 
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.strategies.e01_access_strategy")
 import os
 import time
 from typing import List, Optional, Union
@@ -15,7 +17,7 @@ try:
     DISSECT_AVAILABLE = True
 except ImportError:
     DISSECT_AVAILABLE = False
-    print("Warning: dissect not available - E01 file system access will be limited")
+    _log.warning("Warning: dissect not available - E01 file system access will be limited")
 
 # Handle both relative and absolute imports
 try:
@@ -117,7 +119,7 @@ class E01AccessStrategy(FileAccessStrategy):
     
     def _open_image(self, file_source: Union[str, List[str]]) -> bool:
         if not DISSECT_AVAILABLE:
-            print("[ERROR] Cannot open E01 image: dissect is not installed")
+            _log.error("Cannot open E01 image: dissect is not installed")
             return False
         
         # Determine primary path for opening (dissect usually autodetects siblings from first part)
@@ -131,7 +133,7 @@ class E01AccessStrategy(FileAccessStrategy):
             # DETERMINE IF THIS IS A MISSING SEGMENT ISSUE (Logical Copy)
             error_str = str(e).lower()
             if "missing" in error_str and ("segment" in error_str or "ewf file" in error_str):
-                print(f"[WARNING] Missing segments detected for {primary_path}. Attempting Lenient/Logical Load...")
+                _log.warning(f"Missing segments detected for {primary_path}. Attempting Lenient/Logical Load...")
                 try:
                     # Manually load the available segments
                     from dissect.target.containers.ewf import EWF
@@ -139,13 +141,13 @@ class E01AccessStrategy(FileAccessStrategy):
                     fh = open(primary_path, 'rb')
                     # We wrap it in the EWF internal logic but skip the segment-discovery failure
                     self.img_info = EWF(fh)
-                    print(f"[INFO] Lenient Load Successful: Identified logical slice of {self.img_info.size} bytes.")
+                    _log.info(f"Lenient Load Successful: Identified logical slice of {self.img_info.size} bytes.")
                     return True
                 except Exception as inner_e:
-                    print(f"[ERROR] Lenient load failed for {primary_path}: {inner_e}")
+                    _log.error(f"Lenient load failed for {primary_path}: {inner_e}")
                     return False
             
-            print(f"[ERROR] Failed to open E01 image: {e}")
+            _log.error(f"Failed to open E01 image: {e}")
             return False
     
     def _close_image(self):
@@ -162,7 +164,7 @@ class E01AccessStrategy(FileAccessStrategy):
         try:
             return detect_partitions(self.img_info)
         except Exception as e:
-            print(f"[ERROR] Failed to detect partitions: {e}")
+            _log.error(f"Failed to detect partitions: {e}")
             return []
     
     def get_img_info(self):

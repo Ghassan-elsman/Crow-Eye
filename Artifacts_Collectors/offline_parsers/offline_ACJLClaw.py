@@ -26,7 +26,7 @@ except ImportError:
             sys.path.insert(0, grandparent_dir)
         from Artifacts_Collectors.A_CJL_LNK_Claw import A_CJL_LNK_Claw
 
-def run_offline_acjl(case_path, registry_hive_paths=None, direct_parse=False):
+def run_offline_acjl(case_path, registry_hive_paths=None, direct_parse=False, folder=None):
     """
     Run Jump Lists and LNK analysis in offline mode.
     
@@ -51,7 +51,8 @@ def run_offline_acjl(case_path, registry_hive_paths=None, direct_parse=False):
         result = A_CJL_LNK_Claw(
             case_path=case_path,
             offline_mode=True,
-            direct_parse=direct_parse
+            direct_parse=direct_parse,
+            offline_folder=folder
             # Removed: registry_hive_paths parameter (underlying function doesn't accept it)
         )
         return result

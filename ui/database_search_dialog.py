@@ -211,82 +211,13 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
         self.end_datetime.dateTimeChanged.connect(self._on_datetime_changed)
     
     def _apply_styles(self):
-        """Apply cyberpunk styles to the widget."""
-        # Preset button styles
-        preset_button_style = f"""
-            QPushButton {{
-                background-color: {Colors.BG_PANELS};
-                color: {Colors.TEXT_PRIMARY};
-                border: 2px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px;
-                padding: 6px 12px;
-                font-weight: 600;
-                font-size: 9pt;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.ACCENT_BLUE};
-                border-color: {Colors.ACCENT_CYAN};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QPushButton:checked {{
-                background-color: {Colors.ACCENT_CYAN};
-                color: {Colors.BG_PRIMARY};
-                border-color: {Colors.ACCENT_CYAN};
-                font-weight: bold;
-            }}
-            QPushButton:disabled {{
-                background-color: {Colors.BORDER_SUBTLE};
-                color: {Colors.TEXT_MUTED};
-                border-color: {Colors.BORDER_SUBTLE};
-            }}
-        """
-        
-        for btn in self.preset_buttons.values():
-            btn.setStyleSheet(preset_button_style)
-        
-        self.clear_button.setStyleSheet(preset_button_style)
-    
-        # Date/time picker styles
-        self.start_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
-        self.end_datetime.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
-        
-        # Apply calendar styles if calendar popup is enabled
-        if self.start_datetime.calendarWidget():
-            self.start_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
-        if self.end_datetime.calendarWidget():
-            self.end_datetime.calendarWidget().setStyleSheet(CrowEyeStyles.CALENDAR_STYLE)
-        
-        # Group box style
-        self.group_box.setStyleSheet(f"""
-            QGroupBox {{
-                background-color: {Colors.BG_PANELS};
-                border: 2px solid {Colors.ACCENT_BLUE};
-                border-radius: 6px;
-                margin-top: 10px;
-                padding: 10px;
-                color: {Colors.ACCENT_CYAN};
-                font-weight: bold;
-                font-size: 10pt;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 0 8px;
-                color: {Colors.ACCENT_CYAN};
-            }}
-            QGroupBox::indicator {{
-                width: 16px;
-                height: 16px;
-                border: 2px solid {Colors.BORDER_SUBTLE};
-                border-radius: 3px;
-                background-color: {Colors.BG_TABLES};
-            }}
-            QGroupBox::indicator:checked {{
-                background-color: {Colors.ACCENT_CYAN};
-                border-color: {Colors.ACCENT_CYAN};
-            }}
-        """)
-    
+        """The site look comes from the window it sits in (apply_site_theme on
+        DatabaseSearchDialog clears per-widget sheets). Standalone, it themes
+        itself."""
+        if self.window() is self:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+
     def _on_filter_toggled(self, checked: bool):
         """Handle filter enable/disable toggle."""
         self.is_filter_enabled = checked
@@ -763,6 +694,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             "QLabel { background: rgba(245,158,11,0.12); color: #FBBF24;"
             " border: 1px solid #F59E0B; border-radius: 6px; padding: 8px 10px;"
             " font-weight: 600; }")
+        self._busy_banner.setProperty("keepStyle", True)
         self._busy_banner.hide()
         try:
             self.layout().insertWidget(0, self._busy_banner)
@@ -919,10 +851,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         # Requirements: 7.5
         self._restore_window_state()
         
-        # Main layout - ultra compact spacing for more data visibility
+        # Main layout - compact, with room for the cards' rounded edges
         main_layout = QtWidgets.QVBoxLayout(self)
-        main_layout.setContentsMargins(4, 4, 4, 4)
-        main_layout.setSpacing(2)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(8)
         
         # Time filter widget - show date/time inputs but hide preset buttons
         self.time_filter_widget = TimePeriodFilterWidget(self)
@@ -1094,12 +1026,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.case_sensitive_checkbox.setToolTip("Distinguish between uppercase and lowercase characters in search results")
         layout.addWidget(self.case_sensitive_checkbox)
         
-        # Visual separator
-        separator1 = QtWidgets.QFrame()
-        separator1.setFrameShape(QtWidgets.QFrame.VLine)
-        separator1.setFrameShadow(QtWidgets.QFrame.Sunken)
-        separator1.setStyleSheet(f"color: {Colors.BORDER_SUBTLE};")
-        layout.addWidget(separator1)
         
         # Exact match checkbox
         self.exact_match_checkbox = QtWidgets.QCheckBox("Exact Match")
@@ -1107,12 +1033,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.exact_match_checkbox.setToolTip("Match entire field value exactly (no partial matches)")
         layout.addWidget(self.exact_match_checkbox)
         
-        # Visual separator
-        separator2 = QtWidgets.QFrame()
-        separator2.setFrameShape(QtWidgets.QFrame.VLine)
-        separator2.setFrameShadow(QtWidgets.QFrame.Sunken)
-        separator2.setStyleSheet(f"color: {Colors.BORDER_SUBTLE};")
-        layout.addWidget(separator2)
         
         # Regex checkbox
         self.regex_checkbox = QtWidgets.QCheckBox("Use Regex")
@@ -1120,12 +1040,6 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.regex_checkbox.setToolTip("Interpret search term as a regular expression pattern for advanced matching")
         layout.addWidget(self.regex_checkbox)
         
-        # Visual separator
-        separator3 = QtWidgets.QFrame()
-        separator3.setFrameShape(QtWidgets.QFrame.VLine)
-        separator3.setFrameShadow(QtWidgets.QFrame.Sunken)
-        separator3.setStyleSheet(f"color: {Colors.BORDER_SUBTLE};")
-        layout.addWidget(separator3)
         
         
         layout.addStretch()
@@ -1320,11 +1234,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 self.restoreGeometry(geometry)
                 self.logger.debug("Restored window geometry from settings")
             
-            # Restore window state (maximized, etc.)
-            window_state = self.settings.value("window_state")
-            if window_state:
-                self.restoreState(window_state)
-                self.logger.debug("Restored window state from settings")
+            # A QDialog has no saveState()/restoreState() (QMainWindow only):
+            # the geometry above already carries the maximised state.
                 
         except Exception as e:
             self.logger.warning(f"Failed to restore window state: {e}")
@@ -1339,8 +1250,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             # Save window geometry (size and position)
             self.settings.setValue("window_geometry", self.saveGeometry())
             
-            # Save window state (maximized, etc.)
-            self.settings.setValue("window_state", self.saveState())
+            # (No saveState(): QDialog has none - the call raised every time the
+            # dialog closed, and the geometry was all that was ever needed.)
             
             self.logger.debug("Saved window state to settings")
             
@@ -1368,380 +1279,30 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
 
     
     def _apply_styles(self):
-        """Apply professional Crow-Eye styles — matches canonical design system."""
-        # ── Main dialog stylesheet ──
-        self.setStyleSheet(f"""
-            /* Main Dialog — flat dark background, subtle border */
-            QDialog {{
-                background-color: {Colors.BG_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 8px;
-            }}
-            
-            /* Labels — readable light text, not neon */
-            QLabel {{
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 10pt;
-                font-family: 'Segoe UI', sans-serif;
-                font-weight: 600;
-            }}
-            
-            /* Search Input — compact, subtle focus glow */
-            QLineEdit {{
-                background-color: {Colors.BG_TABLES};
-                color: #FFFFFF;
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                padding: 6px 10px;
-                font-size: 11pt;
-                font-family: 'Segoe UI', sans-serif;
-                selection-background-color: {Colors.ACCENT_BLUE};
-                selection-color: #FFFFFF;
-            }}
-            QLineEdit:hover {{
-                border: 1px solid {Colors.BORDER_ACCENT};
-            }}
-            QLineEdit:focus {{
-                border: 1px solid {Colors.ACCENT_BLUE};
-            }}
-            
-            /* Group Boxes — subtle panels, cyan title accent */
-            QGroupBox {{
-                background-color: {Colors.BG_PANELS};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                margin-top: 10px;
-                padding: 6px;
-                font-weight: 600;
-                font-size: 9pt;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 2px 8px;
-                background-color: {Colors.BG_PRIMARY};
-                color: {Colors.ACCENT_CYAN};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 3px;
-                font-weight: 700;
-            }}
-            
-            /* Checkboxes — blue checked state, subtle hover */
-            QCheckBox {{
-                color: {Colors.TEXT_PRIMARY};
-                spacing: 8px;
-                font-size: 10pt;
-                font-family: 'Segoe UI', sans-serif;
-                font-weight: 500;
-            }}
-            QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
-                border: 1px solid {Colors.BORDER_ACCENT};
-                border-radius: 4px;
-                background-color: {Colors.BG_PANELS};
-            }}
-            QCheckBox::indicator:checked {{
-                background-color: {Colors.ACCENT_BLUE};
-                border: 1px solid {Colors.ACCENT_BLUE};
-            }}
-            QCheckBox::indicator:hover {{
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            
-            /* ComboBox — clean dropdown */
-            QComboBox {{
-                background-color: {Colors.BG_PANELS};
-                color: #FFFFFF;
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                padding: 4px 8px;
-                font-size: 10pt;
-                font-family: 'Segoe UI', sans-serif;
-                min-height: 22px;
-            }}
-            QComboBox:hover {{
-                border: 1px solid {Colors.ACCENT_BLUE};
-            }}
-            QComboBox:focus {{
-                border: 1px solid {Colors.ACCENT_BLUE};
-            }}
-            QComboBox::drop-down {{
-                border: none;
-                width: 24px;
-                background: transparent;
-            }}
-            QComboBox::down-arrow {{
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 5px solid {Colors.ACCENT_BLUE};
-                margin-right: 8px;
-            }}
-            QComboBox QAbstractItemView {{
-                background-color: {Colors.BG_PANELS};
-                color: #FFFFFF;
-                border: 1px solid {Colors.ACCENT_BLUE};
-                selection-background-color: {Colors.ACCENT_BLUE};
-                selection-color: #FFFFFF;
-                padding: 4px;
-                font-size: 10pt;
-                outline: none;
-            }}
-            
-            /* Buttons — canonical blue, flat */
-            QPushButton {{
-                background-color: {Colors.ACCENT_BLUE};
-                color: #FFFFFF;
-                border: none;
-                border-radius: 6px;
-                padding: 4px 12px;
-                font-weight: 600;
-                font-size: 10px;
-                font-family: 'Segoe UI', sans-serif;
-                min-width: 60px;
-                min-height: 24px;
-            }}
-            QPushButton:hover {{
-                background-color: #60A5FA;
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            QPushButton:pressed {{
-                background-color: #1E40AF;
-            }}
-            QPushButton:disabled {{
-                background-color: #64748B;
-                color: #94A3B8;
-            }}
-        """)
-        
-        # ── Database Tree — canonical blue headers, emerald selection ──
-        self.database_tree.setStyleSheet(f"""
-            QTreeWidget {{
-                background-color: {Colors.BG_TABLES};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                alternate-background-color: #162032;
-                font-size: 9pt;
-                font-family: 'Segoe UI', sans-serif;
-                padding: 4px;
-                outline: none;
-            }}
-            QTreeWidget::item {{
-                padding: 4px 6px;
-                min-height: 22px;
-                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
-            }}
-            QTreeWidget::item:selected {{
-                background-color: {Colors.SUCCESS};
-                color: #FFFFFF;
-                font-weight: 600;
-            }}
-            QTreeWidget::item:hover {{
-                background-color: rgba(0, 255, 255, 0.1);
-            }}
-            QTreeWidget::indicator {{
-                width: 16px;
-                height: 16px;
-                border: 1px solid {Colors.BORDER_ACCENT};
-                border-radius: 3px;
-                background-color: {Colors.BG_PANELS};
-            }}
-            QTreeWidget::indicator:checked {{
-                background-color: {Colors.ACCENT_BLUE};
-                border: 1px solid {Colors.ACCENT_BLUE};
-            }}
-            QTreeWidget::indicator:hover {{
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            QHeaderView::section {{
-                background-color: #1E40AF;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2563EB, stop:1 #1E40AF);
-                color: #FFFFFF;
-                border: none;
-                border-right: 1px solid {Colors.BORDER_SUBTLE};
-                padding: 4px 8px;
-                font-weight: 600;
-                font-size: 10px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-            QHeaderView::section:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #3B82F6, stop:1 #2563EB);
-                border-bottom: 2px solid {Colors.ACCENT_CYAN};
-            }}
-        """)
-        
-        # ── Results Table — matches UNIFIED_TABLE_STYLE from styles.py ──
-        self.results_table.setStyleSheet(f"""
-            QTableWidget {{
-                background-color: {Colors.BG_TABLES};
-                color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                gridline-color: {Colors.BORDER_SUBTLE};
-                alternate-background-color: #162032;
-                selection-background-color: {Colors.SUCCESS};
-                selection-color: #FFFFFF;
-                font-size: 11px;
-                font-family: 'Segoe UI', sans-serif;
-                outline: none;
-            }}
-            QTableWidget::item {{
-                padding: 2px 6px;
-                border-bottom: 1px solid {Colors.BORDER_SUBTLE};
-                font-size: 11px;
-                font-weight: 600;
-                font-family: 'Segoe UI', sans-serif;
-                color: #F8FAFC;
-            }}
-            QTableWidget::item:selected {{
-                background-color: #059669;
-                color: #FFFFFF;
-                font-weight: 800;
-            }}
-            QTableWidget::item:hover {{
-                background-color: rgba(0, 255, 255, 0.12);
-                color: {Colors.ACCENT_CYAN};
-            }}
-            QHeaderView::section {{
-                background-color: #1E40AF;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2563EB, stop:1 #1E40AF);
-                color: #FFFFFF;
-                border: none;
-                border-right: 1px solid {Colors.BORDER_SUBTLE};
-                padding: 4px 8px;
-                font-weight: 600;
-                font-size: 11px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-            QHeaderView::section:hover {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #3B82F6, stop:1 #2563EB);
-                border-bottom: 2px solid {Colors.ACCENT_CYAN};
-            }}
-            QHeaderView::down-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 4px solid {Colors.ACCENT_CYAN};
-                margin-right: 6px;
-            }}
-            QHeaderView::up-arrow {{
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-bottom: 4px solid {Colors.ACCENT_CYAN};
-                margin-right: 6px;
-            }}
-            /* Scrollbar — vertical */
-            QScrollBar:vertical {{
-                border: none;
-                background: {Colors.BG_TABLES};
-                width: 10px;
-                border-radius: 5px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {Colors.BORDER_SUBTLE}, stop:1 {Colors.BG_PANELS});
-                min-height: 30px;
-                border-radius: 5px;
-                border: 1px solid rgba(0, 255, 255, 0.15);
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {Colors.BORDER_ACCENT};
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                height: 0px;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: none;
-            }}
-            /* Scrollbar — horizontal */
-            QScrollBar:horizontal {{
-                border: none;
-                background: {Colors.BG_TABLES};
-                height: 10px;
-                border-radius: 5px;
-            }}
-            QScrollBar::handle:horizontal {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 {Colors.BORDER_SUBTLE}, stop:1 {Colors.BG_PANELS});
-                min-width: 30px;
-                border-radius: 5px;
-                border: 1px solid rgba(0, 255, 255, 0.15);
-            }}
-            QScrollBar::handle:horizontal:hover {{
-                background: {Colors.BORDER_ACCENT};
-                border: 1px solid {Colors.ACCENT_CYAN};
-            }}
-            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-                width: 0px;
-            }}
-            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
-                background: none;
-            }}
-        """)
-        
-        # ── Progress Bar — blue gradient chunk ──
-        self.progress_bar.setStyleSheet(f"""
-            QProgressBar {{
-                background-color: {Colors.BG_TABLES};
-                border: 1px solid {Colors.BORDER_SUBTLE};
-                border-radius: 4px;
-                text-align: center;
-                color: {Colors.TEXT_PRIMARY};
-                font-size: 9pt;
-                font-weight: bold;
-                font-family: 'Consolas', 'Courier New', monospace;
-                min-height: 20px;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 {Colors.ACCENT_BLUE}, stop:1 #2563EB);
-                border-radius: 3px;
-                margin: 1px;
-            }}
-        """)
-        
-        # ── Phase 3: Per-widget button overrides ──
-        self.search_button.setStyleSheet(CrowEyeStyles.SEARCH_BUTTON_STYLE)
-        self.cancel_button.setStyleSheet(CrowEyeStyles.RED_BUTTON.replace(
-            "border-radius: 8px", "border-radius: 6px").replace(
-            "padding: 12px 24px", "padding: 4px 12px").replace(
-            "font-size: 13px", "font-size: 10px"))
-        self.export_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
-        self.clear_button.setStyleSheet(CrowEyeStyles.CLEAR_BUTTON_STYLE)
-        self.close_button.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
-        
-        # ── Force header styles programmatically (Qt gradient fallback) ──
-        _header_style = f"""
-            QHeaderView::section {{
-                background-color: #1E40AF;
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                    stop:0 #2563EB, stop:1 #1E40AF);
-                color: #FFFFFF;
-                border: none;
-                border-right: 1px solid {Colors.BORDER_SUBTLE};
-                padding: 4px 8px;
-                font-weight: 600;
-                font-size: 10px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-        """
-        self.database_tree.header().setStyleSheet(_header_style)
-        self.results_table.horizontalHeader().setStyleSheet(_header_style)
-    
+        """The site's look - the loading dialog's fonts, cards, pill buttons and
+        quiet tables - as ONE sheet on the window (ui/site_theme.py). The old
+        per-widget sheets (blue headers, emerald selection, neon titles) are
+        cleared; the busy banner keeps its amber."""
+        from ui.site_theme import apply_site_theme, set_role, set_variant
+        set_variant(self.search_button, "primary")
+        set_variant(self.cancel_button, "danger")
+        for b in (self.export_button, self.clear_button, self.close_button,
+                  self.clear_all_filters_button):
+            set_variant(b, "ghost")
+        for cb in (self.case_sensitive_checkbox, self.exact_match_checkbox, self.regex_checkbox):
+            cb.setProperty("variant", "pill")
+            cb.setCursor(QtCore.Qt.PointingHandCursor)
+        self.search_input.setProperty("field", "large")
+        self.search_input.setMinimumHeight(38)
+        self.search_button.setMinimumHeight(34)
+        self.cancel_button.setMinimumHeight(34)
+        set_role(self.results_info_label, "mono")
+        apply_site_theme(self)
+
     # ========================================================================
     # Database Tree Population (Task 4.2)
     # ========================================================================
-    
+
     @classmethod
     def _group_databases_for_tree(cls, enhanced_databases) -> List[Tuple[str, List]]:
         """`[(category, [database, ...]), ...]` for the tree, in display order.
@@ -3550,7 +3111,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             self.current_results = []
             self.results_table.setRowCount(0)
             self.results_info_label.setText("No search performed yet")
-            self.results_info_label.setStyleSheet(f"color: {Colors.TEXT_SECONDARY}; font-size: 8pt;")
+            # Back to its themed role (the "no databases" red sheet may be on it).
+            self.results_info_label.setStyleSheet("")
             
             # Disable export button
             self.export_button.setEnabled(False)
@@ -4940,11 +4502,9 @@ class SavedSearchesDialog(QtWidgets.QDialog):
         layout.setSpacing(15)
         
         # Title
-        title_label = QtWidgets.QLabel("Manage Saved Searches")
-        title_font = title_label.font()
-        title_font.setPointSize(14)
-        title_font.setBold(True)
-        title_label.setFont(title_font)
+        title_label = QtWidgets.QLabel("Saved Searches")
+        from ui.site_theme import set_role
+        set_role(title_label, "title")
         layout.addWidget(title_label)
         
         # Info label
@@ -5137,59 +4697,13 @@ class SavedSearchesDialog(QtWidgets.QDialog):
             )
     
     def _apply_styles(self):
-        """Apply cyberpunk styles to the dialog."""
-        self.setStyleSheet(f"""
-            QDialog {{
-                background-color: {Colors.BG_PRIMARY};
-                border: 2px solid {Colors.ACCENT_CYAN};
-                border-radius: 8px;
-            }}
-            QLabel {{
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QTableWidget {{
-                background-color: {Colors.BG_TABLES};
-                color: {Colors.TEXT_PRIMARY};
-                border: 2px solid {Colors.BORDER_SUBTLE};
-                border-radius: 6px;
-                gridline-color: {Colors.BORDER_SUBTLE};
-                alternate-background-color: {Colors.BG_PANELS};
-                font-size: 10pt;
-            }}
-            QTableWidget::item:selected {{
-                background-color: {Colors.ACCENT_BLUE};
-                color: {Colors.TEXT_PRIMARY};
-            }}
-            QHeaderView::section {{
-                background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                    stop:0 #2563EB, stop:1 #1E40AF);
-                color: #FFFFFF;
-                border: none;
-                border-right: 1px solid #334155;
-                padding: 6px 10px;
-                font-weight: 600;
-                font-size: 11px;
-                font-family: 'Segoe UI', sans-serif;
-            }}
-            QPushButton {{
-                background-color: {Colors.ACCENT_BLUE};
-                color: {Colors.TEXT_PRIMARY};
-                border: none;
-                border-radius: 6px;
-                padding: 8px 16px;
-                font-weight: bold;
-                font-size: 10pt;
-            }}
-            QPushButton:hover {{
-                background-color: {Colors.ACCENT_CYAN};
-                color: {Colors.BG_PRIMARY};
-            }}
-            QPushButton:disabled {{
-                background-color: {Colors.BORDER_SUBTLE};
-                color: {Colors.TEXT_MUTED};
-            }}
-        """)
-    
+        """The site's look (ui/site_theme.py), as Database Search has."""
+        from ui.site_theme import apply_site_theme, set_variant
+        set_variant(self.load_button, "primary")
+        set_variant(self.delete_button, "danger")
+        set_variant(self.close_button, "ghost")
+        apply_site_theme(self)
+
     def get_selected_search(self):
         """
         Get the selected search.

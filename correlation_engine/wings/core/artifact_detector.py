@@ -639,12 +639,18 @@ class ArtifactDetector:
         """
         # Column signature patterns
         COLUMN_SIGNATURES = {
-            'MFT': ['mft_record_number', 'file_reference', 'parent_reference', 'usn'],
+            # The real columns: mft_records / mft_usn_correlated carry the
+            # record and sequence numbers; journal_events the frn pair. The old
+            # names (file_reference, parent_reference, file_reference_number)
+            # exist in no Crow-Eye table, so these scored on one column each.
+            'MFT': ['mft_record_number', 'mft_sequence_number', 'reconstructed_path',
+                    'si_creation_time'],
             'Prefetch': ['executable_name', 'run_count', 'last_run_time', 'prefetch_hash'],
             'SRUM': ['app_id', 'bytes_sent', 'bytes_received', 'network_adapter'],
             'Registry': ['key_path', 'value_name', 'value_data', 'hive'],
             'BrowserHistory': ['url', 'visit_count', 'last_visit_time', 'title'],
-            'AmCache': ['sha1', 'file_size', 'product_name', 'publisher'],
+            # amcache.db names them file_id (the SHA-1) and size.
+            'AmCache': ['file_id', 'size', 'lower_case_long_path', 'publisher'],
             # Was ['path', 'last_modified', 'file_size', 'shimcache_entry']:
             # ShimCache has no file_size column - that one belongs to MFT and
             # Shellbags, so it scored this artifact on someone else's table -
@@ -654,7 +660,7 @@ class ArtifactDetector:
                           'last_modified'],
             'Jumplists': ['app_id', 'target_path', 'access_time', 'jumplist_type'],
             'LNK': ['target_path', 'creation_time', 'access_time', 'link_flags'],
-            'USN': ['usn', 'file_reference_number', 'reason', 'source_info'],
+            'USN': ['usn', 'frn', 'parent_frn', 'reason', 'source_info'],
             'Logs': ['event_id', 'source', 'log_name', 'event_data']
         }
 

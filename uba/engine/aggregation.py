@@ -100,6 +100,12 @@ class Burst:
     def ts_end(self) -> str:
         return self.rows[-1].ts
 
+    def file_count(self) -> int:
+        """Distinct files in the burst - (volume, file reference). A change
+        to one file writes several journal records, each counted before."""
+        keys = {(r.volume, r.frn) for r in self.rows if r.frn is not None}
+        return len(keys) + sum(1 for r in self.rows if r.frn is None)
+
     def rowid_range(self) -> Tuple[int, int]:
         ids = [r.rowid for r in self.rows]
         return min(ids), max(ids)

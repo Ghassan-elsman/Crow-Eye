@@ -11,13 +11,17 @@ import logging
 import shutil
 import ctypes
 import platform
+
+# Named, so its records reach parsers.log: the root logger's do not.
+logger = logging.getLogger(__name__)
+
 try:
     import win32security
     import win32api
     WIN32_AVAILABLE = True
 except ImportError:
     WIN32_AVAILABLE = False
-    logging.warning("win32security not available - user SID retrieval will be limited")
+    logger.warning("win32security not available - user SID retrieval will be limited")
 try:
     from Artifacts_Collectors import live_hive_access
     from Artifacts_Collectors import registry_hive_walk
@@ -213,7 +217,7 @@ def _carved_data_text(data, value_type):
 def _parser_allows_snapshot_creation():
     """May this parse CREATE a shadow copy, or only use ones that exist?
 
-    Read from config/global_config.json directly. The parser runs headless
+    Read from the global config directly. The parser runs headless
     under ParserInvoker as well as inside the GUI, so importing the settings
     dialog to read a setting would make it depend on a window that may not
     exist.
@@ -222,17 +226,21 @@ def _parser_allows_snapshot_creation():
     cannot be read is evidence lost, and the analyst can turn it off in
     Settings -> Parsing when the machine must not be written to.
     """
+    # From the file Settings actually writes (config.case_history_manager:
+    # %APPDATA%\CrowEye\config, ~/.config/crow-eye). This used to open
+    # <source>/config/global_config.json, which nothing writes - so the
+    # setting always read as on, and switching it off changed nothing.
     try:
-        import json
-        here = os.path.dirname(os.path.abspath(__file__))
-        path = os.path.join(os.path.dirname(here), "config", "global_config.json")
-        if not os.path.exists(path):
+        from config.case_history_manager import read_global_setting
+    except Exception:
+        try:
+            import sys as _sys
+            _sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from config.case_history_manager import read_global_setting
+        except Exception as exc:
+            logger.debug("could not read the snapshot setting, defaulting to on: %s", exc)
             return True
-        with open(path, "r", encoding="utf-8") as handle:
-            return bool(json.load(handle).get("parser_allow_snapshot_creation", True))
-    except Exception as exc:
-        logging.debug("could not read the snapshot setting, defaulting to on: %s", exc)
-        return True
+    return bool(read_global_setting("parser_allow_snapshot_creation", True))
 
 
 def live_key_class(handle, initial=256):
@@ -258,7 +266,7 @@ def live_key_class(handle, initial=256):
             return None
         return buf.value
     except Exception as e:
-        logging.debug("class name read failed: %s", e)
+        logger.debug("class name read failed: %s", e)
         return None
 
 
@@ -283,20 +291,20 @@ def live_key_security(handle):
             return None
         return buf.raw[:size.value]
     except Exception as e:
-        logging.debug("key security read failed: %s", e)
+        logger.debug("key security read failed: %s", e)
         return None
 
 
 def _configure_logging():
-    try:
-        usage = shutil.disk_usage(os.getcwd())
-        free = usage.free
-    except Exception:
-        free = 0
-    if free < 5 * 1024 * 1024:
-        logging.basicConfig(level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
-    else:
-        logging.basicConfig(filename='regclaw_errors.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
+    """Kept for callers; configures nothing.
+
+    It used to give logging's basicConfig a file name, which - whenever the
+    root logger had no handler yet, i.e. any standalone run - wrote regclaw_errors.log
+    into whatever the working folder happened to be, and otherwise did
+    nothing. Inside Crow-Eye the case logging files these records; run alone,
+    Python's last-resort handler still prints warnings and errors to stderr.
+    """
+    return None
 _configure_logging()
 def check_admin_privileges():
     """Check if the script is running with administrative privileges.
@@ -337,7 +345,7 @@ def get_current_user_sid():
     """
     try:
         if not WIN32_AVAILABLE:
-            logging.warning("win32security not available - cannot retrieve user SID")
+            logger.warning("win32security not available - cannot retrieve user SID")
             return ""
         
         # Get the current process token
@@ -353,7 +361,7 @@ def get_current_user_sid():
         return sid_string
         
     except Exception as e:
-        logging.error(f"Error retrieving current user SID: {e}")
+        logger.error(f"Error retrieving current user SID: {e}")
         return ""
 
 
@@ -382,7 +390,7 @@ def get_username_from_sid(sid_string):
         return name
         
     except Exception as e:
-        logging.debug(f"Could not resolve username for SID {sid_string}: {e}")
+        logger.debug(f"Could not resolve username for SID {sid_string}: {e}")
         return ""
 
 
@@ -437,7 +445,7 @@ def _ensure_columns(cursor, table_name, columns):
             cursor.execute('ALTER TABLE "%s" ADD COLUMN "%s" %s'
                            % (table_name, name, sql_type))
         except Exception as exc:                       # pragma: no cover
-            logging.debug("could not add %s.%s: %s", table_name, name, exc)
+            logger.debug("could not add %s.%s: %s", table_name, name, exc)
 
 
 # Columns added after these tables first shipped. Applied to every database the
@@ -498,7 +506,7 @@ def claim_legacy_shellbag(cursor, file_name, registry_path, user_name, value_nam
             "AND user_name IS ? AND value_name IS NULL LIMIT 1)",
             (value_name, file_name, registry_path, user_name))
     except Exception as exc:                             # pragma: no cover
-        logging.debug("could not claim a legacy Shellbags row: %s", exc)
+        logger.debug("could not claim a legacy Shellbags row: %s", exc)
 
 
 def backfill_shellbag_view(cursor, file_name, registry_path, user_name,
@@ -534,7 +542,13 @@ def backfill_shellbag_view(cursor, file_name, registry_path, user_name,
                 (last_written, time_basis, file_name, registry_path, user_name,
                  value_name))
     except Exception as exc:                             # pragma: no cover
-        logging.debug("could not back-fill Shellbags view columns: %s", exc)
+        logger.debug("could not back-fill Shellbags view columns: %s", exc)
+
+
+# Rows a guard found already stored during this parse - the "already present"
+# half of what a re-parse reports (the new half is the per-table row delta the
+# collector takes). Reset by parse_live_registry.
+REPARSE_COUNTS = {"already_present": 0}
 
 
 def check_exists(cursor, table_name, conditions, values):
@@ -557,9 +571,12 @@ def check_exists(cursor, table_name, conditions, values):
         # exactly like `=` for every other value.
         query = f"SELECT 1 FROM {table_name} WHERE {' AND '.join(f'{col} IS ?' for col in conditions)}"
         cursor.execute(query, values)
-        return cursor.fetchone() is not None
+        found = cursor.fetchone() is not None
+        if found:
+            REPARSE_COUNTS["already_present"] += 1
+        return found
     except Exception as e:
-        logging.error(f"Error checking existence in {table_name}: {e}")
+        logger.error(f"Error checking existence in {table_name}: {e}")
         return False
 def parse_live_registry(case_root=None, db_path=None):
     """Parse registry from the live system and save to a database file.
@@ -600,7 +617,17 @@ def parse_live_registry(case_root=None, db_path=None):
         db_filename = os.path.join(artifacts_dir, os.path.basename(db_filename))
    
     # Call the main registry collection function with the database path
-    return main_live_reg(db_filename)
+    REPARSE_COUNTS["already_present"] = 0
+    REPARSE_COUNTS["access_denied"] = 0
+    path = main_live_reg(db_filename)
+    if REPARSE_COUNTS["access_denied"]:
+        print("[WARNING] %d registry key(s) refused access even elevated (device Properties "
+              "keys are readable only by SYSTEM; an offline parse of the SYSTEM hive reads "
+              "them)" % REPARSE_COUNTS["access_denied"])
+    # A result, not just the path: Parse Status reads how many rows were
+    # already in the case (the new ones are the row delta it measures).
+    return {"success": bool(path), "output_path": path,
+            "duplicates": REPARSE_COUNTS["already_present"]}
 def main_live_reg(db_filename='registry_data.db'):
     """Main function for live registry parsing with comprehensive error handling"""
     try:
@@ -633,10 +660,10 @@ def main_live_reg(db_filename='registry_data.db'):
                 return values
             except FileNotFoundError:
                 # Key doesn't exist - this is expected for some optional keys like DAM UserSettings
-                logging.debug(f"Registry key not found (expected for some systems): {key_path}")
+                logger.debug(f"Registry key not found (expected for some systems): {key_path}")
                 return {}
             except Exception as e:
-                logging.error(f"Error reading registry key {key_path}: {e}")
+                logger.error(f"Error reading registry key {key_path}: {e}")
                 return {}
         
         # Function to get subkeys and their values
@@ -690,14 +717,22 @@ def main_live_reg(db_filename='registry_data.db'):
                                 except Exception:
                                     pass
                         except Exception as e:
-                            logging.debug(f"Error reading subkey {subkey_path}: {e}")
+                            logger.debug(f"Error reading subkey {subkey_path}: {e}")
                 return subkey_values
             except FileNotFoundError:
                 # Key doesn't exist - this is expected for some optional keys like DAM UserSettings
-                logging.debug(f"Registry key not found (expected for some systems): {key_path}")
+                logger.debug(f"Registry key not found (expected for some systems): {key_path}")
+                return {}
+            except PermissionError as e:
+                # Expected, not a fault: the device Properties keys deny winreg
+                # even elevated (offline parsing of the SYSTEM hive reads them).
+                # One ERROR line per USB device every run said otherwise; they
+                # are counted and reported once at the end (REPARSE_COUNTS).
+                REPARSE_COUNTS["access_denied"] = REPARSE_COUNTS.get("access_denied", 0) + 1
+                logger.debug(f"Access denied reading subkeys for {key_path}: {e}")
                 return {}
             except Exception as e:
-                logging.error(f"Error reading subkeys for {key_path}: {e}")
+                logger.error(f"Error reading subkeys for {key_path}: {e}")
                 return {}
         
         # ------------------------------------------------------- ControlSets
@@ -720,7 +755,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\Select") as _sel:
                     active = "ControlSet%03d" % int(winreg.QueryValueEx(_sel, "Current")[0])
             except Exception as e:
-                logging.debug("SYSTEM\\Select unreadable: %s", e)
+                logger.debug("SYSTEM\\Select unreadable: %s", e)
             found = []
             try:
                 with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, "SYSTEM") as _sys:
@@ -730,7 +765,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             found.append(_n)
                     found.sort()
             except Exception as e:
-                logging.debug("SYSTEM subkeys unreadable: %s", e)
+                logger.debug("SYSTEM subkeys unreadable: %s", e)
             if active and active in found:
                 found.remove(active)
                 found.insert(0, active)
@@ -810,7 +845,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         return ""
                     return format_forensic_timestamp(filetime_to_datetime(ft))
             except Exception as e:
-                logging.debug(f"No last-write time for {key_path}: {e}")
+                logger.debug(f"No last-write time for {key_path}: {e}")
                 return ""
 
         def mru_order_live(values):
@@ -824,7 +859,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     try:
                         return registry_binary_parser.parse_mru_list_ex(_d)
                     except Exception as e:
-                        logging.debug(f"MRUListEx unreadable: {e}")
+                        logger.debug(f"MRUListEx unreadable: {e}")
                     break
             return []
 
@@ -863,7 +898,7 @@ def main_live_reg(db_filename='registry_data.db'):
         try:
             _live_user = get_username_from_sid(get_current_user_sid()) or None
         except Exception as e:
-            logging.warning(f"Could not resolve the current user: {e}")
+            logger.warning(f"Could not resolve the current user: {e}")
             _live_user = None
 
         # Connect to SQLite database (or create it if it doesn't exist)
@@ -920,7 +955,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 except OSError:
                     pass
             except Exception as _env_exc:
-                logging.debug("evidence environment: %s", _env_exc)
+                logger.debug("evidence environment: %s", _env_exc)
 
             # Additive migration for the three oldest tables, which gained
             # row_decoded. Their DDL is a (name, DDL) tuple entry and so is
@@ -933,7 +968,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         cursor.execute(
                             'ALTER TABLE %s ADD COLUMN row_decoded TEXT' % _rd_t)
                 except sqlite3.Error as _rd_mig:
-                    logging.debug('row_decoded migration %s: %s', _rd_t, _rd_mig)
+                    logger.debug('row_decoded migration %s: %s', _rd_t, _rd_mig)
 
             def _row_decoded(table, name, data, vtype=None):
                 """The decoded form of a plain name/row_data value, or "".
@@ -1081,7 +1116,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     cursor.execute("ALTER TABLE registry_hive_state "
                                    "ADD COLUMN reorganized_at TEXT")
             except sqlite3.Error as _e:
-                logging.debug("source_sha256 migration (live): %s", _e)
+                logger.debug("source_sha256 migration (live): %s", _e)
             # ---- what a tree walk cannot see ------------------------
             # Sections 13 and 14 of the registry guide. Class names and
             # security descriptors are read live through advapi32; carving has
@@ -1418,7 +1453,7 @@ def main_live_reg(db_filename='registry_data.db'):
         
         if columns and 'timestamp' in columns and 'parsed_at' not in columns:
             # Migration needed - old schema exists
-            logging.info("Migrating Shellbags table to new schema...")
+            logger.info("Migrating Shellbags table to new schema...")
             
             # Create new table with updated schema
             cursor.execute('''
@@ -1458,7 +1493,7 @@ def main_live_reg(db_filename='registry_data.db'):
             cursor.execute('DROP TABLE Shellbags')
             cursor.execute('ALTER TABLE Shellbags_new RENAME TO Shellbags')
             
-            logging.info("Shellbags table migration completed")
+            logger.info("Shellbags table migration completed")
         elif not columns:
             # No existing table, create new schema
             cursor.execute('''
@@ -1615,7 +1650,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Check if entry exists for tables without primary keys
                     if db_table_name in ['machine_run', 'machine_run_once', 'user_run', 'user_run_once', 'DAM', 'BAM']:
                         if check_exists(cursor, db_table_name, ['name', 'row_data', 'type'], (name, str(data), value_type)):
-                            logging.info(f"Skipping duplicate entry in {db_table_name}: {name}")
+                            logger.info(f"Skipping duplicate entry in {db_table_name}: {name}")
                             continue
                     cursor.execute(f'INSERT OR IGNORE INTO {db_table_name} (name, row_data, type) VALUES (?, ?, ?)',
                                   (name, str(data), value_type))
@@ -1632,7 +1667,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                        LIVE_STATE,
                                        format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
-                    logging.error(f"Error inserting into table {db_table_name} for key {key}: {e}")
+                    logger.error(f"Error inserting into table {db_table_name} for key {key}: {e}")
         print("Auto start programs data inserted into database successfully.")
         # DAM and BAM data collection
         dam_data = reg_Claw_live(HKEY_LOCAL_MACHINE, paths['dam'][1])
@@ -1663,7 +1698,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             process_path = parsed_data.get('process_path', name)
                             last_execution = parsed_data.get('last_execution', '')
                         except Exception as e:
-                            logging.error(f"Error parsing DAM binary data for {subkey}/{name}: {e}")
+                            logger.error(f"Error parsing DAM binary data for {subkey}/{name}: {e}")
                             # Fallback to using the name as process path
                             process_path = name
                             app_name = os.path.basename(process_path) if process_path else ''
@@ -1689,12 +1724,12 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Check if entry exists
                     # (subkey, name), matching BAM above and the offline parser.
                     if check_exists(cursor, 'DAM', ['subkey', 'name'], (subkey, name)):
-                        logging.info(f"Skipping duplicate DAM entry: {subkey}/{name}")
+                        logger.info(f"Skipping duplicate DAM entry: {subkey}/{name}")
                         continue
                     cursor.execute('INSERT OR IGNORE INTO DAM (subkey, name, row_data, type, app_name, process_path, sid, last_execution, execution_count, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                                   (subkey, name, str(data), value_type, app_name, process_path, sid, last_execution, execution_count, format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
-                    logging.error(f"Error processing DAM entry {subkey}/{name}: {e}")
+                    logger.error(f"Error processing DAM entry {subkey}/{name}: {e}")
         # Process BAM data
         for subkey, values in bam_subkeys.items():
             # The SID key's own last write. BAM rewrites the key as it records
@@ -1744,7 +1779,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             if process_path:
                                 app_name = os.path.basename(process_path)
                         except Exception as parse_error:
-                            logging.error(f"Error parsing BAM binary data for {subkey}/{name}: {parse_error}")
+                            logger.error(f"Error parsing BAM binary data for {subkey}/{name}: {parse_error}")
                             process_path = name
                             app_name = os.path.basename(process_path) if process_path else ''
                     else:
@@ -1763,7 +1798,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # executable was written a second time. On a live case BAM
                     # grew on every re-parse while an offline case never did.
                     if check_exists(cursor, 'BAM', ['subkey', 'name'], (subkey, name)):
-                        logging.info(f"Skipping duplicate BAM entry: {subkey}/{name}")
+                        logger.info(f"Skipping duplicate BAM entry: {subkey}/{name}")
                         continue
                     # execution_flags is gone. It read a value named 'Flags'
                     # that these keys do not have, so it was 0 on all 113 rows -
@@ -1777,7 +1812,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                    'key upper bound' if bam_key_written else None,
                                    format_forensic_timestamp(get_current_utc())))
                 except Exception as e:
-                    logging.error(f"Error processing BAM entry {subkey}/{name}: {e}")
+                    logger.error(f"Error processing BAM entry {subkey}/{name}: {e}")
         print("DAM and BAM data inserted into database successfully.")
         # UserAssist collection - Program execution tracking
         userassist_base_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist"
@@ -1785,7 +1820,7 @@ def main_live_reg(db_filename='registry_data.db'):
         # Get the current user's SID once (more efficient than getting it for each entry)
         current_user_sid = get_current_user_sid()
         if not current_user_sid:
-            logging.warning("Could not retrieve current user SID - will use GUID as fallback")
+            logger.warning("Could not retrieve current user SID - will use GUID as fallback")
        
         try:
             # Enumerate UserAssist GUIDs
@@ -1810,17 +1845,17 @@ def main_live_reg(db_filename='registry_data.db'):
                                    
                                     # Ensure we have bytes for parsing
                                     if not isinstance(data, bytes):
-                                        logging.warning(f"UserAssist data for {value_name} is not bytes: type={type(data)}, value={data}")
+                                        logger.warning(f"UserAssist data for {value_name} is not bytes: type={type(data)}, value={data}")
                                         if isinstance(data, str):
                                             binary_data = data.encode('latin-1')
                                         else:
-                                            logging.error(f"Cannot convert UserAssist data to bytes for {value_name}")
+                                            logger.error(f"Cannot convert UserAssist data to bytes for {value_name}")
                                             continue
                                     else:
                                         binary_data = data
                                    
                                     # Debug: Log binary data info
-                                    logging.debug(f"UserAssist entry {value_name}: data_length={len(binary_data)}, first_bytes={binary_data[:16].hex() if len(binary_data) >= 16 else binary_data.hex()}")
+                                    logger.debug(f"UserAssist entry {value_name}: data_length={len(binary_data)}, first_bytes={binary_data[:16].hex() if len(binary_data) >= 16 else binary_data.hex()}")
                                    
                                     # Parse UserAssist entry
                                     parsed_data = registry_binary_parser.parse_userassist_entry(value_name, binary_data)
@@ -1853,7 +1888,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                     if user_identity.row_exists_for_sid(
                                             cursor, 'UserAssist', ['program_path'],
                                             (program_path,), 'user_sid', user_sid):
-                                        logging.info(f"Skipping duplicate UserAssist entry: {program_path}")
+                                        logger.info(f"Skipping duplicate UserAssist entry: {program_path}")
                                         continue
                                    
                                     # Insert into database with formatted focus time
@@ -1863,26 +1898,26 @@ def main_live_reg(db_filename='registry_data.db'):
                                                  (program_path, run_count, last_execution, focus_count, focus_time_formatted,
                                                   user_sid, format_forensic_timestamp(get_current_utc())))
                                     
-                                    logging.info(f"Inserted UserAssist: {program_path} | count={run_count}, focus={focus_count}, time={focus_time_formatted} ({focus_time_ms}ms), exec={last_execution}")
+                                    logger.info(f"Inserted UserAssist: {program_path} | count={run_count}, focus={focus_count}, time={focus_time_formatted} ({focus_time_ms}ms), exec={last_execution}")
                                    
                                 except Exception as e:
-                                    logging.error(f"Error parsing UserAssist entry {value_name} in {guid_name}: {e}")
+                                    logger.error(f"Error parsing UserAssist entry {value_name} in {guid_name}: {e}")
                                     import traceback
-                                    logging.error(traceback.format_exc())
+                                    logger.error(traceback.format_exc())
                                     continue
                        
                         except Exception as e:
-                            logging.error(f"Error accessing UserAssist Count key for {guid_name}: {e}")
+                            logger.error(f"Error accessing UserAssist Count key for {guid_name}: {e}")
                             continue
                    
                     except Exception as e:
-                        logging.error(f"Error enumerating UserAssist GUID at index {i}: {e}")
+                        logger.error(f"Error enumerating UserAssist GUID at index {i}: {e}")
                         continue
            
             print("UserAssist data inserted into database successfully.")
        
         except Exception as e:
-            logging.error(f"Error accessing UserAssist base key: {e}")
+            logger.error(f"Error accessing UserAssist base key: {e}")
             print(f"Warning: Could not access UserAssist data: {e}")
         # Shellbags collection - Folder access history
         shellbags_paths = [
@@ -1966,7 +2001,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                  parent_path)
             """
             if depth >= max_depth:
-                logging.warning(f"Maximum recursion depth reached for Shellbags at {base_path}\\{current_path}")
+                logger.warning(f"Maximum recursion depth reached for Shellbags at {base_path}\\{current_path}")
                 return []
            
             entries = []
@@ -1987,9 +2022,9 @@ def main_live_reg(db_filename='registry_data.db'):
                     if isinstance(mrulistex_data, bytes):
                         try:
                             mru_order = registry_binary_parser.parse_mru_list_ex(mrulistex_data)
-                            logging.debug(f"Parsed Shellbags MRUListEx for {full_path}: {mru_order}")
+                            logger.debug(f"Parsed Shellbags MRUListEx for {full_path}: {mru_order}")
                         except Exception as e:
-                            logging.error(f"Error parsing Shellbags MRUListEx for {full_path}: {e}")
+                            logger.error(f"Error parsing Shellbags MRUListEx for {full_path}: {e}")
                
                 # Process each value (except MRUListEx)
                 for value_name, (data, value_type) in values.items():
@@ -2064,13 +2099,19 @@ def main_live_reg(db_filename='registry_data.db'):
                                     max_depth, child_readable)
                                 entries.extend(sub_entries)
                             except Exception as e:
-                                logging.error(f"Error enumerating Shellbags subkey {i} in {full_path}: {e}")
+                                logger.error(f"Error enumerating Shellbags subkey {i} in {full_path}: {e}")
                                 continue
+                except FileNotFoundError:
+                    # Not every hive has every Shellbags path (ShellNoRoam,
+                    # .DEFAULT, S-1-5-18): absent, not an error.
+                    logger.debug(f"No Shellbags subkeys at {full_path}")
                 except Exception as e:
-                    logging.error(f"Error accessing Shellbags subkeys for {full_path}: {e}")
-           
+                    logger.error(f"Error accessing Shellbags subkeys for {full_path}: {e}")
+
+            except FileNotFoundError:
+                logger.debug(f"No Shellbags key at {full_path}")
             except Exception as e:
-                logging.error(f"Error accessing Shellbags key {full_path}: {e}")
+                logger.error(f"Error accessing Shellbags key {full_path}: {e}")
 
             return entries
 
@@ -2125,7 +2166,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         backfill_shellbag_view(cursor, file_name, registry_path,
                                                user_name, node_slot, bag_views,
                                                last_written, time_basis, value_name)
-                        logging.debug(f"Skipping duplicate Shellbags entry: {file_name}")
+                        logger.debug(f"Skipping duplicate Shellbags entry: {file_name}")
                         continue
 
                     # Note: mru_position is TEXT to support the "Unknown" value
@@ -2146,12 +2187,12 @@ def main_live_reg(db_filename='registry_data.db'):
                                   value_name))
 
                     written += 1
-                    logging.debug(f"Shellbag {value_name} MRU position: {mru_position}")
+                    logger.debug(f"Shellbag {value_name} MRU position: {mru_position}")
 
                 except Exception as e:
-                    logging.error(f"Error parsing Shellbags entry {registry_path}/{value_name}: {e}")
+                    logger.error(f"Error parsing Shellbags entry {registry_path}/{value_name}: {e}")
                     import traceback
-                    logging.debug(traceback.format_exc())
+                    logger.debug(traceback.format_exc())
                     continue
             return written
 
@@ -2161,7 +2202,7 @@ def main_live_reg(db_filename='registry_data.db'):
             # Enumerate Shellbags from all registry paths
             for shellbags_path in shellbags_paths:
                 try:
-                    logging.info(f"Enumerating Shellbags from {shellbags_path}")
+                    logger.info(f"Enumerating Shellbags from {shellbags_path}")
                    
                     # Recursively enumerate all Shellbags entries
                     entries = enumerate_shellbags_recursive(HKEY_CURRENT_USER, shellbags_path)
@@ -2170,13 +2211,13 @@ def main_live_reg(db_filename='registry_data.db'):
                     shellbags_count += store_shellbag_entries(entries, _live_user)
                
                 except Exception as e:
-                    logging.error(f"Error accessing Shellbags path {shellbags_path}: {e}")
+                    logger.error(f"Error accessing Shellbags path {shellbags_path}: {e}")
                     continue
            
             print(f"Shellbags data inserted into database successfully. Total entries: {shellbags_count}")
        
         except Exception as e:
-            logging.error(f"Error during Shellbags collection: {e}")
+            logger.error(f"Error during Shellbags collection: {e}")
             print(f"Warning: Could not complete Shellbags collection: {e}")
         # RunMRU collection - Run dialog command history
         runmru_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RunMRU"
@@ -2198,7 +2239,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 mru_list_data, mru_list_type = runmru_values['MRUList']
                 if mru_list_type == "REG_SZ":
                     mru_list = str(mru_list_data).strip()
-                    logging.info(f"RunMRU MRUList: {mru_list}")
+                    logger.info(f"RunMRU MRUList: {mru_list}")
            
             runmru_count = 0
            
@@ -2218,7 +2259,7 @@ def main_live_reg(db_filename='registry_data.db'):
                    
                     # Skip empty commands
                     if not command_string:
-                        logging.debug(f"Skipping empty RunMRU entry: {value_name}")
+                        logger.debug(f"Skipping empty RunMRU entry: {value_name}")
                         continue
                    
                     # Parse RunMRU entry
@@ -2230,12 +2271,12 @@ def main_live_reg(db_filename='registry_data.db'):
                    
                     # Skip if no command extracted
                     if not command:
-                        logging.debug(f"Skipping RunMRU entry with no command: {value_name}")
+                        logger.debug(f"Skipping RunMRU entry with no command: {value_name}")
                         continue
                    
                     # Check if entry exists
                     if check_exists(cursor, 'RunMRU', ['command', 'mru_position', 'user_name'], (command, mru_position, _live_user)):
-                        logging.info(f"Skipping duplicate RunMRU entry: {command}")
+                        logger.info(f"Skipping duplicate RunMRU entry: {command}")
                         continue
                    
                     # Insert into database
@@ -2249,13 +2290,13 @@ def main_live_reg(db_filename='registry_data.db'):
                     runmru_count += 1
                    
                 except Exception as e:
-                    logging.error(f"Error parsing RunMRU entry {value_name}: {e}")
+                    logger.error(f"Error parsing RunMRU entry {value_name}: {e}")
                     continue
            
             print(f"RunMRU data inserted into database successfully. Total entries: {runmru_count}")
        
         except Exception as e:
-            logging.error(f"Error accessing RunMRU registry key: {e}")
+            logger.error(f"Error accessing RunMRU registry key: {e}")
             print(f"Warning: Could not access RunMRU data: {e}")
         # MUICache collection - Application name and path tracking
         muicache_paths = [
@@ -2288,7 +2329,7 @@ def main_live_reg(db_filename='registry_data.db'):
 
                         # Skip empty values
                         if not value_name or not app_display_name:
-                            logging.debug(f"Skipping empty MUICache entry: {value_name}")
+                            logger.debug(f"Skipping empty MUICache entry: {value_name}")
                             continue
 
                         # Parse MUICache entry
@@ -2300,7 +2341,7 @@ def main_live_reg(db_filename='registry_data.db'):
 
                         # Skip if no path extracted
                         if not app_path:
-                            logging.debug(f"Skipping MUICache entry with no path: {value_name}")
+                            logger.debug(f"Skipping MUICache entry with no path: {value_name}")
                             continue
 
                         entry = muicache_apps.setdefault(
@@ -2316,11 +2357,11 @@ def main_live_reg(db_filename='registry_data.db'):
                             entry['app_name'] = app_display_name
 
                     except Exception as e:
-                        logging.error(f"Error parsing MUICache entry {value_name}: {e}")
+                        logger.error(f"Error parsing MUICache entry {value_name}: {e}")
                         continue
 
             except Exception as e:
-                logging.debug(f"MUICache path not accessible: {muicache_path} - {e}")
+                logger.debug(f"MUICache path not accessible: {muicache_path} - {e}")
                 continue
 
         for app_path, entry in muicache_apps.items():
@@ -2330,7 +2371,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 # use disappears.
                 if check_exists(cursor, 'MUICache', ['app_path', 'user_name'],
                                 (app_path, _live_user)):
-                    logging.info(f"Skipping duplicate MUICache entry: {app_path}")
+                    logger.info(f"Skipping duplicate MUICache entry: {app_path}")
                     continue
                 cursor.execute('''INSERT INTO MUICache
                                (app_path, app_name, company, file_extension, parsed_at, user_name)
@@ -2340,7 +2381,7 @@ def main_live_reg(db_filename='registry_data.db'):
                               format_forensic_timestamp(get_current_utc()), _live_user))
                 muicache_count += 1
             except Exception as e:
-                logging.error(f"Error inserting MUICache entry {app_path}: {e}")
+                logger.error(f"Error inserting MUICache entry {app_path}: {e}")
                 continue
        
         print(f"MUICache data inserted into database successfully. Total entries: {muicache_count}")
@@ -2395,7 +2436,7 @@ def main_live_reg(db_filename='registry_data.db'):
                    
                     # Check if entry exists
                     if check_exists(cursor, 'WordWheelQuery', ['search_term', 'search_type'], (search_term, search_type)):
-                        logging.info(f"Skipping duplicate WordWheelQuery entry: {search_term}")
+                        logger.info(f"Skipping duplicate WordWheelQuery entry: {search_term}")
                         continue
                    
                     # Insert into WordWheelQuery table with error handling
@@ -2409,15 +2450,15 @@ def main_live_reg(db_filename='registry_data.db'):
                                       format_forensic_timestamp(get_current_utc()), _live_user))
                         wordwheelquery_count += 1
                     except Exception as db_error:
-                        logging.error(f"Error inserting WordWheelQuery entry into database: {db_error}")
+                        logger.error(f"Error inserting WordWheelQuery entry into database: {db_error}")
                         continue
                    
                 except Exception as e:
-                    logging.error(f"Error parsing WordWheelQuery entry {value_name}: {e}")
+                    logger.error(f"Error parsing WordWheelQuery entry {value_name}: {e}")
                     continue
        
         except Exception as e:
-            logging.error(f"Error accessing WordWheelQuery registry key: {e}")
+            logger.error(f"Error accessing WordWheelQuery registry key: {e}")
        
         print(f"WordWheelQuery data inserted into database successfully. Total entries: {wordwheelquery_count}")
         
@@ -2454,7 +2495,7 @@ def main_live_reg(db_filename='registry_data.db'):
 
         for Netlist_reg_key, kind in network_list_paths:
             try:
-                logging.debug(f"Checking Network Lists path: {Netlist_reg_key}")
+                logger.debug(f"Checking Network Lists path: {Netlist_reg_key}")
                 Networklosts_subkeys = get_subkeys_live(HKEY_LOCAL_MACHINE, Netlist_reg_key)
                 if not Networklosts_subkeys:
                     continue
@@ -2495,7 +2536,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         decoded = registry_binary_parser.render_registry_value(
                             'networklist', name, data, value_type)
                         if check_exists(cursor, 'Network_list', ['subkey', 'name', 'data', 'type'], (str(subkey), name, str(data), value_type)):
-                            logging.debug(f"Skipping duplicate Network_list entry: {subkey}/{name}")
+                            logger.debug(f"Skipping duplicate Network_list entry: {subkey}/{name}")
                             continue
                         cursor.execute(
                             'INSERT OR IGNORE INTO Network_list '
@@ -2506,9 +2547,9 @@ def main_live_reg(db_filename='registry_data.db'):
                              network_name, connection_date, gateway_mac,
                              format_forensic_timestamp(get_current_utc())))
 
-                logging.debug(f"Network list data from {Netlist_reg_key} inserted successfully")
+                logger.debug(f"Network list data from {Netlist_reg_key} inserted successfully")
             except Exception as e:
-                logging.debug(f"Network Lists path unavailable: {Netlist_reg_key} - {e}")
+                logger.debug(f"Network Lists path unavailable: {Netlist_reg_key} - {e}")
 
         # --- one row per network -------------------------------------------
         def _nl_value(values, want):
@@ -2613,7 +2654,7 @@ def main_live_reg(db_filename='registry_data.db'):
                      'key upper bound' if written else None,
                      format_forensic_timestamp(get_current_utc())))
         except Exception as exc:
-            logging.error("NetworkProfiles could not be built: %s", exc)
+            logger.error("NetworkProfiles could not be built: %s", exc)
 
         print("Network list key data inserted into database successfully with enhanced information.")
         # Windows Last update - Enhanced version
@@ -2648,7 +2689,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     pass
 
             if check_exists(cursor, 'Windows_lastupdate', ['name', 'row_data', 'type'], (name, str(data), _)):
-                logging.info(f"Skipping duplicate Windows_lastupdate entry: {name}")
+                logger.info(f"Skipping duplicate Windows_lastupdate entry: {name}")
                 continue
             cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), _))
@@ -2679,12 +2720,12 @@ def main_live_reg(db_filename='registry_data.db'):
             VALUES (?, ?, ?, ?, ?, ?)''',
             (last_check, last_install, au_options, scheduled_day, scheduled_time, format_forensic_timestamp(get_current_utc())))
         else:
-            logging.info("Skipping duplicate WindowsUpdateInfo entry")
+            logger.info("Skipping duplicate WindowsUpdateInfo entry")
         # Insert subkeys data
         for subkey, values in last_update_subkey.items():
             for name, (data, value_type) in values.items():
                 if check_exists(cursor, 'Windows_lastupdate_subkeys', ['subkey', 'name', 'row_data', 'type'], (str(subkey), name, str(data), value_type)):
-                    logging.info(f"Skipping duplicate Windows_lastupdate_subkeys entry: {subkey}/{name}")
+                    logger.info(f"Skipping duplicate Windows_lastupdate_subkeys entry: {subkey}/{name}")
                     continue
                 cursor.execute('INSERT OR IGNORE INTO Windows_lastupdate_subkeys '
                                '(subkey, name, row_data, row_decoded, type) '
@@ -2716,9 +2757,9 @@ def main_live_reg(db_filename='registry_data.db'):
                 name = "(Default)"
             if name.lower() == "computername":
                 computer_name = str(data)
-                logging.debug(f"Extracted ComputerName: {computer_name}")
+                logger.debug(f"Extracted ComputerName: {computer_name}")
             if check_exists(cursor, 'computer_Name', ['name', 'row_data', 'type'], (name, str(data), _)):
-                logging.info(f"Skipping duplicate computer_Name entry: {name}")
+                logger.info(f"Skipping duplicate computer_Name entry: {name}")
                 continue
             cursor.execute('INSERT OR IGNORE INTO computer_Name (name, row_data, type) VALUES (?, ?, ?)',
                           (name, str(data), _))
@@ -2726,24 +2767,24 @@ def main_live_reg(db_filename='registry_data.db'):
         for name, (data, _) in system_info.items():
             if name.lower() == "registeredowner":
                 registered_owner = str(data)
-                logging.debug(f"Extracted RegisteredOwner: {registered_owner}")
+                logger.debug(f"Extracted RegisteredOwner: {registered_owner}")
             elif name.lower() == "registeredorganization":
                 registered_org = str(data)
-                logging.debug(f"Extracted RegisteredOrganization: {registered_org}")
+                logger.debug(f"Extracted RegisteredOrganization: {registered_org}")
             elif name.lower() == "productname":
                 product_name = str(data)
-                logging.debug(f"Extracted ProductName: {product_name}")
+                logger.debug(f"Extracted ProductName: {product_name}")
             elif name.lower() == "productid":
                 product_id = str(data)
-                logging.debug(f"Extracted ProductId: {product_id}")
+                logger.debug(f"Extracted ProductId: {product_id}")
             elif name.lower() == "installdate":
                 try:
                     # Convert Windows timestamp to readable date
                     install_date = format_forensic_timestamp(datetime.datetime.fromtimestamp(int(data), tz=datetime.timezone.utc))
-                    logging.debug(f"Extracted InstallDate: {install_date}")
+                    logger.debug(f"Extracted InstallDate: {install_date}")
                 except:
                     install_date = str(data)
-                    logging.debug(f"Extracted InstallDate (raw): {install_date}")
+                    logger.debug(f"Extracted InstallDate (raw): {install_date}")
         # Insert into the enhanced table
         if not check_exists(cursor, 'ComputerNameInfo', ['computer_name', 'registered_owner'], (computer_name, registered_owner)):
             cursor.execute('''
@@ -2752,7 +2793,7 @@ def main_live_reg(db_filename='registry_data.db'):
             VALUES (?, ?, ?, ?, ?, ?)''',
             (computer_name, registered_owner, registered_org, product_id, install_date, format_forensic_timestamp(get_current_utc())))
         else:
-            logging.info("Skipping duplicate ComputerNameInfo entry")
+            logger.info("Skipping duplicate ComputerNameInfo entry")
         print("Computer name data inserted into database successfully.")
         # Time zone information - Enhanced version
         timeZone_path = "SYSTEM\\CurrentControlSet\\Control\\TimeZoneInformation"
@@ -2804,7 +2845,7 @@ def main_live_reg(db_filename='registry_data.db'):
             decoded = registry_binary_parser.render_registry_value(
                 "timezone", name, data, value_type)
             if check_exists(cursor, 'time_zone', ['name', 'row_data', 'type'], (name, str(data), value_type)):
-                logging.info(f"Skipping duplicate time_zone entry: {name}")
+                logger.info(f"Skipping duplicate time_zone entry: {name}")
                 continue
             cursor.execute('INSERT OR IGNORE INTO time_zone (name, row_data, decoded, type) VALUES (?, ?, ?, ?)',
                           (name, str(data), decoded, value_type))
@@ -2862,7 +2903,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 elif any(c is False for c in checks):
                     agrees = "NO - the Start values and TZI disagree"
         except Exception as exc:
-            logging.debug("TZI cross-check unavailable: %s", exc)
+            logger.debug("TZI cross-check unavailable: %s", exc)
 
         signed = registry_binary_parser.signed_bias(bias)
         if not check_exists(cursor, 'TimeZoneInfo', ['time_zone_name', 'standard_name'], (tz_name, resolved["standard_name"] or standard_name)):
@@ -2893,7 +2934,7 @@ def main_live_reg(db_filename='registry_data.db'):
             # Give the decoder the offset rather than letting it relabel.
             registry_binary_parser.set_evidence_bias(bias)
         else:
-            logging.info("Skipping duplicate TimeZoneInfo entry")
+            logger.info("Skipping duplicate TimeZoneInfo entry")
         print("Time zone information inserted into database successfully.")
         # Network interfaces information - Enhanced version
         networkInterface_path = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces"
@@ -2949,7 +2990,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     if _guid and _mac:
                         _mac_overrides[str(_guid).lower()] = _mac
         except Exception as _exc:
-            logging.debug("adapter MAC overrides: %s", _exc)
+            logger.debug("adapter MAC overrides: %s", _exc)
         if _mac_overrides:
             print("[OK] %d network adapter(s) carry a MAC override - a MAC in "
                   "the registry is one somebody set" % len(_mac_overrides))
@@ -3040,7 +3081,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 # DHCP lease times renew) was written again, so the table grew
                 # on every re-parse of a live machine and never on an image.
                 if check_exists(cursor, 'network_interfaces', ['subkey', 'name'], (str(interface_id), name)):
-                    logging.info(f"Skipping duplicate network_interfaces entry: {interface_id}/{name}")
+                    logger.info(f"Skipping duplicate network_interfaces entry: {interface_id}/{name}")
                     continue
                 # _mval, not str(). A MULTI_SZ value reached this raw dump as a
                 # Python list literal, and the two parsers disagreed on the
@@ -3071,13 +3112,16 @@ def main_live_reg(db_filename='registry_data.db'):
                  lease_expires or None,
                  format_forensic_timestamp(get_current_utc())))
             else:
-                logging.info(f"Skipping duplicate NetworkInterfacesInfo entry: {interface_id}")
+                logger.info(f"Skipping duplicate NetworkInterfacesInfo entry: {interface_id}")
         print("Network interfaces information inserted into database successfully.")
         # Shutdown information - Enhanced version
         shutdown_path = "SYSTEM\\CurrentControlSet\\Control\\Windows"
         shutdown_reg_key = reg_Claw_live(HKEY_LOCAL_MACHINE, shutdown_path)
-        shutdown_time_path = "SYSTEM\\CurrentControlSet\\Control\\SessionManager\\Memory Management\\PrefetchParameters"
-        shutdown_time_key = reg_Claw_live(HKEY_LOCAL_MACHINE, shutdown_time_path)
+        # A second read used to look for LastPowerOff / CleanShutdown under
+        # "Control" + "SessionManager" + "PrefetchParameters". No such key exists
+        # (the real one is "Session Manager"), and neither value lives under
+        # PrefetchParameters on any build, so it never returned a row - and the
+        # misspelt path was being documented as a key Crow-Eye reads.
         # Extract shutdown information
         shutdown_time = ""
         shutdown_count = 0
@@ -3098,7 +3142,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             shutdown_time = format_forensic_timestamp(
                                 filetime_to_datetime(ft))
                     except Exception as _e:
-                        logging.error("Error parsing ShutdownTime: %s" % _e)
+                        logger.error("Error parsing ShutdownTime: %s" % _e)
             elif name.lower() == "shutdowncount":
                 try:
                     shutdown_count = int(data)
@@ -3107,25 +3151,13 @@ def main_live_reg(db_filename='registry_data.db'):
             elif name.lower() == "shutdowntype":
                 shutdown_type = str(data)
             if check_exists(cursor, 'shutdown_information', ['name', 'row_data', 'type'], (name, str(data), value_type)):
-                logging.info(f"Skipping duplicate shutdown_information entry: {name}")
+                logger.info(f"Skipping duplicate shutdown_information entry: {name}")
                 continue
             cursor.execute('INSERT OR IGNORE INTO shutdown_information '
                            '(name, row_data, row_decoded, type) VALUES (?, ?, ?, ?)',
                           (name, str(data),
                            _row_decoded('shutdown_information', name, data, value_type),
                            value_type))
-        for name, (data, _) in shutdown_time_key.items():
-            if name.lower() == "lastpoweroff":
-                try:
-                    # Convert Windows timestamp to readable date if possible
-                    shutdown_time = format_forensic_timestamp(datetime.datetime.fromtimestamp(int(data), tz=datetime.timezone.utc))
-                except:
-                    shutdown_time = str(data)
-            elif name.lower() == "cleanshutdown":
-                try:
-                    clean_shutdown = int(data)
-                except:
-                    clean_shutdown = 0
         # Insert into the enhanced table
         if not check_exists(cursor, 'ShutdownInfo', ['shutdown_time', 'shutdown_type'], (shutdown_time, shutdown_type)):
             cursor.execute('''
@@ -3134,7 +3166,7 @@ def main_live_reg(db_filename='registry_data.db'):
             VALUES (?, ?, ?, ?, ?)''',
             (shutdown_time, shutdown_count, shutdown_type, clean_shutdown, format_forensic_timestamp(get_current_utc())))
         else:
-            logging.info("Skipping duplicate ShutdownInfo entry")
+            logger.info("Skipping duplicate ShutdownInfo entry")
         print('Shutdown information inserted into database successfully.')
         # Recent opened docs
         recent_docs_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs"
@@ -3182,9 +3214,9 @@ def main_live_reg(db_filename='registry_data.db'):
                     # If parsing failed or returned empty, fall back to string representation
                     if not parsed_filename:
                         parsed_filename = str(data)
-                        logging.warning(f"RecentDocs parser returned empty for main/{name}, using fallback")
+                        logger.warning(f"RecentDocs parser returned empty for main/{name}, using fallback")
                 except Exception as e:
-                    logging.error(f"Error parsing RecentDocs entry for main/{name}: {e}")
+                    logger.error(f"Error parsing RecentDocs entry for main/{name}: {e}")
                     parsed_filename = str(data)
             else:
                 # For non-binary data, use string representation
@@ -3199,7 +3231,7 @@ def main_live_reg(db_filename='registry_data.db'):
                 pass
 
             if check_exists(cursor, 'RecentDocs', ['subkey', 'name', 'row_data', 'type'], ('main', name, parsed_filename, value_type)):
-                logging.info(f"Skipping duplicate RecentDocs entry: main/{name}")
+                logger.info(f"Skipping duplicate RecentDocs entry: main/{name}")
                 continue
             cursor.execute('INSERT INTO RecentDocs (subkey, name, row_data, type, user_name, mru_position, key_last_write, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                           ('main', name, parsed_filename, value_type, _live_user,
@@ -3225,9 +3257,9 @@ def main_live_reg(db_filename='registry_data.db'):
                         # If parsing failed or returned empty, fall back to string representation
                         if not parsed_filename:
                             parsed_filename = str(data)
-                            logging.warning(f"RecentDocs parser returned empty for {subkey}/{name}, using fallback")
+                            logger.warning(f"RecentDocs parser returned empty for {subkey}/{name}, using fallback")
                     except Exception as e:
-                        logging.error(f"Error parsing RecentDocs entry for {subkey}/{name}: {e}")
+                        logger.error(f"Error parsing RecentDocs entry for {subkey}/{name}: {e}")
                         parsed_filename = str(data)
                 else:
                     # For non-binary data, use string representation
@@ -3242,7 +3274,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     pass
 
                 if check_exists(cursor, 'RecentDocs', ['subkey', 'name', 'row_data', 'type'], (subkey, name, parsed_filename, value_type)):
-                    logging.info(f"Skipping duplicate RecentDocs entry: {subkey}/{name}")
+                    logger.info(f"Skipping duplicate RecentDocs entry: {subkey}/{name}")
                     continue
                 cursor.execute('INSERT INTO RecentDocs (subkey, name, row_data, type, user_name, mru_position, key_last_write, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
                               (subkey, name, parsed_filename, value_type, _live_user,
@@ -3271,7 +3303,7 @@ def main_live_reg(db_filename='registry_data.db'):
             if name[:3].lower() == 'url' and name[3:].isdigit():
                 mru_position = int(name[3:]) - 1
             if check_exists(cursor, 'TypedPaths', ['name', 'row_data', 'type'], (name, str(data), value_type)):
-                logging.info(f"Skipping duplicate TypedPaths entry: {name}")
+                logger.info(f"Skipping duplicate TypedPaths entry: {name}")
                 continue
             cursor.execute('INSERT INTO TypedPaths (name, row_data, type, user_name, mru_position, key_last_write, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
                           (name, str(data), value_type, _live_user,
@@ -3290,9 +3322,9 @@ def main_live_reg(db_filename='registry_data.db'):
                     if isinstance(mrulistex_data, bytes):
                         try:
                             mru_order = registry_binary_parser.parse_mru_list_ex(mrulistex_data)
-                            logging.debug(f"Parsed MRUListEx for {subkey}: {mru_order}")
+                            logger.debug(f"Parsed MRUListEx for {subkey}: {mru_order}")
                         except Exception as e:
-                            logging.error(f"Error parsing MRUListEx for {subkey}: {e}")
+                            logger.error(f"Error parsing MRUListEx for {subkey}: {e}")
                
                 # Get the registry key's last write time (most recent access)
                 try:
@@ -3311,7 +3343,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         else:
                             most_recent_access = ""
                 except Exception as e:
-                    logging.error(f"Error getting last write time for {subkey}: {e}")
+                    logger.error(f"Error getting last write time for {subkey}: {e}")
                     most_recent_access = ""
                
                 for name, (data, value_type) in values.items():
@@ -3356,7 +3388,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                 access_date = parsed_data.get('access_date', '')
                         except Exception as e:
                             # Fallback to original string representation on parse failure
-                            logging.error(f"Error parsing OpenSaveMRU entry {subkey}/{name}: {e}")
+                            logger.error(f"Error parsing OpenSaveMRU entry {subkey}/{name}: {e}")
                             try:
                                 # Fallback: try simple UTF-16-LE decode
                                 possible_path = data.decode('utf-16-le', errors='ignore').strip('\x00')
@@ -3370,13 +3402,13 @@ def main_live_reg(db_filename='registry_data.db'):
                                 pass
                    
                     if check_exists(cursor, 'OpenSaveMRU', ['subkey', 'name', 'row_data', 'type'], (subkey, name, str(data), value_type)):
-                        logging.info(f"Skipping duplicate OpenSaveMRU entry: {subkey}/{name}")
+                        logger.info(f"Skipping duplicate OpenSaveMRU entry: {subkey}/{name}")
                         continue
                     cursor.execute('INSERT INTO OpenSaveMRU (subkey, name, type, file_path, file_name, extension, drive_letter, access_date, key_last_write, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                                   (subkey, name, value_type, file_path, file_name, extension, drive_letter, access_date, most_recent_access, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
             print("OpenSaveMRU subkeys data inserted into database successfully with enhanced information.")
         except Exception as e:
-            logging.error(f"Error accessing OpenSavePidlMRU: {e}")
+            logger.error(f"Error accessing OpenSavePidlMRU: {e}")
         # Track directories that were accessed by applications - Enhanced version
         last_savemru_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU"
         try:
@@ -3388,9 +3420,9 @@ def main_live_reg(db_filename='registry_data.db'):
                 if isinstance(mrulistex_data, bytes):
                     try:
                         mru_order = registry_binary_parser.parse_mru_list_ex(mrulistex_data)
-                        logging.debug(f"Parsed LastSaveMRU MRUListEx: {mru_order}")
+                        logger.debug(f"Parsed LastSaveMRU MRUListEx: {mru_order}")
                     except Exception as e:
-                        logging.error(f"Error parsing LastSaveMRU MRUListEx: {e}")
+                        logger.error(f"Error parsing LastSaveMRU MRUListEx: {e}")
            
             # Get the registry key's last write time
             try:
@@ -3406,7 +3438,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     else:
                         most_recent_access = ""
             except Exception as e:
-                logging.error(f"Error getting last write time for LastSaveMRU: {e}")
+                logger.error(f"Error getting last write time for LastSaveMRU: {e}")
                 most_recent_access = ""
             for name, (data, value_type) in lastsavemru_regkey.items():
                 folder_path = ""
@@ -3430,10 +3462,10 @@ def main_live_reg(db_filename='registry_data.db'):
                        
                         # Log successful parsing
                         if application or folder_path:
-                            logging.debug(f"Successfully parsed LastSaveMRU entry '{name}': app={application}, folder={folder_path}")
+                            logger.debug(f"Successfully parsed LastSaveMRU entry '{name}': app={application}, folder={folder_path}")
                     except Exception as e:
                         # Fallback to string representation on parse failure
-                        logging.error(f"Error parsing LastSaveMRU entry '{name}': {e}")
+                        logger.error(f"Error parsing LastSaveMRU entry '{name}': {e}")
                         try:
                             # Fallback: try simple UTF-16-LE decode
                             text_data = data.decode('utf-16-le', errors='ignore').strip('\x00')
@@ -3467,13 +3499,13 @@ def main_live_reg(db_filename='registry_data.db'):
                     pass
                
                 if check_exists(cursor, 'LastSaveMRU', ['mru_number', 'row_data', 'type'], (name, str(data), value_type)):
-                    logging.info(f"Skipping duplicate LastSaveMRU entry: {name}")
+                    logger.info(f"Skipping duplicate LastSaveMRU entry: {name}")
                     continue
                 cursor.execute('INSERT INTO LastSaveMRU (mru_number, type, application, folder_path, folder_name, drive_letter, access_date, key_last_write, row_data, parsed_at, user_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
                               (name, value_type, application, folder_path, folder_name, drive_letter, access_date, most_recent_access, str(data), format_forensic_timestamp(get_current_utc()), _live_user))
             print("LastSaveMRU has been inserted into database successfully with enhanced information.")
         except Exception as e:
-            logging.error(f"Error accessing LastVisitedPidlMRU: {e}")
+            logger.error(f"Error accessing LastVisitedPidlMRU: {e}")
         # DAM is collected once, above, alongside BAM. A second collector sat
         # here naming a 'data' column that DAM does not have (it is row_data).
         # check_exists swallows the resulting error and returns False, so its
@@ -3604,7 +3636,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                     row = cursor.execute('SELECT device_id FROM USBStorageDevices WHERE device_id = ?', (candidate_id,)).fetchone()
                                     if row:
                                         if check_exists(cursor, 'USBStorageVolumes', ['device_id', 'volume_guid'], (candidate_id, volume_guid)):
-                                            logging.info(f"Skipping duplicate USBStorageVolumes entry: {candidate_id}/{volume_guid}")
+                                            logger.info(f"Skipping duplicate USBStorageVolumes entry: {candidate_id}/{volume_guid}")
                                         else:
                                             cursor.execute('''
                                             INSERT OR IGNORE INTO USBStorageVolumes
@@ -3613,12 +3645,12 @@ def main_live_reg(db_filename='registry_data.db'):
                                             (candidate_id, volume_guid, "", drive_letter, format_forensic_timestamp(get_current_utc())))
                                             volume_count += 1
                                 except sqlite3.OperationalError as e:
-                                    logging.error(f"Error querying USBStorageDevices table: {e}")
+                                    logger.error(f"Error querying USBStorageDevices table: {e}")
                 print(f"USB storage volume information inserted into database successfully. Found {volume_count} volumes.")
             except Exception as e:
-                logging.error(f"Error accessing mounted devices: {e}")
+                logger.error(f"Error accessing mounted devices: {e}")
         except Exception as e:
-            logging.error(f"Error accessing USB storage devices: {e}")
+            logger.error(f"Error accessing USB storage devices: {e}")
         # Try to get Internet Explorer/Edge history from TypedURLs
         try:
             typed_urls_path = "Software\\Microsoft\\Internet Explorer\\TypedURLs"
@@ -3636,14 +3668,14 @@ def main_live_reg(db_filename='registry_data.db'):
                     try:
                         when = registry_binary_parser.parse_filetime(_t[0]) or ""
                     except Exception as e:
-                        logging.debug(f"TypedURLsTime {name}: {e}")
+                        logger.debug(f"TypedURLsTime {name}: {e}")
                 # "Internet Explorer" - the key belongs to IE, and the offline
                 # parser has always said so. This read "Internet Explorer/Edge",
                 # so a filter on the browser column matched only one of them.
                 if check_exists(cursor, 'BrowserHistory',
                                 ['browser', 'url', 'user_name'],
                                 ("Internet Explorer", str(url), _live_user)):
-                    logging.info(f"Skipping duplicate BrowserHistory entry: {url}")
+                    logger.info(f"Skipping duplicate BrowserHistory entry: {url}")
                     continue
                 cursor.execute('''
                 INSERT INTO BrowserHistory
@@ -3653,7 +3685,7 @@ def main_live_reg(db_filename='registry_data.db'):
                  format_forensic_timestamp(get_current_utc()), _live_user))
             print("Browser history from registry inserted into database successfully.")
         except Exception as e:
-            logging.error(f"Error accessing browser history: {e}")
+            logger.error(f"Error accessing browser history: {e}")
         # Get installed software from registry
         try:
             # 64-bit applications
@@ -3690,7 +3722,7 @@ def main_live_reg(db_filename='registry_data.db'):
 
                 if display_name:
                     if check_exists(cursor, 'InstalledSoftware', ['display_name', 'display_version'], (display_name, display_version)):
-                        logging.info(f"Skipping duplicate InstalledSoftware entry: {display_name}")
+                        logger.info(f"Skipping duplicate InstalledSoftware entry: {display_name}")
                         continue
                     cursor.execute('''
                     INSERT INTO InstalledSoftware
@@ -3728,7 +3760,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # Only insert if there's a display name (filters out some system components)
                     if display_name:
                         if check_exists(cursor, 'InstalledSoftware', ['display_name', 'display_version'], (display_name, display_version)):
-                            logging.info(f"Skipping duplicate InstalledSoftware entry: {display_name}")
+                            logger.info(f"Skipping duplicate InstalledSoftware entry: {display_name}")
                             continue
                         cursor.execute('''
                         INSERT INTO InstalledSoftware
@@ -3739,11 +3771,11 @@ def main_live_reg(db_filename='registry_data.db'):
                          install_location, uninstall_string,
                          format_forensic_timestamp(get_current_utc())))
             except Exception as e:
-                logging.error(f"Error accessing 32-bit software registry: {e}")
+                logger.error(f"Error accessing 32-bit software registry: {e}")
        
             print("Installed software information inserted into database successfully.")
         except Exception as e:
-            logging.error(f"Error accessing installed software: {e}")
+            logger.error(f"Error accessing installed software: {e}")
         # Get system services from registry
         try:
             services_path = "SYSTEM\\CurrentControlSet\\Services"
@@ -3795,7 +3827,7 @@ def main_live_reg(db_filename='registry_data.db'):
                  format_forensic_timestamp(get_current_utc())))
             print("System services information inserted into database successfully.")
         except Exception as e:
-            logging.error(f"Error accessing system services: {e}")
+            logger.error(f"Error accessing system services: {e}")
         # Get general USB devices information
         try:
             usb_path = "SYSTEM\\CurrentControlSet\\Enum\\USB"
@@ -3847,7 +3879,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                     VALUES (?, ?, ?, ?)''',
                                     (f"{device_id}\\{instance_id}", property_name, property_value, value_type))
                     except Exception as e:
-                        logging.error(f"Error accessing USB properties for {device_id}\\{instance_id}: {e}")
+                        logger.error(f"Error accessing USB properties for {device_id}\\{instance_id}: {e}")
                
                     # Get parent information
                     parent_id = ""
@@ -3879,11 +3911,11 @@ def main_live_reg(db_filename='registry_data.db'):
                         VALUES (?, ?, ?, ?, ?)''',
                         (f"{device_id}", instance_id, parent_id, service, status))
                     except Exception as e:
-                        logging.error(f"Error processing USB instance for {device_id}\\{instance_id}: {e}")
+                        logger.error(f"Error processing USB instance for {device_id}\\{instance_id}: {e}")
                
             print("USB devices information inserted into database successfully.")
         except Exception as e:
-            logging.error(f"Error accessing USB devices: {e}")
+            logger.error(f"Error accessing USB devices: {e}")
         
         # Collect user profile information
         try:
@@ -3948,7 +3980,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     user_count += 1
                     
                 except Exception as e:
-                    logging.error(f"Error processing user profile {sid}: {e}")
+                    logger.error(f"Error processing user profile {sid}: {e}")
                     continue
             
             # Report collection results
@@ -3956,7 +3988,7 @@ def main_live_reg(db_filename='registry_data.db'):
             print(f"  [OK] Collected: User SIDs, usernames, profile paths, and load status")
             
         except Exception as e:
-            logging.error(f"Error collecting user profile information: {e}")
+            logger.error(f"Error collecting user profile information: {e}")
             print(f"Warning: Could not collect complete user profile information: {e}")
         
         # MUICache is collected once, above, over both of its registry paths and
@@ -4022,7 +4054,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, TASKCACHE + r"\Tree") as tree:
                         walk(tree, "")
                 except OSError as e:
-                    logging.warning(f"TaskCache\\Tree unavailable: {e}")
+                    logger.warning(f"TaskCache\\Tree unavailable: {e}")
                 return mapping
 
             def _tc_trigger_map():
@@ -4113,7 +4145,7 @@ def main_live_reg(db_filename='registry_data.db'):
             print(f"Scheduled Tasks collected successfully. Total tasks: {task_count}")
 
         except Exception as e:
-            logging.error(f"Error collecting Scheduled Tasks: {e}")
+            logger.error(f"Error collecting Scheduled Tasks: {e}")
             print(f"Warning: Could not collect Scheduled Tasks data: {e}")
 
         # ------------------------------------------------------------------
@@ -4266,7 +4298,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     if _nm and _pp:
                         _profile_paths[str(_nm).lower()] = str(_pp)
             except Exception as _pp_exc:
-                logging.debug("profile paths for expansion: %s", _pp_exc)
+                logger.debug("profile paths for expansion: %s", _pp_exc)
 
             # HKCU-sourced rows are attributed to the account this parser is
             # running as. Reuses the existing SID -> name helpers rather than
@@ -4608,7 +4640,7 @@ def main_live_reg(db_filename='registry_data.db'):
             print(f"Persistence keys collected successfully. Total values: {asep_count}")
 
         except Exception as e:
-            logging.error(f"Error collecting persistence keys: {e}")
+            logger.error(f"Error collecting persistence keys: {e}")
             print(f"Warning: Could not collect persistence key data: {e}")
         # ------------------------------------------------------------------
         # Forensic coverage: security posture, network exposure, devices,
@@ -4681,7 +4713,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             'ALTER TABLE %s ADD COLUMN value_decoded TEXT'
                             % _cov_t)
                 except sqlite3.Error as _cov_mig:
-                    logging.debug('value_decoded migration %s: %s',
+                    logger.debug('value_decoded migration %s: %s',
                                   _cov_t, _cov_mig)
 
             def _cov_dec(table, name, data, vtype=None):
@@ -5060,7 +5092,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         elif _s.startswith("S-1-5-21"):
                             user_roots.append((winreg.HKEY_USERS, _s + "\\", _s))
             except OSError as e:
-                logging.debug("HKEY_USERS walk for coverage: %s", e)
+                logger.debug("HKEY_USERS walk for coverage: %s", e)
 
             cursor.execute('''CREATE TABLE IF NOT EXISTS MountPoints2 (
                 user_name TEXT, mount_id TEXT, mount_type TEXT, key_path TEXT,
@@ -5724,7 +5756,7 @@ def main_live_reg(db_filename='registry_data.db'):
                   % (_tot, ", ".join("%s=%d" % (k, v) for k, v in sorted(cov_counts.items()))))
 
         except Exception as e:
-            logging.error(f"Error collecting forensic coverage keys: {e}")
+            logger.error(f"Error collecting forensic coverage keys: {e}")
             print(f"Warning: Could not collect forensic coverage data: {e}")
         # ------------------------------------------------------------------
         # Other users (HKEY_USERS)
@@ -5806,7 +5838,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     # columns simply stay; the tabs place values by name now,
                     # so they render as two empty columns rather than shifting
                     # anything. Worth a line in the log, not a failed parse.
-                    logging.debug("dropping dead columns from %s: %s", _t, _drop_err)
+                    logger.debug("dropping dead columns from %s: %s", _t, _drop_err)
 
             # Migration only. The HKCU passes now stamp user_name at INSERT
             # time, so on a database this build wrote there is nothing left to
@@ -5835,7 +5867,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         except OSError:
                             pass
             except OSError as e:
-                logging.warning(f"ProfileList unreadable: {e}")
+                logger.warning(f"ProfileList unreadable: {e}")
 
             loaded = []
             try:
@@ -5843,7 +5875,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     for _i in range(winreg.QueryInfoKey(_uk)[0]):
                         loaded.append(winreg.EnumKey(_uk, _i))
             except OSError as e:
-                logging.warning(f"HKEY_USERS unreadable: {e}")
+                logger.warning(f"HKEY_USERS unreadable: {e}")
 
             # Same widening as the coverage walk above: the service hives and
             # .DEFAULT come too, and carry their own labels. The set of service
@@ -5930,7 +5962,7 @@ def main_live_reg(db_filename='registry_data.db'):
                              p.get('access_date'), _rm_kw, user_stamp, uname))
                         other_rows += 1
                     except Exception as e:
-                        logging.debug(f"RunMRU {uname}/{nm}: {e}")
+                        logger.debug(f"RunMRU {uname}/{nm}: {e}")
 
                 # MUICache - application display names, an execution signal.
                 # Pivoted to one row per executable, as in the current-user pass.
@@ -5954,7 +5986,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             elif not _e['app_name'] and not _pr:
                                 _e['app_name'] = str(dt).strip()
                         except Exception as e:
-                            logging.debug(f"MUICache {uname}/{nm}: {e}")
+                            logger.debug(f"MUICache {uname}/{nm}: {e}")
                 for _ap, _e in _u_apps.items():
                     # Keyed by user as well as path - the same program run by
                     # two accounts is two findings, not one.
@@ -5994,7 +6026,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                  p.get('focus_time'), sid, user_stamp))
                             other_rows += 1
                         except Exception as e:
-                            logging.debug(f"UserAssist {uname}: {e}")
+                            logger.debug(f"UserAssist {uname}: {e}")
 
                 # Shellbags - UsrClass.dat is a separate hive: HKU\<SID>_Classes.
                 #
@@ -6008,7 +6040,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         sid + r"_Classes\Local Settings\Software\Microsoft\Windows\Shell\BagMRU")
                     other_rows += store_shellbag_entries(sb or [], uname)
                 except Exception as e:
-                    logging.debug(f"Shellbags {uname}: {e}")
+                    logger.debug(f"Shellbags {uname}: {e}")
 
                 # RecentDocs - documents opened by this account.
                 # 'main' matches the current-user pass and the offline parser.
@@ -6045,7 +6077,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                 (_sub, nm, fn, ty, uname, _pos, _u_lw, user_stamp))
                             other_rows += 1
                         except Exception as e:
-                            logging.debug(f"RecentDocs {uname}/{nm}: {e}")
+                            logger.debug(f"RecentDocs {uname}/{nm}: {e}")
 
                 # WordWheelQuery - Explorer search box history.
                 _ww_path = f"{base}\\Explorer\\WordWheelQuery"
@@ -6067,7 +6099,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             (term, 'Explorer search', nm, _ww_kw, user_stamp, uname))
                         other_rows += 1
                     except Exception as e:
-                        logging.debug(f"WordWheelQuery {uname}/{nm}: {e}")
+                        logger.debug(f"WordWheelQuery {uname}/{nm}: {e}")
 
                 # OpenSaveMRU / LastSaveMRU - shell Open/Save dialog history.
                 _cdlg = base + r"\Explorer\ComDlg32"
@@ -6096,7 +6128,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                  str(dt), user_stamp, uname))
                             other_rows += 1
                         except Exception as e:
-                            logging.debug(f"OpenSaveMRU {uname}/{nm}: {e}")
+                            logger.debug(f"OpenSaveMRU {uname}/{nm}: {e}")
 
                 for nm, (dt, _ty) in reg_Claw_live(
                         HKU_R, _cdlg + r"\LastVisitedPidlMRU").items():
@@ -6118,7 +6150,7 @@ def main_live_reg(db_filename='registry_data.db'):
                              p.get('drive_letter', ''), str(dt), user_stamp, uname))
                         other_rows += 1
                     except Exception as e:
-                        logging.debug(f"LastSaveMRU {uname}/{nm}: {e}")
+                        logger.debug(f"LastSaveMRU {uname}/{nm}: {e}")
 
             # Per-user autostart locations, for every loaded user hive.
             #
@@ -6248,7 +6280,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     "command_processor", r"Software\Microsoft\Command Processor",
                     names={"AutoRun"}, roll="Command Processor")
             except Exception as _e:
-                logging.debug("per-user ASEP pass failed for %s: %s", sid, _e)
+                logger.debug("per-user ASEP pass failed for %s: %s", sid, _e)
 
             conn.commit()
             if other_sids:
@@ -6261,7 +6293,7 @@ def main_live_reg(db_filename='registry_data.db'):
                   f"across {len(_asep_sids)} user hive(s)")
 
         except Exception as e:
-            logging.error(f"Error collecting other users: {e}")
+            logger.error(f"Error collecting other users: {e}")
             print(f"Warning: Could not collect other-user registry data: {e}")
 
         # ------------------------------------------------------------------
@@ -6323,7 +6355,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         print("SECURITY hive unavailable - LSA tables skipped "
                               "(needs elevation)")
                 except Exception as _e:
-                    logging.error(f"Error parsing SECURITY hive: {_e}")
+                    logger.error(f"Error parsing SECURITY hive: {_e}")
                     print(f"Warning: Could not parse SECURITY hive: {_e}")
 
             if _sam:
@@ -6343,7 +6375,7 @@ def main_live_reg(db_filename='registry_data.db'):
                       f"{_enriched} SID references resolved")
 
         except Exception as e:
-            logging.error(f"Error building user identity: {e}")
+            logger.error(f"Error building user identity: {e}")
             print(f"Warning: Could not build user identity: {e}")
 
         # ---- what a tree walk, and winreg, cannot reach -----------------
@@ -6402,7 +6434,7 @@ def main_live_reg(db_filename='registry_data.db'):
             try:
                 _targets.extend(live_hive_access.user_hives())
             except Exception as _e:
-                logging.debug("could not enumerate per-user hives: %s", _e)
+                logger.debug("could not enumerate per-user hives: %s", _e)
 
             def _fmt_ft(raw):
                 """A raw FILETIME as our forensic timestamp, or ""."""
@@ -6479,7 +6511,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                 _src, _path,
                                 allow_snapshot_creation=_allow_snapshot)
                     except Exception as _exc:
-                        logging.debug("logs for %s: %s", _label, _exc)
+                        logger.debug("logs for %s: %s", _label, _exc)
 
                     try:
                         for _r in registry_hive_walk.value_changes(_path):
@@ -6488,11 +6520,11 @@ def main_live_reg(db_filename='registry_data.db'):
                             if _kt["key_path"] and _kt["timestamp_raw"]:
                                 _pending_keytimes.append((_label, _kt))
                     except Exception as _exc:
-                        logging.debug("value changes %s: %s", _label, _exc)
+                        logger.debug("value changes %s: %s", _label, _exc)
 
                     _w = registry_hive_walk.walk_hive(_path)
                     if _w.error:
-                        logging.debug("hive walk %s: %s", _label, _w.error)
+                        logger.debug("hive walk %s: %s", _label, _w.error)
 
                     # Whether this hive still holds the free space carving
                     # reads. Windows compacts a hive on its own schedule and
@@ -6668,6 +6700,8 @@ def main_live_reg(db_filename='registry_data.db'):
                         cursor.execute(sql, tuple(row.get(c) for c in columns)
                                        + (_walk_stamp,))
                         _extra["n"] += cursor.rowcount if cursor.rowcount > 0 else 0
+                        if cursor.rowcount == 0:
+                            REPARSE_COUNTS["already_present"] += 1
 
                 _put("startup_approved",
                      ["hive", "scope", "entry_name", "state", "state_byte",
@@ -6771,7 +6805,7 @@ def main_live_reg(db_filename='registry_data.db'):
                           "AutoStartPrograms carry their real state"
                           % (_dis, "y is" if _dis == 1 else "ies are", _marked))
             except Exception as _exc:
-                logging.debug("extra key pass: %s", _exc)
+                logger.debug("extra key pass: %s", _exc)
 
             # ---- which value each pending transaction changed --------
             # A key records when it was last written; its values record
@@ -6819,7 +6853,7 @@ def main_live_reg(db_filename='registry_data.db'):
                                           _kt["cell_offset"])
                 conn.commit()
             except Exception as _exc:
-                logging.debug("live value change pass: %s", _exc)
+                logger.debug("live value change pass: %s", _exc)
 
             # ---- key times, and the bound they give every value row ----
             try:
@@ -6892,7 +6926,7 @@ def main_live_reg(db_filename='registry_data.db'):
                       % (_key_rows, _timed["exact"], _timed["bound"],
                          _timed["none"]))
             except Exception as _exc:
-                logging.debug("live time basis pass: %s", _exc)
+                logger.debug("live time basis pass: %s", _exc)
 
             conn.commit()
             _routes = ", ".join("%s=%s" % (k, v) for k, v in sorted(_hive_routes.items()))
@@ -6914,7 +6948,7 @@ def main_live_reg(db_filename='registry_data.db'):
                          _compacted[-1][0], _compacted[-1][1]))
             print("     acquired by: %s" % _routes)
         except Exception as e:
-            logging.error("Error walking acquired hives: %s", e)
+            logger.error("Error walking acquired hives: %s", e)
             print("Warning: hive structure walk did not complete: %s" % e)
 
         # One row per hive saying HOW it was read. A carved table that is empty
@@ -6946,7 +6980,7 @@ def main_live_reg(db_filename='registry_data.db'):
                      "no hive file to be mid-transaction", _hs_stamp))
             conn.commit()
         except Exception as e:
-            logging.error("Could not record acquisition routes: %s", e)
+            logger.error("Could not record acquisition routes: %s", e)
 
 
         # Commit the transaction
@@ -6956,7 +6990,7 @@ def main_live_reg(db_filename='registry_data.db'):
         
     except Exception as e:
         error_msg = f"Critical error in registry parsing: {str(e)}"
-        logging.error(error_msg)
+        logger.error(error_msg)
         print(f"[Registry Error] {error_msg}")
         # Return the database path even on error - partial data may have been collected
         return db_filename

@@ -79,6 +79,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+
+def _site_look(dialog, primary=None, ghost=None, title=None, log_well=None):
+    """A dialog this window opens at run time, in the site look like its
+    parent: one sheet, the old per-widget sheets read back into roles, the
+    buttons in the role family, an error log in the mono log well."""
+    try:
+        from ui.site_theme import apply_site_theme, set_variant, set_role, keep_style, log_view_sheet
+    except ImportError:
+        return
+    if log_well is not None:
+        log_well.setStyleSheet(log_view_sheet())
+        keep_style(log_well)
+    apply_site_theme(dialog)
+    if title is not None:
+        set_role(title, "subtitle")
+    if primary is not None:
+        set_variant(primary, "primary")
+    if ghost is not None:
+        set_variant(ghost, "ghost")
+
 class ParsingWorker(QThread):
     """
     Worker thread for parsing artifacts without blocking the GUI.
@@ -114,24 +134,13 @@ class ParsingWorker(QThread):
         self.progress_callback = progress_callback
         self.cancellation_check = cancellation_check
         self.error_log_path = error_log_path
-        
-        # Note: QTimer will be created in run() method to ensure it's created in the worker thread
-        # This prevents "QObject::killTimer: Timers cannot be stopped from another thread" error
-        self.heartbeat_timer = None
-    
+
     def run(self):
         """Execute parsing in background thread."""
         try:
-            # Create heartbeat timer in worker thread to avoid Qt threading issues
-            # This prevents "QObject::killTimer: Timers cannot be stopped from another thread" error
-            from PyQt5.QtCore import QTimer
-            self.heartbeat_timer = QTimer()
-            self.heartbeat_timer.timeout.connect(self.heartbeat.emit)
-            self.heartbeat_timer.setInterval(250)  # 250ms interval
-            
-            # Start heartbeat timer to keep QEventLoop active
-            self.heartbeat_timer.start()
-            
+            # The heartbeat comes from the batch itself (heartbeat_callback, at
+            # most every 250 ms). A QTimer used to be started here too, but run()
+            # has no event loop, so it never fired.
             # Create heartbeat callback that emits the heartbeat signal
             def heartbeat_callback():
                 try:
@@ -168,14 +177,6 @@ class ParsingWorker(QThread):
                 self.parsing_error.emit(str(e))
             except Exception as emit_error:
                 logger.error(f"Error emitting parsing_error signal: {emit_error}", exc_info=True)
-        finally:
-            # Stop heartbeat timer after parsing completes or fails
-            # Timer is guaranteed to be in the same thread since it was created in run()
-            try:
-                if self.heartbeat_timer is not None:
-                    self.heartbeat_timer.stop()
-            except Exception as e:
-                logger.error(f"Error stopping heartbeat timer: {e}", exc_info=True)
 
 
 class ParseArtifactsDialog(QDialog):
@@ -213,6 +214,12 @@ class ParseArtifactsDialog(QDialog):
         
         self.setup_ui()
         self.load_artifacts()
+        # Roles for what the per-widget sheets said, once the tables exist.
+        try:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+        except Exception:
+            pass
     
     def showEvent(self, event):
         """
@@ -233,14 +240,18 @@ class ParseArtifactsDialog(QDialog):
         self.setWindowTitle("Parse Offline Artifacts")
         self.setMinimumSize(900, 600)
         
-        # Apply dialog styling
-        if STYLES_AVAILABLE:
-            self.setStyleSheet(f"""
-                QDialog {{
-                    background-color: {Colors.BG_PRIMARY};
-                    color: {Colors.TEXT_PRIMARY};
-                }}
-            """)
+        # The site look (ui/site_theme.py), set before the widgets exist.
+        try:
+            from ui.site_theme import begin_site_theme
+            begin_site_theme(self)
+        except Exception:
+            if STYLES_AVAILABLE:
+                self.setStyleSheet(f"""
+                    QDialog {{
+                        background-color: {Colors.BG_PRIMARY};
+                        color: {Colors.TEXT_PRIMARY};
+                    }}
+                """)
         
         # Main layout
         layout = QVBoxLayout(self)
@@ -686,6 +697,23 @@ class ParseArtifactsDialog(QDialog):
                 msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
             msg_box.exec_()
     
+    def select_only(self, artifact_ids) -> int:
+        """Tick exactly the artifacts in `artifact_ids` (the rest unticked) and
+        return how many were found - how the Offline Importer parses what one
+        COLLECT brought in, through the same parse as the button."""
+        wanted = set(artifact_ids or ())
+        n = 0
+        for table in self.category_tables.values():
+            for row in range(table.rowCount()):
+                widget = table.cellWidget(row, 0)
+                box = widget.findChild(QCheckBox) if widget else None
+                if box is None:
+                    continue
+                hit = box.property("artifact_id") in wanted
+                box.setChecked(hit)
+                n += 1 if hit else 0
+        return n
+
     def get_selected_artifacts(self) -> List[ScannedArtifact]:
         """
         Get the full ScannedArtifact objects for selected artifacts.
@@ -806,12 +834,10 @@ class ParseArtifactsDialog(QDialog):
         from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QTableWidget, QTableWidgetItem, QHeaderView
         from PyQt5.QtCore import Qt
         
-        # Group results by artifact type
+        # Group results by artifact type (paired by artifact id, not position)
+        from .parser_invoker import pair_results
         results_by_type = {}
-        processed_count = len(parse_results)
-        for i in range(processed_count):
-            artifact = selected_artifacts[i]
-            result = parse_results[i]
+        for artifact, result in pair_results(selected_artifacts, parse_results):
             
             if artifact.artifact_type not in results_by_type:
                 results_by_type[artifact.artifact_type] = []
@@ -901,8 +927,18 @@ class ParseArtifactsDialog(QDialog):
             # Status
             status_item = QTableWidgetItem(status_info['status'])
             status_item.setTextAlignment(Qt.AlignCenter)
-            if "Success" in status_info['status']:
-                status_item.setForeground(Qt.green)
+            # The status in its meaning colour: Success / Partial / Failed
+            kind = ("ok" if "Success" in status_info['status'] else
+                    "warn" if "Partial" in status_info['status'] else
+                    "bad" if "Failed" in status_info['status'] else None)
+            if kind:
+                try:
+                    from ui.site_theme import STATUS_COLORS
+                    from PyQt5.QtGui import QColor
+                    status_item.setForeground(QColor(STATUS_COLORS[kind]))
+                except ImportError:
+                    if kind == "ok":
+                        status_item.setForeground(Qt.green)
             table.setItem(row, 1, status_item)
             
             # Files
@@ -935,7 +971,9 @@ class ParseArtifactsDialog(QDialog):
         button_layout.addStretch()
         button_layout.addWidget(ok_button)
         layout.addLayout(button_layout)
-        
+
+        _site_look(dialog, primary=ok_button, title=title_label)
+
         # Show dialog
         dialog.exec_()
     
@@ -949,8 +987,8 @@ class ParseArtifactsDialog(QDialog):
             success_count: Number of successfully parsed artifacts
             error_count: Number of failed artifacts
         """
-        from PyQt5.QtWidgets import QTextEdit, QVBoxLayout, QPushButton
-        
+        from PyQt5.QtWidgets import QTextEdit, QVBoxLayout, QPushButton, QApplication
+
         # Create custom dialog subclass with showEvent override for proper centering
         class CenteredErrorDialog(QDialog):
             """Error dialog that centers itself after Qt finalizes geometry"""
@@ -1063,7 +1101,9 @@ class ParseArtifactsDialog(QDialog):
         button_layout.addStretch()
         button_layout.addWidget(close_button)
         dialog_layout.addLayout(button_layout)
-        
+
+        _site_look(error_dialog, ghost=close_button, log_well=error_text)
+
         # Show dialog modally (centering handled by showEvent)
         error_dialog.exec_()
 
@@ -1206,41 +1246,13 @@ class ParseArtifactsDialog(QDialog):
             # Use self as parent to prevent active modal dialog from blocking this dialog (Fixing modality bug)
             self.loading_dialog = LoadingDialog("PARSING ARTIFACTS", self, phase="parsing")
             
-            # Apply EXACT cyberpunk styling used by live parsers (same as Crow Eye.py line 7325-7330)
-            try:
-                from styles import CrowEyeStyles
-                from PyQt5 import QtWidgets
-                
-                # Apply the main dialog style (same as live parsers)
-                self.loading_dialog.setStyleSheet(CrowEyeStyles.LOADING_DIALOG)
-                
-                # Apply title style (same as live parsers)
-                title_label = self.loading_dialog.findChild(QtWidgets.QLabel, "titleLabel")
-                if title_label:
-                    title_label.setStyleSheet(CrowEyeStyles.OVERLAY_TITLE)
-                
-                # Apply status style (same as live parsers)
-                status_label = self.loading_dialog.findChild(QtWidgets.QLabel, "statusLabel")
-                if status_label:
-                    status_label.setStyleSheet(CrowEyeStyles.OVERLAY_STATUS)
-                
-                # Apply progress bar style (same as live parsers)
-                progress_bar = self.loading_dialog.findChild(QtWidgets.QProgressBar)
-                if progress_bar:
-                    progress_bar.setStyleSheet(CrowEyeStyles.OVERLAY_PROGRESS)
-                
-                # Apply log text style (same as live parsers)
-                log_text = self.loading_dialog.findChild(QtWidgets.QTextEdit)
-                if log_text:
-                    log_text.setStyleSheet(CrowEyeStyles.OVERLAY_LOG)
-                    
-            except (ImportError, Exception) as e:
-                print(f"[DEBUG] Failed to apply cyberpunk style to LoadingDialog: {e}")
-            
+            # The dialog styles itself; per-caller overrides (OVERLAY_*) made the
+            # same dialog look different depending on who opened it.
+           
             # Requirement 2: Group and order steps by artifact type (same as live parsers)
             canonical_order = [
                 'link_jumplist', 'Registry', 'Prefetch', 'EVTX', 'ShimCache', 
-                'AmCache', 'RecycleBin', 'SRUM', 'MFT', 'USN'
+                'AmCache', 'RecycleBin', 'SRUM', 'Browser', 'MFT', 'USN'
             ]
             
             # Get unique artifact types from selected artifacts
@@ -1256,6 +1268,26 @@ class ParseArtifactsDialog(QDialog):
             # Set steps based on unique artifact types
             steps = [f"Analyzing {t}" for t in unique_types]
             self.loading_dialog.set_steps(steps)
+            # The checklist: one row per artifact type, filled in by the parser
+            # frames ParserInvoker runs each parser in (utils/parse_logging.py).
+            try:
+                from utils.parse_status import artifact_label, canonical_artifact
+                rows, seen = [], set()
+                for t in unique_types:
+                    key = canonical_artifact(t)
+                    if key and key not in seen:
+                        seen.add(key)
+                        rows.append((key, artifact_label(key)))
+                if 'MFT' in unique_types and 'USN' in unique_types:
+                    rows.append(('mft_usn_correlation', artifact_label('mft_usn_correlation')))
+                source = (getattr(self, 'run_source', None) or {}).get('image')
+                mode = getattr(self, 'source_mode', 'offline')
+                self.loading_dialog.set_source(
+                    "Parsing %s  (%s)" % (source or os.path.join(self.case_root, 'live_acquisition'),
+                                          'forensic image' if mode == 'image' else 'offline'))
+                self.loading_dialog.set_checklist(rows)
+            except Exception as e:
+                logger.debug("Checklist not shown: %s", e)
             self.loading_dialog.show()
             
             # Force dialog to front and ensure visibility (Bug Fix 3.3)
@@ -1292,7 +1324,7 @@ class ParseArtifactsDialog(QDialog):
                     current_idx += n_files
                     continue
                 
-                is_directory_parser = t in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin']
+                is_directory_parser = t in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin', 'Browser']
                 self.step_ranges[t] = {
                     'start': current_idx,
                     'count': n_files,
@@ -1327,6 +1359,14 @@ class ParseArtifactsDialog(QDialog):
         parser = ParserInvoker(self.case_root)
         # 'image' when opened from ImageParsingDialog; labels the parse status.
         parser.mode = getattr(self, 'source_mode', 'offline')
+        # From the image window: the session's issues, what was found but not
+        # extracted, and what was read - so its report covers the whole session.
+        parser.session_issues = list(getattr(self, 'session_issues', []) or [])
+        parser.collection_failures = dict(getattr(self, 'collection_failures', {}) or {})
+        parser.run_source = dict(getattr(self, 'run_source', {}) or {})
+        parser.extraction_scope = getattr(self, 'extraction_scope', None)
+        if self.loading_dialog is not None:
+            parser.artifact_progress = self.loading_dialog.on_artifact_event
 
         # Track results
         self.parse_results = []
@@ -1357,6 +1397,13 @@ class ParseArtifactsDialog(QDialog):
                 logger.error(f"Error connecting worker signals: {e}", exc_info=True)
                 raise
             
+            # The wait loop is connected BEFORE the worker starts: a parse that
+            # ends at once (nothing to read) finished before the connect, and
+            # loop.exec_() below then never returned.
+            from PyQt5.QtCore import QEventLoop
+            loop = QEventLoop()
+            worker.finished.connect(loop.quit, Qt.QueuedConnection)
+
             # Start worker thread (non-blocking)
             worker.start()
             # Crow-Eye is busy while this parses: feature windows in the main
@@ -1369,17 +1416,6 @@ class ParseArtifactsDialog(QDialog):
             except Exception:
                 pass
 
-            # Use QEventLoop to wait without blocking GUI
-            from PyQt5.QtCore import QEventLoop
-            loop = QEventLoop()
-            
-            # Connect worker finished signal to quit the event loop
-            try:
-                worker.finished.connect(loop.quit, Qt.QueuedConnection)
-            except Exception as e:
-                logger.error(f"Error connecting worker finished signal: {e}", exc_info=True)
-                raise
-            
             # Run event loop - this keeps GUI responsive while waiting
             try:
                 loop.exec_()
@@ -1397,15 +1433,15 @@ class ParseArtifactsDialog(QDialog):
             except Exception as e:
                 logger.error(f"Error waiting for worker thread: {e}", exc_info=True)
             
-            # Update artifact index with parsed status
-            # Fix logical error: use min(len, len) to avoid IndexError if cancelled
-            processed_count = min(len(selected_artifacts), len(self.parse_results))
-            
+            # Update artifact index with parsed status. Results are paired with
+            # their artifacts by id: the invoker returns them grouped by type,
+            # so the i-th result was often another file's.
+            from .parser_invoker import pair_results
+            paired = pair_results(selected_artifacts, self.parse_results)
+
             # Group results by artifact type to avoid duplicate messages for directory-based parsers
             results_by_type = {}
-            for i in range(processed_count):
-                artifact = selected_artifacts[i]
-                result = self.parse_results[i]
+            for artifact, result in paired:
                 
                 if artifact.artifact_type not in results_by_type:
                     results_by_type[artifact.artifact_type] = {
@@ -1482,17 +1518,16 @@ class ParseArtifactsDialog(QDialog):
             
             # Summary stats
             print("[DEBUG] Calculating summary stats...")
-            success_count = sum(1 for r in self.parse_results if r.success)
-            error_count = len(self.parse_results) - success_count
+            counted = [r for r in self.parse_results if not getattr(r, "skipped", False)]
+            success_count = sum(1 for r in counted if r.success)
+            error_count = len(counted) - success_count
             print(f"[DEBUG] Summary: {success_count} success, {error_count} errors")
             
             if LOADING_DIALOG_AVAILABLE:
                 try:
                     errors_list = []
                     warnings_list = []
-                    for i in range(processed_count):
-                        artifact = selected_artifacts[i]
-                        result = self.parse_results[i]
+                    for artifact, result in paired:
                         if not result.success and result.errors:
                             for err in result.errors:
                                 errors_list.append(f"{artifact.artifact_type}: {err}")

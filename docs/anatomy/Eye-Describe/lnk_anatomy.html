@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows LNK File Format — How .LNK Shortcuts Work</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+  <style>
+
+    /* A card that points at the page where the subject is explained in full. */
+    .see-also { display: block; margin-top: 14px; padding-top: 12px;
+                border-top: 1px solid var(--bd, #2a2f3a);
+                font-family: 'Space Mono', ui-monospace, monospace;
+                font-size: 11.5px; letter-spacing: 0.04em;
+                color: var(--accent); text-decoration: none; }
+    .see-also::after { content: ' \2192'; }
+    .see-also:hover, .see-also:focus { text-decoration: underline; }
+
+    /* Figure and table numbers. */
+    .cap { font-family: 'Space Mono', ui-monospace, monospace; font-size: 11px;
+           letter-spacing: 0.1em; text-transform: uppercase; color: var(--accent);
+           font-weight: 700; margin: 22px 0 6px; display: block; }
+
+    /* palette -> anatomy.css */
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: visible !important; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1760px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    /* Line breaking. Measured across the section: 116 paragraphs ended with a
+       stub last line at 1400px, and widening plus `pretty` takes that to 101.
+       `pretty` on its own was worth 4 of those - it is here because it costs
+       nothing, not because it is the fix. The fix was the width. */
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4, .cap, .dg-sub, .factcard .l { text-wrap: balance; }
+
+    /* Offsets and sizes size to their content; the column that carries the
+       sentence takes the rest. Measured: 36% of table width empty before,
+       33% after, and the emptiest column goes from 3% of its width in use
+       to 8%. */
+    /* An offset or a size never wraps. `width: 1%` was here too - the usual
+       trick for making a column shrink - and it was fighting the `width: auto`
+       further down: a percentage cell width makes the browser solve for a
+       table width that satisfies it, which pinned every table to the full
+       1646px container. Measured with it: seven tables on this page, all 1646.
+       Without it: 800, 800, 800, 800, 800, 1489, 1646 - each the width its
+       own content needs. */
+    .ref-table th:nth-child(-n+2),
+    .ref-table td:nth-child(-n+2) { white-space: nowrap; }
+
+    header { margin-bottom: 40px; }
+    h1 { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 40px; font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 700px; margin-bottom: 20px; }
+
+    .dissection-layout { display: grid; grid-template-columns: 1fr 450px; gap: 32px; margin-bottom: 60px; align-items: start; }
+    .map-container { box-shadow: 0 10px 40px rgba(0,0,0,0.4); -webkit-overflow-scrolling: touch; }  /* card look -> anatomy.css */
+    .unified-map { display: grid; grid-template-columns: repeat(16, 1fr); gap: 6px; min-width: 500px; }
+    
+    .byte-cell { aspect-ratio: 1; display: flex; align-items: center; justify-content: center; background: var(--bg2); border: 1px solid var(--border); border-radius: 4px; font-size: 11px; font-family: 'Space Mono', monospace; font-weight: 700; color: var(--tx3); cursor: pointer; transition: all 0.1s; }
+    .byte-cell:hover { transform: scale(1.2); border-color: var(--accent); z-index: 10; filter: brightness(1.3); }
+    .byte-cell.active { border-color: var(--accent); box-shadow: 0 0 15px var(--accent); z-index: 5; color: var(--tx) !important; background: var(--bg3) !important; filter: brightness(1.2); }
+    
+    .byte-cell.reserved { background: var(--bg3); color: var(--tx3); opacity: 0.5; }
+
+    .divider-row { grid-column: 1 / span 16; height: 30px; display: flex; align-items: center; font-family: 'Space Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: var(--tx3); margin: 16px 0 4px; border-top: 1px solid var(--border); padding-top: 8px; }
+    .divider-row::after { content: ''; height: 1px; flex: 1; background: var(--border); margin-left: 10px; }
+
+    .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
+    .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
+    .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 16px; border-radius: 4px; font-size: 14px; line-height: 1.6; margin-top: 20px; color: var(--tx2); }
+    .forensic-text strong { color: var(--accent); }
+
+    .structure-grid { display: grid; gap: 8px; margin-top: 16px; }
+    .struct-row { display: flex; justify-content: space-between; padding: 8px; background: var(--bg); border-radius: 6px; border: 1px solid var(--border); font-family: 'Space Mono', monospace; font-size: 11px; }
+    .struct-off { color: var(--tx3); }
+    .struct-name { color: var(--identity-color); font-weight: 700; }
+    .struct-size { color: var(--accent); }
+
+    /* .narrative-section look -> anatomy.css */
+    .narrative-title { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 28px; font-weight: 800; margin-bottom: 16px; color: var(--tx); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 16px; }
+
+    /* .full-reference look -> anatomy.css */
+    .ref-table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 800px; }
+    .ref-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .ref-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-section-head { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono'; text-transform: uppercase; letter-spacing: 0.1em; font-size: 12px; }
+
+    .kb-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(450px, 1fr)); gap: 32px; margin-bottom: 48px; }
+    /* .kb-section look -> anatomy.css */
+    .kb-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
+    .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* h2 look -> anatomy.css */
+    /* h2::before look -> anatomy.css */
+
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 10px; }
+
+    @media (max-width: 900px) {
+      .dissection-layout { grid-template-columns: 1fr; gap: 16px; }
+      .dynamic-side { position: relative; top: 0; min-height: auto; max-height: none; }  /* card look -> anatomy.css */
+      .kb-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 80px 16px 20px; }
+      h1 { font-size: 28px; }
+      .header-sub { font-size: 15px; }
+      .responsive-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; margin: 0 -8px; }
+      .ref-table, .kb-table { min-width: 600px; }
+      .full-reference, .kb-section, .narrative-section { padding: 24px 16px; border-radius: 16px; }
+      .selection-grid-2 { grid-template-columns: 1fr !important; }
+    }
+      /* Each table takes the width its content needs, instead of being
+       stretched to the container or capped at one number. A capped 1300px was
+       tried first and was wrong in both directions: the four-column offset
+       tables still had gaps, and the column table - five columns, two of them
+       sentences - came out cramped with its text wrapping three deep. `width:
+       auto` lets the narrow ones stay narrow and the wide ones use the room.
+       The wrapper hugs the table so the bordered box does not run on past it. */
+    .ref-table { width: auto; max-width: 100%; }
+    .responsive-table-wrap { width: fit-content; max-width: 100%; }
+  </style>
+  <!-- SEO (injected) -->
+  <meta name="description" content="How Windows LNK (ShellLink) shortcut files work and what they reveal: header, LinkTargetIDList, LinkInfo, and ExtraData blocks — a byte-level forensic breakdown.">
+  <meta name="keywords" content="LNK file format, windows shortcut forensics, ShellLink structure, .lnk analysis, LinkTargetIDList, tracker block, recent files">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/lnk_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/lnk_anatomy">
+  <meta property="og:title" content="Windows LNK File Format — How .LNK Shortcuts Work">
+  <meta property="og:description" content="How Windows LNK (ShellLink) shortcut files work and what they reveal: header, LinkTargetIDList, LinkInfo, and ExtraData blocks — a byte-level forensic breakdown.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Windows LNK File Format — How .LNK Shortcuts Work">
+  <meta name="twitter:description" content="How Windows LNK (ShellLink) shortcut files work and what they reveal: header, LinkTargetIDList, LinkInfo, and ExtraData blocks — a byte-level forensic breakdown.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "Windows LNK (ShellLink) shortcut file format and its forensic interpretation",
+      "keywords": "LNK file format, windows shortcut forensics, ShellLink structure, .lnk analysis, LinkTargetIDList, tracker block, recent files",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Windows LNK File Format — How .LNK Shortcuts Work",
+      "description": "How Windows LNK (ShellLink) shortcut files work and what they reveal: header, LinkTargetIDList, LinkInfo, and ExtraData blocks — a byte-level forensic breakdown.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "about": "Windows LNK ShellLink file",
+      "inLanguage": "en",
+      "dateModified": "2026-06-14",
+      "author": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "url": "https://crow-eye.com/"
+      },
+      "publisher": {
+        "@type": "Organization",
+        "name": "Crow-Eye",
+        "logo": {
+          "@type": "ImageObject",
+          "url": "https://crow-eye.com/og-image.jpg"
+        }
+      },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/lnk_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        {
+          "@type": "ListItem",
+          "position": 1,
+          "name": "Home",
+          "item": "https://crow-eye.com/"
+        },
+        {
+          "@type": "ListItem",
+          "position": 2,
+          "name": "Eye-Describe",
+          "item": "https://crow-eye.com/eye-describe"
+        },
+        {
+          "@type": "ListItem",
+          "position": 3,
+          "name": "LNK File Anatomy",
+          "item": "https://crow-eye.com/Eye-Describe/lnk_anatomy"
+        }
+      ]
+    }
+  ]
+}
+  </script>
+  <style>@media (max-width:900px){html,body{overflow-x:hidden !important}}</style>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What does a Windows LNK file reveal in an investigation?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "The full path of the target, the target's created, modified and accessed times as they were when the shortcut was written, the volume serial number, and often a tracker block holding the machine ID and a NIC MAC address of the system where it was created."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Where are LNK files found on Windows?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Automatically created shortcuts live in the user's Recent folder under AppData. Others sit on the Desktop, in the Start Menu, and anywhere a user or installer placed them, so both automatic and deliberate shortcuts are worth collecting."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does a LNK file prove a document was opened?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "A shortcut in the Recent folder is good evidence the target was opened through the shell, and it preserves the target's timestamps at that moment even if the file has since been deleted or moved. It does not by itself say who opened it or from which application."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can a LNK file point at a file that no longer exists?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes, and that is one of its most useful properties. The shortcut retains the target's path, size and timestamps after the target is gone, which makes LNK files a common source of evidence for removed or external-media files."
+        }
+      }
+    ]
+  }
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+      
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu">
+      <i class="fas fa-bars"></i>
+    </button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <h1>LNK files: structure, contents and evidential limits</h1>
+      <p class="header-sub">The definitive forensic guide to the Windows shortcut (.lnk) file format &mdash; the MS-SHLLINK Shell Link structure used across Windows, and what a shortcut reveals about the file it points to.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#dissection">Full logical dissection reference</a></li>
+        <li><a href="#extradata-blocks">ExtraData block signatures</a></li>
+        <li><a href="#linkflags">LinkFlags bitmask (0x14)</a></li>
+        <li><a href="#dashboard">Reading the LNK / Jump-List dashboard</a></li>
+        <li><a href="#limits">What a shortcut supports, and what it does not</a></li>
+        <li><a href="#faq">Frequently asked questions</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <div class="dissection-layout">
+      <div class="map-container"><span class="cap">Figure 1</span>
+      <div class="unified-map" id="master-map"></div></div>
+      <div class="dynamic-side">
+        <span class="panel-label">Live Byte Selection</span>
+        <div id="selection-output">
+          <div style="text-align:center; padding-top: 60px; color: var(--tx3);"><p style="font-size: 48px; margin-bottom: 16px;"><i class="fas fa-search-plus"></i></p><p>Select any field in the map to reveal a deep forensic dive.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ARTIFACT NARRATIVE -->
+    <div class="narrative-section reveal">
+      <div class="narrative-title">The Three Pillars of Windows Artifacts</div>
+      <div class="narrative-text">
+        <p>Windows maintains three distinct artifact types that record file and application access history. All three share a common underlying structure — the <strong>Shell Link (LNK)</strong> binary format — but they wrap it in different containers and enrich it with different metadata layers:</p>
+        <ul style="margin-left: 24px; margin-bottom: 24px; color: var(--tx2);">
+          <li><strong>LNK Files (.lnk):</strong> Standalone shell shortcut files, one per accessed item. Found in <code>\Recent\</code>.</li>
+          <li><strong>Automatic Destinations:</strong> OLE Compound File containers, system-managed, tracking recently and frequently accessed items per application.</li>
+          <li><strong>Custom Destinations:</strong> Raw binary files, application-managed or user-driven, tracking pinned and task items.</li>
+        </ul>
+        <p>This page focuses on the core <strong>LNK binary payload</strong> found inside all three containers.</p>
+      </div>
+    </div>
+
+    <!-- FULL LOGICAL DISSECTION TABLE -->
+    <div class="full-reference reveal">
+      <h2 id="dissection" style="margin-bottom: 24px;">Full logical dissection reference</h2>
+      <span class="cap">Table 1</span>
+      <div class="responsive-table-wrap">
+      <table class="ref-table">
+          <thead>
+            <tr>
+              <th style="width: 80px;">Offset</th>
+              <th style="width: 60px;">Size</th>
+              <th style="width: 200px;">Field Name</th>
+              <th>Forensic Meaning & Value</th>
+            </tr>
+          </thead>
+          <tbody id="table-body">
+            <!-- JS Populated -->
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="kb-grid reveal">
+      <div class="kb-section">
+        <h2 id="extradata-blocks">ExtraData block signatures</h2>
+        <span class="cap">Table 2</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Signature</th><th>Block Name</th><th>Significance</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0xA0000003</td><td style="color: var(--tx);">TrackerDataBlock</td><td>Contains Machine NetBIOS, MAC Address, & Droid GUIDs.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0000009</td><td style="color: var(--tx);">PropertyStoreBlock</td><td>Serialized metadata (Author, Last_Author, Title, EXIF).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0000001</td><td style="color: var(--tx);">EnvironmentVarBlock</td><td>Target paths using variables like <code>%APPDATA%</code>.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0000006</td><td style="color: var(--tx);">DarwinDataBlock</td><td>Windows Installer (MSI) application component ID.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA000000B</td><td style="color: var(--tx);">KnownFolderBlock</td><td>System folder GUID (e.g. Startup, Downloads).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0000002</td><td style="color: var(--tx);">ConsoleDataBlock</td><td>Command prompt styling; reveals hidden 1x1 shell execution.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0xA0000008</td><td style="color: var(--tx);">ShimDataBlock</td><td>Applied Compatibility Shims (.sdb) - possible persistence.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <div class="kb-section">
+        <h2 id="linkflags">LinkFlags bitmask (0x14)</h2>
+        <span class="cap">Table 3</span>
+        <div class="responsive-table-wrap">
+      <table class="kb-table">
+            <thead><tr><th>Mask</th><th>Flag</th><th>Forensic Result</th></tr></thead>
+            <tbody>
+              <tr><td style="font-family: 'Space Mono';">0x0001</td><td style="color: var(--tx);">HasTargetIDList</td><td>Enables the IDList section containing Shell breadcrumbs & MFT references.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0002</td><td style="color: var(--tx);">HasLinkInfo</td><td>Enables LinkInfo section containing Volume Serial Numbers & Local Paths.</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0020</td><td style="color: var(--tx);">HasArguments</td><td>Enables StringData containing command-line arguments (critical for malware).</td></tr>
+              <tr><td style="font-family: 'Space Mono';">0x0080</td><td style="color: var(--tx);">IsUnicode</td><td>Indicates StringData blocks are UTF-16LE encoded.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const palettes = {
+      'header-color': [{ bg: '#051024', fg: '#2563eb' }, { bg: '#0a1835', fg: '#3b82f6' }, { bg: '#0e2453', fg: '#60a5fa' }, { bg: '#13306d', fg: '#93c5fd' }, { bg: '#194191', fg: '#bfdbfe' }, { bg: '#1e4eab', fg: '#dbeafe' }, { bg: '#255dc7', fg: '#eff6ff' }],
+      'identity-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'times-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'target-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'props-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#10b981' }, { bg: '#0f3f26', fg: '#34d399' }, { bg: '#145432', fg: '#6ee7b7' }, { bg: '#1a6a3f', fg: '#a7f3d0' }, { bg: '#1f824d', fg: '#d1fae5' }, { bg: '#25995b', fg: '#ecfdf5' }],
+      'fileinfo-color': [{ bg: '#04180f', fg: '#059669' }, { bg: '#062619', fg: '#10b981' }, { bg: '#093623', fg: '#34d399' }, { bg: '#0c472f', fg: '#6ee7b7' }, { bg: '#105e3e', fg: '#a7f3d0' }, { bg: '#14754d', fg: '#d1fae5' }, { bg: '#188c5c', fg: '#ecfdf5' }],
+      'metrics-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0e2942', fg: '#22d3ee' }, { bg: '#13395c', fg: '#67e8f9' }, { bg: '#184b79', fg: '#a5f3fc' }, { bg: '#1d5d96', fg: '#cffafe' }, { bg: '#226eb5', fg: '#ecfeff' }],
+      'volumes-color': [{ bg: '#241505', fg: '#d97706' }, { bg: '#352108', fg: '#f59e0b' }, { bg: '#4a2f0b', fg: '#fbbf24' }, { bg: '#603c0e', fg: '#fcd34d' }, { bg: '#784b11', fg: '#fde68a' }, { bg: '#915a15', fg: '#fef3c7' }, { bg: '#aa6a18', fg: '#fffbeb' }],
+      'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
+      'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
+      'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+    };
+
+    const masterFields = [
+      { section: 'LNK Header', name: 'Header Size', offset: 0, size: 4, type: 'header-color', val: '0x0000004C (76 Bytes)', forensic: 'Must be exactly 76 bytes. Combined with the CLSID, it forms the 20-byte magic signature used for carving.' },
+      { section: 'LNK Header', name: 'Link CLSID (GUID)', offset: 4, size: 16, type: 'header-color', val: '00021401-0000-0000-C000-000000000046', forensic: 'The standard Windows Shell Link CLSID confirming the payload is a valid LNK structure.' },
+      { section: 'LNK Header', name: 'Link Flags', offset: 20, size: 4, type: 'header-color', val: '0x000000FF', forensic: 'A 32-bit bitmask dictating optional LNK structures. <code>0xFF</code> here means bits 0&ndash;7 are set: HasTargetIDList + HasLinkInfo + HasName + HasRelativePath + HasWorkingDir + HasArguments + HasIconLocation + IsUnicode &mdash; matching every string and structure shown below.' },
+      { section: 'LNK Header', name: 'File Attributes', offset: 24, size: 4, type: 'header-color', val: '0x00000020 (Archive)', forensic: 'Target file attributes at the time the LNK was created or updated.' },
+      { section: 'LNK Header', name: 'Creation Time (MAC)', offset: 28, size: 8, type: 'header-color', val: 'FILETIME', forensic: 'Target file creation time as recorded in the LNK.' },
+      { section: 'LNK Header', name: 'Access Time (MAC)', offset: 36, size: 8, type: 'header-color', val: 'FILETIME', forensic: 'Target file access time as recorded in the LNK.' },
+      { section: 'LNK Header', name: 'Write Time (MAC)', offset: 44, size: 8, type: 'header-color', val: 'FILETIME', forensic: 'Target file modification time as recorded in the LNK.' },
+      { section: 'LNK Header', name: 'Target File Size', offset: 52, size: 4, type: 'header-color', val: '0x00000000 (0 Bytes)', forensic: 'Size of the target file at the time the shortcut was updated.' },
+      { section: 'LNK Header', name: 'Icon Index', offset: 56, size: 4, type: 'header-color', val: '0', forensic: 'Index of the icon within the icon resource file.' },
+      { section: 'LNK Header', name: 'Show Command', offset: 60, size: 4, type: 'header-color', val: '0x00000001 (SW_NORMAL)', forensic: 'Expected window state. <code>1</code>=Normal, <code>7</code>=Minimized (suspicious indicator).' },
+      { section: 'LNK Header', name: 'Hot Key & Reserved', offset: 64, size: 12, type: 'reserved', val: 'Empty / Zeroed', forensic: 'Reserved padding completing the 76-byte header.' },
+
+      { section: 'LNK IDList', name: 'IDList Total Size', offset: 76, size: 2, type: 'identity-color', val: '0x0042 (66 Bytes)', forensic: 'Total length of the Shell Item chain (breadcrumb trail).' },
+      { section: 'LNK IDList', name: 'Volume Shell Item', offset: 78, size: 20, type: 'identity-color', val: 'Volume ItemID', forensic: 'Definitively ties the LNK to a specific physical drive partition.' },
+      { section: 'LNK IDList', name: 'File Shell Item (BEEF0004)', offset: 98, size: 40, type: 'identity-color', val: 'Shell Item Data', forensic: 'The <code>BEEF0004</code> block contains the MFT Entry/Sequence Numbers and independent MAC timestamps. <a class="see-also" href="mft_anatomy.html#record">Explained in full: the MFT record</a>' },
+      { section: 'LNK IDList', name: 'Terminal Block', offset: 138, size: 2, type: 'identity-color', val: '0x0000', forensic: 'Marks the end of the IDList chain.' },
+
+      { section: 'LinkInfo Header', name: 'LinkInfo Total Size', offset: 140, size: 4, type: 'metrics-color', val: '60 Bytes', forensic: 'Total size of the entire LinkInfo structure.' },
+      { section: 'LinkInfo Header', name: 'Header Size', offset: 144, size: 4, type: 'metrics-color', val: '28 Bytes', forensic: 'Size of the header sub-structure.' },
+      { section: 'LinkInfo Header', name: 'LinkInfo Flags', offset: 148, size: 4, type: 'metrics-color', val: '1', forensic: 'Bit 0 = VolumeID, Bit 1 = NetworkShare.' },
+      { section: 'LinkInfo Header', name: 'VolumeID Offset', offset: 152, size: 4, type: 'metrics-color', val: '28', forensic: 'Byte offset to the VolumeID structure.' },
+      { section: 'LinkInfo Header', name: 'Local Path Offset', offset: 156, size: 4, type: 'metrics-color', val: '44', forensic: 'Byte offset to the ANSI Local Path.' },
+      { section: 'LinkInfo Header', name: 'Network Offset', offset: 160, size: 4, type: 'metrics-color', val: '0', forensic: 'Byte offset to Network info (0 if absent).' },
+      { section: 'LinkInfo Header', name: 'Suffix Offset', offset: 164, size: 4, type: 'metrics-color', val: '59', forensic: 'Byte offset to common path suffix.' },
+
+      { section: 'Volume ID Sub-block', name: 'VolumeID Size', offset: 168, size: 4, type: 'volumes-color', val: '16 Bytes', forensic: 'Size of this sub-structure.' },
+      { section: 'Volume ID Sub-block', name: 'Drive Type', offset: 172, size: 4, type: 'volumes-color', val: 'Fixed (3)', forensic: '2=Removable, 3=Fixed, 4=Network.' },
+      { section: 'Volume ID Sub-block', name: 'Drive Serial Number', offset: 176, size: 4, type: 'volumes-color', val: 'A1B2C3D4', forensic: 'Unique hex serial assigned at format.' },
+      { section: 'Volume ID Sub-block', name: 'Label Offset', offset: 180, size: 4, type: 'volumes-color', val: '16', forensic: 'Offset to volume label string.' },
+
+      { section: 'LNK Link Info', name: 'Local Base Path', offset: 184, size: 16, type: 'target-color', val: '"C:\\Users\\Admin"', forensic: 'The absolute path to the target file.' },
+      
+      { section: 'LNK String Data', name: 'Description', offset: 200, size: 8, type: 'string-color', val: '"My Shortcut"', forensic: 'Length-prefixed string description.' },
+      { section: 'LNK String Data', name: 'Relative Path', offset: 208, size: 12, type: 'string-color', val: '"..\\target.exe"', forensic: 'Path to target relative to the LNK.' },
+      { section: 'LNK String Data', name: 'Working Directory', offset: 220, size: 12, type: 'string-color', val: '"C:\\Windows"', forensic: 'Default I/O directory.' },
+      { section: 'LNK String Data', name: 'Command-Line Args', offset: 232, size: 16, type: 'string-color', val: '"/silent /run"', forensic: 'Launch parameters. Often contains malware payloads.' },
+      { section: 'LNK String Data', name: 'Icon Location', offset: 248, size: 12, type: 'string-color', val: '"shell32.dll"', forensic: 'Path to the shortcut icon.' },
+
+      { section: 'Tracker Data Block (DLT)', name: 'Block Size', offset: 260, size: 4, type: 'trace-color', val: '0x60 (96 Bytes)', forensic: 'Total size of the tracker data container. MS-SHLLINK 2.5.10 fixes this at exactly 96 bytes.' },
+      { section: 'Tracker Data Block (DLT)', name: 'Block Signature', offset: 264, size: 4, type: 'trace-color', val: '0xA0000003', forensic: 'Unique signature for Distributed Link Tracking.' },
+      { section: 'Tracker Data Block (DLT)', name: 'Length', offset: 268, size: 4, type: 'trace-color', val: '0x58 (88 Bytes)', forensic: 'Length of the tracker payload that follows (Version + MachineID + Droid + DroidBirth = 4 + 16 + 32 + 32 = 88 B).' },
+      { section: 'Tracker Data Block (DLT)', name: 'Version', offset: 272, size: 4, type: 'trace-color', val: '0', forensic: 'Tracker versioning field. Always 0 in current Windows.' },
+      { section: 'Tracker Data Block (DLT)', name: 'MachineID (NetBIOS, ASCII)', offset: 276, size: 16, type: 'trace-color', val: '"DESKTOP-PC"', forensic: 'NetBIOS name of the machine that generated the LNK, null-padded ASCII. <strong>16-byte fixed.</strong>' },
+      { section: 'Tracker Data Block (DLT)', name: 'Droid (VolumeID + ObjectID GUIDs)', offset: 292, size: 32, type: 'trace-color', val: '2 &times; GUID', forensic: '<strong>32 bytes = 2 GUIDs.</strong> Droid[0] = volume CDF (Common Data Format) ID, Droid[1] = the file object\'s CDF ID. These are the tracking IDs assigned when the link was last resolved by the Distributed Link Tracking service.' },
+      { section: 'Tracker Data Block (DLT)', name: 'DroidBirth (Volume + Object Birth GUIDs)', offset: 324, size: 32, type: 'trace-color', val: '2 &times; GUID', forensic: '<strong>32 bytes = 2 GUIDs.</strong> DroidBirth[0] = volume\'s ORIGINAL CDF ID, DroidBirth[1] = the file\'s ORIGINAL ObjectID. <strong>The last 6 bytes of DroidBirth[1]</strong> (node field of the v1 UUID at offset 350) <strong>contain the source machine\'s NIC MAC address</strong> &mdash; the famous "MAC leak" forensic indicator.' },
+
+      { section: 'Property Store Block', name: 'Block Size', offset: 356, size: 4, type: 'props-color', val: '16 Bytes', forensic: 'Size of the Property Store container.' },
+      { section: 'Property Store Block', name: 'Block Signature', offset: 360, size: 4, type: 'props-color', val: '0xA0000009', forensic: 'Signature for serialized properties.' },
+      { section: 'Property Store Block', name: 'Serialized Data', offset: 364, size: 8, type: 'props-color', val: 'Store Data', forensic: 'Payload containing document-level metadata.' },
+
+      { section: 'Environment Variable Block', name: 'Block Size', offset: 372, size: 4, type: 'fileinfo-color', val: '8 Bytes', forensic: 'Size of the environment variable container.' },
+      { section: 'Environment Variable Block', name: 'Block Signature', offset: 376, size: 4, type: 'fileinfo-color', val: '0xA0000001', forensic: 'Signature for environment variable paths.' },
+
+      { section: 'Known Folder Block', name: 'Block Size', offset: 380, size: 4, type: 'hash-color', val: '8 Bytes', forensic: 'Size of the known folder container.' },
+      { section: 'Known Folder Block', name: 'Block Signature', offset: 384, size: 4, type: 'hash-color', val: '0xA000000B', forensic: 'Signature for special folder GUID container.' },
+
+      { section: 'Console Data Block', name: 'Block Size', offset: 388, size: 4, type: 'metrics-color', val: '8 Bytes', forensic: 'Size of the console config container.' },
+      { section: 'Console Data Block', name: 'Block Signature', offset: 392, size: 4, type: 'metrics-color', val: '0xA0000002', forensic: 'Signature for the console property container.' },
+
+      { section: 'Terminal Block', name: 'Terminal Signature', offset: 396, size: 4, type: 'reserved', val: '0x00000000', forensic: '32-bit zero marker terminating the ExtraData chain.' }
+    ];
+
+    const masterHex = [
+      "4C","00","00","00","01","14","02","00","00","00","00","00","C0","00","00","00","00","00","00","46","8F","00","00","00","20","00","00","00","00","D5","A0","F2","89","3B","D6","01","00","D5","A0","F2","89","3B","D6","01","00","D5","A0","F2","89","3B","D6","01","00","00","00","00","00","00","00","00","01","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","42","00","14","00","2F","43","3A","5C","00","00","00","00","00","00","00","00","00","00","00","00","00","00","28","00","31","00","00","00","00","00","55","73","65","72","73","00","00","00","00","00","12","00","31","00","00","00","00","00","41","64","6D","69","6E","00","00","00","00","00","00","00","00","00","00","00","3C","00","00","00","1C","00","00","00","01","00","00","00","1C","00","00","00","2C","00","00","00","00","00","00","00","3B","00","00","00","10","00","00","00","03","00","00","00","D4","C3","B2","A1","10","00","00","00","43","3A","5C","55","73","65","72","73","5C","41","64","6D","69","6E","00","00","04","00","4D","00","79","00","20","00","06","00","2E","00","2E","00","5C","00","74","00","2E","00","06","00","43","00","3A","00","5C","00","57","00","69","00","08","00","2F","00","73","00","69","00","6C","00","65","00","6E","00","74","00","06","00","73","00","68","00","65","00","6C","00","6C","00","60","00","00","00","03","00","00","A0","58","00","00","00","00","00","00","00","44","45","53","4B","54","4F","50","2D","50","43","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","00","1A","2B","3C","4D","5E","00","10","00","00","00","09","00","00","A0","00","00","00","00","00","00","00","00","08","00","00","00","01","00","00","A0","08","00","00","00","0B","00","00","A0","08","00","00","00","02","00","00","A0","00","00","00","00"
+    ];
+
+    function init() {
+      const map = document.getElementById('master-map');
+      const table = document.getElementById('table-body');
+      let curSec = "";
+      let fieldIdx = 0;
+      let curF = null;
+
+      masterHex.forEach((byte, i) => {
+        const f = masterFields.find(f => i >= f.offset && i < f.offset + f.size);
+        if (f && f.section !== curSec) {
+          const div = document.createElement('div'); div.className = 'divider-row'; div.textContent = f.section; map.appendChild(div);
+          curSec = f.section;
+          fieldIdx = 0;
+        }
+        if (f && f !== curF) { curF = f; fieldIdx++; }
+
+        const cell = document.createElement('div'); cell.className = 'byte-cell'; 
+        if (f) {
+           if (f.type === 'reserved') {
+              cell.classList.add('reserved');
+           } else {
+              const pal = palettes[f.type] || [{bg: 'var(--bg2)', fg: 'var(--tx3)'}];
+              const color = pal[fieldIdx % pal.length];
+              cell.style.backgroundColor = color.bg;
+              cell.style.color = color.fg;
+           }
+        } else {
+           cell.classList.add('reserved');
+        }
+        cell.textContent = byte; cell.dataset.idx = i;
+        cell.onclick = () => selectField(f, i);
+        map.appendChild(cell);
+      });
+
+      let tableSec = "";
+      masterFields.forEach(f => {
+        if (f.section !== tableSec) {
+          const row = document.createElement('tr');
+          row.innerHTML = `<td colspan="4" class="ref-section-head">${f.section}</td>`;
+          table.appendChild(row);
+          tableSec = f.section;
+        }
+        const row = document.createElement('tr'); row.style.cursor = "pointer";
+        row.onclick = () => selectField(f, f.offset);
+        row.innerHTML = `
+          <td style="font-family:'Space Mono';">0x${f.offset.toString(16).padStart(2,'0').toUpperCase()}</td>
+          <td>${f.size}B</td>
+          <td style="font-weight:700; color:var(--tx);">${f.name}</td>
+          <td>${f.forensic}</td>
+        `;
+        table.appendChild(row);
+      });
+    }
+
+    function selectField(f, index) {
+      if (!f) return;
+      document.querySelectorAll('.byte-cell').forEach(c => c.classList.remove('active'));
+      const start = f.offset; const end = f.offset + f.size - 1;
+      const fieldBytes = masterHex.slice(start, end + 1);
+      document.querySelectorAll('.byte-cell').forEach(c => {
+         const bIdx = parseInt(c.dataset.idx);
+         if (bIdx >= start && bIdx <= end) c.classList.add('active');
+      });
+      
+      let hexString = fieldBytes.join(' ');
+      let asciiString = fieldBytes.map(b => {
+        let code = parseInt(b, 16);
+        return (code >= 32 && code <= 126) ? String.fromCharCode(code) : '.';
+      }).join('');
+
+      document.getElementById('selection-output').innerHTML = `
+        <div class="field-name">${f.name}</div>
+        
+        <div class="meta-box" style="background: var(--bg1); border-color: var(--border2);">
+          <span class="meta-lbl">Raw Hex Bytes (Little-Endian)</span>
+          <div class="field-val" style="margin-bottom: 12px; border: 1px solid var(--border); background: var(--bg2); color: var(--tx);">${hexString}</div>
+          <span class="meta-lbl">ASCII Translation</span>
+          <div class="field-val" style="margin-bottom: 0; border: 1px solid var(--border); background: var(--bg2); color: var(--tx2);">${asciiString}</div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Decoded Value</span>
+            <div class="meta-v" style="color: var(--accent); font-size: 15px;">${f.val}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Data Type</span>
+            <div class="meta-v" style="color: var(--tx2); font-size: 13px; font-family: 'Space Mono';">Little-Endian Hex</div>
+          </div>
+        </div>
+
+        <div class="selection-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Byte Offset Range</span>
+            <div class="meta-v" style="font-family: 'Space Mono'; font-size: 13px;">0x${start.toString(16).toUpperCase().padStart(4, '0')} - 0x${end.toString(16).toUpperCase().padStart(4, '0')}</div>
+          </div>
+          <div class="meta-box" style="margin-bottom: 0;">
+            <span class="meta-lbl">Section / Size</span>
+            <div class="meta-v" style="font-size: 13px;">${f.section} <span style="color:var(--tx3); margin:0 4px;">|</span> ${f.size} Bytes</div>
+          </div>
+        </div>
+
+        <div class="forensic-text" style="margin-top: 16px;">
+          <div style="color:var(--danger); font-weight:800; font-size:11px; text-transform:uppercase; margin-bottom:8px; letter-spacing: 0.05em; display:flex; align-items:center; gap:6px;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+            Forensic Deep Dive
+          </div>
+          ${f.forensic}
+        </div>
+      `;
+    }
+    window.onload = init;
+  </script>
+  <div class="wrap">
+    <h2 id="dashboard">Reading the LNK / Jump-List dashboard</h2>
+    <p class="map-intro">The <strong>Charts</strong> button on the LNK and Jump-List table tabs opens one
+      dashboard over <strong>all three</strong> "a user opened this" artifacts &mdash; LNK shortcuts,
+      Automatic jump lists, and Custom jump lists &mdash; read from <code style="color:var(--accent);">LnkDB.db</code>.
+      Every record is the same shape: a target that was opened, when (its Standard-Info times), by which
+      application, and from which volume. One rule holds everywhere: <strong>source = colour</strong>.</p>
+
+    <div class="full-reference">
+      <span class="cap">Sources</span>
+      <div class="responsive-table-wrap">
+        <table class="ref-table">
+          <thead><tr><th style="width:200px;">Source</th><th>What it records</th><th style="width:110px;">Colour</th></tr></thead>
+          <tbody>
+            <tr><td>LNK shortcut</td><td>A <code>.lnk</code> file &mdash; a target path, its MAC times, volume serial/label, and tracker/MFT identity</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:6px;"></span>blue</td></tr>
+            <tr><td>Automatic jump list</td><td>The per-application <code>DestList</code> &mdash; what an app opened, in access order (AppID)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:6px;"></span>green</td></tr>
+            <tr><td>Custom jump list</td><td>Application-pinned / task items (<code>.customDestinations-ms</code>)</td><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:6px;"></span>purple</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">The two regions</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;"><strong>Left</strong> &mdash; three
+        <strong>source activity strips</strong> (a cell per day, source = colour) over the target last-access
+        history; click a day for the <strong>drill-down</strong>: opens-by-hour (stacked by source), by
+        application, top directories, top file types, and an event list (time &middot; source &middot; app
+        &middot; target &middot; volume). <strong>Right</strong> &mdash; the <strong>overview</strong>:
+        totals, an <strong>Insights</strong> card, a <strong>Volumes (device history)</strong> card, and
+        the most-used applications, directories and file types.</p>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid rgba(244,63,94,0.35);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Insights &amp; device history</h3>
+      <ul style="color:var(--tx2);font-size:14px;line-height:1.8;margin:0;padding-left:20px;">
+        <li><strong>Opens from removable / network media</strong> &mdash; targets whose <code>Drive_Type</code>
+          is removable or remote (or that carry a network share) &mdash; the portable-media / exfiltration angle.</li>
+        <li><strong>Temp / Downloads / AppData targets</strong> &mdash; opens from the locations malware and
+          downloads land in.</li>
+        <li><strong>Volumes (device history)</strong> &mdash; every open records the volume <strong>label and
+          serial</strong>. Grouped, they are a trail of the fixed and external devices the user opened files
+          from &mdash; an external drive that appears once still leaves its serial here.</li>
+      </ul>
+    </div>
+
+    <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
+      <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Click for detail</h3>
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">Click a <strong>day</strong> to fill the
+        drill-down. Click a <strong>target</strong> (a row in the opens list) for its full profile: which
+        sources recorded it (an LNK and a jump list can both point at the same file), its
+        <strong>Access / Create / Modify</strong> times, the <strong>volume + serial</strong> it lived on,
+        and &mdash; from a richer LNK &mdash; its MFT entry, tracker MAC and command-line arguments. Two
+        header filters apply to everything: a <strong>search</strong> box, a <strong>source</strong> and a
+        <strong>volume</strong> selector, and a <strong>date dropdown</strong>.</p>
+    </div>
+  </div>
+
+  <div style="max-width:720px;margin:8px auto 40px;padding:0 24px;">
+    <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:14px;padding:16px 20px;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+      <div style="flex:1;min-width:240px;">
+        <div style="font-family:'Space Mono',monospace;font-size:10px;letter-spacing:0.18em;text-transform:uppercase;color:var(--accent);margin-bottom:4px;">From reading to doing</div>
+        <h3 style="font-size:16px;font-weight:800;color:var(--tx);margin-bottom:4px;">Stop hex-diving — let Crow-Eye parse every LNK</h3>
+        <p style="color:var(--tx2);font-size:12.5px;line-height:1.55;margin-bottom:12px;max-width:620px;">You've just dissected a Shell Link byte by byte. Crow-Eye does this across the whole evidence set automatically — recovering target paths, the three MAC timestamps, the tracker block's machine ID &amp; NIC MAC address, and the full Shell IDList — and lays them on a timeline.</p>
+        <a href="https://crow-eye.com/download" class="dl-btn" style="display:inline-flex;align-items:center;gap:7px;padding:8px 16px;border-radius:8px;background:var(--accent);color:#0a0c10;font-weight:700;text-decoration:none;font-size:12.5px;"><i class="fas fa-download"></i> Download Crow-Eye</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <!-- LIMITS -->
+    <section id="limits" style="margin-top:40px;">
+      <h2>What a shortcut supports, and what it does not</h2>
+      <p class="map-intro">A LNK file is the richest single-file artifact Windows writes about a
+      user's contact with a document, and that richness is why it is routinely asked to prove more
+      than it can. Three claims it does not carry:</p>
+
+      <div class="myth">
+        <h4>The timestamps inside belong to the target, not to the opening</h4>
+        <p>The created, modified and accessed times stored in a shortcut are the
+        <em>target file's</em> times, copied at the moment the shortcut was last written. They
+        describe the document, not the act of opening it. The time the user opened something is the
+        <strong>shortcut's own</strong> MAC times on disk &mdash; the LNK file in
+        <code>Recent\</code> &mdash; and those are the ones a timeline should plot.</p>
+      </div>
+
+      <div class="myth">
+        <h4>It records that a target was opened, not who opened it or with what</h4>
+        <p>A shortcut in a user's <code>Recent</code> folder ties the activity to that profile and
+        no further. It does not name the application that opened the file, and it does not
+        distinguish a person double-clicking a document from a script, an installer or a preview
+        handler touching it. For the application, the answer is the Jump List and its AppID; for the
+        person, it is a logon session beside the timestamp.</p>
+      </div>
+
+      <div class="myth">
+        <h4>A LNK for a file that no longer exists is normal, not suspicious</h4>
+        <p>Shortcuts outlive their targets by design &mdash; that is what makes them valuable
+        against a removable drive or a deleted document. A path pointing at nothing proves the
+        target was reachable once, at that path, with that volume serial. It does not prove deletion,
+        and it does not prove the file was ever on the local disk.</p>
+      </div>
+
+      <p class="map-intro"><strong style="color:var(--tx);">What it is genuinely good for:</strong>
+      the target's identity across machines and media. A shortcut carries the volume serial number,
+      the volume label and, where a tracker block survives, the machine ID and a NIC MAC address of
+      the system that created it. That is a statement about <em>where the file came from</em> which
+      no timestamp provides, and it is what lets a document be followed onto a USB stick, across a
+      share, or back to a machine that is not the one being examined.</p>
+    </section>
+  </div>
+
+  <div class="wrap">
+    <!-- FAQ - mirrored verbatim by the FAQPage JSON-LD. Edit both together. -->
+    <section id="faq" style="margin-top:40px;">
+      <h2>Frequently asked questions</h2>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What does a Windows LNK file reveal in an investigation?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">The full path of the target, the target's created, modified and accessed times as they were when the shortcut was written, the volume serial number, and often a tracker block holding the machine ID and a NIC MAC address of the system where it was created.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Where are LNK files found on Windows?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Automatically created shortcuts live in the user's Recent folder under AppData. Others sit on the Desktop, in the Start Menu, and anywhere a user or installer placed them, so both automatic and deliberate shortcuts are worth collecting.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Does a LNK file prove a document was opened?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">A shortcut in the Recent folder is good evidence the target was opened through the shell, and it preserves the target's timestamps at that moment even if the file has since been deleted or moved. It does not by itself say who opened it or from which application.</p>
+      </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Can a LNK file point at a file that no longer exists?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Yes, and that is one of its most useful properties. The shortcut retains the target's path, size and timestamps after the target is gone, which makes LNK files a common source of evidence for removed or external-media files.</p>
+      </div>
+    </section>
+  </div>
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+  <script src="../main.js"></script></body>
+</html>

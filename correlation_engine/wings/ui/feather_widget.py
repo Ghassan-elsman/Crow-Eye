@@ -16,6 +16,26 @@ from correlation_engine.wings.core.wing_model import FeatherSpec
 from correlation_engine.wings.core.artifact_detector import ArtifactDetector
 from ...gui.crow_eye_icons import apply_status_to_label
 
+# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+try:
+    from ui import site_theme as _site
+except Exception:
+    _site = None
+
+
+def _look(widget, role=None, status=None, variant=None):
+    """A role / meaning colour / button variant through the window sheet."""
+    if _site is None:
+        return widget
+    widget.setStyleSheet("")
+    if role:
+        _site.set_role(widget, role)
+    if status:
+        _site.set_status(widget, status)
+    if variant:
+        _site.set_variant(widget, variant)
+    return widget
+
 
 class FeatherWidget(QWidget):
     """Widget for configuring a single feather"""
@@ -65,7 +85,7 @@ class FeatherWidget(QWidget):
         # If it's already an absolute path that exists, use it
         if current_path and os.path.isabs(current_path) and os.path.exists(current_path):
             self.db_path_edit.setText(current_path)
-            self.db_path_edit.setStyleSheet("color: #00FF00;") # Green = found
+            _look(self.db_path_edit, status="ok")  # found
             print(f"[FeatherWidget] Using absolute path: {current_path}")
             return
         
@@ -148,7 +168,7 @@ class FeatherWidget(QWidget):
                 resolved_path = str(path.absolute())
                 # print(f"[FeatherWidget] [OK] Resolved path: {resolved_path}")
                 self.db_path_edit.setText(resolved_path)
-                self.db_path_edit.setStyleSheet("color: #00FF00;") # Green = found
+                _look(self.db_path_edit, status="ok")  # found
                 
                 # Update feather spec with resolved path
                 self.feather_spec.database_filename = resolved_path
@@ -161,7 +181,7 @@ class FeatherWidget(QWidget):
             self.db_path_edit.setText(current_path)
         else:
             self.db_path_edit.setText(f"[Not Set - {self.feather_spec.feather_id}]")
-        self.db_path_edit.setStyleSheet("color: #FFA500;") # Orange = not found
+        _look(self.db_path_edit, status="warn")  # not found
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -186,6 +206,7 @@ class FeatherWidget(QWidget):
         remove_layout.addStretch()
         self.remove_btn = QPushButton("Remove Feather")
         self.remove_btn.clicked.connect(lambda: self.remove_requested.emit(self))
+        _look(self.remove_btn, variant="danger")
         remove_layout.addWidget(self.remove_btn)
         group_layout.addLayout(remove_layout)
     
@@ -205,13 +226,14 @@ class FeatherWidget(QWidget):
         
         browse_btn = QPushButton("Browse")
         browse_btn.clicked.connect(self.browse_database)
+        _look(browse_btn, variant="ghost")
         db_layout.addWidget(browse_btn)
         
         layout.addLayout(db_layout, 0, 1)
         
         # Database info
         self.db_info_label = QLabel("No database selected")
-        self.db_info_label.setStyleSheet("color: #666; font-size: 10px;")
+        _look(self.db_info_label, role="muted")
         layout.addWidget(self.db_info_label, 1, 1)
         
         return frame

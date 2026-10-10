@@ -591,3 +591,72 @@ body { margin: 0; background: var(--bg); }
 .hour-row--open { cursor: pointer; }
 .hour-row--open:hover { background: rgba(99,102,241,0.08); }
 .prov-list.tight { display: flex; flex-direction: column; gap: 2px; }
+
+/* ===== One strip for MFT + every USN reason flag (Round 12) ===== */
+/* Flag names are longer than provider names: a wider head, cut with an
+   ellipsis (the full name and total are in its title). */
+.usn-rowhead { width: 178px; }
+.usn-rowlabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+/* A little air between the MFT rows and the USN ones. */
+.usn-row--group { margin-top: 6px; }
+.tl-leg b { color: var(--tx); font-family: var(--mono); }
+
+/* reason flags: one coloured square per flag */
+.flag-chips { display: inline-flex; gap: 2px; align-items: center; flex-wrap: nowrap; }
+.flag-chip { width: 9px; height: 9px; border-radius: 2px; display: inline-block; flex-shrink: 0; }
+.flag-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; }
+.flag-leg { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: var(--tx2); }
+.flag-leg b { font-family: var(--mono); color: var(--tx); font-weight: 600; }
+
+/* events: wider reasons column, a pager, journal-rebuilt paths marked */
+.evt-row { grid-template-columns: 74px 104px 1.3fr 2.4fr 70px; }
+.evt-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.pager { display: inline-flex; align-items: center; gap: 6px; text-transform: none; letter-spacing: 0; }
+.pager button { background: var(--bg-card); color: var(--tx2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 3px 10px; font-size: 11.5px; cursor: pointer; }
+.pager button:hover:not(:disabled) { border-color: var(--indigo); color: var(--tx); }
+.pager button:disabled { opacity: 0.4; cursor: default; }
+.pager-pos { font-size: 11.5px; color: var(--tx3); font-family: var(--mono); }
+.evt-path--journal { color: #c4b5fd; }
+.evt-nopath { color: var(--tx3); font-style: italic; }
+.evt-gone { color: #fda4af; font-size: 11px; }
+
+/* the day's MFT files */
+.win-grid--mft { grid-template-columns: 1fr 1fr; margin-bottom: 14px; }
+.mft-files { display: flex; flex-direction: column; max-height: 220px; overflow: auto; font-size: 12px; }
+.mft-files > * { flex-shrink: 0; }
+.mft-file { display: grid; grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1.4fr); gap: 8px; padding: 4px 4px;
+  border-bottom: 1px solid var(--border); cursor: pointer; }
+.mft-file:hover { background: rgba(99,102,241,0.08); }
+.mft-file > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mft-t { font-family: var(--mono); color: var(--tx2); }
+.mft-name { color: var(--tx); }
+.mft-path { color: var(--tx3); direction: rtl; text-align: left; }
+
+/* file modal */
+.detail-ids { font-family: var(--mono); font-size: 11.5px; margin-top: 2px; }
+.name-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.name-chip { font-family: var(--mono); font-size: 11.5px; padding: 2px 8px; border-radius: 6px;
+  background: rgba(99,102,241,0.12); color: var(--tx); }
+
+/* renames: old -> new, from the journal */
+.rn-row { grid-template-columns: 74px minmax(0, 1fr) 18px minmax(0, 1fr) minmax(0, 1.3fr); }
+.rn-table { max-height: 260px; overflow-y: auto; }
+.rn-name { font-family: var(--mono); color: var(--tx); }
+.rn-dim { color: var(--tx3); }
+.rn-arrow { color: #34d399; padding: 0 4px; }
+.rn-move { color: var(--amber); font-weight: 700; font-size: 11px; }
+.rn-movenote { color: var(--tx3); font-size: 11.5px; }
+.life-row.rn-life { grid-template-columns: 170px 1fr; }
+.tl-outside { color: var(--amber); }
+
+/* all records, every day */
+.all-items { margin-top: 14px; }
+.all-items-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.all-items-ctl { display: inline-flex; gap: 8px; }
+.all-items .evt-table { max-height: 520px; overflow-y: auto; }
+.evt-row.all-row { grid-template-columns: 150px 104px 1.3fr 2.2fr 70px; }
+.all-items-foot { display: flex; justify-content: center; padding-top: 10px; }
+.load-more { background: rgba(99,102,241,0.12); color: #c7d2fe; border: 1px solid rgba(99,102,241,0.45);
+  border-radius: 8px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; }
+.load-more:hover { background: rgba(99,102,241,0.22); }

@@ -301,6 +301,11 @@ def parse_named_payload(description) -> Dict[str, str]:
     if not description:
         return {}
     text = str(description)
+    # Offline rows now carry the event's sentence first:
+    # "An account was successfully logged on. | SubjectUserSid: ...; ..."
+    # (utils/event_descriptions). The payload is what follows the bar.
+    if " | " in text:
+        text = text.split(" | ", 1)[1]
     if ":" not in text:
         return {}
     info: Dict[str, str] = {}

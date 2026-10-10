@@ -106,9 +106,10 @@ class OfflineShimCacheParser(ShimCacheParser):
                 all_entries.append(entry)
                 
         if all_entries:
-            self.save_to_database(all_entries)
+            counts = self.save_to_database(all_entries) or {}
             print(f"[OK] Successfully parsed {len(all_entries)} total entries")
-            return {"success": True, "records": len(all_entries), "output_path": output_db}
+            return {"success": True, "records": len(all_entries), "output_path": output_db,
+                    "inserted": counts.get("inserted"), "duplicates": counts.get("duplicates")}
         else:
             return {"success": False, "records": 0, "output_path": output_db}
 
@@ -126,6 +127,14 @@ def run_offline_shimcache(case_path):
     system_hive = None
     for dir_path in possible_dirs:
         hive_path = os.path.join(dir_path, "SYSTEM")
+        if not os.path.exists(hive_path):
+            # Linux file systems are case-sensitive: a hive copied as "system"
+            # or "System" (some collectors lowercase) is the same file.
+            try:
+                from utils.path_utils import PathUtils
+                hive_path = PathUtils.get_case_insensitive_path(dir_path, "SYSTEM") or hive_path
+            except Exception:
+                pass
         if os.path.exists(hive_path):
             system_hive = hive_path
             break

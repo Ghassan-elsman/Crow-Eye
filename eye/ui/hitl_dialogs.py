@@ -203,34 +203,13 @@ class SemanticMappingApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """Apply comprehensive dark theme styling to the dialog."""
-        # Set palette for backup styling
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-        
-        # Main dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style)
+        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        back into roles, the buttons into the role family."""
+        try:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+        except Exception:
+            pass
     
     def _load_rule(self):
         """Load the proposed rule into the text editor."""
@@ -587,34 +566,13 @@ class FileWriteApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """Apply comprehensive dark theme styling to the dialog."""
-        # Set palette for backup styling
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-        
-        # Main dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style)
+        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        back into roles, the buttons into the role family."""
+        try:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+        except Exception:
+            pass
     
     def _load_content(self):
         """Load the content preview into the text editor."""
@@ -824,34 +782,13 @@ class ReportExportApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """Apply comprehensive dark theme styling to the dialog."""
-        # Set palette for backup styling
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-        
-        # Main dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style)
+        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        back into roles, the buttons into the role family."""
+        try:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+        except Exception:
+            pass
     
     def _format_display_name(self, format_type: str) -> str:
         """
@@ -1126,34 +1063,13 @@ class CaseVariableApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """Apply comprehensive dark theme styling to the dialog."""
-        # Set palette for backup styling
-        palette = QPalette()
-        palette.setColor(QPalette.Window, QColor("#0B1220"))
-        palette.setColor(QPalette.WindowText, QColor("#E5E7EB"))
-        palette.setColor(QPalette.Base, QColor("#1E293B"))
-        palette.setColor(QPalette.Text, QColor("#F8FAFC"))
-        self.setPalette(palette)
-        
-        # Main dialog stylesheet
-        dialog_style = """
-            QDialog {
-                background-color: #0B1220;
-                color: #E5E7EB;
-                font-size: 10pt;
-            }
-            QWidget {
-                background-color: #0B1220;
-                color: #E5E7EB;
-            }
-            QLabel {
-                color: #E5E7EB;
-                font-size: 10pt;
-                background: transparent;
-            }
-        """
-        
-        self.setStyleSheet(dialog_style)
+        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        back into roles, the buttons into the role family."""
+        try:
+            from ui.site_theme import apply_site_theme
+            apply_site_theme(self)
+        except Exception:
+            pass
     
     def _on_approve(self):
         """

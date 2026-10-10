@@ -1485,19 +1485,19 @@ class VSSHealthChecker:
                     logger.info("[VSSHealthChecker] VSS service started successfully")
                     successful_fixes += 1
                     if interactive:
-                        print(f"✓ {step}: SUCCESS")
+                        print(f"[OK] {step}: SUCCESS")
                 else:
                     logger.warning(f"[VSSHealthChecker] Failed to start VSS service: {result.stderr}")
                     remaining_issues.append("VSS service not running (failed to start automatically)")
                     failed_fixes += 1
                     if interactive:
-                        print(f"✗ {step}: FAILED - {result.stderr.strip()}")
+                        print(f"[FAIL] {step}: FAILED - {result.stderr.strip()}")
             except Exception as e:
                 logger.error(f"[VSSHealthChecker] Error starting VSS service: {e}")
                 remaining_issues.append(f"VSS service not running (error: {str(e)})")
                 failed_fixes += 1
                 if interactive:
-                    print(f"✗ {step}: ERROR - {str(e)}")
+                    print(f"[FAIL] {step}: ERROR - {str(e)}")
         
         # Check for other issues that cannot be fixed automatically
         for issue in report.issues_found:
@@ -1543,19 +1543,19 @@ class VSSHealthChecker:
                             logger.info("[VSSHealthChecker] VSS service restarted successfully")
                             successful_fixes += 1
                             if interactive:
-                                print(f"✓ {step}: SUCCESS")
+                                print(f"[OK] {step}: SUCCESS")
                         else:
                             logger.warning(f"[VSSHealthChecker] Failed to restart VSS service: {result.stderr}")
                             remaining_issues.append(issue)
                             failed_fixes += 1
                             if interactive:
-                                print(f"✗ {step}: FAILED - {result.stderr.strip()}")
+                                print(f"[FAIL] {step}: FAILED - {result.stderr.strip()}")
                     except Exception as e:
                         logger.error(f"[VSSHealthChecker] Error restarting VSS service: {e}")
                         remaining_issues.append(issue)
                         failed_fixes += 1
                         if interactive:
-                            print(f"✗ {step}: ERROR - {str(e)}")
+                            print(f"[FAIL] {step}: ERROR - {str(e)}")
             
             # Policy/security restrictions require manual intervention
             elif "policy" in issue.lower() or "restricted" in issue.lower():
@@ -1581,11 +1581,11 @@ class VSSHealthChecker:
                     print(f"  {i}. {issue}")
             
             if successful:
-                print("\n✓ All issues resolved successfully!")
+                print("\n[OK] All issues resolved successfully!")
             elif successful_fixes > 0:
-                print("\n⚠ Some issues resolved, but manual intervention required for remaining issues.")
+                print("\n[!] Some issues resolved, but manual intervention required for remaining issues.")
             else:
-                print("\n✗ No issues could be resolved automatically. Manual intervention required.")
+                print("\n[FAIL] No issues could be resolved automatically. Manual intervention required.")
             print("=" * 80 + "\n")
         
         logger.info(

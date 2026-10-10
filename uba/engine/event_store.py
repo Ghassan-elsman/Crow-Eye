@@ -65,13 +65,16 @@ class UBAEventStore:
         if not rows:
             return 0
         placeholders = ",".join("?" for _ in _COLUMNS)
+        before = self.conn.total_changes
         self.conn.executemany(
             "INSERT OR IGNORE INTO events ({}) VALUES ({})".format(
                 ",".join(_COLUMNS), placeholders),
             [[r[c] for c in _COLUMNS] for r in rows],
         )
         self.conn.commit()
-        return len(rows)
+        # What was stored: INSERT OR IGNORE drops duplicates, and len(rows)
+        # reported them as added.
+        return self.conn.total_changes - before
 
     # ------------------------------------------------------------------ #
     def query_events(self, filters: Optional[dict] = None,

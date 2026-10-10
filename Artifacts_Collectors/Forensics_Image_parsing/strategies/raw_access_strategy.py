@@ -5,6 +5,8 @@ This module implements the RawAccessStrategy for accessing Raw/DD (bit-for-bit)
 disk images using the dissect ecosystem for file system access.
 """
 
+import logging as _logging_mod
+_log = _logging_mod.getLogger("image_parsing.strategies.raw_access_strategy")
 import os
 import time
 from typing import List, Optional, Union
@@ -15,7 +17,7 @@ try:
     DISSECT_AVAILABLE = True
 except ImportError:
     DISSECT_AVAILABLE = False
-    print("Warning: dissect not available - Raw/DD file system access will be limited")
+    _log.warning("Warning: dissect not available - Raw/DD file system access will be limited")
 
 # Handle both relative and absolute imports
 try:
@@ -123,7 +125,7 @@ class RawAccessStrategy(FileAccessStrategy):
     
     def _open_image(self, file_source: Union[str, List[str]]) -> bool:
         if not DISSECT_AVAILABLE:
-            print("[ERROR] Cannot open Raw/DD image: dissect is not installed")
+            _log.error("Cannot open Raw/DD image: dissect is not installed")
             return False
 
         try:
@@ -141,20 +143,20 @@ class RawAccessStrategy(FileAccessStrategy):
 
             if isinstance(file_source, list):
                 # Explicit list of multiple segments provided by user
-                print(f"[INFO] Chaining {len(file_source)} explicit Raw/DD segments")
+                _log.info(f"Chaining {len(file_source)} explicit Raw/DD segments")
                 try:
                     from dissect.util.stream import MultipartStream
                     self._segment_handles = [open(s, 'rb') for s in file_source]
                     self.img_info = MultipartStream(self._segment_handles)
                     return True
                 except ImportError:
-                    print("[WARNING] MultipartStream not found in dissect.util.stream. Using alternative split container.")
+                    _log.warning("MultipartStream not found in dissect.util.stream. Using alternative split container.")
                     try:
                         self.img_info = open_container(file_source)
                         self._segment_handles = []
                         return True
                     except Exception as e:
-                        print(f"[ERROR] Split container failed: {e}. Trying first segment only.")
+                        _log.error(f"Split container failed: {e}. Trying first segment only.")
                         file_source = file_source[0]
                         # Fall through to single file logic below
 
@@ -178,13 +180,13 @@ class RawAccessStrategy(FileAccessStrategy):
                         segments = found_segments
 
                 if len(segments) > 1:
-                    print(f"[INFO] Auto-chaining {len(segments)} Raw/DD segments starting with {filename}")
+                    _log.info(f"Auto-chaining {len(segments)} Raw/DD segments starting with {filename}")
                     try:
                         from dissect.util.stream import MultipartStream
                         self._segment_handles = [open(s, 'rb') for s in segments]
                         self.img_info = MultipartStream(self._segment_handles)
                     except ImportError:
-                        print("[WARNING] MultipartStream not found in dissect.util.stream. Using split container fallback.")
+                        _log.warning("MultipartStream not found in dissect.util.stream. Using split container fallback.")
                         self.img_info = open_container(segments)
                         self._segment_handles = []
                 else:
@@ -193,7 +195,7 @@ class RawAccessStrategy(FileAccessStrategy):
 
                 return True
         except Exception as e:
-            print(f"[ERROR] Failed to open Raw/DD image: {e}")
+            _log.error(f"Failed to open Raw/DD image: {e}")
             return False
     def _close_image(self):
         if self.img_info:
@@ -216,7 +218,7 @@ class RawAccessStrategy(FileAccessStrategy):
         try:
             return detect_partitions(self.img_info)
         except Exception as e:
-            print(f"[ERROR] Failed to detect partitions: {e}")
+            _log.error(f"Failed to detect partitions: {e}")
             return []
     
     def get_img_info(self):

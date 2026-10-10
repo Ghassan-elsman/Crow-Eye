@@ -78,7 +78,9 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
 from Artifacts_Collectors import registry_transaction_log
 from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
                                             decode_binary_sid, SRUM_EXTRA_COLUMNS,
-                                            dedupe_exact)
+                                            dedupe_exact, _custody_sha256,
+                                            _custody_repair_note, insert_srum_rows)
+from utils.dedupe_insert import Tally
 
 # Try to import Registry library for registry hive parsing
 try:
@@ -86,7 +88,9 @@ try:
     REGISTRY_AVAILABLE = True
 except ImportError:
     REGISTRY_AVAILABLE = False
-    logger.warning("Registry library not available - registry hive SID resolution will be disabled")
+    # `logger` is defined further down; this runs at import, before it.
+    logging.getLogger(__name__).warning(
+        "Registry library not available - registry hive SID resolution will be disabled")
 
 # ============================================================================
 # LOGGING CONFIGURATION
@@ -897,6 +901,7 @@ class ESEDatabaseParser:
 
                     # Run esentutl /p repair as a last resort (may discard pages).
                     logger.info("Running esentutl /p (repair mode) on database...")
+                    _before = _custody_sha256(temp_srudb)
                     result = subprocess.run(
                         ["esentutl", "/p", temp_srudb, "/o"],
                         cwd=temp_dir,
@@ -904,6 +909,9 @@ class ESEDatabaseParser:
                         text=True,
                         timeout=120
                     )
+                    _custody_repair_note(temp_srudb, _before,
+                                         result.returncode == 0
+                                         or "Operation completed successfully" in (result.stdout or ""))
 
                     if result.returncode == 0 or "Operation completed successfully" in result.stdout:
                         logger.info("Database repair completed successfully")
@@ -1964,6 +1972,28 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
         logger.info(f"Output database: {output_db_path}")
         
         # Initialize statistics
+        # Rows written vs already in the database (a re-parse adds only what
+        # is new; the same writer the live parser uses).
+        tally = Tally()
+        empty_at_start = {}
+
+        def _save_rows(sql, rows):
+            """All rows in one pass; row by row if the batch fails, so one bad
+            row costs that row only. Returns the number of rows that failed."""
+            try:
+                insert_srum_rows(conn, sql, rows, tally, empty_at_start)
+                return 0
+            except Exception as batch_error:
+                logger.warning("SRUM batch insert failed (%s); inserting row by row", batch_error)
+            failed = 0
+            for one in rows:
+                try:
+                    insert_srum_rows(conn, sql, [one], tally, empty_at_start)
+                except Exception as e:
+                    logger.error(f"Error inserting SRUM record: {e}")
+                    failed += 1
+            return failed
+
         stats = {
             'total_records': 0,
             'app_usage_records': 0,
@@ -2021,9 +2051,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 rows, removed = dedupe_exact(rows)
                 if removed:
                     logger.info("[SRUM] application_usage: removed %d exact-duplicate rows", removed)
-                for row in rows:
-                    try:
-                        cursor.execute("""
+                stats['errors'] += _save_rows("""
                             INSERT INTO srum_application_usage (
                                 timestamp, app_name, app_path, user_sid, user_name,
                                 foreground_cycle_time, background_cycle_time, face_time,
@@ -2034,10 +2062,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                                 background_bytes_written, background_num_read_operations,
                                 background_num_write_operations, background_number_of_flushes
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, row)
-                    except Exception as e:
-                        logger.error(f"Error inserting Application Resource Usage record: {e}")
-                        stats['errors'] += 1
+                        """, rows)
 
                 conn.commit()
                 logger.info("Application Resource Usage records inserted successfully")
@@ -2066,18 +2091,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 rows, removed = dedupe_exact(rows)
                 if removed:
                     logger.info("[SRUM] network_connectivity: removed %d exact-duplicate rows", removed)
-                for row in rows:
-                    try:
-                        cursor.execute("""
+                stats['errors'] += _save_rows("""
                             INSERT INTO srum_network_connectivity (
                                 timestamp, app_name, app_path, user_sid, user_name,
                                 interface_luid, l2_profile_id, l2_profile_flags,
                                 connected_time, connect_start_time
                             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        """, row)
-                    except Exception as e:
-                        logger.error(f"Error inserting Network Connectivity record: {e}")
-                        stats['errors'] += 1
+                        """, rows)
 
                 conn.commit()
                 logger.info("Network Connectivity records inserted successfully")
@@ -2100,12 +2120,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 rows, removed = dedupe_exact(rows)
                 if removed:
                     logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
-                for row in rows:
-                    try:
-                        cursor.execute(nd_stmt, row)
-                    except Exception as e:
-                        logger.error(f"Error inserting Network Data Usage record: {e}")
-                        stats['errors'] += 1
+                stats['errors'] += _save_rows(nd_stmt, rows)
 
                 conn.commit()
                 logger.info("Network Data Usage records inserted successfully")
@@ -2128,12 +2143,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 rows, removed = dedupe_exact(rows)
                 if removed:
                     logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
-                for row in rows:
-                    try:
-                        cursor.execute(en_stmt, row)
-                    except Exception as e:
-                        logger.error(f"Error inserting Energy Usage record: {e}")
-                        stats['errors'] += 1
+                stats['errors'] += _save_rows(en_stmt, rows)
 
                 conn.commit()
                 logger.info("Energy Usage records inserted successfully")
@@ -2154,12 +2164,7 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 rows, removed = dedupe_exact(rows)
                 if removed:
                     logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
-                for row in rows:
-                    try:
-                        cursor.execute(statement, row)
-                    except Exception as e:
-                        logger.error(f"Error inserting Application Timeline record: {e}")
-                        stats['errors'] += 1
+                stats['errors'] += _save_rows(statement, rows)
 
                 conn.commit()
                 logger.info("Application Timeline records inserted successfully")
@@ -2215,9 +2220,15 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
             print(f"\nSRUM parsing completed successfully!")
             print(f"Database created at: {output_db_path}")
             
+            _tot = tally.totals()
+            logger.info("[SRUM] %d rows read: %d new, %d already in the database",
+                        _tot['parsed'], _tot['inserted'], _tot['duplicates'])
             return {
                 'success': True,
                 'records': stats.get('total_records', 0),
+                'inserted': _tot['inserted'],
+                'duplicates': _tot['duplicates'],
+                'tables': tally.tables,
                 'output_path': output_db_path
             }
             

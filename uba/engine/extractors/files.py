@@ -51,12 +51,46 @@ _SYSTEM_AREA_RE = re.compile(
 
 def _mft_record(frn) -> Optional[int]:
     """USN FRN (stored as a string) -> $MFT record number, or None."""
+    ref = _mft_ref(frn)
+    return ref[0] if ref else None
+
+
+def _mft_ref(frn):
+    """USN FRN -> ($MFT record number, sequence number), or None.
+
+    v2 journals store the reference as a decimal string, v3 as 32 hex digits
+    (a FILE_ID_128 whose low half is the NTFS reference)."""
     if frn in (None, "", "0"):
         return None
+    s = str(frn).strip()
     try:
-        return int(frn) & _FRN_RECORD_MASK
+        if s.isdigit() and len(s) != 32:
+            value = int(s)
+        else:
+            value = int(s[2:] if s.lower().startswith("0x") else s, 16) & 0xFFFFFFFFFFFFFFFF
     except (TypeError, ValueError):
         return None
+    return value & _FRN_RECORD_MASK, (value >> 48) & 0xFFFF
+
+
+def _corr_cols(conn) -> set:
+    """Columns of mft_usn_correlated - older cases lack volume_letter,
+    mft_sequence_number and has_mft_record, so each is optional."""
+    try:
+        return {r[1] for r in conn.execute("PRAGMA table_info(mft_usn_correlated)")}
+    except Exception:
+        return set()
+
+
+def _col(cols, name):
+    return name if name in cols else "NULL"
+
+
+def _usable_path(path):
+    """A reconstructed path, or None when it only names an unknown folder."""
+    if not path or str(path).startswith("["):
+        return None
+    return path
 
 _OP_RULE_KEY = {
     aggregation.OP_CREATE: "file_created",
@@ -75,20 +109,35 @@ _OP_PHRASES = {
 }
 
 
-def _build_path_map(ctx) -> Dict[int, str]:
-    """frn -> reconstructed path, bulk-loaded once."""
-    path_map: Dict[int, str] = {}
+def _build_path_map(ctx) -> Dict[tuple, str]:
+    """(volume, record, sequence) -> reconstructed path, bulk-loaded once.
+
+    Keyed by volume and sequence as well as the record: record 5000 on C: is
+    not record 5000 on D:, and a journal event for an earlier occupant of a
+    record must not take the path of the file that holds it now (7,575 events
+    of one case would have). Journal-only rows carry a path too since the
+    correlator rebuilds it from the journal, so they are included.
+    """
+    path_map: Dict[tuple, str] = {}
     conn = ctx.pool.get("mft_usn_correlated")
     if conn is None or not ctx.pool.has_table("mft_usn_correlated", "mft_usn_correlated"):
         return path_map
     try:
+        cols = _corr_cols(conn)
+        ctx.corr_keyed = "volume_letter" in cols and "mft_sequence_number" in cols
+        # Only the files the journal mentions: the path map exists to name
+        # journal events. A whole $MFT is millions of files (3.3 million on one
+        # drive) - loading them all hit MAX_PATH_MAP_ENTRIES and silently left
+        # most events without a folder. Journal-only rows carry a path too.
+        only_events = " AND has_usn_event = 1" if "has_usn_event" in cols else ""
         cursor = conn.execute(
-            "SELECT mft_record_number, reconstructed_path FROM mft_usn_correlated "
-            "WHERE reconstructed_path IS NOT NULL")
-        for frn, path in cursor:
-            if frn is None:
+            "SELECT DISTINCT {}, mft_record_number, {}, reconstructed_path "
+            "FROM mft_usn_correlated WHERE reconstructed_path IS NOT NULL{}".format(
+                _col(cols, "volume_letter"), _col(cols, "mft_sequence_number"), only_events))
+        for vol, rec, seq, path in cursor:
+            if rec is None:
                 continue
-            path_map[frn] = path
+            path_map.setdefault((vol, rec, seq) if ctx.corr_keyed else rec, path)
             if len(path_map) >= MAX_PATH_MAP_ENTRIES:
                 logger.warning("UBA: path map capped at %d entries", MAX_PATH_MAP_ENTRIES)
                 break
@@ -157,11 +206,17 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
         if not ts_norm:
             skipped += 1
             continue
-        # Prefer the file's own reconstructed path; fall back to its folder.
-        own = _mft_record(frn)
-        parent = _mft_record(parent_frn)
-        path = (path_map.get(own) if own is not None else None) or \
-               (path_map.get(parent) if parent is not None else None)
+        # Prefer the file's own reconstructed path; fall back to its folder
+        # plus the journal's name (the folder's path alone would be read as a
+        # file in ITS parent - one level too high).
+        own = _mft_ref(frn)
+        parent = _mft_ref(parent_frn)
+        keyed = getattr(ctx, "corr_keyed", True)
+        path = _usable_path(path_map.get((volume,) + own if keyed else own[0])) if own else None
+        if path is None and parent:
+            folder = _usable_path(path_map.get((volume,) + parent if keyed else parent[0]))
+            if folder:
+                path = folder.rstrip("/") + "/" + (filename or "")
         row = aggregation.usn_row_from_db(rowid, volume, filename, usn, frn,
                                           parent_frn, ts_norm, reason, path)
         if row is None:
@@ -246,7 +301,12 @@ def _burst_event(ctx, rules_by_key, burst: aggregation.Burst):
     rule = rules_by_key.get(_OP_RULE_KEY[burst.op])
     if rule is None:
         return None
-    n = len(burst.rows)
+    # FILES, not journal records. NTFS writes several records per change of
+    # one file (FILE_CREATE, then DATA_EXTEND | FILE_CREATE, then ... | CLOSE),
+    # and every one of them used to count: "5000 files were created" was about
+    # 1,500 files; edits were overstated about 19x.
+    records = len(burst.rows)
+    n = burst.file_count()
     singular, plural = _OP_PHRASES[burst.op]
     actor = _burst_actor(ctx, burst)
     samples = burst.sample_names()
@@ -259,6 +319,8 @@ def _burst_event(ctx, rules_by_key, burst: aggregation.Burst):
         span = description.span_phrase(burst.ts_start, burst.ts_end)
         if span:
             text += " " + span
+    if records != n:
+        text += " ({} journal records)".format(records)
     if actor[0] == "User":
         text = "{}: {}".format(actor[1], text)
 
@@ -281,10 +343,11 @@ def _burst_event(ctx, rules_by_key, burst: aggregation.Burst):
         session_context=ctx.session_context(burst.ts_start),
         aggregate_count=n,
         details={"folder": burst.folder_bucket, "operation": burst.op,
+                 "files": n, "journal_records": records,
                  "sample_files": samples,
                  "file_types": burst.extension_histogram()},
         evidence=[EvidenceRef(db="usn", table="journal_events",
-                              rowids=[r.rowid for r in burst.rows], count=n)])
+                              rowids=[r.rowid for r in burst.rows], count=records)])
 
 
 def _ext(name):
@@ -428,17 +491,27 @@ def file_copy_inferred(ctx, rules) -> List[BehaviorEvent]:
     from collections import defaultdict
     buckets = defaultdict(lambda: {"rowids": [], "names": [], "first_ts": None,
                                    "actor": ("", "", "")})
+    # One row per FILE: the correlated table repeats a file once per journal
+    # event, so the same copied file was counted once per USN record.
+    cols = _corr_cols(conn)
+    sql = ("SELECT rowid, fn_filename, reconstructed_path, si_creation_time, "
+           "si_modification_time, {}, mft_record_number, {} FROM mft_usn_correlated "
+           "WHERE si_modification_time IS NOT NULL AND si_modification_time != '' "
+           "AND si_creation_time > si_modification_time".format(
+               _col(cols, "volume_letter"), _col(cols, "mft_sequence_number")))
+    if "has_mft_record" in cols:
+        sql += " AND has_mft_record = 1"
     try:
-        cursor = conn.execute(
-            "SELECT rowid, fn_filename, reconstructed_path, si_creation_time, "
-            "si_modification_time FROM mft_usn_correlated "
-            "WHERE si_modification_time IS NOT NULL AND si_modification_time != '' "
-            "AND si_creation_time > si_modification_time")
+        cursor = conn.execute(sql)
     except Exception as e:
         logger.warning("UBA: copy-inference query failed: %s", e)
         return []
 
-    for rowid, fname, path, created, modified in cursor:
+    seen_files = set()
+    for rowid, fname, path, created, modified, vol, rec, seq in cursor:
+        if (vol, rec, seq) in seen_files:
+            continue
+        seen_files.add((vol, rec, seq))
         if not description.is_user_document_area(path):
             continue                       # exclude system/servicing noise
         ts = normalize_ts(created)

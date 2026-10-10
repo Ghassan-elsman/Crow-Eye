@@ -55,6 +55,32 @@ def sha256_file(path, chunk_size: int = 1024 * 1024) -> Optional[str]:
         return None
 
 
+def _case_dir_of(artifacts_dir) -> Optional[str]:
+    p = Path(artifacts_dir)
+    return str(p.parent if p.name.lower() == "target_artifacts" else p)
+
+
+def ledger_evidence_import(artifacts_dir, entry=None, failed=None, source_path=None) -> None:
+    """Mirror an import (or a failed one) into the case's custody ledger,
+    whose lines are hash-chained - this manifest is not, so on its own an
+    edited entry would not show."""
+    try:
+        from utils import custody
+        if failed is not None:
+            custody.ledger(_case_dir_of(artifacts_dir), "evidence import failed",
+                           source=str(source_path) if source_path else None, error=str(failed))
+            return
+        e = entry or {}
+        custody.ledger(_case_dir_of(artifacts_dir), "evidence imported",
+                       kind=e.get("kind"), source=e.get("source_path"),
+                       source_sha256=e.get("sha256_source"), dest=e.get("dest_path"),
+                       dest_sha256=e.get("sha256"), size=e.get("size_bytes"),
+                       rows=e.get("row_count"), table=e.get("table"),
+                       manifest_id=e.get("id"))
+    except Exception:
+        pass
+
+
 class ImportedEvidenceManifest:
     """Per-case ledger of imported evidence with source/dest SHA-256 hashes."""
 
@@ -121,6 +147,7 @@ class ImportedEvidenceManifest:
                 self._save(entries)
             logger.info(f"Imported-evidence manifest: recorded {entry['name']} "
                         f"({kind}, sha256={str(entry['sha256'])[:12]}…)")
+            ledger_evidence_import(self.artifacts_dir, entry)
             return entry
         except Exception as e:
             logger.error(f"record_import failed: {e}", exc_info=True)

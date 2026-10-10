@@ -1,4 +1,10 @@
-"""QWebChannel bridge for the Shell Items ("user navigation & MRU") dashboard.
+"""QWebChannel bridge for the User Activity dashboard: Shell Items & Registry.
+
+(Formerly "Shell Items - user navigation & MRU". The registry tables that
+record what a user RAN or SET - UserAssist, BAM, DAM, FeatureUsage, the
+Program Compatibility Assistant store, FileExts and the ProgramsCache - sat
+beside the shell-item tables with no dashboard at all; they are sources here
+now, and every one of those tables' Charts buttons opens this dashboard.)
 
 Reads the case's registry_data.db and unifies all seven Windows shell-item
 artifacts into one activity stream for the react-shellitems app. Same shape as
@@ -70,6 +76,16 @@ SOURCE_TABLES = {
 }
 SOURCES = SOURCES + ("taskband", "mountpoints", "office", "typedurls", "rdp",
                      "recentapps", "appmru", "regedit")
+# What the user RAN, with a time per entry: on the strip like the MRUs.
+SOURCE_TABLES.update({
+    "userassist": "UserAssist",              # Explorer\UserAssist: run + focus counts
+    "bam": "BAM",                            # Background Activity Moderator: last run
+    "dam": "DAM",                            # Desktop Activity Moderator: last run
+    # CapabilityAccessManager\ConsentStore: when each app last used the
+    # camera, microphone or location - its own start and stop time per row.
+    "apppermissions": "app_permissions",
+})
+SOURCES = SOURCES + ("userassist", "bam", "dam", "apppermissions")
 # Undated by nature - listed in All items and counted, never on the strip.
 SOURCE_TABLES.update({
     "muicache": "MUICache",                  # programs launched: name + company
@@ -77,6 +93,16 @@ SOURCE_TABLES.update({
     "shellext": "shell_open_command",        # Explorer shell registrations...
 })
 SOURCES = SOURCES + ("muicache", "shellfolders", "shellext")
+# Ran or set, but with only the KEY's write time - one upper bound shared by
+# every entry under it. Plotting 268 FeatureUsage rows on that one day would
+# be a false spike, so these are listed undated; the key time is in the detail.
+SOURCE_TABLES.update({
+    "featureusage": "FeatureUsage",          # Explorer\FeatureUsage: taskbar counts
+    "compat": "CompatibilityAssistant",      # PCA Store: programs the user ran
+    "fileexts": "file_exts",                 # Explorer\FileExts: what opens each type
+    "programscache": "programs_cache",       # StartPage2\ProgramsCache
+})
+SOURCES = SOURCES + ("featureusage", "compat", "fileexts", "programscache")
 # ...read from all three tables that share the registration shape.
 SOURCE_MULTI = {
     "shellext": ("shell_open_command", "shell_icon_overlay_identifiers",
@@ -204,6 +230,19 @@ def _clean_str(v) -> str:
     return s.strip()
 
 
+def _account(v) -> str:
+    """'S-1-5-21-...-1001 (HOST\\ann)' -> 'HOST\\ann'; a bare SID or name as it is."""
+    s = _clean_str(v)
+    if s.endswith(")") and " (" in s:
+        return s[s.rindex(" (") + 2:-1]
+    return s
+
+
+def _upper_bound_note(r: dict) -> str:
+    t = _clean_str(r.get("last_written"))
+    return ("key written %s (an upper bound for every entry in it)" % t) if t else "no time recorded"
+
+
 def _looks_pathy(s: str) -> bool:
     """True for a string that reads like a real filesystem/UNC path."""
     s = s or ""
@@ -214,7 +253,17 @@ def _looks_pathy(s: str) -> bool:
 _ILLEGAL_PLACE_CHARS = set('<>:"/|?*')
 
 
-class ShellItemsBridge(QObject):
+try:
+    from visualizations.async_bridge import AsyncBridge
+except ImportError:                                  # run from its own folder
+    import os as _os, sys as _sys
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    from visualizations.async_bridge import AsyncBridge
+
+
+# AsyncBridge (a QObject): the page calls its slots through callAsync, off
+# the GUI thread, so the window keeps painting while a query runs.
+class ShellItemsBridge(AsyncBridge):
     def __init__(self, case_directory: str, parent=None, focus_source: str = ""):
         super().__init__(parent)
         self.case_dir = case_directory or ""
@@ -507,6 +556,92 @@ class ShellItemsBridge(QObject):
             rec["note"] = "%s: %s (no time recorded)" % (
                 SHELLEXT_KIND.get(g("_src_table") or "", "shell registration"), data or "-")
             drive = _drive_of(rec["path"])
+            rec["when"] = ""
+
+        elif source == "userassist":
+            prog = _clean_str(g("program_path"))
+            if not prog or prog.upper().startswith("UEME_CTL"):
+                return None             # UserAssist's own session counters
+            rec["target"] = _base(prog) or prog
+            rec["path"] = prog if _looks_pathy(prog) else ""
+            rec["itemType"] = "executed"
+            rec["user"] = _account(g("user_sid"))
+            try:
+                focus_s = "%.0fs" % (int(g("focus_time") or 0) / 1000.0)
+            except (TypeError, ValueError):
+                focus_s = str(g("focus_time") or "0")
+            rec["note"] = "UserAssist: run %s time(s), focused %s time(s) for %s" % (
+                g("run_count") or 0, g("focus_count") or 0, focus_s)
+            drive = _drive_of(rec["path"])
+            rec["when"] = _clean_str(g("last_execution"))
+
+        elif source in ("bam", "dam"):
+            proc = _clean_str(g("process_path"))
+            if not proc:
+                return None             # the Version / SequenceNumber values
+            rec["target"] = _clean_str(g("app_name")) or _base(proc) or proc
+            rec["path"] = proc
+            rec["itemType"] = "executed"
+            rec["user"] = _account(g("sid"))
+            rec["registryPath"] = _clean_str(g("subkey"))
+            what = "Background" if source == "bam" else "Desktop"
+            rec["note"] = "%s Activity Moderator: last run by this account%s" % (
+                what, ("; %s execution(s)" % g("execution_count")) if g("execution_count") else "")
+            drive = _drive_of(rec["path"])
+            rec["when"] = _clean_str(g("last_execution"))
+
+        elif source == "apppermissions":
+            app = _clean_str(g("app"))
+            cap = _clean_str(g("capability")) or "a device"
+            rec["target"] = (_base(app) if _looks_pathy(app) else app) or "(unnamed app)"
+            rec["path"] = app if _looks_pathy(app) else ""
+            rec["itemType"] = "device access"
+            rec["registryPath"] = g("key_path") or ""
+            start, stop = _clean_str(g("last_used_start")), _clean_str(g("last_used_stop"))
+            rec["note"] = "used the %s%s%s%s" % (
+                cap,
+                (" from " + start) if start else "",
+                (" until " + stop) if stop and stop != start else "",
+                ("; permission " + _clean_str(g("permission"))) if _clean_str(g("permission")) else "")
+            drive = _drive_of(rec["path"])
+            rec["when"] = start or stop
+
+        elif source == "featureusage":
+            rec["target"] = _clean_str(g("program")) or "(unnamed program)"
+            rec["path"] = rec["target"] if _looks_pathy(rec["target"]) else ""
+            rec["itemType"] = "executed"
+            rec["registryPath"] = g("key_path") or ""
+            rec["note"] = "FeatureUsage %s: %s; %s" % (
+                g("usage_type") or "?", g("count") or 0, _upper_bound_note(r))
+            drive = _drive_of(rec["path"])
+            rec["when"] = ""
+
+        elif source == "compat":
+            prog = _clean_str(g("program_path"))
+            rec["target"] = _base(prog) or prog or "(unparsed entry)"
+            rec["path"] = prog if _looks_pathy(prog) else ""
+            rec["itemType"] = "executed"
+            rec["registryPath"] = g("key_path") or ""
+            rec["note"] = "Program Compatibility Assistant saw this program run; " + _upper_bound_note(r)
+            drive = _drive_of(rec["path"])
+            rec["when"] = ""
+
+        elif source == "fileexts":
+            rec["target"] = _clean_str(g("extension")) or "(no extension)"
+            rec["itemType"] = "configured"
+            rec["registryPath"] = g("key_path") or ""
+            rec["note"] = "opens with %s (%s); %s" % (
+                _clean_str(g("progid")) or "?", g("choice_type") or "?", _upper_bound_note(r))
+            drive = ""
+            rec["when"] = ""
+
+        elif source == "programscache":
+            rec["target"] = _clean_str(g("value_name")) or "(unnamed value)"
+            rec["itemType"] = "configured"
+            rec["registryPath"] = g("key_path") or ""
+            rec["note"] = "Start menu program cache, %s byte(s); %s" % (
+                g("blob_size") or 0, _upper_bound_note(r))
+            drive = ""
             rec["when"] = ""
 
         elif source == "regedit":

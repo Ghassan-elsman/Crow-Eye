@@ -21,7 +21,27 @@ if mft_usn_dir not in sys.path:
     sys.path.insert(0, mft_usn_dir)
 
 
-def run_offline_correlation(case_path):
+def offline_volume_label(path, case_root=None, db_path=None, journal=False):
+    """The volume a collected $MFT (or, with journal=True, $J) is stored under.
+
+    The parsers ask volume_identity directly; this is the same answer for any
+    caller still importing it from here. The journal gets the label of its
+    $MFT, so the correlator - which joins on volume_letter - pairs the two.
+    It used to be made from the file name alone ('OFFLINE', 'OFFLINE_1' for a
+    name-conflict copy), so Crow-Claw's copy of C:'s $MFT was stored a second
+    time beside the live parse of C:, and two disks' $MFT files shared
+    'OFFLINE'. That name-based label is now only the last resort.
+    """
+    _here = os.path.dirname(os.path.abspath(__file__))
+    if _here not in sys.path:
+        sys.path.insert(0, _here)
+    import volume_identity
+    if journal:
+        return volume_identity.resolve_usn_volume_label(path, case_root, db_path)
+    return volume_identity.resolve_volume_label(path, case_root, db_path)
+
+
+def run_offline_correlation(case_path, force=False):
     """
     Run MFT-USN correlation in offline mode.
     
@@ -52,8 +72,20 @@ def run_offline_correlation(case_path):
     usn_db_path = os.path.join(target_artifacts_dir, 'USN_journal.db')
     correlated_db_path = os.path.join(target_artifacts_dir, 'mft_usn_correlated_analysis.db')
     
-    # Check if correlated database already exists
-    if os.path.exists(correlated_db_path):
+    # An existing correlation is reused only while it is newer than both of
+    # its inputs. It was reused whenever it existed, so evidence parsed later
+    # (a second import, a re-collected $J) was never correlated.
+    inputs = [p for p in (mft_db_path, usn_db_path) if p and os.path.exists(p)]
+    stale = bool(inputs) and os.path.exists(correlated_db_path) and \
+        os.path.getmtime(correlated_db_path) < max(os.path.getmtime(p) for p in inputs)
+    if os.path.exists(correlated_db_path) and (force or stale):
+        try:
+            os.remove(correlated_db_path)        # derived: rebuilt below
+            print(f"[Offline Correlator] Rebuilding the correlation (inputs are newer)")
+        except OSError as e:
+            # Open in the GUI: the correlator appends (rows are unique).
+            print(f"[Offline Correlator] Could not remove the old correlation ({e}); updating it in place")
+    if os.path.exists(correlated_db_path) and not (force or stale):
         print(f"[Offline Correlator] Correlated database already exists: {correlated_db_path}")
         try:
             import sqlite3
@@ -118,9 +150,12 @@ def run_offline_correlation(case_path):
         correlator.usn_db = usn_db_path
         correlator.correlated_db = correlated_db_path
         
-        # Run correlation (skip parser execution since databases already exist)
+        # The join, the record names and the name columns - and never a
+        # parser: run_complete_analysis() would first parse THIS machine's
+        # MFT and USN into the evidence case.
         print(f"[Offline Correlator] Creating correlated database...")
-        correlator.create_correlated_database()
+        correlator.correlate_existing()
+        correlator.generate_forensic_report()
         
         # Verify the correlated database was created
         if os.path.exists(correlated_db_path):

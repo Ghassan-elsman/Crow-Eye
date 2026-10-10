@@ -48,47 +48,22 @@ class CaseCardWidget(QtWidgets.QWidget):
         shadow = QGraphicsDropShadowEffect()
         shadow.setBlurRadius(15)
         if self.is_available:
-            shadow.setColor(QtGui.QColor(0, 255, 255, 100))
+            shadow.setColor(QtGui.QColor(0, 0, 0, 110))            # depth, not glow
         else:
-            shadow.setColor(QtGui.QColor(239, 68, 68, 100))  # Red for unavailable
+            shadow.setColor(QtGui.QColor(244, 63, 94, 70))  # Rose for unavailable
         shadow.setOffset(0, 5)
         self.setGraphicsEffect(shadow)
         
-        # Set dark background for card - NO WHITE BACKGROUNDS!
-        if self.is_available:
-            self.setStyleSheet("""
-                QWidget#option_card {
-                    background-color: #1E293B;
-                    border: 2px solid #475569;
-                    border-radius: 12px;
-                }
-                QWidget#option_card:hover {
-                    background-color: #334155;
-                    border: 3px solid #00FFFF;
-                }
-                QWidget {
-                    background-color: transparent;
-                }
-                QLabel {
-                    background-color: transparent;
-                }
-            """)
-        else:
-            self.setStyleSheet("""
-                QWidget#option_card {
-                    background-color: #1E293B;
-                    border: 3px solid #EF4444;
-                    border-radius: 12px;
-                    opacity: 0.7;
-                }
-                QWidget {
-                    background-color: transparent;
-                }
-                QLabel {
-                    background-color: transparent;
-                }
-            """)
-        
+        # The site card (ui/site_theme.py tones); an unavailable case keeps
+        # its rose edge - that is the warning.
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        edge = "#1E293B" if self.is_available else "rgba(244, 63, 94, 0.65)"
+        self.setStyleSheet(
+            "QWidget#option_card { background-color: #0F172A; border: 1px solid %s; border-radius: 14px; }"
+            " QWidget#option_card:hover { background-color: #111A33; border-color: %s; }"
+            " QWidget, QLabel { background-color: transparent; }"
+            % (edge, "rgba(99, 102, 241, 0.60)" if self.is_available else edge))
+
         # Main layout
         card_layout = QtWidgets.QVBoxLayout(self)
         card_layout.setContentsMargins(20, 15, 20, 15)
@@ -96,28 +71,12 @@ class CaseCardWidget(QtWidgets.QWidget):
         
         # Case name (bold, bright cyan)
         name_label = QtWidgets.QLabel(self.case_metadata.name)
-        name_label.setStyleSheet("""
-            QLabel {
-                color: #00FFFF;
-                font-size: 18px;
-                font-weight: 800;
-                font-family: 'BBH Sans Bogle', 'Segoe UI', sans-serif;
-                background-color: transparent;
-            }
-        """)
+        name_label.setStyleSheet("QLabel { color: #A5B4FC; font-size: 18px; font-weight: 800; background-color: transparent; }")
         card_layout.addWidget(name_label)
         
         # Case path (brighter gray, readable)
         path_label = QtWidgets.QLabel(self.case_metadata.path)
-        path_label.setStyleSheet("""
-            QLabel {
-                color: #E2E8F0;
-                font-size: 12px;
-                font-family: 'Segoe UI', sans-serif;
-                background-color: transparent;
-                font-weight: 500;
-            }
-        """)
+        path_label.setStyleSheet("QLabel { color: #E2E8F0; font-size: 12px; font-weight: 500; background-color: transparent; }")
         path_label.setWordWrap(True)
         card_layout.addWidget(path_label)
         
@@ -132,30 +91,14 @@ class CaseCardWidget(QtWidgets.QWidget):
         created_label = QtWidgets.QLabel(
             f'<img src="{CrowEyeIcons.icon_path("calendar")}" width="12" height="12"> '
             f'Created: {self._format_datetime(self.case_metadata.created_date)}')
-        created_label.setStyleSheet("""
-            QLabel {
-                color: #94A3B8;
-                font-size: 11px;
-                font-family: 'Segoe UI', sans-serif;
-                background-color: transparent;
-                font-weight: 600;
-            }
-        """)
+        created_label.setStyleSheet("QLabel { color: #94A3B8; font-size: 11px; font-weight: 600; background-color: transparent; }")
         timestamps_layout.addWidget(created_label)
         
         # Last opened date (brighter, more visible)
         last_opened_label = QtWidgets.QLabel(
             f'<img src="{CrowEyeIcons.icon_path("clock")}" width="12" height="12"> '
             f'Last Opened: {self._format_datetime(self.case_metadata.last_opened)}')
-        last_opened_label.setStyleSheet("""
-            QLabel {
-                color: #94A3B8;
-                font-size: 11px;
-                font-family: 'Segoe UI', sans-serif;
-                background-color: transparent;
-                font-weight: 600;
-            }
-        """)
+        last_opened_label.setStyleSheet("QLabel { color: #94A3B8; font-size: 11px; font-weight: 600; background-color: transparent; }")
         timestamps_layout.addWidget(last_opened_label)
         timestamps_layout.addStretch()
         
@@ -164,33 +107,14 @@ class CaseCardWidget(QtWidgets.QWidget):
         # Description (if available) - brighter and more visible
         if self.case_metadata.description:
             desc_label = QtWidgets.QLabel(self.case_metadata.description)
-            desc_label.setStyleSheet("""
-                QLabel {
-                    color: #E2E8F0;
-                    font-size: 13px;
-                    font-family: 'Segoe UI', sans-serif;
-                    font-style: italic;
-                    background-color: transparent;
-                    padding: 5px 0;
-                }
-            """)
+            desc_label.setStyleSheet("QLabel { color: #E2E8F0; font-size: 13px; font-weight: 400; background-color: transparent; font-style: italic; padding: 5px 0; }")
             desc_label.setWordWrap(True)
             card_layout.addWidget(desc_label)
         
         # Warning for unavailable cases
         if not self.is_available:
             warning_label = QtWidgets.QLabel(f"⚠ Case not found at: {self.case_metadata.path}")
-            warning_label.setStyleSheet("""
-                QLabel {
-                    color: #EF4444;
-                    font-size: 11px;
-                    font-weight: 600;
-                    font-family: 'Segoe UI', sans-serif;
-                    padding: 5px;
-                    background-color: rgba(239, 68, 68, 0.1);
-                    border-radius: 3px;
-                }
-            """)
+            warning_label.setStyleSheet("QLabel { color: #FDA4AF; font-size: 11px; font-weight: 600; background-color: transparent; padding: 5px; background-color: rgba(244, 63, 94, 0.08); border-radius: 6px; }")
             warning_label.setWordWrap(True)
             card_layout.addWidget(warning_label)
     
@@ -222,7 +146,7 @@ class CaseCardWidget(QtWidgets.QWidget):
             shadow = self.graphicsEffect()
             if shadow:
                 shadow.setBlurRadius(25)
-                shadow.setColor(QtGui.QColor(0, 255, 255, 150))
+                shadow.setColor(QtGui.QColor(99, 102, 241, 90))
                 shadow.setOffset(0, 8)
     
     def leaveEvent(self, event):
@@ -231,7 +155,7 @@ class CaseCardWidget(QtWidgets.QWidget):
             shadow = self.graphicsEffect()
             if shadow:
                 shadow.setBlurRadius(15)
-                shadow.setColor(QtGui.QColor(0, 255, 255, 100))
+                shadow.setColor(QtGui.QColor(0, 0, 0, 110))
                 shadow.setOffset(0, 5)
 
 
@@ -254,7 +178,9 @@ class StartupMenuDialog(QtWidgets.QDialog):
         self.case_history_manager = case_history_manager
         self.selected_case = None
         self.choice = None  # 'create', 'open', or case metadata
-        
+
+        from ui.site_theme import begin_site_theme
+        begin_site_theme(self)                  # before the widgets exist
         self.setup_ui()
         self.apply_styles()
         self.load_recent_cases()
@@ -296,13 +222,14 @@ class StartupMenuDialog(QtWidgets.QDialog):
             QWidget {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, 
                     stop:0 transparent, 
-                    stop:0.2 #00FFFF, 
-                    stop:0.5 #00FF7F, 
-                    stop:0.8 #00FFFF, 
+                    stop:0.2 #6366F1, 
+                    stop:0.5 #22D3EE, 
+                    stop:0.8 #6366F1, 
                     stop:1 transparent);
                 border-radius: 1px;
             }
         """)
+        divider_widget.setProperty("keepStyle", True)
         return divider_widget
     
     def create_header(self):
@@ -410,6 +337,7 @@ class StartupMenuDialog(QtWidgets.QDialog):
         create_button = QtWidgets.QPushButton("CREATE NEW CASE")
         create_button.setFixedHeight(45)
         create_button.setMinimumWidth(180)
+        self._create_button = create_button
         create_button.clicked.connect(self.on_create_new_case)
         create_button.setStyleSheet(CrowEyeStyles.GREEN_BUTTON)
         
@@ -425,6 +353,7 @@ class StartupMenuDialog(QtWidgets.QDialog):
         open_button = QtWidgets.QPushButton("OPEN EXISTING CASE")
         open_button.setFixedHeight(45)
         open_button.setMinimumWidth(180)
+        self._open_button = open_button
         open_button.clicked.connect(self.on_open_existing_case)
         open_button.setStyleSheet(CrowEyeStyles.CASE_BUTTON)
         
@@ -439,6 +368,7 @@ class StartupMenuDialog(QtWidgets.QDialog):
         # Exit button
         exit_button = QtWidgets.QPushButton("EXIT")
         exit_button.setFixedSize(120, 45)
+        self._exit_button = exit_button
         exit_button.clicked.connect(self.reject)
         exit_button.setStyleSheet(CrowEyeStyles.RED_BUTTON)
         
@@ -462,7 +392,6 @@ class StartupMenuDialog(QtWidgets.QDialog):
                 QLabel {
                     color: #94A3B8;
                     font-size: 14px;
-                    font-family: 'Segoe UI', sans-serif;
                     padding: 40px;
                 }
             """)
@@ -503,7 +432,8 @@ class StartupMenuDialog(QtWidgets.QDialog):
         msg_box.setWindowTitle("Case Directory Not Found")
         msg_box.setText(f"The case directory no longer exists at:\n{case_metadata.path}\n\nWhat would you like to do?")
         msg_box.setIcon(QMessageBox.Warning)
-        msg_box.setStyleSheet(CrowEyeStyles.MESSAGE_BOX_STYLE)
+        from ui.site_theme import apply_site_theme
+        apply_site_theme(msg_box)
         
         # Add custom buttons
         browse_button = msg_box.addButton("Browse to New Location", QMessageBox.ActionRole)
@@ -555,18 +485,20 @@ class StartupMenuDialog(QtWidgets.QDialog):
         self.accept()
     
     def apply_styles(self):
-        """Apply cyberpunk styles to the dialog."""
-        self.setStyleSheet(CrowEyeStyles.CASE_DIALOG_STYLE)
-        
-        # Apply specific styles
+        """The site look (ui/site_theme.py): one sheet, roles for the labels,
+        Create as the main action, Exit as the stop button."""
+        from ui.site_theme import apply_site_theme, set_role, set_variant
+        apply_site_theme(self)
         title_widget = self.findChild(QtWidgets.QLabel, "dialog_title")
         if title_widget:
-            title_widget.setStyleSheet(CrowEyeStyles.DIALOG_TITLE)
-        
+            set_role(title_widget, "title")
         desc_widget = self.findChild(QtWidgets.QLabel, "dialog_description")
         if desc_widget:
-            desc_widget.setStyleSheet(CrowEyeStyles.DIALOG_DESCRIPTION)
-    
+            set_role(desc_widget, "muted")
+        set_variant(self._create_button, "primary")
+        set_variant(self._open_button, "ghost")
+        set_variant(self._exit_button, "danger")
+
     def get_choice(self):
         """Get the user's choice."""
         return self.choice

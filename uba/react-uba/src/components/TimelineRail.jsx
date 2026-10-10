@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 // Severity -> bar colour. Matches ActivityMapView so the two views agree.
 const SEV_COLOR = { 4: '#ff3b56', 3: '#ff3b56', 2: '#f0a93b', 1: '#4f8eff' }
 const RAIL_H = 42
+const MAX_DAYS = 800
 
 function addDays(iso, n) {
   const d = new Date(iso + 'T00:00:00Z')
@@ -40,15 +41,29 @@ export default function TimelineRail({ summary, filters, onChange }) {
     }
     // Walk the calendar, not just the days that have data, so gaps in activity
     // are visible as gaps rather than silently closing up.
+    //
+    // At most MAX_DAYS, ending at the LAST active day. The walk used to start
+    // at the first day and stop after 800: one artifact carrying a timestamp
+    // years older than the case (a driver's build date, an installer's file
+    // time) used up the whole budget on empty days, and the rail read
+    // "800 days, 2 with activity" on a case with 28,000 events - none of them
+    // reachable. What falls before the window is counted, not hidden.
     const keys = [...totals.keys()].sort()
-    const out = []
-    let cursor = keys[0]
     const last = keys[keys.length - 1]
-    let guard = 0
-    while (cursor <= last && guard++ < 800) {
+    let start = addDays(last, -(MAX_DAYS - 1))
+    if (keys[0] > start) start = keys[0]
+    const out = []
+    let cursor = start
+    while (cursor <= last) {
       const hit = totals.get(cursor)
       out.push({ day: cursor, events: hit ? hit.events : 0, max: hit ? hit.max : 0 })
       cursor = addDays(cursor, 1)
+    }
+    const before = keys.filter((k) => k < start)
+    out.earlier = {
+      days: before.length,
+      events: before.reduce((n, k) => n + totals.get(k).events, 0),
+      first: before[0] || null,
     }
     return out
   }, [summary])
@@ -83,6 +98,11 @@ export default function TimelineRail({ summary, filters, onChange }) {
         <span className="rail-hint">
           {days.length} days, {active} with activity · busiest {dayLabel(busiest.day)}
           {' '}({busiest.events.toLocaleString()})
+          {days.earlier && days.earlier.days > 0 && (
+            <> · {days.earlier.events.toLocaleString()} earlier event
+              {days.earlier.events === 1 ? '' : 's'} on {days.earlier.days} day
+              {days.earlier.days === 1 ? '' : 's'} from {dayLabel(days.earlier.first)}</>
+          )}
           {selected && ` · showing ${dayLabel(selected)} only`}
         </span>
         {selected && (

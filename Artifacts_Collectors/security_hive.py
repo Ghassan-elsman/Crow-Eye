@@ -28,8 +28,15 @@ import logging
 import os
 import struct
 
+# Named, so its records reach parsers.log: the root logger's do not.
+logger = logging.getLogger(__name__)
+
 try:
     from Registry import Registry
+    try:
+        from Artifacts_Collectors.registry_hive_cache import open_hive as _open_hive
+    except ImportError:
+        _open_hive = Registry.Registry
     REGISTRY_AVAILABLE = True
 except ImportError:                                   # pragma: no cover
     Registry = None
@@ -83,10 +90,12 @@ def _open(hive_path):
         return None
     try:
         # Recovered copy when the logs apply, the original otherwise.
-        return Registry.Registry(
+        # One read per parse while the parser's hive cache is on; outside
+        # it, exactly Registry.Registry (registry_hive_cache).
+        return _open_hive(
             registry_transaction_log.hive_for_reading(hive_path))
     except Exception as e:
-        logging.debug("SECURITY hive unreadable (%s): %s", hive_path, e)
+        logger.debug("SECURITY hive unreadable (%s): %s", hive_path, e)
         return None
 
 
@@ -144,7 +153,7 @@ def parse_lsa_unicode_string(blob):
             end = len(blob)
         return bytes(blob[8:end]).decode("utf-16-le", errors="replace").rstrip("\x00")
     except Exception as e:
-        logging.debug("LSA string decode failed: %s", e)
+        logger.debug("LSA string decode failed: %s", e)
         return ""
 
 
@@ -195,7 +204,7 @@ def parse_audit_policy(blob):
         return ("Auditing %s; " % ("on" if enabled else "off")) + ", ".join(parts), \
                "legacy AuditEventCount layout, validated against this blob"
     except Exception as e:
-        logging.debug("audit policy decode failed: %s", e)
+        logger.debug("audit policy decode failed: %s", e)
         return "", "decode failed: %s" % e
 
 
@@ -242,11 +251,11 @@ def parse_security(cursor, security_hive, check_exists, stamp):
 
     reg = _open(security_hive)
     if reg is None:
-        logging.info("SECURITY hive not available - skipping LSA tables")
+        logger.info("SECURITY hive not available - skipping LSA tables")
         return counts
 
     if _key(reg, "Policy") is None:
-        logging.warning("SECURITY hive has no Policy key - not a SECURITY hive?")
+        logger.warning("SECURITY hive has no Policy key - not a SECURITY hive?")
         return counts
 
     # ---------------------------------------------------------- LSA policy

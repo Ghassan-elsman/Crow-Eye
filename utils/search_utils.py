@@ -48,6 +48,24 @@ class SearchWorker(QObject):
         search_text_lower = self.search_text.lower()
         
         for table in self.tables:
+            # A paged table (the event logs) holds only the rows on screen:
+            # ask its database instead. search_rowids opens its own read-only
+            # connection, so it is safe on this worker thread.
+            if getattr(table, 'searchable', False) and hasattr(table, 'search_rowids'):
+                name = table.objectName()
+                if (self.include_tables and name not in self.include_tables) \
+                        or name in self.exclude_tables:
+                    continue
+                try:
+                    for rid in table.search_rowids(self.search_text, start_time=self.start_time,
+                                                   end_time=self.end_time):
+                        row = table.row_for_rowid(rid)
+                        if row is not None:
+                            results.append((table, row))
+                except Exception as e:
+                    print(f"[Search] {name}: {e}")
+                continue
+
             # Skip if table doesn't have required methods
             if not hasattr(table, 'rowCount') or not hasattr(table, 'columnCount'):
                 continue
@@ -315,7 +333,11 @@ class SearchUtils:
             if isinstance(parent_widget, QtWidgets.QTabWidget):
                 # Find which tab contains our widget
                 for i in range(parent_widget.count()):
-                    if parent_widget.widget(i) is current_widget or parent_widget.widget(i).isAncestorOf(current_widget):
+                    # Against the ORIGINAL table: a tab page's parent is the
+                    # QTabWidget's internal QStackedWidget, so comparing pages
+                    # with current_widget never matched and no tab ever switched.
+                    page = parent_widget.widget(i)
+                    if page is current_widget or page.isAncestorOf(original_table):
                         print(f"DEBUG: Setting tab index {i} in {parent_widget.objectName()}")
                         parent_widget.setCurrentIndex(i)
                         QtWidgets.QApplication.processEvents()
@@ -347,9 +369,14 @@ class SearchUtils:
         if not SearchUtils.make_table_visible(parent_obj, table):
             print(f"WARNING: Could not make table {table.objectName()} visible")
             return False
-        
+
         # Clear previous selection
         table.clearSelection()
+
+        # A paged table has no items: scroll to and select by row index.
+        if hasattr(table, 'select_row'):
+            table.setFocus()
+            return table.select_row(row)
         
         # Check if the row exists
         if row >= 0 and row < table.rowCount():

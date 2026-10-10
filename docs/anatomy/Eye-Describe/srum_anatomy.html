@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows SRUM Forensics: Inside the SRUDB.dat Database</title>
+
+  <!-- Favicon -->
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Barlow+Semi+Condensed:wght@400;500;600;700;800;900&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="../style.css">
+
+  <style>
+    :root {
+      /* base palette + section-accent family + --danger now come from anatomy.css */
+      /* page-unique provider accents: */
+      --net-color: #34d399;
+      --energy-color: #fbbf24;
+      --timeline-color: #a78bfa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { overflow-x: hidden; }
+    body { background: var(--bg); color: var(--tx); font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 15px; line-height: 1.6; min-height: 100vh; }
+    .wrap { max-width: 1500px; margin: 0 auto; padding: 40px 24px; position: relative; }
+    p, li, td, dd { text-wrap: pretty; }
+    h1, h2, h3, h4 { text-wrap: balance; }
+    code { font-family: 'Space Mono', monospace; font-size: 0.86em; color: var(--accent); background: var(--bg); padding: 1px 6px; border-radius: 4px; border: 1px solid var(--border); overflow-wrap: anywhere; word-break: break-word; }
+
+    header { margin-bottom: 34px; }
+    .kicker { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px; }
+    h1 { font-size: 40px; font-weight: 800; margin-bottom: 10px; background: linear-gradient(135deg, #fff 0%, var(--tx2) 100%); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; line-height: 1.1; }
+    .header-sub { color: var(--tx2); font-size: 17px; max-width: 820px; }
+
+    /* h2 with accent tick — matches the anatomy pages */
+    h2.sec-title { font-family: 'Barlow Semi Condensed', sans-serif; font-size: 22px; font-weight: 800; margin-bottom: 18px; color: var(--tx); display: flex; align-items: center; gap: 12px; }
+    h2.sec-title::before { content: ''; width: 4px; height: 24px; background: var(--accent); border-radius: 2px; flex-shrink: 0; }
+    .sec-label { font-family: 'Space Mono', monospace; font-size: 11px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+
+    /* Narrative section box */
+    /* .narrative-section look -> anatomy.css; page-unique provider accents kept below */
+    .narrative-section.net { border-left-color: var(--net-color); }
+    .narrative-section.energy { border-left-color: var(--energy-color); }
+    .narrative-section.time { border-left-color: var(--times-color); }
+    .narrative-section.tl { border-left-color: var(--timeline-color); }
+    .narrative-text { font-size: 17px; color: var(--tx2); line-height: 1.8; }
+    .narrative-text p { margin-bottom: 14px; }
+    .narrative-text p:last-child { margin-bottom: 0; }
+    .narrative-text strong { color: var(--tx); }
+    .narrative-text ul { margin: 4px 0 14px 22px; }
+    .narrative-text li { margin-bottom: 8px; }
+
+    /* Diagram card */
+    .dcard { margin: 18px 0 6px; }  /* card look -> anatomy.css */
+    .dcard .cap { font-family: 'Space Mono', monospace; font-size: 10.5px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--identity-color); display: block; margin-bottom: 4px; }
+    .dcard h4 { font-size: 15px; color: var(--tx); margin-bottom: 14px; }
+    .dnote { color: var(--tx2); font-size: 13.5px; margin-top: 12px; line-height: 1.55; text-align: center; }
+
+    /* file-role cards: one card per file type in the sru directory */
+    .file-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 12px; margin-top: 14px; }
+    .file-card { background: var(--bg2); border: 1px solid var(--border); border-left: 3px solid var(--file-accent, var(--accent)); border-radius: 12px; padding: 14px 16px; }
+    .file-card .fn { font-family: 'Space Mono', monospace; font-size: 14px; font-weight: 700; color: var(--file-accent, var(--accent)); word-break: break-all; }
+    .file-card .fr { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--tx3); margin: 7px 0 8px; }
+    .file-card .fdsc { font-size: 13px; color: var(--tx2); line-height: 1.55; }
+    .file-card .fdsc strong { color: var(--tx); }
+
+    /* Fact cards */
+    .fact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; margin: 18px 0 4px; }
+    /* .fact-card look -> anatomy.css */
+    .fact-label { font-family: 'Space Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 0.15em; color: var(--tx3); margin-bottom: 6px; }
+    .fact-value { font-size: 24px; font-weight: 800; color: var(--accent); margin-bottom: 4px; line-height: 1.15; }
+    .fact-detail { font-size: 13.5px; color: var(--tx2); line-height: 1.55; overflow-wrap: anywhere; }
+
+    /* Forensic callout */
+    .forensic-text { background: var(--accent-dim); border-left: 3px solid var(--accent); padding: 14px 18px; border-radius: 4px; font-size: 14.5px; line-height: 1.65; margin: 18px 0 4px; color: var(--tx2); }
+    .forensic-text.warn { background: rgba(255,77,106,0.06); border-left-color: var(--danger); color: #fecdd3; }
+    .forensic-text strong { color: var(--tx); }
+
+    /* Reference tables */
+    .ref-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border-radius: 12px; }
+    table.ref-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .ref-table th { text-align: left; padding: 11px 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono', monospace; text-transform: uppercase; font-size: 11px; letter-spacing: 0.06em; }
+    .ref-table td { padding: 10px 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
+    .ref-table tr:hover { background: rgba(255,255,255,0.02); }
+    .ref-table td strong { color: var(--tx); }
+    .ref-table code { font-size: 12.5px; }
+    .ref-section-head td { background: var(--bg2); color: var(--tx); font-weight: 800; font-family: 'Space Mono', monospace; text-transform: uppercase; letter-spacing: 0.08em; font-size: 12px; }
+    .ct { font-family: 'Space Mono', monospace; color: var(--identity-color); font-size: 12.5px; white-space: nowrap; }
+    /* prose ref-tables (glossary / comparison): the wide columns hold sentences, so let
+       them wrap instead of inheriting the byte-map nowrap on the first two columns. */
+    .ref-table.prose td { white-space: normal; }
+    .ref-table.prose td:nth-child(2) { white-space: normal; color: var(--tx2); }
+
+    /* Full reference wrapper */
+    /* .full-reference look -> anatomy.css */
+
+    /* Intro card (animated collapsible) look now lives in anatomy.css. */
+
+    /* Component / catalog bar (SRUDB.dat -> tables) */
+    .container-strip { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: center; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 20px; margin-bottom: 16px; }
+    .container-strip-icon { width: 44px; height: 44px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0; background: var(--bg2); border: 1px solid var(--border2); color: var(--header-color); }
+    .container-strip-title { font-size: 16px; font-weight: 700; color: var(--tx); line-height: 1.3; }
+    .container-strip-sub { font-family: 'Space Mono', monospace; font-size: 12.5px; color: var(--tx2); margin-top: 4px; line-height: 1.6; overflow-wrap: anywhere; }
+    .container-strip-meta { text-align: right; font-family: 'Space Mono', monospace; font-size: 10px; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.1em; line-height: 1.45; padding-left: 16px; border-left: 1px solid var(--border); }
+    .container-strip-meta strong { display: block; font-size: 16px; font-weight: 700; letter-spacing: 0; text-transform: none; margin: 2px 0; color: var(--tx); }
+    @media (max-width: 640px){ .container-strip { grid-template-columns: 1fr; } .container-strip-meta { text-align: left; border-left: none; padding-left: 0; } }
+
+    /* ---- Lifecycle / pipeline flow ---- */
+    .flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px; }
+    .flow-node { flex: 1; min-width: 150px; background: var(--bg1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+    .flow-node .fk { font-family: 'Space Mono', monospace; font-size: 9.5px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--identity-color); display: block; margin-bottom: 4px; }
+    .flow-node .ft { color: var(--tx); font-size: 14px; font-weight: 700; }
+    .flow-node .fd { color: var(--tx2); font-size: 12.5px; line-height: 1.5; margin-top: 3px; overflow-wrap: anywhere; }
+    .flow-node.warn { border-color: rgba(255,77,106,0.4); border-left: 3px solid var(--danger); }
+    .flow-arrow { display: flex; align-items: center; color: var(--accent); font-size: 1rem; }
+    @media (max-width: 760px){ .flow { flex-direction: column; } .flow-arrow { transform: rotate(90deg); align-self: center; } }
+
+    /* ---- Retention timeline ---- */
+    .ret { display: flex; gap: 3px; align-items: flex-end; height: 96px; margin: 6px 0 4px; }
+    .ret .bucket { flex: 1; background: linear-gradient(180deg, var(--accent) 0%, #1e3a8a 100%); border-radius: 3px 3px 0 0; opacity: 0.9; }
+    .ret .bucket.old { background: var(--bg3); opacity: 0.5; }
+    .ret-axis { display: flex; justify-content: space-between; font-family: 'Space Mono', monospace; font-size: 10.5px; color: var(--tx3); margin-top: 4px; }
+
+    /* ---- Dissection layout (interactive provider explorer) ---- */
+    .dissection-layout { display: grid; grid-template-columns: 1fr 460px; gap: 28px; align-items: start; margin-top: 6px; }
+    /* .map-container look -> anatomy.css */
+    .v-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+    .v-tab { background: var(--bg1); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; color: var(--tx3); font-weight: 700; cursor: pointer; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; transition: all .15s; }
+    .v-tab:hover { color: var(--tx2); border-color: var(--accent); }
+    .v-tab.active { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+    /* ESE node graph inside the map */
+    .ese-root { background: var(--header-dim); border: 1px solid var(--header-color); border-radius: 12px; padding: 14px; text-align: center; margin-bottom: 14px; }
+    .ese-root .rt { font-weight: 800; color: var(--header-color); font-size: 16px; }
+    .ese-root .rs { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx2); margin-top: 3px; }
+    .ese-tables { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+    .ese-node { background: var(--bg1); border: 1px solid var(--border2); border-radius: 10px; padding: 11px 13px; cursor: pointer; transition: border-color .15s, background .15s; }
+    .ese-node:hover { border-color: var(--accent); }
+    .ese-node.on { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 16px var(--accent-dim); }
+    .ese-node .nn { font-weight: 700; color: var(--tx); font-size: 13.5px; }
+    .ese-node .ns { font-family: 'Space Mono', monospace; font-size: 11.5px; color: var(--tx2); margin-top: 3px; word-break: break-all; }
+    .ese-node.idmap { border-left: 3px solid var(--identity-color); }
+    .ese-node.sys { border-left: 3px solid var(--tx3); opacity: 0.85; }
+    /* sticky inspector */
+    .dynamic-side { position: sticky; top: 100px; min-height: 460px; }  /* card look -> anatomy.css */
+    .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 14px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
+    .field-name { font-size: 23px; font-weight: 800; margin-bottom: 4px; color: var(--accent); }
+    .p-table { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--identity-color); margin-bottom: 10px; }
+    .p-guid { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--tx2); margin-bottom: 14px; word-break: break-all; }
+    .p-mean { color: var(--tx2); font-size: 14.5px; line-height: 1.65; margin-bottom: 16px; }
+    .p-mean strong { color: var(--tx); }
+    .p-col { display: grid; grid-template-columns: 1fr; gap: 2px; padding: 9px 0; border-top: 1px solid var(--border); }
+    .p-col .cn { font-family: 'Space Mono', monospace; font-size: 12.5px; color: var(--tx); font-weight: 700; }
+    .p-col .cd { font-size: 13px; color: var(--tx2); line-height: 1.5; }
+    @media (max-width: 900px){ .dissection-layout { grid-template-columns: 1fr; } .dynamic-side { position: relative; top: 0; min-height: auto; } .ese-tables { grid-template-columns: repeat(auto-fit, minmax(140px,1fr)); } }
+
+    /* ---- History timeline ---- */
+    .timeline { position: relative; padding-left: 28px; margin-top: 10px; }
+    .timeline::before { content: ''; position: absolute; left: 8px; top: 6px; bottom: 6px; width: 2px; background: linear-gradient(180deg, var(--accent) 0%, var(--identity-color) 100%); }
+    .timeline-item { position: relative; padding: 0 0 20px 0; }
+    .timeline-item::before { content: ''; position: absolute; left: -27px; top: 4px; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); border: 3px solid var(--bg1); box-shadow: 0 0 0 2px var(--accent); }
+    .timeline-year { font-family: 'Space Mono', monospace; font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+    .timeline-event { font-size: 17px; font-weight: 700; color: var(--tx); margin-bottom: 4px; }
+    .timeline-text { font-size: 14px; color: var(--tx2); line-height: 1.6; }
+
+    /* ---- SQL blocks ---- */
+    .sql-block { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; margin: 12px 0; overflow-x: auto; }
+    .sql-block .sql-title { font-family: 'Space Mono', monospace; font-size: 10.5px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--identity-color); margin-bottom: 8px; }
+    .sql-block pre { font-family: 'Space Mono', monospace; font-size: 12.5px; color: #cbd5e1; line-height: 1.6; white-space: pre; }
+    .sql-block .kw { color: #93c5fd; }
+
+    /* related cards */
+    .rel-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 8px; }
+    .rel-card { text-decoration: none; display: block; }  /* card look -> anatomy.css */
+    .rel-card .rk { font-family: 'Space Mono', monospace; font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--identity-color); }
+    .rel-card .rt { color: var(--tx); font-weight: 700; font-size: 15px; margin: 4px 0; }
+    .rel-card .rd { color: var(--tx3); font-size: 12.5px; line-height: 1.5; }
+
+    @media (max-width: 760px){ .wrap { padding: 90px 16px 20px; } h1 { font-size: 30px; } .header-sub { font-size: 15px; } .narrative-section { padding: 24px 20px; } .narrative-text { font-size: 15.5px; } }
+  </style>
+
+  <!-- SEO (injected) -->
+  <meta name="description" content="How SRUM works in forensics: the SRUDB.dat ESE database, its five provider tables and their columns, the SruDbIdMapTable resolver, the hourly buckets, and what a.">
+  <meta name="keywords" content="srum forensics, srudb.dat, system resource usage monitor, ese database forensics, srum tables, srum providers, srudbidmaptable, srum retention, application resource usage, network data usage srum, esentutl srum, srum columns">
+  <link rel="canonical" href="https://crow-eye.com/Eye-Describe/srum_anatomy">
+  <meta name="robots" content="index, follow">
+  <meta property="og:type" content="article">
+  <meta property="og:site_name" content="Crow-Eye">
+  <meta property="og:url" content="https://crow-eye.com/Eye-Describe/srum_anatomy">
+  <meta property="og:title" content="Windows SRUM Forensics: Inside the SRUDB.dat Database">
+  <meta property="og:description" content="How SRUM works in forensics: the SRUDB.dat ESE database, its five provider tables and their columns, the SruDbIdMapTable resolver, the hourly buckets, and what a.">
+  <meta property="og:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:secure_url" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta property="og:image:type" content="image/jpeg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Windows SRUM Forensics: Inside the SRUDB.dat Database">
+  <meta name="twitter:description" content="How SRUM works in forensics: the SRUDB.dat ESE database, its five provider tables and their columns, the SruDbIdMapTable resolver, the hourly buckets, and what a.">
+  <meta name="twitter:image" content="https://crow-eye.com/og-eye-describe.jpg">
+  <meta name="twitter:image:alt" content="Eye-Describe by Crow-Eye: Windows forensic artifacts explained byte by byte, shown on an NTFS MFT FILE record header, offsets 0x00 to 0x2F">
+  <!-- SEO structured data (injected) -->
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "TechArticle",
+      "about": "Windows SRUM (System Resource Usage Monitor) SRUDB.dat ESE database",
+      "keywords": "SRUM, SRUDB.dat, ESE database, System Resource Usage Monitor, forensics",
+      "articleSection": "Windows forensic artifact formats",
+      "proficiencyLevel": "Expert",
+      "isPartOf": { "@type": "CreativeWork", "name": "Eye-Describe", "url": "https://crow-eye.com/eye-describe" },
+      "headline": "Windows SRUM Forensics: Inside the SRUDB.dat Database",
+      "description": "How SRUM works: the SRUDB.dat ESE database, its provider tables and columns, the SruDbIdMapTable ID resolver, the hourly-window lifecycle, ~30-60 day retention, and how Crow-Eye parses it.",
+      "image": "https://crow-eye.com/og-eye-describe.jpg",
+      "inLanguage": "en",
+      "dateModified": "2026-09-13",
+      "author": { "@type": "Organization", "name": "Crow-Eye", "url": "https://crow-eye.com/" },
+      "publisher": { "@type": "Organization", "name": "Crow-Eye", "logo": { "@type": "ImageObject", "url": "https://crow-eye.com/og-image.jpg" } },
+      "mainEntityOfPage": "https://crow-eye.com/Eye-Describe/srum_anatomy"
+    },
+    {
+      "@type": "BreadcrumbList",
+      "itemListElement": [
+        { "@type": "ListItem", "position": 1, "name": "Home", "item": "https://crow-eye.com/" },
+        { "@type": "ListItem", "position": 2, "name": "Eye-Describe", "item": "https://crow-eye.com/eye-describe" },
+        { "@type": "ListItem", "position": 3, "name": "SRUM Anatomy", "item": "https://crow-eye.com/Eye-Describe/srum_anatomy" }
+      ]
+    }
+  ]
+}
+  </script>
+  <script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    { "@type": "Question", "name": "What database format is SRUM stored in?",
+      "acceptedAnswer": { "@type": "Answer", "text": "SRUM is stored in SRUDB.dat, an ESE (Extensible Storage Engine / JET Blue) database at C:\\Windows\\System32\\sru\\. It is locked by the Diagnostic Policy Service while Windows is running." } },
+    { "@type": "Question", "name": "How long does SRUM keep data before overwriting it?",
+      "acceptedAnswer": { "@type": "Answer", "text": "SRUM aggregates activity into roughly hourly windows and typically retains about 30 to 60 days. Once the retention window is exceeded, the oldest windows are purged as new ones are written." } },
+    { "@type": "Question", "name": "What are the SRUM provider tables?",
+      "acceptedAnswer": { "@type": "Answer", "text": "The main providers are Application Resource Usage, Network Data Usage, Network Connectivity, Energy Usage (with a long-term variant), and Application Timeline. Six provider GUIDs map to five output tables, since the two energy GUIDs merge. A SruDbIdMapTable resolves each row's numeric App and User ids." } },
+    { "@type": "Question", "name": "What can SRUM prove that Prefetch cannot?",
+      "acceptedAnswer": { "@type": "Answer", "text": "SRUM records how much CPU, disk and especially network an application used, hour by hour, and keeps it for weeks. Per-application bytes sent is often the cleanest evidence of data exfiltration, and keyboard/mouse seconds in the Application Timeline indicate a person was physically present." } }
+  ]
+}
+  </script>
+  <link rel="stylesheet" href="anatomy.css">
+</head>
+
+<body>
+  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <div id="scroll-progress"></div>
+
+  <!-- NAV -->
+  <nav id="main-nav">
+    <a href="https://crow-eye.com/" class="nav-brand">Crow-Eye</a>
+    <div class="nav-links-wrap">
+      <a href="https://crow-eye.com/">Home</a>
+      <a href="https://crow-eye.com/sentinel">Sentinel</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-ai">Eye AI</a>
+      <a href="https://crow-eye.com/user-guide">User Guide</a>
+      <a href="https://crow-eye.com/documentation">Docs</a>
+      <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
+    </div>
+    <button class="nav-toggle" aria-label="Toggle Menu"><i class="fas fa-bars"></i></button>
+  </nav>
+
+  <div class="wrap" style="padding-top: 100px;">
+    <header>
+      <div class="kicker">Eye Describe Anatomy</div>
+      <h1>SRUM: the System Resource Usage Monitor, table by table</h1>
+      <p class="header-sub">The quiet ESE database that records what ran, for how long, and how much it moved over the network &mdash; per application, per user, per hour, for weeks. How <code>SRUDB.dat</code> is built, what each of its five provider tables holds, when it overwrites itself, and how Crow-Eye decodes it.</p>
+    </header>
+
+    <!-- PAGETOC:START - generated by gen_page_toc.py -->
+    <div class="page-toc">
+      <h4>What this page covers</h4>
+      <ol>
+        <li><a href="#database">SRUDB.dat &mdash; one ESE database, several tables</a></li>
+        <li><a href="#mechanism">How SRUM records what happens</a></li>
+        <li><a href="#ese">What "ESE database" means</a></li>
+        <li><a href="#retention">How much it saves &mdash; and when it overwrites itself</a></li>
+        <li><a href="#providers">Every provider, every column</a></li>
+        <li><a href="#idmap-sec">SruDbIdMapTable &mdash; the join that makes a row readable</a></li>
+        <li><a href="#timestamps">Two kinds of time in one row</a></li>
+        <li><a href="#forensic">Why SRUM is forensic gold</a></li>
+        <li><a href="#limits">Limitations &amp; anti-forensics</a></li>
+        <li><a href="#crow-eye">How Crow-Eye parses SRUM</a></li>
+        <li><a href="#dashboard">Reading the SRUM activity dashboard</a></li>
+        <li><a href="#history">A short history</a></li>
+        <li><a href="#related">Related anatomy</a></li>
+      </ol>
+    </div>
+    <!-- PAGETOC:END -->
+
+
+    <!-- INTRO CARD -->
+    <div class="intro-card" id="introCard">
+      <div class="intro-icon" id="introIcon" title="What is SRUM?"><i class="fas fa-info"></i></div>
+      <div class="intro-content">
+        <div class="intro-title">What is SRUM?</div>
+        <div class="intro-body">
+          <strong style="color: var(--accent);">TL;DR &mdash;</strong> The <strong>System Resource Usage Monitor</strong> is a Windows 8+ diagnostic feature, run by the <strong>Diagnostic Policy Service (DPS)</strong>, that quietly accounts for how much <strong>CPU, disk, network and energy</strong> every application uses &mdash; broken down <strong>per application, per user, per hour</strong>. It persists that history in an ESE database, <code>SRUDB.dat</code>, and keeps roughly 30&ndash;60 days of it. For an investigator it answers a question few other artifacts can: <strong>not just that a program ran, but how much it moved over the wire, and when.</strong>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1. SRUDB.dat container map -->
+    <section class="sec" id="database">
+      <div class="sec-label">01 &middot; The container</div>
+      <h2 class="sec-title">SRUDB.dat &mdash; one ESE database, several tables</h2>
+      <div class="container-strip">
+        <div class="container-strip-icon"><i class="fas fa-database"></i></div>
+        <div>
+          <div class="container-strip-title">SRUDB.dat &mdash; the persistent SRUM store</div>
+          <div class="container-strip-sub">On-disk location: <code>C:\Windows\System32\sru\SRUDB.dat</code> &middot; ESE / JET Blue engine, B-tree tables<br><strong style="color:var(--tx);">Alongside it:</strong> <code>SRU.chk</code> (checkpoint), <code>SRUDB.jfm</code> (flush map) and the <code>SRU*.log</code> transaction logs. Held open (locked) by the DPS service on a running system.</div>
+        </div>
+        <div class="container-strip-meta">Engine<strong>ESE / EDB</strong>JET Blue</div>
+      </div>
+
+      <div class="fact-grid">
+        <div class="fact-card"><div class="fact-label">Format</div><div class="fact-value">ESE / EDB</div><div class="fact-detail">Extensible Storage Engine (JET Blue) &mdash; the same engine behind Windows Search and older Exchange stores.</div></div>
+        <div class="fact-card"><div class="fact-label">Granularity</div><div class="fact-value">1 hour</div><div class="fact-detail">One row per app, per user, per interface, per hourly window.</div></div>
+        <div class="fact-card"><div class="fact-label">Retention</div><div class="fact-value">~30&ndash;60 d</div><div class="fact-detail">Then the oldest hourly windows are overwritten.</div></div>
+        <div class="fact-card"><div class="fact-label">Since</div><div class="fact-value">Win 8</div><div class="fact-detail">Windows 8 / Server 2012 onward, including 8.1, 10 and 11.</div></div>
+      </div>
+
+      <div class="dcard">
+        <span class="cap">Figure 1 &middot; interactive</span>
+        <h4>Inside SRUDB.dat &mdash; click a table to inspect it below</h4>
+        <div class="v-tabs" id="provTabs">
+          <div class="v-tab" data-prov="app" onclick="showProvider('app')">App Resource</div>
+          <div class="v-tab" data-prov="netdata" onclick="showProvider('netdata')">Network Data</div>
+          <div class="v-tab" data-prov="netconn" onclick="showProvider('netconn')">Network Connectivity</div>
+          <div class="v-tab" data-prov="energy" onclick="showProvider('energy')">Energy</div>
+          <div class="v-tab" data-prov="timeline" onclick="showProvider('timeline')">App Timeline</div>
+          <div class="v-tab" data-prov="idmap" onclick="showProvider('idmap')">SruDbIdMapTable</div>
+        </div>
+        <div class="dissection-layout">
+          <div class="map-container">
+            <div class="ese-root"><div class="rt">SRUDB.dat</div><div class="rs">ESE database &middot; MSysObjects catalog</div></div>
+            <div class="ese-tables">
+              <div class="ese-node" data-prov="app" onclick="showProvider('app')"><div class="nn">Application Resource Usage</div><div class="ns">{D10CA2FE-…FA89}</div></div>
+              <div class="ese-node" data-prov="netdata" onclick="showProvider('netdata')"><div class="nn">Network Data Usage</div><div class="ns">{973F5D5C-…}</div></div>
+              <div class="ese-node" data-prov="netconn" onclick="showProvider('netconn')"><div class="nn">Network Connectivity</div><div class="ns">{DD6636C4-…}</div></div>
+              <div class="ese-node" data-prov="energy" onclick="showProvider('energy')"><div class="nn">Energy Usage (+ long-term)</div><div class="ns">{FEE4E14F-…} · {DA73FB89-…}</div></div>
+              <div class="ese-node" data-prov="timeline" onclick="showProvider('timeline')"><div class="nn">Application Timeline</div><div class="ns">{5C8CF1C7-…}</div></div>
+              <div class="ese-node idmap" data-prov="idmap" onclick="showProvider('idmap')"><div class="nn">SruDbIdMapTable</div><div class="ns">IdIndex → App / SID</div></div>
+              <div class="ese-node sys" style="cursor:default;opacity:0.72;" title="Not a SRUM provider — ESE's own transaction bookkeeping. Nothing to inspect."><div class="nn">SruDbCheckpointTable <span style="font-weight:600;font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">· not a provider</span></div><div class="ns">ESE engine bookkeeping &mdash; not clickable</div></div>
+            </div>
+          </div>
+          <div class="dynamic-side">
+            <span class="panel-label">Provider Inspector</span>
+            <div id="provPanel"><!-- filled by showProvider() --></div>
+          </div>
+        </div>
+        <p class="dnote" style="text-align:left;">Why <strong>six provider GUIDs become five Crow-Eye tables</strong>: two of the six &mdash; a short-term and a long-term <strong>energy</strong> provider &mdash; hold the same kind of battery data, so Crow-Eye merges them into one <code>srum_energy_usage</code> table. That leaves five data providers. The <strong>SruDbIdMapTable</strong> is <em>not</em> a provider at all &mdash; it is the lookup table every provider row depends on: each row stores only numeric <code>AppId</code> and <code>UserId</code> values, and the ID map turns those back into real app paths and user SIDs (see section 6). And <strong>SruDbCheckpointTable</strong> is neither a provider nor data &mdash; it is ESE's own transaction bookkeeping, which is why it has no inspector here and Crow-Eye writes no table for it. It does, however, <em>collect</em> the on-disk checkpoint set (<code>SRU.chk</code>, <code>SRUDB.jfm</code> and the <code>SRU*.log</code> logs) alongside the database, so a dirty <code>SRUDB.dat</code> can be soft-recovered rather than repaired &mdash; and records that it did in <code>srum_metadata</code> (see section 10).</p>
+      </div>
+    </section>
+
+    <!-- 2. HOW IT WORKS -->
+    <section class="sec" id="mechanism">
+      <div class="sec-label">02 &middot; The mechanism</div>
+      <h2 class="sec-title">How SRUM records what happens</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <p>SRUM is not a log that can be watched in real time. Each <strong>provider</strong> is an "extension" registered under <code>HKLM\SYSTEM\CurrentControlSet\Services\SRUM\Extensions\{GUID}</code>, and it keeps the <strong>current hour's running counters in the registry</strong>. The SRUM service &mdash; part of the Diagnostic Policy Service &mdash; <strong>flushes those counters into <code>SRUDB.dat</code> periodically (about once an hour) and at shutdown</strong>, aggregating them into <strong>hourly windows</strong>: one row per application, per user, per hour, per interface.</p>
+          <p>That two-stage design has a direct forensic consequence: SRUM survives a reboot, but it is <strong>never perfectly live</strong>. The most recent activity may still be sitting in the registry buffer, not yet written to the database &mdash; so the last hour before an image was taken can be incomplete on disk.</p>
+        </div>
+        <div class="dcard">
+          <span class="cap">Figure 2</span>
+          <h4>The SRUM data lifecycle &mdash; from live activity to overwrite</h4>
+          <div class="flow">
+            <div class="flow-node"><span class="fk">Live</span><span class="ft">Application activity</span><span class="fd">CPU cycles, bytes sent/received, focus time accrue as a process runs.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node"><span class="fk">Buffer</span><span class="ft">Registry counters</span><span class="fd"><code>…\Services\SRUM\Extensions\{GUID}</code> holds the current hour.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node"><span class="fk">Flush ~hourly</span><span class="ft">SRUDB.dat (ESE)</span><span class="fd">The service writes the window and starts a new one.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node warn"><span class="fk">~30&ndash;60 days</span><span class="ft">Rolling overwrite</span><span class="fd">Once retention is exceeded, the oldest windows are purged.</span></div>
+          </div>
+          <p class="dnote">Crow-Eye reads the persistent <code>SRUDB.dat</code> directly &mdash; the registry buffer is the operating system's staging area, shown here to explain the timing.</p>
+        </div>
+
+        <div class="dcard reveal">
+          <span class="cap">On disk &middot; C:\Windows\System32\sru</span>
+          <h4>The SRUM files, and the job each one does</h4>
+          <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:6px;">SRUM is not a single file. The database sits beside an ESE checkpoint, a flush map and a set of transaction logs &mdash; together they are how ESE stays crash-safe, and why the newest activity can be recovered even when it has not reached the database yet.</div>
+          <div class="file-grid">
+            <div class="file-card" style="--file-accent: var(--header-color);">
+              <div class="fn">SRUDB.dat</div>
+              <div class="fr">The database &middot; ESE / EDB</div>
+              <div class="fdsc">The persistent store. Every provider's hourly rows live here in B-tree tables &mdash; this is what Crow-Eye parses. The DPS service holds it open on a running system, so it must be copied before it can be read.</div>
+            </div>
+            <div class="file-card" style="--file-accent: var(--net-color);">
+              <div class="fn">SRU*.log</div>
+              <div class="fr">Transaction logs &middot; write-ahead</div>
+              <div class="fdsc"><strong>Where the newest data lives first.</strong> ESE commits every change to a log before it is flushed into <code>SRUDB.dat</code>, so the last minutes-to-an-hour of activity sit here <em>before</em> they reach the database. Replaying them recovers data not yet saved. <code>SRU.log</code> is the current log; <code>SRU&lt;gen&gt;.log</code> are the earlier generations.</div>
+            </div>
+            <div class="file-card" style="--file-accent: var(--times-color);">
+              <div class="fn">SRU.chk</div>
+              <div class="fr">Checkpoint</div>
+              <div class="fdsc"><strong>The bookmark for recovery.</strong> Records how far the logs have already been applied into the database. Recovery replays every log record <em>after</em> this point; without the checkpoint, replay would not know where to start.</div>
+            </div>
+            <div class="file-card" style="--file-accent: var(--identity-color);">
+              <div class="fn">SRUDB.jfm</div>
+              <div class="fr">Flush map</div>
+              <div class="fdsc">The JET flush map: tracks which database pages have been safely written to disk. It lets ESE skip re-verifying pages it already knows are durable, making recovery faster and safer.</div>
+            </div>
+            <div class="file-card" style="--file-accent: var(--energy-color);">
+              <div class="fn">SRUtmp.log</div>
+              <div class="fr">Next log &middot; pre-allocated</div>
+              <div class="fdsc">An empty log the engine has already created and will rename into the next generation the moment the current log fills &mdash; so logging never stalls waiting to allocate a file.</div>
+            </div>
+            <div class="file-card" style="--file-accent: var(--danger, var(--rose));">
+              <div class="fn">SRUres00001.jrs &middot; SRUres00002.jrs</div>
+              <div class="fr">Reserve logs &middot; emergency space</div>
+              <div class="fdsc">Two reserved log files kept as a safety margin so the engine can always finish writing and shut down cleanly &mdash; even if the disk fills up.</div>
+            </div>
+          </div>
+          <p class="dnote" style="text-align:left;">Crow-Eye collects the whole set (see section 10). On a <strong>dirty</strong> database &mdash; one imaged mid-write, where committed rows are still only in the logs &mdash; it replays the logs against the checkpoint to recover that unsaved activity before reading.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. WHAT ESE IS -->
+    <section class="sec" id="ese">
+      <div class="sec-label">03 &middot; The engine</div>
+      <h2 class="sec-title">What "ESE database" means</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <p>The <strong>Extensible Storage Engine</strong> (ESE, historically "JET Blue") is Microsoft's embedded, transactional, indexed-sequential database engine. It is not SQL &mdash; it is a low-level B-tree store that Windows uses wherever it needs a fast local database: Windows Search, the certificate store, and SRUM all sit on it. Three names appear for essentially the same thing &mdash; they are defined side by side below.</p>
+          <p>An ESE database is a set of <strong>tables</strong> whose definitions live in an internal catalog, <code>MSysObjects</code>. SRUM's tables are named by <strong>provider GUID</strong> (e.g. <code>{D10CA2FE-…}</code>), plus the <code>SruDbIdMapTable</code> and a <code>SruDbCheckpointTable</code>. Large values are stored out-of-row as <em>long values</em>. The engine keeps a checkpoint (<code>SRU.chk</code>), a flush map (<code>SRUDB.jfm</code>) and transaction logs (<code>SRU*.log</code>) so an unclean shutdown can be recovered.</p>
+          <p>Two practical consequences follow. First, the file is <strong>locked</strong> on a running system &mdash; the DPS service holds it open, so it cannot simply be copied. Second, a database that was not cleanly closed is <strong>"dirty"</strong> and must be recovered (log replay) or repaired before it will open &mdash; which is exactly why forensic tooling reaches for the native ESE engine or a dirty-tolerant reader rather than a naive parser.</p>
+        </div>
+
+        <div class="dcard">
+          <span class="cap">Glossary &middot; the words on this page</span>
+          <h4>ESE, EDB, JET Blue, and "provider GUID"</h4>
+          <div class="ref-wrap">
+            <table class="ref-table prose">
+              <thead><tr><th>Term</th><th>What it actually is</th></tr></thead>
+              <tbody>
+                <tr><td>ESE</td><td><strong>Extensible Storage Engine</strong> &mdash; the database <em>engine</em> itself: Microsoft's embedded, transactional B-tree store. The code that reads and writes the file.</td></tr>
+                <tr><td>JET Blue</td><td>The original internal <strong>codename for ESE</strong> &mdash; same engine, older name. Not to be confused with <em>JET Red</em>, the unrelated engine behind Microsoft Access; the shared word "JET" is the only thing they have in common.</td></tr>
+                <tr><td>EDB</td><td>The on-disk <strong>database file format</strong> ESE produces (historically the <code>.edb</code> extension). <code>SRUDB.dat</code> is an ESE/EDB database that simply doesn't use the <code>.edb</code> name &mdash; the format is the same.</td></tr>
+                <tr><td>Provider&nbsp;GUID</td><td>A <strong>GUID</strong> is a 128-bit globally-unique identifier written like <code>{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}</code>. Each SRUM provider is registered under one, and ESE stores that provider's table <em>named by the GUID</em> &mdash; which is why the raw table names look like GUIDs, not words.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. RETENTION -->
+    <section class="sec" id="retention">
+      <div class="sec-label">04 &middot; Coverage &amp; retention</div>
+      <h2 class="sec-title">How much it saves &mdash; and when it overwrites itself</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <p>Each hourly window is a wide row of counters. Across the providers, SRUM captures <strong>CPU cycle time</strong> (foreground and background), <strong>disk bytes read and written</strong>, <strong>network bytes sent and received</strong> per interface, <strong>connection windows</strong>, <strong>focus / keyboard / mouse seconds</strong>, and <strong>battery / energy</strong> state. Multiply that by every application and every user, once an hour, for weeks, and SRUM becomes one of the densest behavioural records on the machine &mdash; often tens of megabytes of <code>SRUDB.dat</code> holding many thousands of rows.</p>
+          <p>The cost of that density is that the database is a <strong>rolling window</strong>. Once activity ages past the retention period (roughly 30&ndash;60 days), the oldest hourly buckets are purged to make room. SRUM answers "the last month or two," not "the life of the machine" &mdash; so it is a <strong>time-limited</strong> artifact, best collected promptly.</p>
+          <p><strong>Why a case often holds far less than 60 days.</strong> That range is a typical ceiling, not a guarantee &mdash; retention is bounded by <em>volume</em>, not by a timer counting down days. A busy machine with many applications and several user accounts writes wide hourly rows quickly, fills the window, and starts overwriting its oldest hours sooner &mdash; heavy use can shrink real coverage to a couple of weeks. A lightly used machine can hold longer. And anything that resets the store cuts it shorter still: stopping the SRUM service, deleting or clearing <code>SRUDB.dat</code>, a corruption-triggered rebuild, or reimaging. So the earliest row present is the floor of what <em>this</em> machine kept, not as proof of when activity began.</p>
+        </div>
+        <div class="dcard">
+          <span class="cap">Figure 3</span>
+          <h4>A rolling window of hourly buckets</h4>
+          <div class="ret" id="retBar"></div>
+          <div class="ret-axis"><span>~30&ndash;60 days ago &mdash; overwritten</span><span>now</span></div>
+          <p class="dnote">Faded buckets on the left have aged out of the retention window and been overwritten; the bright buckets on the right are what an examiner recovers.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 5. PROVIDERS full reference -->
+    <section class="sec" id="providers">
+      <div class="sec-label">05 &middot; The provider tables</div>
+      <h2 class="sec-title">Every provider, every column</h2>
+      <div class="narrative-text" style="max-width:900px;margin-bottom:16px;">
+        <p>SRUM splits its data across <strong>five providers</strong> &mdash; each a registered ESE extension identified by a GUID, each its own table inside <code>SRUDB.dat</code> &mdash; plus the internal <code>SruDbIdMapTable</code>. Crow-Eye writes each provider to its own SQLite table in <code>srum_data.db</code>. Every row of every provider table carries the same resolved identity and window time, so those <strong>shared columns are listed once below</strong>; each provider card then adds only its own columns, one per row.</p>
+      </div>
+
+      <div class="dcard reveal">
+        <span class="cap">Orientation &middot; three app-centric tables, three different questions</span>
+        <h4>application_usage vs energy_usage vs app_timeline</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;">Three tables are all "about an application," which is easy to confuse. They answer different questions &mdash; keep them apart:</div>
+        <div class="ref-wrap">
+          <table class="ref-table prose">
+            <thead><tr><th>Table</th><th>The question it answers</th><th>Signature columns</th></tr></thead>
+            <tbody>
+              <tr><td>srum_application_usage</td><td><strong>How much did it cost to run?</strong> The resource price of execution &mdash; processor and disk &mdash; per app, per hour.</td><td class="ct">*_cycle_time, *_bytes_read/written</td></tr>
+              <tr><td>srum_energy_usage</td><td><strong>What did it cost the battery?</strong> Power and charge state over time &mdash; populated mostly on laptops.</td><td class="ct">charge_level, state_transition</td></tr>
+              <tr><td>srum_app_timeline</td><td><strong>How was it used, and was a human there?</strong> Interaction and lifecycle, not just resources (Windows 10+).</td><td class="ct">keyboard_input_s, in_focus_s, hosted_services</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dcard reveal">
+        <span class="cap">Shared &middot; on every provider row</span>
+        <h4>Resolved identity &amp; window time</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><strong>Where the App id and User id come from:</strong> every provider row stores its own raw numeric <code>AppId</code> and <code>UserId</code> &mdash; they live on the row itself, not in a separate index. Crow-Eye resolves both through <code>SruDbIdMapTable</code> (see section 6) into the real app path and user SID, then attaches the columns below to every row, in every table.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td>app_name</td><td class="ct">TEXT</td><td>Executable name, resolved from the numeric <code>AppId</code></td></tr>
+              <tr><td>app_path</td><td class="ct">TEXT</td><td>Full path the app ran from (a device path for <code>svchost.exe</code> &mdash; see section 6)</td></tr>
+              <tr><td>user_sid</td><td class="ct">TEXT</td><td>SID of the user the activity is attributed to, resolved from <code>UserId</code></td></tr>
+              <tr><td>user_name</td><td class="ct">TEXT</td><td>Account name for that SID &mdash; a live <code>LookupAccountSid</code>, or offline from the SOFTWARE hive <code>ProfileList</code></td></tr>
+              <tr><td><strong>timestamp</strong></td><td class="ct">DATETIME (UTC)</td><td>The hourly aggregation window this row covers &mdash; the event time; use this for the timeline</td></tr>
+              <tr><td>parsed_at</td><td class="ct">TEXT</td><td>Bookkeeping &mdash; when Crow-Eye read the DB; never evidence</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dcard reveal" id="tbl-application-usage">
+        <span class="cap">Provider 1 &middot; APPLICATION_RESOURCE_USAGE</span>
+        <h4><code>srum_application_usage</code> &mdash; the CPU &amp; disk cost of running</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><code>{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}</code> &middot; one row per app, per user, per hour &middot; the primary evidence-of-execution table.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>foreground_cycle_time</strong></td><td class="ct">INTEGER</td><td>CPU cycles used while the app was in the foreground (100-ns units)</td></tr>
+              <tr><td><strong>background_cycle_time</strong></td><td class="ct">INTEGER</td><td>CPU cycles used in the background</td></tr>
+              <tr><td>face_time</td><td class="ct">INTEGER</td><td>Seconds the app was on screen / in focus this window</td></tr>
+              <tr><td>foreground_bytes_read</td><td class="ct">INTEGER</td><td>Disk bytes read while focused</td></tr>
+              <tr><td>foreground_bytes_written</td><td class="ct">INTEGER</td><td>Disk bytes written while focused</td></tr>
+              <tr><td>background_bytes_read</td><td class="ct">INTEGER</td><td>Disk bytes read while backgrounded</td></tr>
+              <tr><td>background_bytes_written</td><td class="ct">INTEGER</td><td>Disk bytes written while backgrounded</td></tr>
+              <tr><td>foreground_num_read_operations</td><td class="ct">INTEGER</td><td>Read operations behind the foreground byte total</td></tr>
+              <tr><td>foreground_num_write_operations</td><td class="ct">INTEGER</td><td>Write operations, foreground</td></tr>
+              <tr><td>background_num_read_operations</td><td class="ct">INTEGER</td><td>Read operations, background</td></tr>
+              <tr><td>background_num_write_operations</td><td class="ct">INTEGER</td><td>Write operations, background</td></tr>
+              <tr><td>foreground_number_of_flushes</td><td class="ct">INTEGER</td><td>Cache flushes, foreground</td></tr>
+              <tr><td>background_number_of_flushes</td><td class="ct">INTEGER</td><td>Cache flushes, background</td></tr>
+              <tr><td>foreground_context_switches</td><td class="ct">INTEGER</td><td>Scheduler context switches, foreground</td></tr>
+              <tr><td>background_context_switches</td><td class="ct">INTEGER</td><td>Scheduler context switches, background</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="forensic-text"><strong>Reading these columns.</strong> <strong>Foreground</strong> means the app held the active window / UI focus at the time; <strong>background</strong> means it was running without focus &mdash; a service, a minimized window, or work continuing behind another app. Splitting every cost this way separates deliberate use from silent activity. The <strong>operation counts</strong> (<code>*_num_read_operations</code>, <code>*_num_write_operations</code>) are the <em>number of individual I/O operations</em>, not bytes: divide bytes by operations for the average I/O size, and a pattern of many tiny operations versus a few large ones is itself a behavioural tell (log spam vs a bulk copy).</div>
+      </div>
+
+      <div class="dcard reveal" id="tbl-network-data">
+        <span class="cap">Provider 2 &middot; NETWORK_DATA_USAGE</span>
+        <h4><code>srum_network_data_usage</code> &mdash; bytes on the wire</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><code>{973F5D5C-1D90-4944-BE8E-24B94231A174}</code> &middot; one row per app, per interface, per hour.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>bytes_sent</strong></td><td class="ct">INTEGER</td><td>Bytes the app sent this hour &mdash; the exfiltration signal</td></tr>
+              <tr><td><strong>bytes_received</strong></td><td class="ct">INTEGER</td><td>Bytes the app received this hour</td></tr>
+              <tr><td>interface_luid</td><td class="ct">INTEGER</td><td>LUID of the network interface that carried the traffic</td></tr>
+              <tr><td>l2_profile_id</td><td class="ct">INTEGER</td><td>Layer-2 (wireless) profile the traffic went over &mdash; which SSID/network</td></tr>
+              <tr><td>l2_profile_flags</td><td class="ct">INTEGER</td><td>Flags on that L2 profile (0 when unused)</td></tr>
+              <tr><td>wake_count</td><td class="ct">INTEGER</td><td>Times this traffic woke the machine from a low-power state</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="forensic-text"><strong>What a "network profile" is.</strong> The <strong>layer-2 (L2) profile</strong> (<code>l2_profile_id</code>) identifies <em>which network</em> the interface was actually on &mdash; a specific named Wi-Fi SSID or wired network profile &mdash; while <code>interface_luid</code> only says which adapter. Together they tie an app's traffic to a particular network: home vs the corporate LAN vs an unknown coffee-shop hotspot. The same profile fields appear in Network Connectivity below.</div>
+      </div>
+
+      <div class="dcard reveal" id="tbl-network-connectivity">
+        <span class="cap">Provider 3 &middot; NETWORK_CONNECTIVITY</span>
+        <h4><code>srum_network_connectivity</code> &mdash; connection windows</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><code>{DD6636C4-8929-4683-974E-22C046A43763}</code> &middot; when an interface was connected, and for how long.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>connected_time</strong></td><td class="ct">INTEGER</td><td>Seconds the interface was connected in this window</td></tr>
+              <tr><td><strong>connect_start_time</strong></td><td class="ct">FILETIME</td><td>Precise moment the connection began (Int64 FILETIME &rarr; UTC)</td></tr>
+              <tr><td>interface_luid</td><td class="ct">INTEGER</td><td>LUID of the network interface</td></tr>
+              <tr><td>l2_profile_id</td><td class="ct">INTEGER</td><td>Layer-2 (wireless) profile</td></tr>
+              <tr><td>l2_profile_flags</td><td class="ct">INTEGER</td><td>Flags on that L2 profile</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dcard reveal" id="tbl-energy">
+        <span class="cap">Provider 4 &middot; ENERGY_USAGE</span>
+        <h4><code>srum_energy_usage</code> &mdash; battery &amp; power state</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><code>{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37}</code> (short-term), with a long-term variant <code>{DA73FB89-2BEA-4DDC-86B8-6E048C6DA477}</code> Crow-Eye falls back to when the short-term table is absent &mdash; both feed this one table.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>charge_level</strong></td><td class="ct">INTEGER</td><td>Battery charge (percentage, or mWh depending on the row)</td></tr>
+              <tr><td><strong>state_transition</strong></td><td class="ct">INTEGER</td><td>Power / charge state change</td></tr>
+              <tr><td>event_timestamp</td><td class="ct">FILETIME</td><td>Precise moment of the transition (Int64 FILETIME &rarr; UTC)</td></tr>
+              <tr><td>cycle_count</td><td class="ct">INTEGER</td><td>Battery charge-cycle count (0 on hardware that does not report it)</td></tr>
+              <tr><td>designed_capacity</td><td class="ct">INTEGER</td><td>The battery's original design capacity (mWh)</td></tr>
+              <tr><td>full_charged_capacity</td><td class="ct">INTEGER</td><td>Current full-charge capacity (mWh) &mdash; against <code>designed_capacity</code> this is <strong>battery wear</strong></td></tr>
+              <tr><td>battery_count</td><td class="ct">INTEGER</td><td>Number of batteries present</td></tr>
+              <tr><td>configuration_hash</td><td class="ct">INTEGER</td><td>Hash identifying the power configuration this row was recorded under</td></tr>
+              <tr><td>battery_charge_limited</td><td class="ct">INTEGER</td><td>Whether charging was capped (e.g. a vendor "battery care" limit)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="dcard reveal" id="tbl-app-timeline">
+        <span class="cap">Provider 5 &middot; APPLICATION_TIMELINE &middot; Windows 10+</span>
+        <h4><code>srum_app_timeline</code> &mdash; <em>how</em> the app was used, not just that it ran</h4>
+        <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;"><code>{5C8CF1C7-7257-4F13-B223-970EF5939312}</code> &middot; the richest provider &middot; the only table that carries <code>hosted_services</code>.</div>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td><strong>in_focus_s</strong></td><td class="ct">INTEGER</td><td>Seconds the app held foreground focus</td></tr>
+              <tr><td><strong>keyboard_input_s</strong></td><td class="ct">INTEGER</td><td>Seconds of keyboard input &mdash; a non-NULL value is strong evidence a person was present</td></tr>
+              <tr><td><strong>mouse_input_s</strong></td><td class="ct">INTEGER</td><td>Seconds of mouse input &mdash; likewise, human-presence evidence</td></tr>
+              <tr><td>user_input_s</td><td class="ct">INTEGER</td><td>Combined user-input seconds</td></tr>
+              <tr><td>psm_foreground_s</td><td class="ct">INTEGER</td><td>Process-state-manager foreground seconds</td></tr>
+              <tr><td>display_required_s</td><td class="ct">INTEGER</td><td>Seconds the app kept the display on</td></tr>
+              <tr><td>duration_ms</td><td class="ct">INTEGER</td><td>Milliseconds the app was running in this window</td></tr>
+              <tr><td>span_ms</td><td class="ct">INTEGER</td><td>Milliseconds the window itself spanned</td></tr>
+              <tr><td>end_time</td><td class="ct">FILETIME</td><td>Precise end of the window (Int64 FILETIME &rarr; UTC)</td></tr>
+              <tr><td>timeline_end</td><td class="ct">INTEGER</td><td>Timeline end marker for the window</td></tr>
+              <tr><td>flags</td><td class="ct">INTEGER</td><td>Timeline record flags</td></tr>
+              <tr><td>hosted_services</td><td class="ct">TEXT</td><td>For <code>svchost.exe</code>: the services it hosted, from the <code>!!</code> AppId form (see section 6)</td></tr>
+              <tr><td>audio_in_s / audio_out_s</td><td class="ct">INTEGER</td><td>Seconds of audio captured / rendered</td></tr>
+              <tr><td>comp_rendered_s / comp_dirtied_s / comp_propagated_s</td><td class="ct">INTEGER</td><td>Desktop-compositor render / dirty / propagate seconds</td></tr>
+              <tr><td>cycles / cycles_attr / cycles_wob</td><td class="ct">INTEGER</td><td>CPU-cycle accounting for the window (total / attributed / work-on-behalf)</td></tr>
+              <tr><td>disk_raw / network_bytes_raw / network_tail_raw</td><td class="ct">INTEGER</td><td>Raw disk and network roll-up counters for the window</td></tr>
+              <tr><td>cpu_timeline / disk_timeline / network_timeline</td><td class="ct">INTEGER</td><td>Per-window packed activity timelines &mdash; a bitfield of when in the window CPU / disk / network was busy</td></tr>
+              <tr><td>in_focus_timeline / user_input_timeline / keyboard_input_timeline / display_required_timeline</td><td class="ct">INTEGER</td><td>The same packed-timeline form of focus, user input, keyboard and display-on activity</td></tr>
+              <tr><td>comp_rendered_timeline / comp_dirtied_timeline / comp_propagated_timeline / audio_in_timeline / audio_out_timeline</td><td class="ct">INTEGER</td><td>Packed timelines for the compositor and audio counters</td></tr>
+              <tr><td>cycles_breakdown / cycles_attr_breakdown / cycles_wob_breakdown</td><td class="ct">INTEGER</td><td>Per-window breakdowns behind the CPU-cycle totals</td></tr>
+              <tr><td>mbb_timeline / mbb_bytes_raw / mbb_tail_raw</td><td class="ct">INTEGER</td><td>Mobile-broadband (cellular) activity, timeline and byte counters &mdash; populated only on machines with a WWAN radio</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dnote" style="text-align:left;">Crow-Eye captures <strong>every native column</strong> this provider carries &mdash; the compact <code>*_s</code> second-counts above <em>and</em> these raw <code>*_timeline</code> / <code>*_breakdown</code> packed counters &mdash; so nothing SRUM records is dropped.</div>
+        <div class="forensic-text"><strong>Where to find human-presence evidence.</strong> <code>keyboard_input_s</code> and <code>mouse_input_s</code> come <em>only</em> from this Application Timeline provider (<code>srum_app_timeline</code>), on Windows&nbsp;10 and later &mdash; no other SRUM table records them. That is why "was a person at the keyboard?" is always a question for this table, and why a non-NULL value here (and nowhere else) is the human-presence signal.<br><br><strong>Why they are rare.</strong> SRUM records a keyboard or mouse value only for a window where that input <em>actually occurred</em>, and most application-hours have none: services, scheduled tasks and background processes run for hours with no window on screen and never see a keystroke, and even a foreground app is only typed into for part of the time it is open. So the overwhelming majority of timeline rows have empty input columns &mdash; that is normal, not a decode failure. The value is precisely what makes a non-NULL entry meaningful: it marks the specific windows where a human was genuinely interacting, against a backdrop of automated activity.</div>
+      </div>
+
+      <div class="dcard reveal">
+        <span class="cap">Bookkeeping &middot; not evidence</span>
+        <h4><code>srum_metadata</code> &mdash; one row per parse</h4>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Column</th><th>Type</th><th>What it means</th></tr></thead>
+            <tbody>
+              <tr><td>parsed_at</td><td class="ct">TEXT</td><td>When Crow-Eye read the database (UTC)</td></tr>
+              <tr><td>srudb_path</td><td class="ct">TEXT</td><td>Source path of the SRUDB.dat that was parsed</td></tr>
+              <tr><td>total_records_parsed</td><td class="ct">INTEGER</td><td>How many rows the parse produced across all tables</td></tr>
+              <tr><td>parsing_duration_seconds</td><td class="ct">REAL</td><td>How long the parse took</td></tr>
+              <tr><td>windows_version</td><td class="ct">TEXT</td><td>Recorded as <code>Unknown</code> &mdash; SRUM does not stamp the source OS build, and offline must not report the analyst's own</td></tr>
+              <tr><td>notes</td><td class="ct">TEXT</td><td>Free-text run notes</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 6. IDMAP -->
+    <section class="sec" id="idmap-sec">
+      <div class="sec-label">06 &middot; The join</div>
+      <h2 class="sec-title">SruDbIdMapTable &mdash; the join that makes a row readable</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <p>A provider row does not store an app name or a user name. It stores small integers &mdash; an <code>AppId</code>, a <code>UserId</code>, an interface id. The <strong>SruDbIdMapTable</strong> maps each <code>IdIndex</code> to its real value in <code>IdBlob</code>, tagged by <code>IdType</code>:</p>
+          <ul>
+            <li><strong><code>IdType = 3</code> &rarr; a binary SID</strong> &mdash; decoded structurally into <code>S-1-5-…</code> so it joins cleanly against the registry's user list. (Decoding it as a string via the wrong API yields a broken <code>PySID:</code> value that never matches &mdash; a real trap.)</li>
+            <li><strong><code>IdType = 0 / 1 / 2</code> &rarr; an application identity</strong>, a UTF-16LE string. Two forms appear: a <em>device path</em> (<code>\Device\HarddiskVolume3\…\svchost.exe [DcomLaunch]</code>, used by the resource and network tables) and the timeline's <code>!!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]</code> form.</li>
+          </ul>
+          <div class="forensic-text"><strong>Telling one svchost.exe from another:</strong> the resource and network tables carry the full device path with the service in brackets &mdash; so the column to query is <code>app_path</code>, not <code>app_name</code> (<code>app_name</code> is <code>svchost.exe</code> for every one of them). The Application Timeline provider instead splits the service list into its own <code>hosted_services</code> column.</div>
+        </div>
+        <div class="ref-wrap">
+        <table class="ref-table">
+          <thead><tr><th>Special Id</th><th>Resolves to</th></tr></thead>
+          <tbody>
+            <tr><td><strong>App 1 / 2</strong></td><td>System · Unknown Application (their <code>IdBlob</code> is NULL)</td></tr>
+            <tr><td><strong>User 1</strong></td><td><code>S-1-0-0</code> — Nobody</td></tr>
+            <tr><td><strong>User 2</strong></td><td><code>S-1-5-18</code> — SYSTEM</td></tr>
+            <tr><td><strong>User 3</strong></td><td><code>S-1-5-19</code> — LOCAL SERVICE</td></tr>
+            <tr><td><strong>User 4</strong></td><td><code>S-1-5-20</code> — NETWORK SERVICE</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7. TIMESTAMPS -->
+    <section class="sec" id="timestamps">
+      <div class="sec-label">07 &middot; Time</div>
+      <h2 class="sec-title">Two kinds of time in one row</h2>
+      <div class="narrative-section reveal time">
+        <div class="narrative-text">
+          <p>Every provider table carries a <code>timestamp</code> &mdash; the <strong>aggregation-window event time</strong>, taken from the provider's own <code>TimeStamp</code> column. That is the value a timeline plots: it dates the hourly bucket, not a single instant.</p>
+          <p>Some tables carry a second, <strong>more precise</strong> time inside that window: <code>event_timestamp</code> (energy state transitions), <code>connect_start_time</code> (connectivity) and <code>end_time</code> (timeline) are Int64 <strong>FILETIME</strong> values naming the exact moment the row is really about. Do not confuse either with <code>parsed_at</code> in the metadata table &mdash; that is only when Crow-Eye read the database, and is never evidence.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8. FORENSIC GOLD + SQL -->
+    <section class="sec" id="forensic">
+      <div class="sec-label">08 &middot; Why it matters</div>
+      <h2 class="sec-title">Why SRUM is forensic gold</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <ul>
+            <li><strong>Execution with a cost.</strong> Where Prefetch says a program ran, SRUM says how much CPU, disk and network it used, hour by hour &mdash; and keeps it for weeks after Prefetch has rolled over.</li>
+            <li><strong>Data exfiltration.</strong> <code>bytes_sent</code> per application, per hour, is often the cleanest evidence that a process moved gigabytes off the machine, and exactly when.</li>
+            <li><strong>Human presence.</strong> In the Application Timeline, a non-NULL <code>keyboard_input_s</code> or <code>mouse_input_s</code> is strong evidence <strong>a person was physically at the keyboard</strong> in that window. A service accrues CPU for hours and never sees a keystroke, so NULL there means "no such activity," not a decode failure.</li>
+            <li><strong>Attribution.</strong> Every row carries the resolved user SID, tying the activity to an account.</li>
+          </ul>
+        </div>
+        <div class="sql-block"><div class="sql-title">Network usage by application</div><pre><span class="kw">SELECT</span> app_name, app_path, bytes_sent, bytes_received, timestamp
+<span class="kw">FROM</span> srum_network_data_usage
+<span class="kw">ORDER BY</span> bytes_sent <span class="kw">DESC</span> <span class="kw">LIMIT</span> 20;</pre></div>
+        <div class="sql-block"><div class="sql-title">Evidence a person was at the keyboard</div><pre><span class="kw">SELECT</span> timestamp, app_name, in_focus_s, keyboard_input_s, mouse_input_s, user_name
+<span class="kw">FROM</span> srum_app_timeline
+<span class="kw">WHERE</span> keyboard_input_s &gt; 0 <span class="kw">OR</span> mouse_input_s &gt; 0
+<span class="kw">ORDER BY</span> timestamp <span class="kw">DESC</span>;</pre></div>
+        <div class="sql-block"><div class="sql-title">Telling one svchost.exe apart from another</div><pre><span class="kw">SELECT</span> timestamp, hosted_services, in_focus_s, duration_ms
+<span class="kw">FROM</span> srum_app_timeline
+<span class="kw">WHERE</span> app_name = <span style="color:#a7f3d0;">'svchost.exe'</span> <span class="kw">AND</span> hosted_services != <span style="color:#a7f3d0;">''</span>;</pre></div>
+        <div class="forensic-text warn"><strong>Reading raw values:</strong> SRUM's counters (<code>duration_ms</code>, byte totals, cycle time) are stored as <strong>large raw integers</strong>. Any thousands-separator formatting is a display concern &mdash; comparing or sorting must use the stored integer, or a formatted <code>"1,024"</code> silently sorts as text.</div>
+      </div>
+    </section>
+
+    <!-- 9. LIMITATIONS -->
+    <section class="sec" id="limits">
+      <div class="sec-label">09 &middot; Limits</div>
+      <h2 class="sec-title">Limitations &amp; anti-forensics</h2>
+      <div class="narrative-section reveal">
+        <div class="narrative-text">
+          <ul>
+            <li><strong>Time-boxed.</strong> ~30&ndash;60 days only. Older activity is gone &mdash; collect SRUM early.</li>
+            <li><strong>Hourly, not instant.</strong> A row dates the window, not the exact second an event happened (except the precise FILETIME columns).</li>
+            <li><strong>Can be disabled.</strong> The SRUM service can be stopped or its providers disabled; deleting <code>SRUDB.dat</code> destroys history (though the current hour may still be in the registry buffer, and file recovery may recover the deleted database).</li>
+            <li><strong>Sparse by design &mdash; and why NULL is meaningful.</strong> SRUM writes a value only when that activity actually occurred, so an empty cell is a <em>positive fact</em>, not a gap in the data. A background service that never had a window on screen shows NULL keyboard and mouse seconds &mdash; that reads as "no human interaction," which is exactly what happened. A desktop with no battery shows NULL energy &mdash; "there was nothing to measure." The distinction that matters forensically: NULL here means <em>"this did not happen,"</em> not <em>"the parser failed to decode it."</em> So a NULL is evidence in its own right &mdash; energy columns are populated mostly on laptops, and timeline input columns only on windows with real user interaction.</li>
+            <li><strong>Dirty databases.</strong> An uncleanly-closed <code>SRUDB.dat</code> needs ESE recovery or repair before it opens &mdash; a naive reader will fail or return partial data.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10. HOW CROW-EYE PARSES -->
+    <section class="sec" id="crow-eye">
+      <div class="sec-label">10 &middot; In practice</div>
+      <h2 class="sec-title">How Crow-Eye parses SRUM</h2>
+      <div class="narrative-section reveal">
+        <div class="dcard">
+          <span class="cap">Figure 4</span>
+          <h4>From a locked SRUDB.dat to srum_data.db</h4>
+          <div class="flow">
+            <div class="flow-node"><span class="fk">1 · Copy</span><span class="ft">Unlock the file</span><span class="fd">Copied through Crow-Eye's file-access chain (standard copy &rarr; <strong>VSS</strong> shadow copy &rarr; raw disk) into a temp dir &mdash; with the checkpoint (<code>SRU.chk</code>), flush map (<code>SRUDB.jfm</code>) and <code>SRU*.log</code> logs beside it.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node"><span class="fk">2 · Open</span><span class="ft">Read-only, recover if dirty</span><span class="fd">Native <code>esent.dll</code> JET API (live) or <code>dissect.esedb</code> (offline). A dirty database is <strong>soft-recovered</strong> by replaying the collected logs (<code>esentutl /r</code>) before falling back to an <code>esentutl /p</code> repair.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node"><span class="fk">3 · Resolve</span><span class="ft">Load SruDbIdMapTable</span><span class="fd">Decode SIDs and app paths first, so every provider row resolves.</span></div>
+            <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+            <div class="flow-node"><span class="fk">4 · Write</span><span class="ft">srum_data.db</span><span class="fd">Five provider tables + a metadata row, evidence never modified.</span></div>
+          </div>
+        </div>
+        <div class="narrative-text" style="margin-top:16px;">
+          <p>The evidence file is opened <strong>read-only</strong> and never written to; recovery for a dirty database is handled by the ESE engine itself. The live path uses the Windows native JET API through <code>ctypes</code>; the offline path prefers <code>dissect.esedb</code> because it tolerates dirty databases better, falling back to <code>pyesedb</code> / <code>libesedb</code> and, in the worst case, an <code>esentutl /p</code> repair. The result is one queryable SQLite database, <code>srum_data.db</code>.</p>
+          <p><strong>Every native column, nothing dropped.</strong> Crow-Eye reads <em>every</em> column each provider table defines &mdash; not a fixed subset. That includes the battery-health columns (<code>designed_capacity</code> vs <code>full_charged_capacity</code> is battery wear), the network <code>wake_count</code>, and the Application Timeline's full set of <code>*_timeline</code> and <code>*_breakdown</code> packed counters. Every metric is stored as a <strong>raw integer</strong>; formatting is left to the display layer so sorting and range filters stay correct.</p>
+          <p><strong>Nothing left in the logs.</strong> Because the newest activity is committed to <code>SRU*.log</code> before it is flushed into <code>SRUDB.dat</code> (see section 2), Crow-Eye records what state the database was in: a clean database reports <code>db_state = clean</code> with the ESE header's <em>&ldquo;Clean Shutdown, Log Required 0-0&rdquo;</em> proof &mdash; meaning everything was already flushed and there was nothing in the logs to recover. A dirty database (an image captured mid-write) reports <code>recovered</code>, because the logs were replayed to fold in exactly that unflushed activity. Either way the metadata row states plainly whether any data was still pending.</p>
+        </div>
+
+        <div class="dcard" style="margin-top:16px;">
+          <span class="cap">Output &middot; srum_data.db</span>
+          <h4>The six tables Crow-Eye writes</h4>
+          <div class="dnote" style="text-align:left;margin-top:0;margin-bottom:12px;">Note the shape: the parser resolves <strong>five providers</strong> into five data tables plus one bookkeeping table &mdash; there is no single <code>srum_data</code> table, the name is the <em>file</em>.</div>
+          <div class="ref-wrap">
+            <table class="ref-table">
+              <thead><tr><th>Table</th><th>From provider</th><th>What it holds</th></tr></thead>
+              <tbody>
+                <tr><td>srum_application_usage</td><td class="ct">App Resource</td><td>Per-app, per-hour CPU &amp; disk cost</td></tr>
+                <tr><td>srum_network_data_usage</td><td class="ct">Network Data</td><td>Bytes sent / received per app, per interface</td></tr>
+                <tr><td>srum_network_connectivity</td><td class="ct">Network Conn.</td><td>When and how long an interface was connected</td></tr>
+                <tr><td>srum_energy_usage</td><td class="ct">Energy (&times;2)</td><td>Battery charge &amp; state &mdash; short- and long-term providers merged</td></tr>
+                <tr><td>srum_app_timeline</td><td class="ct">App Timeline</td><td>Focus / input seconds, hosted services (Win 10+)</td></tr>
+                <tr><td>srum_metadata</td><td class="ct">&mdash;</td><td>One row per parse: source path, counts, duration, and the recovery record &mdash; whether the checkpoint/logs were collected and whether the database was read clean, recovered or repaired (<code>db_state</code>)</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="narrative-section reveal" style="margin-top:16px;border-left-color:var(--net-color);">
+          <div class="narrative-text">
+            <h3 style="font-family:'Barlow Semi Condensed',sans-serif;font-size:18px;font-weight:800;color:var(--tx);margin-bottom:10px;">Resolving identity &mdash; the step that makes a row mean something</h3>
+            <p>Provider rows store only numeric ids, so Crow-Eye loads <code>SruDbIdMapTable</code> <strong>before</strong> any provider table and builds the lookup once. Each map entry has an <code>IdType</code> that says how to decode its blob:</p>
+            <ul>
+              <li><strong>IdType 3 &mdash; a binary SID (a user).</strong> Crow-Eye decodes the SID structurally from its bytes with its own <code>decode_binary_sid</code>. It deliberately does <em>not</em> route this through <code>win32security</code>: that path produced a <code>PySID</code> object whose text form corrupted a large fraction of the rows, so the raw-byte decoder is the correct one.</li>
+              <li><strong>IdType 0 / 1 / 2 &mdash; an application identity</strong> (a UTF-16LE string). The <code>!!svchost.exe!&hellip;![netsvcs]</code> form only appears in the timeline provider and is split out into <code>hosted_services</code>.</li>
+              <li><strong>Special ids bypass the map entirely</strong> &mdash; app id 1 = System, 2 = Unknown; user id 1 = <code>S-1-0-0</code>, 2 = <code>S-1-5-18</code> (Local System), 3 = <code>S-1-5-19</code>, 4 = <code>S-1-5-20</code>.</li>
+            </ul>
+            <p>A SID is only half an identity. Live, Crow-Eye turns it into an account name with <code>LookupAccountSid</code>; <strong>offline</strong>, there is no live registry to ask, so it reads the account names from the SOFTWARE hive's <code>ProfileList</code> instead &mdash; the answer belongs to the <em>image</em>, never the analyst's own machine.</p>
+          </div>
+        </div>
+
+        <div class="narrative-section reveal time" style="margin-top:16px;">
+          <div class="narrative-text">
+            <h3 style="font-family:'Barlow Semi Condensed',sans-serif;font-size:18px;font-weight:800;color:var(--tx);margin-bottom:10px;">Time and numbers &mdash; two rules that keep the data honest</h3>
+            <p>SRUM mixes two clocks in one row (see section 7): the hourly window <code>TimeStamp</code> is an <strong>OLE-automation date</strong>, while <code>event_timestamp</code>, <code>connect_start_time</code> and <code>end_time</code> are <strong>Int64 FILETIME</strong> (100-ns ticks since 1601). Crow-Eye normalises both to timezone-aware UTC and applies a <strong>1980&ndash;2200 sanity bound</strong>, which is what catches the classic "year 6916" wrong-offset misread before it ever reaches a table.</p>
+            <p>Every metric &mdash; cycles, bytes, seconds &mdash; is stored as a <strong>raw integer</strong>, never a pre-formatted string. That is not a stylistic choice: SQLite keeps a value it cannot convert as TEXT, and TEXT sorts above every integer, so a single <code>"1,024"</code> in a numeric column silently breaks every <code>ORDER BY</code> and <code>&gt;</code> comparison over it. Formatting is the display layer's job.</p>
+          </div>
+        </div>
+
+        <div class="narrative-text" style="margin-top:16px;">
+          <p>The finished <code>srum_data.db</code> is a first-class citizen of the case: <strong>Timeline</strong> plots its window timestamps alongside every other artifact, <strong>Database Search</strong> queries it directly, <strong>Eye AI</strong> reads it to answer questions like &ldquo;what sent data the night of the incident?&rdquo;, and the <strong><a href="#dashboard">activity dashboard</a></strong> charts it interactively &mdash; the same evidence, seen four ways.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section class="sec" id="dashboard">
+      <div class="sec-label">11 &middot; Read it</div>
+      <h2 class="sec-title">Reading the SRUM activity dashboard</h2>
+
+      <div class="narrative-text">
+        <p>Parsing writes five tables; the <strong>Charts</strong> button on any SRUM table tab opens the same
+        <code>srum_data.db</code> as an interactive dashboard. One rule holds everywhere: <strong>provider = colour</strong>.
+        Each of the five provider tables owns a colour, and that colour means the same thing in every chart on the page.</p>
+      </div>
+
+      <div class="dcard" style="margin-top:16px;">
+        <span class="cap">Colour language</span>
+        <h4>Five providers, five colours</h4>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Provider table</th><th>On the dashboard</th><th>What its heat-map counts</th></tr></thead>
+            <tbody>
+              <tr><td>srum_application_usage</td><td class="ct"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#39d353;vertical-align:-1px;margin-right:6px;"></span>App Resource</td><td>Records of CPU &amp; disk cost, per app / hour</td></tr>
+              <tr><td>srum_network_data_usage</td><td class="ct"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#4aa8ff;vertical-align:-1px;margin-right:6px;"></span>Network Data</td><td>Records of bytes sent / received</td></tr>
+              <tr><td>srum_network_connectivity</td><td class="ct"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#22d3ee;vertical-align:-1px;margin-right:6px;"></span>Net Conn.</td><td>Records of interface connect time</td></tr>
+              <tr><td>srum_energy_usage</td><td class="ct"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#fbbf24;vertical-align:-1px;margin-right:6px;"></span>Energy</td><td>Records of battery charge &amp; state</td></tr>
+              <tr><td>srum_app_timeline</td><td class="ct"><span style="display:inline-block;width:11px;height:11px;border-radius:3px;background:#a78bfa;vertical-align:-1px;margin-right:6px;"></span>App Timeline</td><td>Records of focus / input seconds</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dnote" style="text-align:left;margin-top:12px;margin-bottom:0;">The <strong>five heat-maps</strong> run down the top of the dashboard, one per provider. Every cell is a day; its shade is that provider's <strong>record volume</strong> for the day, normalised within its own map. They share a weekday / month axis, so a column is the same day in all five &mdash; and <strong>clicking any day selects it in all five at once</strong> and fills the section beneath.</div>
+      </div>
+
+      <div class="narrative-section reveal" style="margin-top:16px;">
+        <div class="narrative-text">
+          <h3 style="font-family:'Barlow Semi Condensed',sans-serif;font-size:18px;font-weight:800;color:var(--tx);margin-bottom:10px;">Why five heat-maps but only four timelines</h3>
+          <p>A heat-map <strong>counts records</strong>, and all five providers write records &mdash; so there are five heat-maps. The timeline below is different: it plots one bubble per app per hour and <strong>sizes each bubble by a magnitude</strong>. Only four metric families give an app a per-hour magnitude worth sizing &mdash; network bytes, CPU cycles, disk bytes and presence seconds &mdash; so there are four timeline modes.</p>
+          <p><strong>Network Connectivity</strong> and <strong>Energy</strong> have no per-app activity magnitude to size a bubble: connectivity is about <em>when</em> an interface was up, and energy is a battery charge level, not an amount an app &ldquo;did&rdquo;. They still earn a heat-map (record volume still shows when they were active), and Energy's charge shows up as the <em>battery&nbsp;%</em> line inside an app's pop-up &mdash; just not as a timeline mode.</p>
+        </div>
+      </div>
+
+      <div class="dcard" style="margin-top:16px;">
+        <span class="cap">The day timeline &middot; four modes</span>
+        <h4>Apps &times; hour of day &mdash; the button row switches what bubble size means</h4>
+        <div class="ref-wrap">
+          <table class="ref-table">
+            <thead><tr><th>Mode</th><th>Comes from</th><th>Bubble size / marker</th></tr></thead>
+            <tbody>
+              <tr><td>Network (sent / received)</td><td class="ct">srum_network_data_usage</td><td>Bytes moved that hour &mdash; <strong>&#9650; filled = sent</strong>, <strong>&#9663; outline = received</strong></td></tr>
+              <tr><td>CPU cycles</td><td class="ct">srum_application_usage</td><td>Foreground + background cycle time</td></tr>
+              <tr><td>Disk bytes</td><td class="ct">srum_application_usage</td><td>Foreground + background bytes read + written</td></tr>
+              <tr><td>User presence</td><td class="ct">srum_app_timeline</td><td>Seconds the app was in focus</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="dnote" style="text-align:left;margin-top:12px;margin-bottom:0;">Every mode shares the same frame: <strong>X = hour of day</strong> (the ruler stays pinned at the top while the rows scroll), <strong>Y = application</strong>, <strong>colour = the user</strong> who ran it, and <strong>size = the chosen magnitude</strong>. The user chips beneath the chart toggle each user on and off.</div>
+      </div>
+
+      <div class="narrative-section reveal" style="margin-top:16px;border-left-color:var(--net-color);">
+        <div class="narrative-text">
+          <h3 style="font-family:'Barlow Semi Condensed',sans-serif;font-size:18px;font-weight:800;color:var(--tx);margin-bottom:10px;">The three regions</h3>
+          <p><strong>Left &mdash; the five heat-maps</strong>, then the <strong>day section</strong> for whichever day is selected: the bubble timeline above, and below it <em>Activity by hour</em> (stacked bars, one colour per provider), <em>Top applications</em> (each app's bar split by provider), a <em>Records by provider</em> breakdown for that day, and <em>user-presence</em> tiles (keyboard&nbsp;/&nbsp;mouse&nbsp;/&nbsp;in-focus).</p>
+          <p><strong>Right &mdash; the overview</strong>, scoped to the whole selected date range rather than one day: totals tiles (active days, distinct apps, bytes sent, bytes received, CPU cycles, user presence); a <em>Network activity</em> card (bytes sent vs received per day, plus the top apps by network); <em>Most active applications</em> and <em>Activity by user</em>, both bars split by provider colour; and a <em>Records by provider</em> total.</p>
+        </div>
+      </div>
+
+      <div class="dcard" style="margin-top:16px;">
+        <span class="cap">Click for detail</span>
+        <h4>What each click opens</h4>
+        <div class="flow">
+          <div class="flow-node"><span class="fk">Heat-map day</span><span class="ft">Focus a day</span><span class="fd">Selects that day in all five maps and rebuilds the day section for it.</span></div>
+          <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+          <div class="flow-node"><span class="fk">An app</span><span class="ft">Full profile</span><span class="fd">Click a bubble or an app chip: totals; <em>Data &amp; resources over time</em> (sent/received bars + CPU line + battery-% line); <em>Network by time</em> (each hour's sent / received); a <em>Resource footprint</em> radar &mdash; this app's share of all apps across CPU, disk, net-out, net-in and presence; and <em>Who ran it</em>, per user.</span></div>
+          <div class="flow-arrow"><i class="fas fa-arrow-right"></i></div>
+          <div class="flow-node"><span class="fk">An hour bar</span><span class="ft">That hour, in detail</span><span class="fd">Click a bar in <em>Activity by hour</em>: the records-by-provider split for that hour, and every app active in it with its user, bytes sent / received, CPU and focus.</span></div>
+        </div>
+        <div class="dnote" style="text-align:left;margin-top:12px;margin-bottom:0;">Two filters sit in the header and apply to the whole dashboard: a <strong>search</strong> box (several terms, matched ANY or ALL) narrows to matching apps, paths or users; the <strong>date dropdown</strong> picks a month and then a day to focus the range.</div>
+      </div>
+    </section>
+
+    <!-- HISTORY -->
+    <section class="sec" id="history">
+      <div class="sec-label">Background</div>
+      <h2 class="sec-title">A short history</h2>
+      <div class="narrative-section reveal tl">
+        <div class="timeline">
+          <div class="timeline-item"><div class="timeline-year">2012 · Windows 8 / Server 2012</div><div class="timeline-event">SRUM introduced</div><div class="timeline-text">The System Resource Usage Monitor ships as a DPS diagnostic feature, writing <code>SRUDB.dat</code> under <code>System32\sru</code>.</div></div>
+          <div class="timeline-item"><div class="timeline-year">Windows 10</div><div class="timeline-event">Application Timeline added</div><div class="timeline-text">The <code>{5C8CF1C7-…}</code> provider adds focus, keyboard and mouse seconds &mdash; the "was a human present" signal.</div></div>
+          <div class="timeline-item"><div class="timeline-year">Windows 11</div><div class="timeline-event">Same core, still one of the richest artifacts</div><div class="timeline-text">The provider set and ESE format carry forward; SRUM remains a first-stop artifact for execution and network evidence.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- RELATED -->
+    <section class="sec" id="related">
+      <div class="sec-label">Keep reading</div>
+      <h2 class="sec-title">Related anatomy</h2>
+      <div class="rel-grid">
+        <a class="rel-card" href="prefetch_anatomy.html"><span class="rk">Anatomy</span><div class="rt">Prefetch</div><div class="rd">That a program ran, and its last eight run times &mdash; the execution artifact SRUM complements.</div></a>
+        <a class="rel-card" href="amcache_anatomy.html"><span class="rk">Anatomy</span><div class="rt">AmCache</div><div class="rd">Another inventory of what was present on the machine, with a SHA-1.</div></a>
+        <a class="rel-card" href="registry-internals.html"><span class="rk">Guide</span><div class="rt">Registry Internals</div><div class="rd">Where SRUM buffers its current hour before the flush to SRUDB.dat.</div></a>
+        <a class="rel-card" href="https://crow-eye.com/eye-describe"><span class="rk">Hub</span><div class="rt">Eye-Describe</div><div class="rd">Every Windows artifact, torn down to the binary.</div></a>
+      </div>
+    </section>
+  </div>
+
+  <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
+    <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:13px;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
+      <a href="https://crow-eye.com/eye-describe" style="color:var(--tx2);text-decoration:none;">Eye-Describe — Windows Artifact Anatomy</a>
+      <a href="https://crow-eye.com/eye-ai" style="color:var(--tx2);text-decoration:none;">Eye AI — Digital Forensics AI Assistant</a>
+      <a href="https://crow-eye.com/correlation-engine" style="color:var(--tx2);text-decoration:none;">Windows Correlation Engine</a>
+      <a href="https://crow-eye.com/documentation" style="color:var(--tx2);text-decoration:none;">Documentation</a>
+      <a href="https://crow-eye.com/user-guide" style="color:var(--tx2);text-decoration:none;">User Guide</a>
+      <a href="https://crow-eye.com/sentinel" style="color:var(--tx2);text-decoration:none;">Crow-Eye Sentinel</a>
+      <a href="https://crow-eye.com/gep" style="color:var(--tx2);text-decoration:none;">GEP Standard</a>
+      <a href="https://crow-eye.com/download" style="color:var(--tx2);text-decoration:none;">Download Crow-Eye</a>
+    </nav>
+    <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
+  </footer>
+
+  <script>
+    var PROVIDERS = {
+      app: { name:"Application Resource Usage", table:"srum_application_usage",
+        guid:"{D10CA2FE-6FCF-4F6D-848E-B2E99266FA89}",
+        mean:"Per-app, per-hour <strong>CPU and disk cost</strong>. The workhorse execution record: how much processor time and disk I/O an application consumed, split foreground vs background.",
+        cols:[["foreground_cycle_time / background_cycle_time","CPU cycles, foreground vs background"],["face_time","Time the app was on screen"],["foreground/background_bytes_read / _written","Disk I/O per state"],["*_num_read/write_operations, *_number_of_flushes","Operation counts behind the bytes"],["app_path · user_sid","Resolved via SruDbIdMapTable"]] },
+      netdata: { name:"Network Data Usage", table:"srum_network_data_usage",
+        guid:"{973F5D5C-1D90-4944-BE8E-24B94231A174}",
+        mean:"Per-app <strong>bytes sent and received</strong>, per network interface, per hour. The single best artifact for <strong>data-exfiltration</strong> timelines.",
+        cols:[["bytes_sent","Bytes the app sent this hour"],["bytes_received","Bytes the app received this hour"],["interface_luid","Which network interface carried it"],["l2_profile_id","Which wireless / network profile"]] },
+      netconn: { name:"Network Connectivity", table:"srum_network_connectivity",
+        guid:"{DD6636C4-8929-4683-974E-22C046A43763}",
+        mean:"When an interface was <strong>connected</strong>, and for how long. Places a machine on a given network at a given time.",
+        cols:[["connected_time","Duration the interface was connected"],["connect_start_time","Precise FILETIME the connection began"],["interface_luid","The network interface"],["l2_profile_id / _flags","Wireless profile + flags"]] },
+      energy: { name:"Energy Usage (+ long-term)", table:"srum_energy_usage",
+        guid:"{FEE4E14F-02A9-4550-B5CE-5FA2DA202E37} · {DA73FB89-2BEA-4DDC-86B8-6E048C6DA477}",
+        mean:"Battery <strong>charge level</strong> and <strong>state transitions</strong>. Two GUIDs (standard + long-term) feed this one table. Mostly populated on laptops.",
+        cols:[["charge_level","Battery charge percentage"],["state_transition","Charge / discharge state change"],["event_timestamp","Precise FILETIME of the transition"],["cycle_count","Battery cycle count"]] },
+      timeline: { name:"Application Timeline", table:"srum_app_timeline",
+        guid:"{5C8CF1C7-7257-4F13-B223-970EF5939312}",
+        mean:"How an app was <strong>used</strong>, not only that it ran: focus, keyboard and mouse seconds, duration. A non-NULL keyboard / mouse value is strong evidence <strong>a human was present</strong>.",
+        cols:[["in_focus_s","Seconds the app held focus"],["keyboard_input_s","Seconds of keyboard input (human present)"],["mouse_input_s","Seconds of mouse input (human present)"],["duration_ms · end_time","Window duration + precise end FILETIME"],["hosted_services","For svchost.exe: which services it hosted"]] },
+      idmap: { name:"SruDbIdMapTable", table:"(resolver — joined into every table)",
+        guid:"not a provider — the ID → value lookup",
+        mean:"The <strong>join</strong> that turns a row's numeric <code>AppId</code> / <code>UserId</code> into a real app path or user SID. Loaded first; every provider row depends on it.",
+        cols:[["IdIndex","The numeric id referenced by provider rows"],["IdBlob","The value: a UTF-16LE app path, or a binary SID"],["IdType","3 = binary SID; 0/1/2 = application identity"]] }
+    };
+    function showProvider(key){
+      var p = PROVIDERS[key]; if(!p) return;
+      var cols = p.cols.map(function(c){ return '<div class="p-col"><div class="cn">'+c[0]+'</div><div class="cd">'+c[1]+'</div></div>'; }).join('');
+      document.getElementById('provPanel').innerHTML =
+        '<div class="field-name">'+p.name+'</div>'+
+        '<div class="p-table">'+p.table+'</div>'+
+        '<div class="p-guid">'+p.guid+'</div>'+
+        '<div class="p-mean">'+p.mean+'</div>'+cols;
+      var els = document.querySelectorAll('.v-tab, .ese-node');
+      for(var i=0;i<els.length;i++){
+        var d = els[i].getAttribute('data-prov');
+        els[i].classList.toggle('active', d===key && els[i].classList.contains('v-tab'));
+        els[i].classList.toggle('on', d===key && els[i].classList.contains('ese-node'));
+      }
+    }
+    (function(){
+      var bar=document.getElementById('retBar'); if(!bar) return;
+      var n=60, html='';
+      for(var i=0;i<n;i++){ var aged=i<n*0.32; var h=22+Math.round(Math.abs(Math.sin(i*0.7))*66+(Math.random()*10)); if(h>94)h=94; html+='<div class="bucket'+(aged?' old':'')+'" style="height:'+h+'%"></div>'; }
+      bar.innerHTML=html;
+    })();
+    (function(){ var card=document.getElementById('introCard'), icon=document.getElementById('introIcon'); if(icon){ icon.addEventListener('click', function(){ card.classList.toggle('collapsed'); }); } })();
+    showProvider('app');
+  </script>
+  <script src="../main.js"></script>
+</body>
+
+</html>

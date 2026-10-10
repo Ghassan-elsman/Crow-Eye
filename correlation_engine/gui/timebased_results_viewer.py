@@ -22,7 +22,12 @@ from PyQt5.QtGui import QColor, QFont, QBrush
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
-from correlation_engine.gui.identity_results_view import _search_semantic_data
+from correlation_engine.gui.identity_results_view import (
+    fit_header_titles,
+    _search_semantic_data, _tone, _colour_score, _colour_severity, _percent, _item_font,
+    HIDDEN_RECORD_KEYS, style_viewer_bars, bar_label, begin_dialog_look, finish_dialog_look,
+)
+from ui import site_theme as _site
 from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
 
 logger = logging.getLogger(__name__)
@@ -145,252 +150,130 @@ class TimeBasedResultsViewer(QWidget):
         main_layout.setSpacing(4)
         main_layout.setContentsMargins(4, 4, 4, 4)
         
-        # Set widget background
-        self.setStyleSheet("background-color: #0B1220;")
-        
         # === TOP: Summary + Filters (single compact row) ===
         top_frame = QFrame()
         top_frame.setMaximumHeight(36)
-        top_frame.setStyleSheet("""
-            QFrame {
-                background-color: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 6px;
-            }
-        """)
         top_layout = QHBoxLayout(top_frame)
         top_layout.setSpacing(10)
         top_layout.setContentsMargins(8, 4, 8, 4)
         
         # Summary labels (compact - values only, tooltips for context)
         self.windows_lbl = QLabel("0")
-        self.windows_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
+        bar_label(self.windows_lbl, "info", strong=True)
         self.windows_lbl.setToolTip("Windows")
         top_layout.addWidget(self.windows_lbl)
         
         self.identities_lbl = QLabel("0")
-        self.identities_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.identities_lbl)
         self.identities_lbl.setToolTip("Identities")
         top_layout.addWidget(self.identities_lbl)
         
         self.records_lbl = QLabel("0")
-        self.records_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.records_lbl)
         self.records_lbl.setToolTip("Records")
         top_layout.addWidget(self.records_lbl)
         
         self.feathers_used_lbl = QLabel("0")
-        self.feathers_used_lbl.setStyleSheet("color: #4CAF50; font-size: 8pt; font-weight: bold;")
+        bar_label(self.feathers_used_lbl, "ok", strong=True)
         self.feathers_used_lbl.setToolTip("Feathers")
         top_layout.addWidget(self.feathers_used_lbl)
         
         # Scoring indicator
         self.scoring_lbl = QLabel("Scoring: Off")
-        self.scoring_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.scoring_lbl, "neutral")
         self.scoring_lbl.setToolTip("Scoring: Off")
         top_layout.addWidget(self.scoring_lbl)
         
         # Separator
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep)
         
         # Search filter
         search_lbl = QLabel("Search:")
-        search_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(search_lbl)
         top_layout.addWidget(search_lbl)
         
         self.identity_filter = QLineEdit()
         self.identity_filter.setPlaceholderText("Search identity or semantic...")
         self.identity_filter.setMaximumWidth(250)
-        self.identity_filter.setStyleSheet("""
-            QLineEdit {
-                font-size: 8pt; 
-                padding: 2px 4px;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QLineEdit:focus {
-                border: 1px solid #00FFFF;
-            }
-        """)
         self.identity_filter.textChanged.connect(self._on_search_text_changed)
         top_layout.addWidget(self.identity_filter)
         
         # Feather filter
         feather_lbl = QLabel("Feather:")
-        feather_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(feather_lbl)
         top_layout.addWidget(feather_lbl)
         
         self.feather_filter = QComboBox()
         self.feather_filter.addItem("All")
         self.feather_filter.setMaximumWidth(100)
-        self.feather_filter.setStyleSheet("""
-            QComboBox {
-                font-size: 8pt;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 2px 4px;
-            }
-            QComboBox:hover {
-                border: 1px solid #00FFFF;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1E293B;
-                color: #E2E8F0;
-                selection-background-color: #334155;
-            }
-        """)
         self.feather_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.feather_filter)
         
         # Time range filter
         time_lbl = QLabel("Time:")
-        time_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(time_lbl)
         top_layout.addWidget(time_lbl)
         
-        datetime_style = """
-            QDateTimeEdit {
-                font-size: 8pt;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 2px 4px;
-            }
-            QDateTimeEdit:focus {
-                border: 1px solid #00FFFF;
-            }
-            QDateTimeEdit::drop-down {
-                border: none;
-            }
-        """
         
         self.time_start_edit = QDateTimeEdit()
         self.time_start_edit.setDisplayFormat("MM-dd HH:mm")
         self.time_start_edit.setMaximumWidth(100)
-        self.time_start_edit.setStyleSheet(datetime_style)
         self.time_start_edit.setCalendarPopup(True)
         self.time_start_edit.dateTimeChanged.connect(self._apply_filters)
         top_layout.addWidget(self.time_start_edit)
         
         to_lbl = QLabel("-")
-        to_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(to_lbl)
         top_layout.addWidget(to_lbl)
         
         self.time_end_edit = QDateTimeEdit()
         self.time_end_edit.setDisplayFormat("MM-dd HH:mm")
         self.time_end_edit.setMaximumWidth(100)
-        self.time_end_edit.setStyleSheet(datetime_style)
         self.time_end_edit.setCalendarPopup(True)
         self.time_end_edit.dateTimeChanged.connect(self._apply_filters)
         top_layout.addWidget(self.time_end_edit)
         
         # Window status filter
         status_lbl = QLabel("Status:")
-        status_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(status_lbl)
         top_layout.addWidget(status_lbl)
         
         self.status_filter = QComboBox()
         self.status_filter.addItems(["All", "With Data", "Empty"])
         self.status_filter.setMaximumWidth(80)
-        self.status_filter.setStyleSheet("""
-            QComboBox {
-                font-size: 8pt;
-                background-color: #0B1220;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                color: #E2E8F0;
-                padding: 2px 4px;
-            }
-            QComboBox:hover {
-                border: 1px solid #00FFFF;
-            }
-            QComboBox::drop-down {
-                border: none;
-            }
-            QComboBox QAbstractItemView {
-                background-color: #1E293B;
-                color: #E2E8F0;
-                selection-background-color: #334155;
-            }
-        """)
         self.status_filter.currentTextChanged.connect(self._apply_filters)
         top_layout.addWidget(self.status_filter)
         
         # Reset button
         reset_btn = QPushButton("Reset")
         reset_btn.setMaximumWidth(50)
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px 6px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(reset_btn, "ghost")
+        # The variant's uppercase, tracked font is wider: never clip the label
+        reset_btn.setMaximumWidth(max(reset_btn.maximumWidth(), reset_btn.sizeHint().width()))
         reset_btn.clicked.connect(self._reset_filters)
         top_layout.addWidget(reset_btn)
         
         # Separator
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.VLine)
-        sep2.setStyleSheet("color: #334155;")
         top_layout.addWidget(sep2)
         
         # Pagination controls
         self.prev_btn = QPushButton("<")
         self.prev_btn.setMaximumWidth(24)
-        self.prev_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(self.prev_btn, "ghost")
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
         self.page_lbl = QLabel("1/1")
-        self.page_lbl.setStyleSheet("font-size: 8pt; color: #94A3B8;")
+        bar_label(self.page_lbl)
         top_layout.addWidget(self.page_lbl)
         
         self.next_btn = QPushButton(">")
         self.next_btn.setMaximumWidth(24)
-        self.next_btn.setStyleSheet("""
-            QPushButton {
-                font-size: 8pt; 
-                padding: 2px;
-                background-color: #334155;
-                border: 1px solid #475569;
-                border-radius: 4px;
-                color: #E2E8F0;
-            }
-            QPushButton:hover {
-                background-color: #475569;
-                border: 1px solid #00FFFF;
-            }
-        """)
+        _site.set_variant(self.next_btn, "ghost")
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -405,12 +288,6 @@ class TimeBasedResultsViewer(QWidget):
         stats_frame = QFrame()
         stats_frame.setMinimumHeight(80)
         stats_frame.setMaximumHeight(120)
-        stats_frame.setStyleSheet("""
-            QFrame {
-                background-color: #0B1220;
-                border-top: 1px solid #334155;
-            }
-        """)
         stats_layout = QHBoxLayout(stats_frame)
         stats_layout.setSpacing(8)
         stats_layout.setContentsMargins(4, 4, 4, 4)
@@ -434,6 +311,7 @@ class TimeBasedResultsViewer(QWidget):
         stats_layout.addWidget(self._wrap_table("Patterns", self.patterns_table), stretch=1)
         
         main_layout.addWidget(stats_frame)
+        style_viewer_bars(self, top_frame, stats_frame)
 
     def _create_tree(self) -> QTreeWidget:
         """Create tree with app-matching background and hierarchical structure."""
@@ -456,64 +334,9 @@ class TimeBasedResultsViewer(QWidget):
         tree.setContextMenuPolicy(Qt.CustomContextMenu)
         tree.customContextMenuRequested.connect(self._on_tree_context_menu)
 
-        # Dark theme + hierarchy visualization: slate guide lines show which
-        # row nests under which, and cyan chevrons show expanded/collapsed
-        # state on every row that has children. Same rules as the identity
-        # viewer so both result trees speak one visual language.
-        vline = CrowEyeIcons.icon_path("branch_vline")
-        more = CrowEyeIcons.icon_path("branch_more")
-        end = CrowEyeIcons.icon_path("branch_end")
-        closed = CrowEyeIcons.icon_path("branch_closed")
-        opened = CrowEyeIcons.icon_path("branch_open")
-        tree.setStyleSheet(f"""
-            QTreeWidget {{
-                font-size: 8pt;
-                background-color: #0B1220;
-                alternate-background-color: #1E293B;
-                border: 1px solid #334155;
-                color: #E2E8F0;
-            }}
-            QTreeWidget::item {{
-                padding: 4px 2px;
-                min-height: 24px;
-            }}
-            QTreeWidget::item:selected {{
-                background-color: #334155;
-                color: #00FFFF;
-            }}
-            QTreeWidget::branch {{
-                background-color: transparent;
-            }}
-            QTreeWidget::branch:has-siblings:!adjoins-item {{
-                border-image: url({vline}) 0;
-            }}
-            QTreeWidget::branch:has-siblings:adjoins-item {{
-                border-image: url({more}) 0;
-            }}
-            QTreeWidget::branch:!has-children:!has-siblings:adjoins-item {{
-                border-image: url({end}) 0;
-            }}
-            QTreeWidget::branch:has-children:!has-siblings:closed,
-            QTreeWidget::branch:closed:has-children:has-siblings {{
-                border-image: none;
-                image: url({closed});
-            }}
-            QTreeWidget::branch:open:has-children:!has-siblings,
-            QTreeWidget::branch:open:has-children:has-siblings {{
-                border-image: none;
-                image: url({opened});
-            }}
-            QHeaderView::section {{
-                background-color: #1E293B;
-                color: #00FFFF;
-                padding: 6px 4px;
-                font-size: 8pt;
-                font-weight: bold;
-                border: none;
-                border-bottom: 2px solid #00FFFF;
-                min-height: 26px;
-            }}
-        """)
+        # Guide lines show which row nests under which, chevrons the expanded /
+        # collapsed state: ui_styling.engine_extra(), the same rule set as the
+        # identity viewer's tree (the window's site sheet).
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
@@ -528,55 +351,11 @@ class TimeBasedResultsViewer(QWidget):
         table.verticalHeader().setVisible(False)
         table.verticalHeader().setDefaultSectionSize(18) # Compact rows
         table.horizontalHeader().setFixedHeight(22) # Compact header
-        table.setStyleSheet("""
-            QTableWidget {
-                font-size: 8pt;
-                background-color: #0B1220;
-                alternate-background-color: #1E293B;
-                border: 1px solid #334155;
-                color: #E2E8F0;
-            }
-            QTableWidget::item { 
-                padding: 2px; 
-            }
-            QTableWidget::item:selected {
-                background-color: #334155;
-                color: #00FFFF;
-            }
-            QHeaderView::section {
-                background-color: #1E293B;
-                color: #00FFFF;
-                padding: 2px;
-                font-size: 8pt;
-                font-weight: bold;
-                border: none;
-                border-bottom: 1px solid #00FFFF;
-            }
-        """)
         return table
     
     def _wrap_table(self, title: str, table: QTableWidget) -> QGroupBox:
         """Wrap table in group box with dark theme styling."""
         group = QGroupBox(title)
-        group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 8pt; 
-                font-weight: bold; 
-                color: #00FFFF;
-                padding-top: 12px; 
-                margin-top: 4px;
-                border: 1px solid #334155;
-                border-radius: 4px;
-                background-color: #0B1220;
-            }
-            QGroupBox::title {
-                subcontrol-origin: margin;
-                subcontrol-position: top left;
-                padding: 1px 6px;
-                background-color: #1E293B;
-                border-radius: 3px;
-            }
-        """)
         layout = QVBoxLayout()
         layout.setContentsMargins(2, 2, 2, 2)
         layout.setSpacing(1)
@@ -1015,7 +794,7 @@ class TimeBasedResultsViewer(QWidget):
         # Update windows label with cancelled indicator
         if is_cancelled:
             apply_status_to_label(self.windows_lbl, "WARN", f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
-            self.windows_lbl.setStyleSheet("color: #FF9800; font-weight: bold; font-size: 9pt;")
+            _site.set_status(self.windows_lbl, "warn")
             tooltip_text = (
                 f"[WARN] EXECUTION CANCELLED\n"
                 f"Showing partial results\n\n"
@@ -1027,7 +806,7 @@ class TimeBasedResultsViewer(QWidget):
             )
         else:
             self.windows_lbl.setText(f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
-            self.windows_lbl.setStyleSheet("color: #00FFFF; font-weight: bold; font-size: 9pt;")
+            _site.set_status(self.windows_lbl, "info")
             tooltip_text = (
                 f"Windows\n\n"
                 f"Total: {total_windows:,}\n"
@@ -1131,8 +910,8 @@ class TimeBasedResultsViewer(QWidget):
         if not windows:
             # Empty item with 6 columns (removed Time column)
             empty_item = QTreeWidgetItem(["No time windows found", "", "", "", "", ""])
-            empty_item.setForeground(0, QBrush(QColor("#64748B")))
-            empty_item.setFont(0, QFont("Segoe UI", 9, QFont.Normal))
+            empty_item.setForeground(0, _tone("empty"))
+            empty_item.setFont(0, _item_font(12))
             self.results_tree.addTopLevelItem(empty_item)
             return
         
@@ -1304,19 +1083,19 @@ class TimeBasedResultsViewer(QWidget):
             # Empty window (skipped)
             icon = "" # White circle for empty
             window_type = "Empty"
-            color = QColor("#666666") # Gray
+            color = _tone("empty")
             tooltip = "Empty window - no activity detected (skipped during processing)"
         elif identity_count == 1:
             # Single identity window (isolated activity)
             icon = "" # Blue circle for single identity
             window_type = "Isolated"
-            color = QColor("#FF9800") # Orange
+            color = _tone("warn")
             tooltip = "Single identity window - isolated activity with no temporal correlation opportunities"
         else:
             # Multi-identity window (correlation opportunity)
             icon = "" # Green circle for correlation opportunity
             window_type = "Correlation"
-            color = QColor("#4CAF50") # Green
+            color = _tone("ok")
             tooltip = f"Multi-identity window - {identity_count} identities active simultaneously (correlation opportunity)"
         
         # Window item (6 columns - removed Time). Crow-Eye clock icon marks
@@ -1330,17 +1109,12 @@ class TimeBasedResultsViewer(QWidget):
             status
         ])
         item.setIcon(0, CrowEyeIcons.clock())
-        item.setFont(0, QFont("Segoe UI", 9, QFont.Bold))
-        item.setForeground(0, QBrush(color))
+        item.setFont(0, _item_font(13, True))
+        item.setForeground(0, color)
         item.setToolTip(0, tooltip)
         
         # Color score
-        if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
-        elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
-        elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+        _colour_score(item, 2, avg_score)
         
         item.setData(0, Qt.UserRole, {'type': 'window', 'data': window, 'window_type': window_type})
         
@@ -1431,38 +1205,33 @@ class TimeBasedResultsViewer(QWidget):
         if has_semantic:
             # Descriptive tag icon on the Semantic column (replaces "[S] ")
             item.setIcon(3, CrowEyeIcons.tag())
-        item.setFont(0, QFont("Segoe UI", 8, QFont.Bold))
+        item.setFont(0, _item_font(12, True))
         
         # Color based on temporal relationship
         if window_type == "Correlation":
-            item.setForeground(0, QBrush(QColor("#4CAF50"))) # Green for correlation
+            item.setForeground(0, _tone("ok"))
         elif window_type == "Isolated":
-            item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for isolated
+            item.setForeground(0, _tone("warn"))
         else:
-            item.setForeground(0, QBrush(QColor("#2196F3"))) # Blue default
+            item.setForeground(0, _tone("identity"))
         
         item.setToolTip(0, tooltip)
         
         # Color score
-        if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
-        elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
-        elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+        _colour_score(item, 2, avg_score)
         
         # Task 6.2: Color semantic column with error handling
         try:
             if semantic_value == "Error":
-                item.setForeground(4, QBrush(QColor("#F44336"))) # Red for errors
-                item.setToolTip(4, "Error retrieving semantic data")
+                item.setForeground(3, _tone("bad"))
+                item.setToolTip(3, "Error retrieving semantic data")
             elif semantic_value == "Fallback":
-                item.setForeground(4, QBrush(QColor("#FF9800"))) # Orange for fallback
-                item.setToolTip(4, "Using fallback semantic data")
+                item.setForeground(3, _tone("warn"))
+                item.setToolTip(3, "Using fallback semantic data")
             elif semantic_value != "-":
-                item.setForeground(4, QBrush(QColor("#9C27B0"))) # Purple for semantic values
+                item.setForeground(3, _tone("semantic"))
                 if semantic_tooltip:
-                    item.setToolTip(4, semantic_tooltip)
+                    item.setToolTip(3, semantic_tooltip)
         except Exception as e:
             logger.warning(f"Error setting semantic column color: {e}")
         
@@ -1578,16 +1347,11 @@ class TimeBasedResultsViewer(QWidget):
             f"{len(matches)} matches"
         ])
         item.setIcon(0, CrowEyeIcons.sub_identity()) # branch-to-variant: name/version variant
-        item.setFont(0, QFont("Segoe UI", 8))
-        item.setForeground(0, QBrush(QColor("#FF9800"))) # Orange for sub-identity
+        item.setFont(0, _item_font(12))
+        item.setForeground(0, _tone("sub_identity"))
         
         # Color score
-        if avg_score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
-        elif avg_score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
-        elif avg_score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+        _colour_score(item, 2, avg_score)
         
         item.setData(0, Qt.UserRole, {'type': 'sub_identity', 'data': sub_identity})
         
@@ -1617,7 +1381,7 @@ class TimeBasedResultsViewer(QWidget):
         weighted_score = getattr(match, 'weighted_score', None)
         if isinstance(weighted_score, dict):
             score = weighted_score.get('score', 0)
-            score_str = f"{score:.2f}"
+            score_str = f"{score:.2f}" if isinstance(score, (int, float)) else "-"
         else:
             score = 0
             score_str = "-"
@@ -1636,15 +1400,10 @@ class TimeBasedResultsViewer(QWidget):
             match.anchor_artifact_type
         ])
         item.setIcon(0, CrowEyeIcons.evidence()) # record+magnifier: raw artifact record
-        item.setForeground(0, QBrush(QColor("#4CAF50"))) # Green for evidence
+        item.setForeground(0, _tone("evidence"))
         
         # Color score
-        if score >= 0.7:
-            item.setForeground(3, QBrush(QColor("#4CAF50")))
-        elif score >= 0.4:
-            item.setForeground(3, QBrush(QColor("#FF9800")))
-        elif score > 0:
-            item.setForeground(3, QBrush(QColor("#F44336")))
+        _colour_score(item, 2, score)
         
         item.setData(0, Qt.UserRole, {'type': 'evidence', 'data': match})
         
@@ -1738,9 +1497,8 @@ class TimeBasedResultsViewer(QWidget):
                         has_match = True
                         break
                     
-                    # Check semantic values using helper method
-                    semantic_data = identity.get('semantic_data', {})
-                    if _search_semantic_data(semantic_data, text):
+                    # Semantic values live on each match, not on the identity
+                    if self._identity_semantic_matches(identity, text):
                         has_match = True
                         break
                 
@@ -1893,17 +1651,38 @@ class TimeBasedResultsViewer(QWidget):
                 feather_names = [f.strip() for f in feather_text.replace('...', '').split(',')]
                 if feather_names and feather_names[0]:
                     # Open dialog with specific feather tab active
-                    dialog = TimeWindowDetailDialog(item_type, item_data, self, feather_id=feather_names[0])
-                    dialog.exec_()
+                    self._open_detail_dialog(item_type, item_data, feather_id=feather_names[0])
                     return
         
         # Check if user clicked on a window and wants to see feather data across all identities
         # This would require adding a context menu or special handling
         
         # Default: open dialog normally
-        dialog = TimeWindowDetailDialog(item_type, item_data, self)
-        dialog.exec_()
+        self._open_detail_dialog(item_type, item_data)
     
+    @staticmethod
+    def _identity_semantic_matches(identity: Dict, text: str) -> bool:
+        """Whether any match under ``identity`` carries a semantic value or
+        rule name containing ``text`` (already lower-cased)."""
+        for sub in identity.get('sub_identities', []) or []:
+            for match in sub.get('matches', []) or []:
+                data = (match.get('semantic_data') if isinstance(match, dict)
+                        else getattr(match, 'semantic_data', None))
+                if _search_semantic_data(data, text):
+                    return True
+        return False
+
+    def _open_detail_dialog(self, item_type, item_data, feather_id=None):
+        """Open the detail dialog; a record that cannot be shown says why
+        instead of raising out of the double-click."""
+        try:
+            dialog = TimeWindowDetailDialog(item_type, item_data, self, feather_id=feather_id)
+        except Exception as e:
+            logger.exception("[TimeWindowResultsView] detail dialog failed")
+            QMessageBox.warning(self, "Details", f"Could not show this {item_type.replace('_', ' ')}:\n\n{e}")
+            return
+        dialog.exec_()
+
     def _on_tree_context_menu(self, position):
         """Handle right-click context menu on tree items."""
         from PyQt5.QtWidgets import QMenu, QAction
@@ -1919,7 +1698,9 @@ class TimeBasedResultsViewer(QWidget):
         item_type = data.get('type')
         item_data = data.get('data', {})
         
-        menu = QMenu()
+        # Parented, so the window's site sheet reaches it (a parentless menu
+        # is its own top-level window and only got the app's old colours)
+        menu = QMenu(self)
         
         # For window items, offer to show feather data across all identities
         if item_type == 'window':
@@ -1990,6 +1771,7 @@ class TimeBasedResultsViewer(QWidget):
         """Show visual indicators legend dialog."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Visual Indicators Legend")
+        begin_dialog_look(dialog)
         dialog.setMinimumSize(500, 400)
         
         layout = QVBoxLayout(dialog)
@@ -1997,13 +1779,12 @@ class TimeBasedResultsViewer(QWidget):
         
         # Title
         title = QLabel("<b>Time Window Visual Indicators</b>")
-        title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
+        _site.set_role(title, "section")
         layout.addWidget(title)
         
         # Legend content
         text = QTextEdit()
         text.setReadOnly(True)
-        text.setStyleSheet("font-size: 8pt; background-color: #0B1220; border: 1px solid #334155; color: #E2E8F0;")
         
         legend_text = """
 TIME WINDOW INDICATORS:
@@ -2159,9 +1940,9 @@ stronger evidence and better temporal correlation.
 
             status_item = QTableWidgetItem(window_type)
             if window_type == "Correlation":
-                status_item.setForeground(QBrush(QColor("#4CAF50")))
+                status_item.setForeground(_tone("ok"))
             elif window_type == "Isolated":
-                status_item.setForeground(QBrush(QColor("#FF9800")))
+                status_item.setForeground(_tone("warn"))
             self.windows_table.setItem(row, 3, status_item)
 
         # 2. Feather Contribution Table — "Evidence Extracted by Feather"
@@ -2299,15 +2080,12 @@ stronger evidence and better temporal correlation.
             count_item.setToolTip(tooltip)
             
             # Color code with visual indicators
-            if "Multi-Identity" in pattern:
-                count_item.setForeground(QBrush(QColor("#4CAF50"))) # Green - correlation opportunities
-                pattern_item.setForeground(QBrush(QColor("#4CAF50")))
-            elif "Single-Identity" in pattern:
-                count_item.setForeground(QBrush(QColor("#FF9800"))) # Orange - isolated activity
-                pattern_item.setForeground(QBrush(QColor("#FF9800")))
-            elif "Empty" in pattern:
-                count_item.setForeground(QBrush(QColor("#888"))) # Gray - skipped
-                pattern_item.setForeground(QBrush(QColor("#888")))
+            tone = ("ok" if "Multi-Identity" in pattern          # correlation opportunities
+                    else "warn" if "Single-Identity" in pattern   # isolated activity
+                    else "empty" if "Empty" in pattern else None)  # skipped
+            if tone:
+                count_item.setForeground(_tone(tone))
+                pattern_item.setForeground(_tone(tone))
             
             self.patterns_table.setItem(row, 1, count_item)
             
@@ -2325,11 +2103,11 @@ stronger evidence and better temporal correlation.
         if total_scored > 0:
             self.scoring_enabled = True
             self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
-            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #4CAF50;")
+            _site.set_status(self.scoring_lbl, "ok")
         else:
             self.scoring_enabled = False
             self.scoring_lbl.setText("Scoring: Off")
-            self.scoring_lbl.setStyleSheet("font-size: 7pt; color: #888;")
+            _site.set_status(self.scoring_lbl, "neutral")
 
 
 class TimeWindowDetailDialog(QDialog):
@@ -2367,6 +2145,8 @@ class TimeWindowDetailDialog(QDialog):
         else:
             self.setWindowTitle(f"{self.item_type.capitalize()} Details")
         
+        begin_dialog_look(self)
+
         # Use same sizing rules as IdentityDetailDialog (800x600 min, 90% screen max)
         self.setMinimumSize(900, 600)
         
@@ -2415,23 +2195,15 @@ class TimeWindowDetailDialog(QDialog):
         btn_layout.addWidget(close_btn)
         layout.addLayout(btn_layout)
 
-        # GUI-polish pass: every tab / table / tree / scroll-area / text
-        # edit / group box in the dialog's content variants picks up the
-        # unified slate / cyan / emerald look. Called last so every
-        # child widget exists by the time we walk findChildren().
-        # See correlation_engine/gui/ui_styling.py.
-        try:
-            from correlation_engine.gui.ui_styling import CorrelationEngineStyles
-            CorrelationEngineStyles.apply_evidence_detail_styling(self)
-        except Exception:
-            # Styling is cosmetic — never block the dialog from opening.
-            pass
+        # The site look: roles for the content variants, a ghost Close.
+        # Called last, once every child exists (cosmetic - never blocks).
+        finish_dialog_look(self)
 
     def _create_header(self) -> QFrame:
         """Create header with visual indicators."""
         frame = QFrame()
         frame.setMaximumHeight(50)
-        frame.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 4px;")
+        _site.set_card(frame)
         layout = QHBoxLayout(frame)
         
         if self.item_type == 'window':
@@ -2457,7 +2229,7 @@ class TimeWindowDetailDialog(QDialog):
             
             indicator_lbl = QLabel(indicator)
             indicator_lbl.setToolTip(tooltip)
-            indicator_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
+            _site.set_role(indicator_lbl, "label")
             layout.addWidget(indicator_lbl)
             
             layout.addWidget(QLabel(f"<b>Time:</b> {time_str}"))
@@ -2583,31 +2355,6 @@ class TimeWindowDetailDialog(QDialog):
         """Summary tab + one tab per contributing feather."""
         tabs = QTabWidget()
         # Tabs matching the main app tab style - dark theme
-        tabs.setStyleSheet("""
-            QTabWidget::pane { 
-                border: 1px solid #334155; 
-                background-color: #0B1220;
-            }
-            QTabBar::tab { 
-                font-size: 8pt; 
-                padding: 4px 12px; 
-                min-width: 80px;
-                background-color: #1E293B;
-                color: #94A3B8;
-                border: 1px solid #334155;
-                border-bottom: none;
-                margin-right: 1px;
-            }
-            QTabBar::tab:selected { 
-                background-color: #334155; 
-                color: #00FFFF;
-                border-top: 2px solid #00FFFF;
-            }
-            QTabBar::tab:hover:!selected { 
-                background-color: #2D3748;
-                color: #E2E8F0;
-            }
-        """)
         
         # Collect all evidence rows grouped by feather
         feather_records = {} # feather_id -> list of evidence rows
@@ -2667,12 +2414,12 @@ class TimeWindowDetailDialog(QDialog):
         # reading only `identity_name` titled it 'Unknown'.
         name = (self.data.get('identity_name')
                 or self.data.get('original_name') or 'Unknown')
-        name_lbl = QLabel(f"<h2 style='color: #00FFFF;'>{name}</h2>")
+        name_lbl = QLabel(f"<h2 style='color: #22D3EE;'>{name}</h2>")
         layout.addWidget(name_lbl)
         
         # Statistics frame
         stats_frame = QFrame()
-        stats_frame.setStyleSheet("background-color: #1E293B; border: 1px solid #334155; border-radius: 6px; padding: 8px;")
+        _site.set_card(stats_frame)
         stats_layout = QHBoxLayout(stats_frame)
         
         # Variants count - meaningless on a single variant, which is
@@ -2701,24 +2448,10 @@ class TimeWindowDetailDialog(QDialog):
         
         # Feather contribution table
         feather_group = QGroupBox()
-        feather_group.setStyleSheet("""
-            QGroupBox { 
-                font-size: 10pt; font-weight: bold; color: #00FFFF;
-                padding-top: 16px; margin-top: 8px;
-                border: 1px solid #334155; background-color: #0B1220;
-                border-radius: 6px;
-            }
-            QGroupBox::title { 
-                subcontrol-origin: margin; 
-                padding: 2px 8px;
-                background-color: #1E293B;
-                border-radius: 4px;
-            }
-        """)
         feather_layout = QVBoxLayout(feather_group)
         from .crow_eye_icons import group_title_label
         _ce_title = group_title_label("feather", "Feather Contributions", size_px=16)
-        _ce_title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
+        _site.set_role(_ce_title, "section")
         feather_layout.addWidget(_ce_title)
         
         # Group feather records by base name
@@ -2755,13 +2488,12 @@ class TimeWindowDetailDialog(QDialog):
         
         # Header
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
-        header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
+        _site.set_role(header, "muted")
         layout.addWidget(header)
         
         # Search box
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
-        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
         layout.addWidget(search_box)
         
         # Collect all unique keys from all records
@@ -2769,7 +2501,7 @@ class TimeWindowDetailDialog(QDialog):
         for rec in records:
             data = rec.get('data', {})
             if isinstance(data, dict):
-                all_keys.update(data.keys())
+                all_keys.update(k for k in data.keys() if k not in HIDDEN_RECORD_KEYS)
         
         # Create table with all fields (timestamp prominently in first column)
         table = QTableWidget()
@@ -2778,7 +2510,6 @@ class TimeWindowDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True) # Enable column sorting
         
         for row, rec in enumerate(records):
             table.setItem(row, 0, QTableWidgetItem(str(rec.get('timestamp', ''))[:19]))
@@ -2793,9 +2524,14 @@ class TimeWindowDetailDialog(QDialog):
                 item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
+        # Sorting on after the fill, as Qt documents: once a header has been
+        # clicked, a fill with sorting on moves each row as its sort cell lands.
+        table.setSortingEnabled(True)
+
         # Enable column resizing
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        fit_header_titles(table)
         
         # Connect search box to filter function
         def filter_table(search_text):
@@ -2833,13 +2569,12 @@ class TimeWindowDetailDialog(QDialog):
         
         # Header
         header = QLabel(f"<b>{feather_id}</b> - All records across all identities in this time window")
-        header.setStyleSheet("font-size: 9pt; color: #aaa; padding: 4px;")
+        _site.set_role(header, "muted")
         layout.addWidget(header)
         
         # Search box
         search_box = QLineEdit()
         search_box.setPlaceholderText("Search records...")
-        search_box.setStyleSheet("padding: 4px; font-size: 8pt;")
         layout.addWidget(search_box)
         
         # Collect all unique keys from all records
@@ -2847,7 +2582,7 @@ class TimeWindowDetailDialog(QDialog):
         for rec in records:
             data = rec.get('data', {})
             if isinstance(data, dict):
-                all_keys.update(data.keys())
+                all_keys.update(k for k in data.keys() if k not in HIDDEN_RECORD_KEYS)
         
         # Create table with Identity column first, then Timestamp prominently
         table = QTableWidget()
@@ -2856,7 +2591,6 @@ class TimeWindowDetailDialog(QDialog):
         table.setHorizontalHeaderLabels(cols)
         table.setRowCount(len(records))
         table.setAlternatingRowColors(True)
-        table.setSortingEnabled(True) # Enable column sorting
         
         for row, rec in enumerate(records):
             # Identity column
@@ -2874,9 +2608,14 @@ class TimeWindowDetailDialog(QDialog):
                 item.setToolTip(val) # Full value in tooltip
                 table.setItem(row, col, item)
         
+        # Sorting on after the fill, as Qt documents: once a header has been
+        # clicked, a fill with sorting on moves each row as its sort cell lands.
+        table.setSortingEnabled(True)
+
         # Enable column resizing
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
+        fit_header_titles(table)
         
         # Connect search box to filter function
         def filter_table(search_text):
@@ -2929,20 +2668,6 @@ class TimeWindowDetailDialog(QDialog):
         if has_semantic_data:
             # Add Semantic Mappings section
             semantic_group = QGroupBox("Semantic Mappings")
-            semantic_group.setStyleSheet("""
-                QGroupBox { 
-                    font-size: 10pt; font-weight: bold; color: #00FFFF;
-                    padding-top: 16px; margin-top: 8px;
-                    border: 2px solid #00FFFF; background-color: #0B1220;
-                    border-radius: 6px;
-                }
-                QGroupBox::title { 
-                    subcontrol-origin: margin; 
-                    padding: 2px 8px;
-                    background-color: #1E293B;
-                    border-radius: 4px;
-                }
-            """)
             semantic_layout = QVBoxLayout(semantic_group)
             
             # Create semantic mappings table
@@ -2974,18 +2699,13 @@ class TimeWindowDetailDialog(QDialog):
                         semantic_table.setItem(row, 3, QTableWidgetItem(mapping.get('category', '')))
                         
                         confidence = mapping.get('confidence', 0)
-                        conf_item = QTableWidgetItem(f"{confidence:.0%}")
+                        conf_item = QTableWidgetItem(_percent(confidence))
                         semantic_table.setItem(row, 4, conf_item)
                         
-                        severity = mapping.get('severity', 'info')
+                        severity = str(mapping.get('severity', 'info') or 'info')
                         sev_item = QTableWidgetItem(severity.upper())
                         # Color code severity
-                        if severity == 'high':
-                            sev_item.setForeground(QColor('#ff5252'))
-                        elif severity == 'medium':
-                            sev_item.setForeground(QColor('#ffa726'))
-                        else:
-                            sev_item.setForeground(QColor('#66bb6a'))
+                        _colour_severity(sev_item, severity)
                         semantic_table.setItem(row, 5, sev_item)
                         
                         row += 1
@@ -3007,41 +2727,14 @@ class TimeWindowDetailDialog(QDialog):
         if has_feather_records:
             # Add Feather Records section
             feather_group = QGroupBox()
-            feather_group.setStyleSheet("""
-                QGroupBox { 
-                    font-size: 10pt; font-weight: bold; color: #00FFFF;
-                    padding-top: 16px; margin-top: 8px;
-                    border: 1px solid #334155; background-color: #0B1220;
-                    border-radius: 6px;
-                }
-                QGroupBox::title { 
-                    subcontrol-origin: margin; 
-                    padding: 2px 8px;
-                    background-color: #1E293B;
-                    border-radius: 4px;
-                }
-            """)
             feather_layout = QVBoxLayout(feather_group)
             from .crow_eye_icons import group_title_label
             _ce_title = group_title_label("feather", "Feather Records", size_px=16)
-            _ce_title.setStyleSheet("font-size: 10pt; color: #00FFFF;")
+            _site.set_role(_ce_title, "section")
             feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
             feather_tabs = QTabWidget()
-            feather_tabs.setStyleSheet("""
-                QTabBar::tab { 
-                    font-size: 8pt; 
-                    padding: 4px 12px; 
-                    background-color: #1E293B;
-                    color: #94A3B8;
-                    border: 1px solid #334155;
-                }
-                QTabBar::tab:selected { 
-                    background-color: #334155; 
-                    color: #00FFFF;
-                }
-            """)
             
             for feather_name, feather_data in sorted(feather_records.items()):
                 if isinstance(feather_data, list) and feather_data:
@@ -3113,8 +2806,7 @@ class TimeWindowDetailDialog(QDialog):
                 all_keys.update(record.keys())
         
         # Remove internal/metadata keys
-        excluded_keys = {'semantic_data', 'semantic_mappings', '_metadata', '_internal', '_feather_id', '_table'}
-        all_keys = sorted([k for k in all_keys if k not in excluded_keys])
+        all_keys = sorted([k for k in all_keys if k not in HIDDEN_RECORD_KEYS])
         
         # Create table with VERTICAL layout (fields as rows)
         # Columns: Record 1 | Record 2 | ... | Record N

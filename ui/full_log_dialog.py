@@ -190,6 +190,18 @@ class FullLogDialog(QtWidgets.QDialog):
             QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: #0B1226; }
             QScrollBar::corner { background: #0B1226; }
         """)
+        # IDE-style colouring (ui/log_highlighter.py). Skipped past 40 MB: it
+        # highlights every block as it arrives, and the point of this window is
+        # that a huge log opens at all.
+        try:
+            total = sum(os.path.getsize(p) for p in self._paths if os.path.exists(p))
+        except OSError:
+            total = 0
+        if total <= 40 * 1024 * 1024:
+            from ui.log_highlighter import LogHighlighter
+            self._highlighter = LogHighlighter(
+                self._view.document(),
+                json_mode=all(p.lower().endswith((".json", ".jsonl")) for p in self._paths))
         layout.addWidget(self._view, 1)
 
         close_row = QtWidgets.QHBoxLayout()
