@@ -4,32 +4,16 @@
 
 ## Version 0.14.1 — Whole-Disk Evidence, Chain of Custody & Large-Case Correlation
 
-**Release date:** 2026-10-10 · **Baseline:** 0.14.0. All figures below are measured against that release.
+**Release date:** 2026-10-10 · **Baseline:** 0.14.0. Figures are measured against that release.
 
 ### Overview
 
-Version 0.14.1 is organised around two themes:
+Version 0.14.1 makes the evidence Crow-Eye collects complete, and the way it handles that evidence provable. Two themes run through it:
 
-- **Complete evidence.** The MFT parser reads every fragment of the `$MFT`, not only the first. Browsers are parsed from collected folders and forensic images as well as live systems. Every user's registry hive replays its own transaction logs.
-- **Chain of custody.** Every collection and parse writes a record of what was read, how, and what Crow-Eye changed on the machine. Copies are verified against their source, shadow copies Crow-Eye creates are deleted when the run ends, and each case keeps a hash-chained ledger of everything done to it.
+- **Complete evidence.** The MFT parser follows the `$MFT` through its data runs, so every fragment is read: deleted entries, real file sizes and correct names included. Renames are kept as old → new pairs. Browsers are parsed from collected folders and forensic images with the same 37 tables as a live parse. Every user's registry hive replays its own transaction logs, matched to its owner.
+- **Provable handling.** Every collection and parse writes a chain-of-custody record: what was read, how, and what Crow-Eye changed on the machine. Each copy is verified against its source, shadow copies Crow-Eye creates are deleted when the run ends, and each case keeps a hash-chained ledger of everything done to it.
 
-| Measure | 0.14.0 | 0.14.1 |
-|---|---:|---:|
-| Live MFT records read on a 17-fragment `$MFT` (test machine) | 205,056 | **3,320,633** |
-| MFT file names with corrupted bytes (one `$MFT`) | 13,601 | **0** |
-| In-use files whose size read as 0 | 122,682 of 152,131 | **38,053 of 1,209,142** |
-| MFT rows with an `[Unknown Parent]` path | 50,848 | **135** |
-| Renames recorded old → new (one case) | 0 | **4,107** |
-| Modes that parse browsers | live | **live, offline, image** |
-| Copies verified against their source | none | **every copy** |
-| Shadow copies Crow-Eye created, left on the target | all | **none** |
-| Rows stored again by a second parse of the same machine | all (Amcache, SRUM, MFT) | **none** |
-| Identity engine memory, 3.8-million-row MFT feather | ~18 GB | **~2.1 GB** |
-| Semantic mapping, 105,309 matches | 138 s | **86 s** |
-| Longest interface stall while a dashboard loads | 70 s | **172 ms** |
-| User Behavior Analytics behaviours | 65 | **81** |
-| Event IDs with their own description | 426 | **617** |
-| Test files in this repository | 84 | **89** |
+Around those themes, re-parsing a case adds only what is new, forensic images are checked before extraction, the Correlation Engine streams large cases and keeps the statistics of a stopped run, and the GUI and UI are enhanced across the application. A measured comparison with 0.14.0 is at the end of these notes.
 
 ### Highlights
 
@@ -227,7 +211,7 @@ Version 0.14.1 is organised around two themes:
 
 ### Interface
 
-- **The website's look across the application:** Settings, Database Search, the Correlation Engine, Crow-Claw, the Offline Importer, Forensic Images, Row Details and the loading dialog.
+- **GUI and UI enhancements across the application:** Settings, Database Search, the Correlation Engine, Crow-Claw, the Offline Importer, Forensic Images, Row Details and the loading dialog have a refreshed, consistent design.
 - **Colour that carries meaning is kept:** status, score and severity colours.
 - **Bundled fonts:** Barlow Semi Condensed and JetBrains Mono, under the SIL Open Font License.
 - **Standard columns are colour-coded** in every artifact table: times, paths, hashes, users, sizes, names, IDs, values, flags and network fields.
@@ -271,6 +255,20 @@ Version 0.14.1 is organised around two themes:
   - Settings → Parsing → *Parse automatically after collection*;
   - Settings → Semantic Mappings → *Semantic mapping engine*.
 - **Upgrading:** replace the source tree. On Linux, run `python3 "Crow Eye.py"`; it creates its venv on first start.
+
+### Measured Against 0.14.0
+
+| Measure | 0.14.0 | 0.14.1 |
+|---|---:|---:|
+| Renames recorded old → new (one case) | 0 | **4,107** |
+| Modes that parse browsers | live | **live, offline, image** |
+| Copies verified against their source | none | **every copy** |
+| Shadow copies Crow-Eye created, left on the target | all | **none** |
+| Rows stored again by a second parse of the same machine | all (Amcache, SRUM, MFT) | **none** |
+| Longest interface stall while a dashboard loads | 70 s | **172 ms** |
+| User Behavior Analytics behaviours | 65 | **81** |
+| Event IDs with their own description | 426 | **617** |
+| Test files in this repository | 84 | **89** |
 
 ---
 
