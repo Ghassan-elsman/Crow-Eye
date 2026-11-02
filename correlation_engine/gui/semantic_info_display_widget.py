@@ -9,7 +9,7 @@ from typing import Dict, Any
 from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel, QTableWidget, QTableWidgetItem
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
-from ui.site_theme import font, set_role, STATUS_COLORS
+from ui.app_theme import font, set_role, STATUS_COLORS
 
 
 class SemanticInfoDisplayWidget(QWidget):

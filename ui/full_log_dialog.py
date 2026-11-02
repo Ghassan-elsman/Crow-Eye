@@ -176,7 +176,7 @@ class FullLogDialog(QtWidgets.QDialog):
         # timestamps line up or they do not.
         self._view.setStyleSheet("""
             QPlainTextEdit { background-color: #0B1226; color: #CBD5E1;
-                             border: 1px solid #334155; border-radius: 6px;
+                             border: 3px solid #334155; border-radius: 6px;
                              font-family: 'JetBrains Mono','Consolas',monospace;
                              font-size: 12px; }
             QScrollBar:vertical { background: #0B1226; width: 11px; margin: 0; border: none; }

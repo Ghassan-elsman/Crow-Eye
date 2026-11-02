@@ -3,13 +3,13 @@
 This document serves as the master intelligence reference for the EYE AI Assistant to identify which forensic artifacts and database tables to query based on investigative categories.
 
 ## 1. App Execution (App Runs)
-Use these artifacts to prove a program was executed on the system.
+Use these artifacts to assess whether a program was executed on the system. Weigh them together: Prefetch, BAM, UserAssist and SRUM are execution indicators; Amcache and ShimCache primarily show a program was present, and do not by themselves prove it ran.
 
 | Artifact | Database | Key Tables | Significance |
 | :--- | :--- | :--- | :--- |
-| **Prefetch** | `prefetch_data.db` | `prefetch_data` | Primary execution proof. Includes `last_executed`, `run_count`, and `run_times` (up to 8 timestamps). |
-| **Amcache** | `amcache.db` | `InventoryApplication`, `InventoryApplicationFile` | Records application installation and execution. High confidence for file paths and hashes. |
-| **ShimCache** | `shimcache.db` | `shimcache_entries` | Proof of existence and potential execution. Focus on `last_modified` timestamp. |
+| **Prefetch** | `prefetch_data.db` | `prefetch_data` | Strongest execution indicator. Includes `last_executed`, `run_count`, and `run_times` (up to 8 timestamps). |
+| **Amcache** | `amcache.db` | `InventoryApplication`, `InventoryApplicationFile` | Records program presence and inventory (installation, file metadata); not by itself proof of execution. High confidence for file paths and SHA-1 hashes. |
+| **ShimCache** | `shimcache.db` | `shimcache_entries` | Presence / compatibility indicator: shows the file existed on the system, not that it ran. `last_modified` is the file's own modification time, not an execution time. |
 | **BAM (Background Activity Moderator)** | `registry_data.db` | `BAM` | Registry-based execution tracking. Provides `last_execution` timestamp for apps. |
 | **UserAssist** | `registry_data.db` | `UserAssist` | Tracks GUI-based program execution. Includes `focus_time` and run count. |
 | **SRUM** | `srum_data.db` | `srum_application_usage` | Resource usage tracking. Proves an app ran and for how long (CPU/Network). |

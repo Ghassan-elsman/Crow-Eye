@@ -311,18 +311,17 @@ def _copy_with_raw_disk_access(source_path: str, dest_path: str) -> bool:
         bool: True if successful
     """
     logger.info("Trying raw disk access copy...")
-    
-    # This is a complex implementation that requires:
-    # 1. Getting file's cluster locations using FSCTL_GET_RETRIEVAL_POINTERS
-    # 2. Opening the raw volume (e.g., \\.\C:)
-    # 3. Reading clusters directly
-    # 4. Reconstructing the file
-    
-    # For now, we'll log that this method is not yet implemented
-    logger.warning("Raw disk access method not yet fully implemented")
-    logger.info("This would require reading NTFS MFT and cluster chains")
-    
-    return False
+    try:
+        from utils.locked_file_extents import copy_by_extents
+    except ImportError:
+        from locked_file_extents import copy_by_extents
+    try:
+        size = copy_by_extents(source_path, dest_path)
+        logger.info("Raw disk copy: %s bytes read by the file's clusters", f"{size:,}")
+        return True
+    except OSError as e:
+        logger.warning("Raw disk copy failed: %s", e.strerror or e)
+        return False
 
 
 def copy_srudb_with_raw_access(dest_path: str, source_path: str = None) -> bool:

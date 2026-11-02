@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 
 from .identity_registry import IdentityRegistry, IdentityRecord, RecordReference
 
+from ..engine import engine_registry
+
 logger = logging.getLogger(__name__)
 
 
@@ -85,7 +87,7 @@ class IdentityAggregator:
             return (False, "Correlation results is None", warnings)
         
         # Check for identity-based engine requirements
-        if engine_type.lower() in ["identity_based", "identity-based", "identity"]:
+        if engine_registry.is_identity_engine(engine_type):
             if not hasattr(results, 'identities'):
                 return (False, "Identity-based results missing 'identities' attribute", warnings)
             
@@ -183,15 +185,15 @@ class IdentityAggregator:
                     # Fall through to normal extraction
             
             # Determine aggregation method based on engine type
-            if engine_type.lower() in ["identity_based", "identity-based", "identity"]:
+            # An unregistered engine type raises (engine_registry); it used
+            # to be aggregated as a time-based run.
+            if engine_registry.is_identity_engine(engine_type):
                 registry = self.extract_from_identity_engine(correlation_results)
-            elif engine_type.lower() in ["time_based", "time-based", "time"]:
+            elif engine_registry.is_time_window_engine(engine_type):
                 registry = self.extract_from_time_based_engine(correlation_results)
             else:
-                warning_msg = f"Unknown engine type: {engine_type}, attempting time-based aggregation"
-                logger.warning(f"[Identity Aggregator] {warning_msg}")
-                self.statistics.warnings.append(warning_msg)
-                registry = self.extract_from_time_based_engine(correlation_results)
+                raise engine_registry.UnknownEngineError(
+                    f"No identity aggregation for engine type {engine_type!r}")
             
             # Log aggregation summary
             if self.debug_mode or self.statistics.aggregation_errors > 0:
@@ -1178,11 +1180,11 @@ class IdentityAggregator:
         Property 13: Multi-Wing Scenario Support
         """
         # Extract identities using standard method
-        if engine_type.lower() in ["identity_based", "identity-based", "identity"]:
+        if engine_registry.is_identity_engine(engine_type):
             registry = self._extract_from_identity_engine_with_wing(
                 correlation_results, wing_id, wing_name
             )
-        elif engine_type.lower() in ["time_based", "time-based", "time"]:
+        elif engine_registry.is_time_window_engine(engine_type):
             registry = self._extract_from_time_based_engine_with_wing(
                 correlation_results, wing_id, wing_name
             )
@@ -1596,8 +1598,29 @@ class IdentityAggregator:
         logger.info(f"[Identity Aggregator] Strategy: Use matched_application column (primary) + feather_records (fallback)")
         
         conn = sqlite3.connect(database_path)
+        # One commit at the end, so a crash leaves the previous state: NORMAL
+        # (the results database is in WAL) drops a sync per page, not safety.
+        conn.execute("PRAGMA synchronous=NORMAL")
         cursor = conn.cursor()
-        
+        # Written in batches with executemany: one UPDATE statement per match
+        # was 40% of the identity semantic phase on 76,000 matches.
+        pending = []
+
+        def flush():
+            if not pending:
+                return
+            sql = "UPDATE matches SET feather_records = ? WHERE match_id = ?"
+            try:
+                cursor.executemany(sql, pending)
+            except Exception:
+                # One bad row must not lose the batch: each alone, as before.
+                for row in pending:
+                    try:
+                        cursor.execute(sql, row)
+                    except Exception as e:
+                        logger.error(f"[Identity Aggregator] Error processing match {row[1]}: {e}")
+            pending.clear()
+
         try:
             # Get all matches for this execution (including matched_application column)
             cursor.execute("""
@@ -1692,14 +1715,14 @@ class IdentityAggregator:
                                         records_with_identity += 1
                                         used_feather_records += 1
                     
-                    # Update the match if modified
+                    # Update the match if modified (and not when the
+                    # records already read exactly so: nothing to rewrite)
                     if modified:
                         updated_feather_records = json.dumps(records)
-                        cursor.execute("""
-                            UPDATE matches
-                            SET feather_records = ?
-                            WHERE match_id = ?
-                        """, (updated_feather_records, match_id))
+                        if updated_feather_records != feather_records_json:
+                            pending.append((updated_feather_records, match_id))
+                            if len(pending) >= 2000:
+                                flush()
                         updated_count += 1
                 
                 except Exception as e:
@@ -1707,6 +1730,7 @@ class IdentityAggregator:
                     continue
             
             # Commit changes
+            flush()
             conn.commit()
             logger.info(f"[Identity Aggregator] Updated {updated_count:,} matches with identity fields")
             logger.info(f"[Identity Aggregator] Total records with identity: {records_with_identity:,}")

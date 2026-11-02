@@ -202,3 +202,26 @@ def test_taskbar_text_does_not_repeat_the_word_pinned(artifacts_dir):
     events = by_rule(run(artifacts_dir), "taskbar_pinned")
     assert len(events) == 1
     assert "pinned with" not in events[0]["description"]
+
+
+def test_an_internal_volume_is_not_a_device(artifacts_dir):
+    """MountPoints2 lists every volume the user's shell saw. C:, a second
+    internal partition and a GUID no USB drive had are routine and never
+    called removable; the USB stick's GUID and letter stay notable; a share
+    is said as a share."""
+    events = by_rule(run(artifacts_dir), "mounted_volume")
+    kind = dict((e["details"]["volume"], (e["details"]["volume_kind"],
+                                          e["severity"]))
+                for e in events)
+    assert kind["C"] == ("internal_or_unknown", "routine"), kind
+    assert kind["E"] == ("internal_or_unknown", "routine"), kind
+    assert kind["{bbbb2222-0000-0000-0000-000000000002}"] == (
+        "internal_or_unknown", "routine"), kind
+    assert kind["{aaaa1111-0000-0000-0000-000000000001}"] == (
+        "usb", "notable"), kind
+    assert kind["F"] == ("usb_letter", "notable"), kind
+    assert kind["##fileserver#finance"][0] == "network", kind
+    said = text_of(events)
+    assert r"the network share '\\fileserver\finance'" in said, said
+    assert "not known to be removable" in said, said
+

@@ -107,14 +107,14 @@ class SearchWidget(QtWidgets.QWidget):
             QLineEdit {{
                 background-color: {Colors.BG_TABLES};
                 color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_SUBTLE};
+                border: 3px solid {Colors.BORDER_SUBTLE};
                 border-radius: 4px;
                 padding: 6px 8px;
                 font-size: 11px;
                 min-height: 28px;
             }}
             QLineEdit:focus {{
-                border: 1px solid {Colors.ACCENT_CYAN};
+                border: 3px solid {Colors.ACCENT_CYAN};
             }}
             QCheckBox {{
                 color: {Colors.TEXT_SECONDARY};

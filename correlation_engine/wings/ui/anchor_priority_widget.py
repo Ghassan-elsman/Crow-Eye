@@ -9,24 +9,24 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, pyqtSignal
 
-# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+# The site look (ui/app_theme.py); standalone it keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 def _look(widget, role=None, status=None, variant=None):
     """A role / meaning colour / button variant through the window sheet."""
-    if _site is None:
+    if _theme is None:
         return widget
     widget.setStyleSheet("")
     if role:
-        _site.set_role(widget, role)
+        _theme.set_role(widget, role)
     if status:
-        _site.set_status(widget, status)
+        _theme.set_status(widget, status)
     if variant:
-        _site.set_variant(widget, variant)
+        _theme.set_variant(widget, variant)
     return widget
 
 

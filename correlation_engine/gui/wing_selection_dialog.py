@@ -11,14 +11,14 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .ui_styling import CorrelationEngineStyles
-from ui.site_theme import (begin_site_theme, apply_site_theme, set_role, set_variant,
-                           set_status, font as site_font)
+from ui.app_theme import (begin_theme, apply_theme, set_role, set_variant,
+                           set_status, font as theme_font)
 
 # The wing cards: titleless group boxes, so none of the site group box's title
 # margin; the hover keeps the old affordance in the site's indigo.
 _EXTRA = """
 QGroupBox#wingCard { margin-top: 0px; padding: 10px; }
-QGroupBox#wingCard:hover { border-color: rgba(99, 102, 241, 0.55); }
+QGroupBox#wingCard:hover { border-color: #3B4093; }
 """
 
 
@@ -42,9 +42,9 @@ class WingSelectionDialog(QDialog):
         self.wing_checkboxes = {} # wing_id -> QCheckBox
         self.selected_wing_ids = []
 
-        begin_site_theme(self, extra=_EXTRA)
+        begin_theme(self, extra=_EXTRA)
         self._init_ui()
-        apply_site_theme(self, extra=_EXTRA)
+        apply_theme(self, extra=_EXTRA)
         
         # Select all by default
         self._select_all()
@@ -63,7 +63,7 @@ class WingSelectionDialog(QDialog):
         
         # Header
         header_label = QLabel("Select which Wings to execute:")
-        header_label.setFont(site_font("ui", 16, QFont.Bold))
+        header_label.setFont(theme_font("ui", 16, QFont.Bold))
         layout.addWidget(header_label)
         
         # Info label
@@ -159,7 +159,10 @@ class WingSelectionDialog(QDialog):
         
         # Checkbox with Wing name
         checkbox = QCheckBox(wing.wing_name)
-        checkbox.setFont(site_font("ui", 15, QFont.Bold))
+        checkbox.setFont(theme_font("ui", 15, QFont.Bold))
+        from .crow_eye_icons import pair_icon_size, wing_icon
+        checkbox.setIcon(wing_icon(wing))  # the Wing, then the engine that runs it
+        checkbox.setIconSize(pair_icon_size(16))
         
         # Store checkbox reference
         self.wing_checkboxes[wing.wing_id] = checkbox
@@ -180,7 +183,9 @@ class WingSelectionDialog(QDialog):
         details_layout.setSpacing(15)
         
         # Feather count
-        feather_count_label = QLabel(f"{len(wing.feathers)} Feather(s)")
+        from .crow_eye_icons import icon_label_html
+        feather_count_label = QLabel(icon_label_html(
+            "feather", f"{len(wing.feathers)} Feather(s)", 16))
         set_role(feather_count_label, "muted")
         details_layout.addWidget(feather_count_label)
         
@@ -200,7 +205,7 @@ class WingSelectionDialog(QDialog):
             scoring_icon = QLabel()
             scoring_icon.setPixmap(CrowEyeIcons.chart().pixmap(12, 12))
             scoring_label = QLabel("Weighted Scoring")
-            scoring_label.setFont(site_font("ui", 12, QFont.Bold))
+            scoring_label.setFont(theme_font("ui", 12, QFont.Bold))
             set_status(scoring_label, "accent")
             scoring_row.addWidget(scoring_icon)
             scoring_row.addWidget(scoring_label)

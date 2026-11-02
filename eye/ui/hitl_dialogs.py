@@ -1,5 +1,5 @@
 """
-Human-in-the-Loop (HitL) Approval Dialogs for EYE AI Forensic Assistant
+Human-in-the-Loop (HitL) Approval Dialogs for Eye AI Forensic Assistant
 
 This module provides dialogs for user approval of AI-proposed operations:
 - SemanticMappingApprovalDialog: Approve/reject/edit semantic mapping rules
@@ -62,7 +62,7 @@ class SemanticMappingApprovalDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         
         # Header section
-        header_label = QLabel("EYE has proposed a new semantic mapping rule:")
+        header_label = QLabel("Eye has proposed a new semantic mapping rule:")
         header_label.setStyleSheet(
             "font-size: 12pt; font-weight: bold; color: #00FFFF; background: transparent;"
         )
@@ -86,7 +86,7 @@ class SemanticMappingApprovalDialog(QDialog):
                 font-size: 11pt;
                 font-weight: bold;
                 color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 6px;
                 padding-top: 18px;
                 margin-top: 6px;
@@ -109,7 +109,7 @@ class SemanticMappingApprovalDialog(QDialog):
         self.rule_text_edit.setStyleSheet("""
             QTextEdit {
                 background: #0F172A;
-                border: 1px solid #334155;
+                border: 3px solid #334155;
                 padding: 12px;
                 color: #F8FAFC;
                 font-family: 'Consolas', 'Courier New', monospace;
@@ -203,11 +203,11 @@ class SemanticMappingApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        """The site look (ui/app_theme.py): one sheet, the inline sheets read
         back into roles, the buttons into the role family."""
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
         except Exception:
             pass
     
@@ -226,7 +226,7 @@ class SemanticMappingApprovalDialog(QDialog):
             self.rule_text_edit.setStyleSheet("""
                 QTextEdit {
                     background: #1E293B;
-                    border: 2px solid #F59E0B;
+                    border: 3px solid #F59E0B;
                     padding: 12px;
                     color: #F8FAFC;
                     font-family: 'Consolas', 'Courier New', monospace;
@@ -259,7 +259,7 @@ class SemanticMappingApprovalDialog(QDialog):
             self.rule_text_edit.setStyleSheet("""
                 QTextEdit {
                     background: #0F172A;
-                    border: 1px solid #334155;
+                    border: 3px solid #334155;
                     padding: 12px;
                     color: #F8FAFC;
                     font-family: 'Consolas', 'Courier New', monospace;
@@ -408,7 +408,7 @@ class FileWriteApprovalDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         
         # Header section
-        header_label = QLabel("EYE has requested a file write operation:")
+        header_label = QLabel("Eye has requested a file write operation:")
         header_label.setStyleSheet(
             "font-size: 12pt; font-weight: bold; color: #00FFFF; background: transparent;"
         )
@@ -431,7 +431,7 @@ class FileWriteApprovalDialog(QDialog):
                 font-size: 11pt;
                 font-weight: bold;
                 color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 6px;
                 padding-top: 18px;
                 margin-top: 6px;
@@ -473,7 +473,7 @@ class FileWriteApprovalDialog(QDialog):
                     font-size: 11pt;
                     font-weight: bold;
                     color: #00FFFF;
-                    border: 2px solid #00FFFF;
+                    border: 3px solid #00FFFF;
                     border-radius: 6px;
                     padding-top: 18px;
                     margin-top: 6px;
@@ -496,7 +496,7 @@ class FileWriteApprovalDialog(QDialog):
             self.content_text_edit.setStyleSheet("""
                 QTextEdit {
                     background: #0F172A;
-                    border: 1px solid #334155;
+                    border: 3px solid #334155;
                     padding: 12px;
                     color: #F8FAFC;
                     font-family: 'Consolas', 'Courier New', monospace;
@@ -566,11 +566,11 @@ class FileWriteApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        """The site look (ui/app_theme.py): one sheet, the inline sheets read
         back into roles, the buttons into the role family."""
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
         except Exception:
             pass
     
@@ -657,7 +657,7 @@ class ReportExportApprovalDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         
         # Header section
-        header_label = QLabel("EYE has requested to export a report:")
+        header_label = QLabel("Eye has requested to export a report:")
         header_label.setStyleSheet(
             "font-size: 12pt; font-weight: bold; color: #00FFFF; background: transparent;"
         )
@@ -680,7 +680,7 @@ class ReportExportApprovalDialog(QDialog):
                 font-size: 11pt;
                 font-weight: bold;
                 color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 6px;
                 padding-top: 18px;
                 margin-top: 6px;
@@ -782,11 +782,11 @@ class ReportExportApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        """The site look (ui/app_theme.py): one sheet, the inline sheets read
         back into roles, the buttons into the role family."""
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
         except Exception:
             pass
     
@@ -899,7 +899,7 @@ class CaseVariableApprovalDialog(QDialog):
         layout.setContentsMargins(16, 16, 16, 16)
         
         # Header section
-        header_label = QLabel("EYE has requested to set a case variable:")
+        header_label = QLabel("Eye has requested to set a case variable:")
         header_label.setStyleSheet(
             "font-size: 12pt; font-weight: bold; color: #00FFFF; background: transparent;"
         )
@@ -922,7 +922,7 @@ class CaseVariableApprovalDialog(QDialog):
                 font-size: 11pt;
                 font-weight: bold;
                 color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 6px;
                 padding-top: 18px;
                 margin-top: 6px;
@@ -967,7 +967,7 @@ class CaseVariableApprovalDialog(QDialog):
                     font-size: 11pt;
                     font-weight: bold;
                     color: #00FFFF;
-                    border: 2px solid #00FFFF;
+                    border: 3px solid #00FFFF;
                     border-radius: 6px;
                     padding-top: 18px;
                     margin-top: 6px;
@@ -1063,11 +1063,11 @@ class CaseVariableApprovalDialog(QDialog):
         layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        """The site look (ui/app_theme.py): one sheet, the inline sheets read
         back into roles, the buttons into the role family."""
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
         except Exception:
             pass
     

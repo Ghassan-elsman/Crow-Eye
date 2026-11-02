@@ -1,6 +1,6 @@
 import React, { useState, memo } from 'react';
 import type { ToolOutputEntry } from './types';
-import { IconWrench } from './Icons';
+import { IconWrench, correlationToolIcon } from './Icons';
 import './ToolOutput.css';
 
 /**
@@ -18,11 +18,14 @@ interface ToolOutputProps {
 const ToolEntry: React.FC<{ entry: ToolOutputEntry; index: number }> = ({ entry, index }) => {
   const [open, setOpen] = useState(false);
   const hasParams = entry.parameters && Object.keys(entry.parameters).length > 0;
+  // A Correlation Engine tool shows its Wing / engine icon, as in the trace.
+  const correlation = correlationToolIcon(entry.name, entry.parameters, 16);
   return (
     <div className="tool-output-entry">
       <button className="tool-output-entry-head" onClick={() => setOpen(!open)}>
         <span className="tool-output-caret">{open ? '▾' : '▸'}</span>
         <span className="tool-output-index">{index + 1}.</span>
+        {correlation && <span className="tool-output-icon">{correlation}</span>}
         <span className="tool-output-name">{entry.name}</span>
         <span className={`tool-output-badge ${entry.success ? 'tool-output-badge--ok' : 'tool-output-badge--fail'}`}>
           {entry.success ? 'SUCCESS' : 'FAILED'}

@@ -95,6 +95,11 @@ def _chunk_markdown(content: str, min_chars: int = 50, max_chars: int = 1500) ->
     return chunks
 
 
+
+# A knowledge file larger than this is sent as its relevant sections only
+# (RAGService.relevant_sections).
+SECTION_BUDGET_CHARS = 12000
+
 class EmbeddingClient:
     """Base class for embedding generation."""
     def embed_text(self, text: str, is_query: bool = False) -> List[float]:
@@ -351,6 +356,63 @@ class RAGService:
             self._build_lexical_index()
         return self._bm25_over(query, self.lexical_index, self.lexical_df, self.lexical_avg_len)
 
+    # ---- section-level retrieval ------------------------------------------
+    _STOP = frozenset("the and for with from that this which what when where were was are how "
+                      "who whom whose any all each every have has had been into onto than then "
+                      "them they their there these those give show list tell about over under "
+                      "machine computer case did does done most more some".split())
+
+    @classmethod
+    def _query_terms(cls, user_query: str, keywords=None) -> set:
+        words = set(re.findall(r"[a-z0-9_$\-]{3,}", (user_query or "").lower()))
+        words |= {k.lower() for k in (keywords or []) if k}
+        return {w for w in words if w not in cls._STOP}
+
+    @staticmethod
+    def relevant_sections(content: str, terms, budget_chars: int) -> str:
+        """The parts of a knowledge file that bear on the question.
+
+        Whole files were sent before: the 100 KB schema reference on every step and
+        a 44 KB registry sheet whenever "registry" came up, most of it about other
+        artifacts. A file over the budget is split on its markdown headings; the
+        opening section is kept for orientation, then the sections sharing the most
+        terms with the question (heading matches count triple), in file order."""
+        if not content or len(content) <= budget_chars:
+            return content
+        parts = re.split(r"(?m)^(?=#{1,4} )", content)
+        if len(parts) < 2:
+            return content[:budget_chars]
+        intro, sections = parts[0], parts[1:]
+        if not intro.strip():
+            intro, sections = sections[0], sections[1:]
+        intro = intro[:1500]
+        terms = {t for t in (terms or []) if t}
+        scored = []
+        for i, sec in enumerate(sections):
+            low = sec.lower()
+            head = low.split("\n", 1)[0]
+            score = sum(3 for t in terms if t in head) + sum(1 for t in terms if t in low)
+            if score:
+                scored.append((score, i))
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        chosen, used = [], len(intro)
+        for score, i in scored:
+            sec = sections[i]
+            if used + len(sec) > budget_chars:
+                sec = sec[:max(0, budget_chars - used)]
+                if len(sec) < 400:
+                    continue
+            chosen.append(i)
+            used += len(sec)
+            if used >= budget_chars:
+                break
+        body = "".join(sections[i] if sum(len(sections[j]) for j in chosen) <= budget_chars
+                       else sections[i][:budget_chars] for i in sorted(chosen))
+        omitted = len(sections) - len(chosen)
+        tail = ("\n\n[%d other section(s) of this file not shown: not related to the question]" % omitted
+                if omitted else "")
+        return (intro + body)[:budget_chars] + tail
+
     def _load_keyword_mapping(self) -> Dict[str, str]:
         """
         Load keyword to knowledge file mapping.
@@ -479,6 +541,7 @@ class RAGService:
 
         # ---- 1. Deterministic keyword-mapped docs (highest priority) ----
         if keywords:
+            terms = self._query_terms(user_query, keywords)
             for keyword in keywords:
                 fname = self.keyword_mapping.get(keyword.lower())
                 if not fname or fname in seen_files:
@@ -486,6 +549,7 @@ class RAGService:
                 content = self._load_knowledge_file(fname)
                 if content:
                     seen_files.add(fname)
+                    content = self.relevant_sections(content, terms, SECTION_BUDGET_CHARS)
                     context_parts.append(f"## {keyword.title()} Knowledge\n{content}")
                     self.logger.debug(f"Retrieved knowledge for keyword: {keyword} ({fname})")
 

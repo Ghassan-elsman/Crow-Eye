@@ -40,8 +40,10 @@ DEFAULTS = {
     "max_sub_questions": 6,
     # Hierarchical plan-driven investigation (verdict → narrative → sub-narrative).
     "enable_hierarchy": True,
-    "max_narratives": 12,
-    "max_sub_narratives": 8,
+    # Upper bounds; the planner sizes each plan to its question (2026-11-02: 12 x 8
+    # made a one-fact question cost 27-53 model calls).
+    "max_narratives": 4,
+    "max_sub_narratives": 3,
     "max_iterations": 300,
     "enable_premise_verification": True,
     "enable_question_memory": True,

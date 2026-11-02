@@ -57,6 +57,30 @@ const ModelBadge: React.FC<ModelBadgeProps> = ({ stats, bridgeReady }) => {
             <span className="tooltip-key">Messages</span>
             <span className="tooltip-val">{stats.total_messages ?? 0}</span>
           </div>
+          {stats.provider_usage && stats.provider_usage.calls > 0 && (
+            <>
+              <div className="tooltip-row">
+                <span className="tooltip-key">Model calls</span>
+                <span className="tooltip-val">{stats.provider_usage.calls.toLocaleString()}</span>
+              </div>
+              <div className="tooltip-row">
+                <span className="tooltip-key">Sent / cached</span>
+                <span className="tooltip-val">
+                  {(stats.provider_usage.input_tokens + stats.provider_usage.cache_creation_input_tokens).toLocaleString()}
+                  {' / '}
+                  {stats.provider_usage.cache_read_input_tokens.toLocaleString()}
+                </span>
+              </div>
+              <div className="tooltip-row">
+                <span className="tooltip-key">Written</span>
+                <span className="tooltip-val">{stats.provider_usage.output_tokens.toLocaleString()} tokens</span>
+              </div>
+              <div className="tooltip-row" title="What these tokens would cost at API list price; on a Claude plan they count against the plan's limits instead.">
+                <span className="tooltip-key">List-price value</span>
+                <span className="tooltip-val">${stats.provider_usage.cost_usd.toFixed(2)}</span>
+              </div>
+            </>
+          )}
           {(stats.truncation_count ?? 0) > 0 && (
             <div className="tooltip-row tooltip-row--warn">
               <span className="tooltip-key">Truncations</span>

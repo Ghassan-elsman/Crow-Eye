@@ -80,7 +80,7 @@ class CollectionCoordinator:
     
     This class coordinates between the artifact collector, detector, and parser
     invoker. It provides:
-    - Workflow orchestration (collector → detector → invoker)
+    - Workflow orchestration (collector -> detector -> invoker)
     - Progress aggregation from multiple sources
     - Error aggregation and reporting
     - Collection summary generation

@@ -120,7 +120,10 @@ class DefaultPipelineCreator:
         wings = []
         
         # Look for all wing files in the directory
-        for wing_path in wings_dir.glob("*.json"):
+        # Sorted by name, case-insensitively: glob order is the filesystem's
+        # (NTFS name order, ext4 hash order, tmpfs newest first), and the run
+        # order must not depend on it (2026-11-02, E9).
+        for wing_path in sorted(wings_dir.glob("*.json"), key=lambda p: p.name.upper()):
             try:
                 wing_config = WingConfig.load_from_file(str(wing_path))
                 wings.append(wing_config)

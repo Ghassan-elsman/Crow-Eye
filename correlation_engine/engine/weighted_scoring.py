@@ -101,6 +101,19 @@ class WeightedScoringEngine:
                 return spec.get(key, default)
             return getattr(spec, key, default)
 
+        # Feathers the wing loads for its rules but that must never move the
+        # score. Execution Without Trace loads Prefetch only so its absence
+        # rule can test for a MISSING Prefetch entry; counting a PRESENT one
+        # raised the "trace gap" score (AmCache + ShimCache + Prefetch reached
+        # the top label). A weight of 0.0 cannot express this: the integration
+        # layer reads 0.0 as "unset" and substitutes the global default weight.
+        excluded = set(scoring_config.get('score_excluded_feathers') or [])
+        # A Behaviour feather is context (engine/behaviour_context): derived
+        # from the artifacts, so it never raises the score either.
+        from .behaviour_context import is_context_type
+        excluded |= {(_read(s, 'feather_id', '') or '') for s in feathers
+                     if is_context_type(_read(s, 'artifact_type', ''))}
+
         weights_raw = []
         for spec in feathers:
             try:
@@ -109,14 +122,21 @@ class WeightedScoringEngine:
                 w = 0.0
             if w < 0.0:
                 w = 0.0 # negative weights would invert semantics — clamp.
+            if (_read(spec, 'feather_id', '') or '') in excluded:
+                w = 0.0
             weights_raw.append(w)
 
         # ---- Step 2: silent-zero fix — equal weights if all are zero ----
         total_raw = sum(weights_raw)
         used_equal_weight = False
         if total_raw <= 0.0:
-            # User didn't configure weights; treat every feather as equal.
-            weights_effective = [1.0 / n_feathers] * n_feathers
+            # User didn't configure weights; treat every feather as equal
+            # (except the ones the wing excludes from scoring).
+            scored = [(_read(s, 'feather_id', '') or '') not in excluded
+                      for s in feathers]
+            n_scored = sum(scored)
+            weights_effective = [(1.0 / n_scored) if (ok and n_scored) else 0.0
+                                 for ok in scored]
             total_effective = 1.0
             used_equal_weight = True
         else:
@@ -143,6 +163,7 @@ class WeightedScoringEngine:
 
             breakdown[feather_id] = {
                 'matched': is_matched,
+                'excluded_from_score': feather_id in excluded,
                 'weight': raw_weight, # what the user configured
                 'weight_normalised': round(w_norm, 4), # share of total used in score
                 'contribution': round(contribution, 4),
@@ -150,12 +171,35 @@ class WeightedScoringEngine:
                 'tier_name': tier_name,
             }
 
+        # ---- Step 5: present-feather caps ----
+        # Excluding a feather keeps it from ADDING to the score, but other
+        # feathers can still carry the match to the top band. In Execution
+        # Without Trace, AmCache + ShimCache + a present Prefetch + any matched
+        # MFT/USN record scored 0.97 - "Strong Indicators of Trace Gap" for a
+        # program whose Prefetch trace exists. `cap_when_present` maps a
+        # feather_id to the highest interpretation level the match may reach
+        # while that feather is matched.
+        uncapped_score = total_score
+        capped_by = []
+        caps = scoring_config.get('cap_when_present') or {}
+        if isinstance(caps, dict) and caps:
+            levels = scoring_config.get('score_interpretation', {}) or {}
+            for feather_id, level in caps.items():
+                if feather_id not in match_records:
+                    continue
+                ceiling = self._ceiling_for_level(level, levels)
+                if ceiling is None:
+                    continue
+                if total_score > ceiling:
+                    total_score = ceiling
+                capped_by.append(feather_id)
+
         interpretation = self._interpret_score(
             total_score,
             scoring_config.get('score_interpretation', {})
         )
 
-        return {
+        result = {
             'score': round(total_score, 4),
             'interpretation': interpretation,
             'breakdown': breakdown,
@@ -164,6 +208,39 @@ class WeightedScoringEngine:
             'weights_normalised': True,
             'used_equal_weight_fallback': used_equal_weight,
         }
+        if capped_by:
+            result['capped_by'] = capped_by
+            result['uncapped_score'] = round(uncapped_score, 4)
+        return result
+
+    @staticmethod
+    def _ceiling_for_level(level: Any, interpretation_config: Dict) -> Any:
+        """Highest score that still interprets at ``level``, or None.
+
+        The ceiling sits 0.01 below the next higher level's ``min`` (so a
+        two-decimal display never rounds it up into that level), and never
+        below the level's own ``min``. None when the level is unknown or is
+        already the top level - there is nothing to cap.
+        """
+        def _min_of(cfg):
+            try:
+                if isinstance(cfg, dict):
+                    return float(cfg.get('min', 0.0))
+                return float(cfg)
+            except (TypeError, ValueError):
+                return None
+
+        if not isinstance(interpretation_config, dict) or level not in interpretation_config:
+            logger.warning("[WeightedScoring] cap_when_present names unknown level %r - not capped", level)
+            return None
+        own_min = _min_of(interpretation_config[level])
+        if own_min is None:
+            return None
+        higher = [m for m in (_min_of(c) for c in interpretation_config.values())
+                  if m is not None and m > own_min]
+        if not higher:
+            return None
+        return max(own_min, round(min(higher) - 0.01, 4))
     
     def _interpret_score(self, score: float, 
                         interpretation_config: Dict) -> str:

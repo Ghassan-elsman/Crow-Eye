@@ -34,7 +34,7 @@ import json
 import argparse
 import subprocess
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from pathlib import Path
 import sqlite3
 
@@ -179,7 +179,23 @@ class PartitionInfo:
     is_bootable: bool = False
     # Data source tracking
     source: str = "Current System"
-    
+    # Where the volume's own structures sit (volume_layout.py): sizes on disk, shadow-copy
+    # storage from WMI, and extents as (kind, offset from the volume start, length), kind
+    # being 'mft', 'usn' or 'vss'. Empty for a volume that is not NTFS or not readable, with
+    # the reason in layout_note.
+    cluster_size: int = 0
+    mft_bytes: int = 0
+    usn_bytes: int = 0
+    vss_used: int = 0
+    vss_allocated: int = 0
+    vss_max: int = 0
+    vss_copies: int = 0
+    vss_diff_volume: str = ""
+    vss_oldest: str = ""
+    vss_newest: str = ""
+    layout_note: str = ""
+    extents: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for easy serialization"""
         return asdict(self)
@@ -248,6 +264,31 @@ class PartitionAnalyzer:
                 print(f"[Partition Analyzer] Failed to initialize WMI: {e}")
                 self.wmi_available = False
     
+    _PS_SECTIONS = {
+        'partitions': ("Get-Partition | Select-Object DiskNumber, PartitionNumber, DriveLetter, Type, GptType, "
+                       "Offset, Size, IsHidden, IsActive"),
+        'disks': ("Get-Disk | Select-Object Number, FriendlyName, Size, PartitionStyle, BootFromDisk, "
+                  "SerialNumber, BusType, OperationalStatus, Signature"),
+    }
+
+    def _ps(self, name):
+        """Rows of one Storage-module query, from ONE PowerShell process for all of them, kept a minute
+        and shared with the other windows (volume_layout.wmi_snapshot). A PowerShell launch per
+        unknown partition, one per disk and one for the disks cost about a second each."""
+        cache = getattr(self, '_ps_cache', None)
+        if cache is None:
+            try:
+                try:
+                    from Artifacts_Collectors import volume_layout as _vl
+                except ImportError:
+                    import volume_layout as _vl
+                cache = _vl.wmi_snapshot(dict(self._PS_SECTIONS))
+            except Exception as e:
+                print(f"[Partition Analyzer] Storage query failed: {e}")
+                cache = {}
+            self._ps_cache = cache
+        return cache.get(name) or []
+
     def get_all_partitions(self) -> List[PartitionInfo]:
         """
         Get information about all partitions on the system.
@@ -285,31 +326,10 @@ class PartitionAnalyzer:
                 part_info.is_swap = self._is_swap_partition(partition)
                 part_info.is_linux = self._is_linux_partition(partition)
                 
-                # === NEW: Windows hibernation & modern swap detection (for mounted NTFS) ===
-                if part_info.mountpoint and os.path.exists(part_info.mountpoint):
-                    is_windows_mount = (os.name == 'nt' and part_info.mountpoint.endswith(":\\")) or \
-                                     (os.name != 'nt' and part_info.is_system)
-                    
-                    if is_windows_mount:
-                        try:
-                            # Windows 10/11 uses swapfile.sys (virtual swap)
-                            swapfile = os.path.join(part_info.mountpoint, "swapfile.sys")
-                            if os.path.exists(swapfile):
-                                part_info.is_swap = True
-                                if "Basic" in part_info.partition_type or part_info.partition_type == "Unknown":
-                                    part_info.partition_type = "Windows Swap Partition (swapfile.sys)"
-                                if not part_info.volume_label:
-                                    part_info.volume_label = "Windows Virtual Swap"
+                # pagefile.sys, swapfile.sys and hiberfil.sys are files ON a Windows volume, not
+                # a kind of partition: they no longer turn the volume into "swap" or give it a
+                # made-up label and type (paging_files() reports them for the window).
 
-                            # hiberfil.sys = hibernation file
-                            hiberfil = os.path.join(part_info.mountpoint, "hiberfil.sys")
-                            if os.path.exists(hiberfil):
-                                part_info.is_swap = True
-                                if "Hibernation" not in part_info.partition_type:
-                                    part_info.partition_type += " (Hibernation)"
-                        except (PermissionError, OSError, FileNotFoundError):
-                            pass
-                
                 # Get additional Windows-specific info if WMI is available
                 if self.wmi_available:
                     wmi_info = self._get_wmi_partition_info(partition.device)
@@ -346,17 +366,8 @@ class PartitionAnalyzer:
         disks = []
         try:
             # Get Disk Info
-            cmd = "Get-Disk | Select-Object Number, FriendlyName, Size, PartitionStyle, BootFromDisk, SerialNumber, BusType, OperationalStatus, Signature | ConvertTo-Json"
-            result = subprocess.run(["powershell", "-Command", cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
-            
-            if result.returncode != 0 or not result.stdout.strip():
-                return []
-                
-            try:
-                disk_data = json.loads(result.stdout)
-                if isinstance(disk_data, dict):
-                    disk_data = [disk_data]
-            except json.JSONDecodeError:
+            disk_data = self._ps('disks')
+            if not disk_data:
                 return []
                 
             for d in disk_data:
@@ -382,15 +393,9 @@ class PartitionAnalyzer:
                 
                 # Get Partition Info from PowerShell to enrich partitions and assign them to this disk
                 try:
-                    p_cmd = f"Get-Partition -DiskNumber {idx} | Select-Object PartitionNumber, DriveLetter, Type, GptType, Offset, Size, IsHidden, IsActive | ConvertTo-Json"
-                    p_res = subprocess.run(["powershell", "-Command", p_cmd], capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW, timeout=60)
-                    
-                    if p_res.returncode == 0 and p_res.stdout.strip():
+                    p_data = [r for r in self._ps('partitions') if r.get('DiskNumber') == idx]
+                    if p_data:
                         try:
-                            p_data = json.loads(p_res.stdout)
-                            if isinstance(p_data, dict):
-                                p_data = [p_data]
-                                
                             for pd in p_data:
                                 p_num = pd.get('PartitionNumber', 0)
                                 p_offset = pd.get('Offset', 0)
@@ -531,11 +536,43 @@ class PartitionAnalyzer:
 
     def get_disks_with_partitions(self) -> List[DiskInfo]:
         """
-        Get information about all physical disks and their partitions.
-        
+        Get information about all physical disks and their partitions, each NTFS volume
+        with its $MFT, USN journal and shadow-copy storage laid out (attach_volume_layout).
+
         Returns:
             List of DiskInfo objects containing disk and partition details
         """
+        disks = self._get_disks_with_partitions()
+        self.attach_volume_layout(disks)
+        return disks
+
+    def attach_volume_layout(self, disks: List[DiskInfo]) -> None:
+        """Fill each mounted NTFS partition's layout fields. A failure leaves them empty."""
+        try:
+            try:
+                from Artifacts_Collectors import volume_layout
+            except ImportError:
+                import volume_layout
+            storage = volume_layout.shadow_storage()       # cached a minute (wmi_snapshot)
+        except Exception as e:
+            print(f"[Partition Analyzer] Volume layout unavailable: {e}")
+            return
+        for disk in disks:
+            for part in disk.partitions:
+                letter = (part.mountpoint or '').rstrip(':\\')
+                if len(letter) != 1 or str(part.fstype).upper() != 'NTFS':
+                    continue
+                try:
+                    lay = volume_layout.volume_layout(letter, storage)
+                except Exception as e:
+                    part.layout_note = f"layout failed: {e}"
+                    continue
+                for key, value in lay.items():
+                    setattr(part, key, value)
+                if lay['layout_note']:
+                    print(f"[Partition Analyzer] {letter}: {lay['layout_note']}")
+
+    def _get_disks_with_partitions(self) -> List[DiskInfo]:
         disks = []
         partitions = self.get_all_partitions()
         
@@ -679,34 +716,25 @@ class PartitionAnalyzer:
                                     # Map WMI partition index to disk/partition numbers
                                     # WMI Name format: "Disk #0, Partition #1" (Partition # is 0-based index usually, but PowerShell uses 1-based)
                                     # Actually, let's try to match by Offset which is reliable
-                                    ps_cmd = f"Get-Partition -DiskNumber {idx} | Where-Object {{$_.Offset -eq {wpart_offset}}} | Select-Object -ExpandProperty Type"
-                                    
-                                    import subprocess
-                                    # Add timeout to prevent hanging (e.g., if AV blocks PowerShell)
-                                    result = subprocess.run(
-                                        ["powershell", "-Command", ps_cmd], 
-                                        capture_output=True, 
-                                        text=True, 
-                                        creationflags=subprocess.CREATE_NO_WINDOW,
-                                        timeout=5  # 5 second timeout
-                                    )
-                                    if result.returncode == 0:
-                                        ps_type = result.stdout.strip()
-                                        if ps_type:
-                                            # PowerShell returns types like "Basic", "Recovery", "System", "IFS" (Installable File System - often Linux)
-                                            if "IFS" in ps_type or "Installable" in ps_type:
-                                                part_type = "Linux Filesystem (Likely)"
-                                                is_linux = True
-                                                fstype = "ext4" # Assumption for IFS
-                                            elif "Recovery" in ps_type:
-                                                part_type = "Recovery Partition"
-                                                fstype = "NTFS"
-                                            elif "System" in ps_type:
-                                                part_type = "EFI System Partition"
-                                                is_efi = True
-                                                fstype = "FAT32"
-                                            elif "Reserved" in ps_type:
-                                                part_type = "Microsoft Reserved"
+                                    # One Get-Partition for every partition (self._ps): a PowerShell launch per unknown
+                                    # partition cost about a second each.
+                                    ps_type = next((str(r.get('Type') or '') for r in self._ps('partitions')
+                                                    if r.get('DiskNumber') == idx and r.get('Offset') == wpart_offset), '')
+                                    if ps_type:
+                                        # PowerShell returns types like "Basic", "Recovery", "System", "IFS" (Installable File System - often Linux)
+                                        if "IFS" in ps_type or "Installable" in ps_type:
+                                            part_type = "Linux Filesystem (Likely)"
+                                            is_linux = True
+                                            fstype = "ext4" # Assumption for IFS
+                                        elif "Recovery" in ps_type:
+                                            part_type = "Recovery Partition"
+                                            fstype = "NTFS"
+                                        elif "System" in ps_type:
+                                            part_type = "EFI System Partition"
+                                            is_efi = True
+                                            fstype = "FAT32"
+                                        elif "Reserved" in ps_type:
+                                            part_type = "Microsoft Reserved"
                                 except (subprocess.TimeoutExpired, Exception) as e:
                                     print(f"[Debug] PowerShell detection failed: {e}")
 
@@ -1103,30 +1131,13 @@ class PartitionAnalyzer:
         return False
     
     def _is_swap_partition(self, partition) -> bool:
-        """
-        Detect if a partition contains the Windows pagefile (swap).
-        
-        Args:
-            partition: psutil partition object
-            
-        Returns:
-            True if partition contains pagefile.sys
-        """
-        try:
-            # Check for pagefile.sys
-            pagefile_path = os.path.join(partition.mountpoint, 'pagefile.sys')
-            if os.path.exists(pagefile_path):
-                return True
-            
-            # Check for swapfile.sys (Windows 8+)
-            swapfile_path = os.path.join(partition.mountpoint, 'swapfile.sys')
-            if os.path.exists(swapfile_path):
-                return True
-                
-        except (PermissionError, OSError):
-            pass
-        
-        return False
+        """True for a partition that IS swap space (a Linux swap partition, fstype 'swap').
+
+        A Windows volume holding pagefile.sys or swapfile.sys is not one: those are files on the
+        volume, and calling C: a swap partition (with "Windows Virtual Swap" as its label) put a
+        wrong partition type and a made-up label in front of the analyst. Which paging files a
+        volume holds is shown by the Partition window (paging_files)."""
+        return str(getattr(partition, 'fstype', '') or '').lower() == 'swap'
     
     # Filesystem signature database for raw disk scanning
     _FS_SIGNATURES = {
@@ -1874,14 +1885,54 @@ class PartitionAnalyzer:
                 is_removable INTEGER,
                 is_usb INTEGER,
                 source TEXT,
+                cluster_size INTEGER,
+                mft_bytes INTEGER,
+                usn_bytes INTEGER,
+                vss_used INTEGER,
+                vss_allocated INTEGER,
+                vss_max INTEGER,
+                vss_copies INTEGER,
+                vss_diff_volume TEXT,
+                vss_oldest TEXT,
+                vss_newest TEXT,
+                layout_note TEXT,
                 FOREIGN KEY(disk_index) REFERENCES disks(disk_index)
             )
             ''')
-            
+            # A database written before the layout columns: add them one statement at a time.
+            have = {row[1] for row in cursor.execute("PRAGMA table_info(partitions)")}
+            if 'cluster_size' not in have:
+                cursor.execute("ALTER TABLE partitions ADD COLUMN cluster_size INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN mft_bytes INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN usn_bytes INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_used INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_allocated INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_max INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_copies INTEGER")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_diff_volume TEXT")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_oldest TEXT")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN vss_newest TEXT")
+                cursor.execute("ALTER TABLE partitions ADD COLUMN layout_note TEXT")
+
+            # Where $MFT, the USN journal and shadow-copy storage sit on each volume, in bytes
+            # from the start of the volume (offset_bytes) - the partition bar draws them there.
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS volume_extents (
+                disk_index INTEGER,
+                partition_index INTEGER,
+                mountpoint TEXT,
+                kind TEXT,
+                offset_bytes INTEGER,
+                length_bytes INTEGER,
+                PRIMARY KEY (disk_index, partition_index, kind, offset_bytes)
+            )
+            ''')
+
             # Clear existing data for these disks to avoid duplicates
             cursor.execute("DELETE FROM disks")
             cursor.execute("DELETE FROM partitions")
-            
+            cursor.execute("DELETE FROM volume_extents")
+
             # Insert data
             for disk in disks:
                 cursor.execute('''
@@ -1903,8 +1954,11 @@ class PartitionAnalyzer:
                         volume_label, partition_guid, partition_style,
                         is_hidden, is_active, is_efi_system, partition_offset,
                         partition_length, disk_signature, volume_serial,
-                        is_removable, is_usb, source
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        is_removable, is_usb, source,
+                        cluster_size, mft_bytes, usn_bytes, vss_used, vss_allocated, vss_max,
+                        vss_copies, vss_diff_volume, vss_oldest, vss_newest, layout_note
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         part.disk_index, part.partition_index, part.device, part.mountpoint, part.fstype,
                         part.total_size, part.used_size, part.free_size, part.percent_used,
@@ -1914,9 +1968,16 @@ class PartitionAnalyzer:
                         1 if part.is_hidden else 0, 1 if part.is_active else 0,
                         1 if part.is_efi_system else 0, part.partition_offset,
                         part.partition_length, part.disk_signature, part.volume_serial,
-                        1 if part.is_removable else 0, 1 if part.is_usb else 0, source
+                        1 if part.is_removable else 0, 1 if part.is_usb else 0, source,
+                        part.cluster_size, part.mft_bytes, part.usn_bytes, part.vss_used,
+                        part.vss_allocated, part.vss_max, part.vss_copies, part.vss_diff_volume,
+                        part.vss_oldest, part.vss_newest, part.layout_note
                     ))
-            
+                    for kind, offset, length in part.extents:
+                        cursor.execute(
+                            "INSERT INTO volume_extents VALUES (?, ?, ?, ?, ?, ?)",
+                            (part.disk_index, part.partition_index, part.mountpoint, kind, offset, length))
+
             conn.commit()
             conn.close()
             print(f"[Partition Analyzer] Results saved to database: {db_path}")
@@ -1991,14 +2052,21 @@ class PartitionAnalyzer:
             cursor.execute("SELECT * FROM disks ORDER BY disk_index")
             disk_rows = cursor.fetchall()
             
+            part_cols = [row[1] for row in cursor.execute("PRAGMA table_info(partitions)")]
+            has_extents = cursor.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='volume_extents'").fetchone()
+            layout_keys = ('cluster_size', 'mft_bytes', 'usn_bytes', 'vss_used', 'vss_allocated',
+                           'vss_max', 'vss_copies', 'vss_diff_volume', 'vss_oldest', 'vss_newest',
+                           'layout_note')
+
             disks = []
             for disk_row in disk_rows:
                 disk_index = disk_row[0]
-                
+
                 # Load partitions for this disk
                 cursor.execute("SELECT * FROM partitions WHERE disk_index = ? ORDER BY partition_index", (disk_index,))
                 partition_rows = cursor.fetchall()
-                
+
                 # Get disk signature from disk row (index 6) to propagate if needed
                 disk_sig_from_disk = disk_row[6]
 
@@ -2038,8 +2106,17 @@ class PartitionAnalyzer:
                         is_removable=bool(part_row[25]),
                         is_usb=bool(part_row[26])
                     )
+                    named = dict(zip(part_cols, part_row))
+                    for key in layout_keys:
+                        if named.get(key) is not None:
+                            setattr(partition, key, named[key])
+                    if has_extents:
+                        partition.extents = [tuple(r) for r in cursor.execute(
+                            "SELECT kind, offset_bytes, length_bytes FROM volume_extents "
+                            "WHERE disk_index = ? AND partition_index = ? ORDER BY kind, offset_bytes",
+                            (partition.disk_index, partition.partition_index))]
                     partitions.append(partition)
-                
+
                 disk = DiskInfo(
                     disk_index=disk_row[0],
                     size=disk_row[1],

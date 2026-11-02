@@ -1,13 +1,20 @@
+import { ActivityIcon } from './icons.jsx'
 const STATUS_LABEL = {
   active: 'Working',
   degraded: 'Limited',
   unavailable: 'No data',
   requires_collection: 'By design',
+  off: 'Off',
 }
+
+// An analyst's own rule that the case could not run (a column its table lacks,
+// a base behaviour turned off) is "Not run", not "No data": the note says why.
+const statusLabel = (r) =>
+  r.user_rule && r.status === 'unavailable' ? 'Not run' : STATUS_LABEL[r.status]
 
 export default function CoveragePanel({ coverage, rules, onFocusRule }) {
   if (!coverage) return <p style={{ color: '#8c95ab' }}>Loading…</p>
-  const groups = { active: [], degraded: [], unavailable: [] }
+  const groups = { active: [], degraded: [], unavailable: [], off: [] }
   for (const r of coverage.rules) (groups[r.status] || groups.active).push(r)
 
   // Event counts come from the rule catalogue, which is built over the whole
@@ -25,11 +32,16 @@ export default function CoveragePanel({ coverage, rules, onFocusRule }) {
         const n = countOf[r.rule_id]
         return (
           <div className="cov-row" key={r.rule_id}>
-            <span className={'cov-status ' + r.status}>{STATUS_LABEL[r.status]}</span>
+            <span className={'cov-status ' + r.status}>{statusLabel(r)}</span>
             <div style={{ flex: 1 }}>
               <div className="cov-title">
+                {r.user_rule && (
+                  <ActivityIcon activity={r.activity} userRule size={16}
+                    style={{ verticalAlign: '-3px', marginRight: 6 }} />
+                )}
                 {r.title}
-                {n !== undefined && (
+                {r.user_rule && <span className="rule-badge">Your rule</span>}
+                {n !== undefined && r.status !== 'off' && (
                   <span className={'cov-count' + (n === 0 ? ' zero' : '')}
                     title={n === 0
                       ? 'The data this rule reads was available and it found nothing in it'
@@ -83,6 +95,8 @@ export default function CoveragePanel({ coverage, rules, onFocusRule }) {
         rows={groups.degraded}
         help="Windows was not configured to log these, so they are recovered from on-disk artifacts at lower certainty." />
       <Section title={`No data available (${groups.unavailable.length})`} rows={groups.unavailable} />
+      <Section title={`Turned off in Settings (${groups.off.length})`} rows={groups.off}
+        help="An administrator turned these rules off, so they were not looked for. Having no events for them says nothing about this computer. Turn them back on in the Rules view or in Crow-Eye Settings → User Behavior." />
 
       {coverage.requires_collection && coverage.requires_collection.length > 0 && (
         <div className="coverage-section">

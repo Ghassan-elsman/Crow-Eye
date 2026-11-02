@@ -2,6 +2,7 @@
   "config_name": "lateral_movement_correlation",
   "wing_name": "Lateral Movement Correlation",
   "wing_id": "default_wing_lateral_001",
+  "wing_category": "identity",
   "description": "Detects evidence that activity on this host originated from or propagated to another machine. Uses a tiered approach with Security log network/RDP logons (4624 type 3/10) and remote-tool prefetch hits weighted highest, followed by UNC-target artefacts (LNK to \\\\server\\share, TypedPaths, mstsc jumplists), and admin-share file drops in MFT/USN as supporting context.",
   "proves": "Activity originated from or propagated to a remote system",
   "author": "Crow-Eye Team",
@@ -247,46 +248,6 @@
       "severity": "high"
     },
     {
-      "rule_id": "lat_ordered_chain",
-      "name": "Ordered Lateral Chain (Sequence)",
-      "semantic_value": "Ordered Lateral Movement",
-      "description": "Network/RDP logon (4624) \u2192 remote-admin tool execution (prefetch) \u2192 admin-share file drop (MFT/USN), in that order and within the gap \u2014 a full lateral-movement kill-chain. Identity engine only.",
-      "rule_type": "sequence",
-      "sequence": {
-        "max_gap_minutes": 60,
-        "steps": [
-          {
-            "feather_id": "security_logs",
-            "field_name": "EventID",
-            "operator": "equals",
-            "value": "4624"
-          },
-          {
-            "feather_id": "prefetch",
-            "field_name": "executable_name",
-            "operator": "regex",
-            "value": "\\b(?:psexec|paexec|wmic|winrs|winrm|mstsc|smbexec|wmiexec|atexec)\\b"
-          },
-          {
-            "feather_id": "mft_usn",
-            "field_name": "reconstructed_path",
-            "operator": "regex",
-            "value": "(?i)^\\./Windows/[^/]+\\.(?:exe|dll|bat|cmd|ps1|vbs|sys)$"
-          }
-        ]
-      },
-      "scope": "wing",
-      "category": "lateral_movement",
-      "severity": "critical",
-      "technique_id": [
-        "T1021",
-        "T1570"
-      ],
-      "tactic": [
-        "lateral-movement"
-      ]
-    },
-    {
       "rule_id": "lm_inbound_firewall_rule",
       "name": "Inbound Firewall Rule",
       "semantic_value": "Inbound Firewall Rule",
@@ -335,6 +296,14 @@
         "T1016"
       ],
       "description": "The adapter inventory by installation index. It names cards that no longer have an interface, which is how an adapter that was removed still leaves a trace."
+    }
+  ],
+  "moved_rules": [
+    {
+      "rule_id": "lat_ordered_chain",
+      "moved_to": "Lateral_Movement_Behaviour.json",
+      "moved_to_wing": "Ordered Lateral Movement Chain (Behaviour)",
+      "why": "Its three steps (a sign-in, a tool run, a file drop) are three different identities, so the Identity engine, which evaluates one identity at a time, could never see the whole chain. The Behavioural engine evaluates it per person."
     }
   ],
   "tags": [

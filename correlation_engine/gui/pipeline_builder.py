@@ -13,14 +13,16 @@ from PyQt5.QtWidgets import (
     QTextEdit, QPushButton, QListWidget, QListWidgetItem, QFileDialog,
     QMessageBox, QSplitter, QFormLayout, QMenu
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
-from .crow_eye_icons import CrowEyeIcons
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QSize
+from .crow_eye_icons import CrowEyeIcons, engine_icon, pair_icon_size, wing_icon
 from PyQt5.QtGui import QIcon
-from ui.site_theme import set_variant, set_status, font as site_font
+from ui.app_theme import set_variant, set_status, font as theme_font
 from PyQt5.QtGui import QFont
 
 
 from ..config import PipelineConfig, FeatherConfig, WingConfig
+from ..engine import engine_registry
+from ..config.wing_config import behaviour_fields_of, wing_category_label
 from ..integration.feather_mappings import (
     detect_artifact_type_from_name,
     get_artifact_type_info,
@@ -242,118 +244,212 @@ class PipelineBuilderWidget(QWidget):
     def _init_ui(self):
         """Initialize the user interface"""
         layout = QVBoxLayout(self)
-        
-        # Create top bar with output directory
-        top_bar = self._create_top_bar()
-        layout.addWidget(top_bar)
-        
-        # Create splitter for main layout
-        splitter = QSplitter(Qt.Vertical)
-        layout.addWidget(splitter)
-        
-        # Metadata section
-        metadata_group = self._create_metadata_section()
-        splitter.addWidget(metadata_group)
-        
-        # Feathers and Wings section
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # Metadata, then the Feathers and Wings it runs, then validation.
+        # The metadata used to be one field per row under a right-aligned
+        # Output Directory bar: about 560 px of form above the lists, so on a
+        # 768 px screen the Feathers and Wings - the work of this page - began
+        # below the fold. Two columns of fields put the lists in view, and the
+        # lists take every pixel the window has left (2026-11-02).
+        layout.addWidget(self._create_metadata_section())
+
         components_widget = QWidget()
         components_layout = QHBoxLayout(components_widget)
-        
-        # Feathers section
-        feathers_group = self._create_feathers_section()
-        components_layout.addWidget(feathers_group)
-        
-        # Wings section
-        wings_group = self._create_wings_section()
-        components_layout.addWidget(wings_group)
-        
-        splitter.addWidget(components_widget)
-        
-        # Validation status section
-        validation_group = self._create_validation_section()
-        layout.addWidget(validation_group)
-        
-        # Set splitter sizes
-        splitter.setSizes([200, 350])
-    
-    def _create_top_bar(self) -> QWidget:
-        """Create top bar with output directory"""
-        top_widget = QWidget()
-        top_layout = QHBoxLayout(top_widget)
-        top_layout.setContentsMargins(0, 0, 0, 10)
-        
-        # Add stretch to push output directory to the right
-        top_layout.addStretch()
-        
-        # Output directory label
-        output_label = QLabel("Output Directory:")
-        output_label.setFont(site_font("ui", 13, QFont.Bold))
-        set_status(output_label, "info")
-        top_layout.addWidget(output_label)
-        
-        # Output directory input
+        components_layout.setContentsMargins(0, 0, 0, 0)
+        components_layout.addWidget(self._create_feathers_section())
+        components_layout.addWidget(self._create_wings_section())
+        # The lists keep room for about six rows; below that the page scrolls.
+        components_widget.setMinimumHeight(300)
+        layout.addWidget(components_widget, 1)
+
+        layout.addWidget(self._create_validation_section())
+
+    def _create_output_dir_row(self) -> QWidget:
+        """Output directory field with its Browse button, as one form field."""
+        row = QWidget()
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+
         self.output_dir_input = QLineEdit()
         self.output_dir_input.setPlaceholderText("Output directory for results and configs")
         self.output_dir_input.setText("output")
-        self.output_dir_input.setMinimumWidth(300)
         self.output_dir_input.textChanged.connect(self._on_modified)
-        top_layout.addWidget(self.output_dir_input)
-        
-        # Browse button
+        row_layout.addWidget(self.output_dir_input, 1)
+
         browse_btn = QPushButton("Browse...")
         browse_btn.clicked.connect(self._browse_output_dir)
         set_variant(browse_btn, "ghost")
-        top_layout.addWidget(browse_btn)
-        
-        return top_widget
-    
+        row_layout.addWidget(browse_btn)
+        return row
+
     def _create_metadata_section(self) -> QGroupBox:
-        """Create metadata input section"""
+        """Create metadata input section: label/field pairs in two columns."""
+        from PyQt5.QtWidgets import QGridLayout
         group = QGroupBox("Pipeline Metadata")
-        layout = QFormLayout()
-        
+        layout = QGridLayout()
+        # The theme's group box already leaves room for its title; the default
+        # margins added another empty band above the first row.
+        layout.setContentsMargins(14, 6, 14, 12)
+        layout.setHorizontalSpacing(12)
+        layout.setVerticalSpacing(8)
+        layout.setColumnStretch(1, 1)
+        layout.setColumnStretch(3, 1)
+
+        def label(text):
+            lab = QLabel(text)
+            lab.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            return lab
+
         # Case name display (read-only, auto-populated)
         self.case_name_display = QLabel("Not set")
-        self.case_name_display.setFont(site_font("ui", 13, QFont.Bold))
+        self.case_name_display.setFont(theme_font("ui", 13, QFont.Bold))
         set_status(self.case_name_display, "info")
-        layout.addRow("Case:", self.case_name_display)
-        
+
         # Pipeline name
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Enter pipeline name...")
         self.name_input.textChanged.connect(self._on_pipeline_name_changed)
-        layout.addRow("Pipeline Name:", self.name_input)
-        
-        # Pipeline name validation label
+
+        # Pipeline name validation label (empty, so it takes no height, until it speaks)
         self.name_validation_label = QLabel("")
         self.name_validation_label.setWordWrap(True)
-        layout.addRow("", self.name_validation_label)
-        
+        self.name_validation_label.setVisible(False)
+
         # Description
         self.description_input = QTextEdit()
         self.description_input.setPlaceholderText("Enter pipeline description...")
-        self.description_input.setMaximumHeight(60)
+        # Beside the three optional fields, spanning their rows: at least two
+        # lines inside the 3 px outline.
+        self.description_input.setMinimumHeight(64)
         self.description_input.textChanged.connect(self._on_modified)
-        layout.addRow("Description:", self.description_input)
-        
+
         # Case information (optional additional fields)
         self.case_name_input = QLineEdit()
         self.case_name_input.setPlaceholderText("Optional case name override...")
         self.case_name_input.textChanged.connect(self._on_modified)
-        layout.addRow("Case Name (optional):", self.case_name_input)
-        
+
         self.case_id_input = QLineEdit()
         self.case_id_input.setPlaceholderText("Optional case ID...")
         self.case_id_input.textChanged.connect(self._on_modified)
-        layout.addRow("Case ID:", self.case_id_input)
-        
+
         self.investigator_input = QLineEdit()
         self.investigator_input.setPlaceholderText("Optional investigator name...")
         self.investigator_input.textChanged.connect(self._on_modified)
-        layout.addRow("Investigator:", self.investigator_input)
-        
+
+        # The engine decides which Wings run: each Wing has one category, and
+        # a Wing of another category is skipped (with its reason) at run time.
+        from PyQt5.QtWidgets import QComboBox
+        self.engine_combo = QComboBox()
+        for spec in engine_registry.all_specs():
+            self.engine_combo.addItem(engine_icon(spec.type_id),
+                                      f"{spec.selector_name}  -  runs "
+                                      f"{wing_category_label(spec.wing_category)}s",
+                                      spec.type_id)
+        index = self.engine_combo.findData(engine_registry.IDENTITY_BASED)
+        self.engine_combo.setCurrentIndex(max(index, 0))
+        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+
+        # Case | Engine, Pipeline Name | Output Directory, the name warning
+        # (hidden until it has one), then the three optional fields on the
+        # left with Description beside them across their three rows.
+        layout.addWidget(label("Case:"), 0, 0)
+        layout.addWidget(self.case_name_display, 0, 1)
+        layout.addWidget(label("Engine:"), 0, 2)
+        layout.addWidget(self.engine_combo, 0, 3)
+        layout.addWidget(label("Pipeline Name:"), 1, 0)
+        layout.addWidget(self.name_input, 1, 1)
+        layout.addWidget(label("Output Directory:"), 1, 2)
+        layout.addWidget(self._create_output_dir_row(), 1, 3)
+        layout.addWidget(self.name_validation_label, 2, 1, 1, 3)
+        for r, (text, field) in enumerate((("Case Name:", self.case_name_input),
+                                           ("Case ID:", self.case_id_input),
+                                           ("Investigator:", self.investigator_input)), start=3):
+            layout.addWidget(label(text), r, 0)
+            layout.addWidget(field, r, 1)
+        desc_label = label("Description:")
+        layout.addWidget(desc_label, 3, 2, Qt.AlignRight | Qt.AlignTop)
+        desc_label.setMinimumHeight(self.case_name_input.sizeHint().height())
+        layout.addWidget(self.description_input, 3, 3, 3, 1)
+        self.case_name_input.setToolTip("Optional: overrides the case name in the results")
+
         group.setLayout(layout)
         return group
+
+    def _selected_engine_type(self) -> str:
+        return self.engine_combo.currentData() or engine_registry.IDENTITY_BASED
+
+    def _on_engine_changed(self, _index=None):
+        if self.current_pipeline is not None:
+            self.current_pipeline.engine_type = self._selected_engine_type()
+        self._refresh_wing_labels()
+        self._on_modified()
+        self.validate_pipeline()
+
+    def _wing_label_and_reason(self, wing_config):
+        """List text for a Wing: its category, and why it will not run here."""
+        if self._is_behaviour_wing(wing_config):
+            steps = len(getattr(wing_config, 'steps', None) or [])
+            name = f"{wing_config.wing_name} ({steps} step{'s' if steps != 1 else ''})"
+        else:
+            name = f"{wing_config.wing_name} ({len(wing_config.feathers)} feathers)"
+        label = wing_category_label(getattr(wing_config, 'wing_category', None))
+        ok, reason = engine_registry.check_wing(wing_config, self._selected_engine_type())
+        text = f"[{label}] {name}"
+        if not ok:
+            text += f"  -  {engine_registry.needed_engine_label(wing_config)}"
+        return text, ok, reason
+
+    def _refresh_wing_labels(self):
+        from PyQt5.QtGui import QColor
+        from ui.app_theme import STATUS_COLORS
+        for i in range(self.wings_list.count()):
+            item = self.wings_list.item(i)
+            wing_config = item.data(Qt.UserRole)
+            if wing_config is None:
+                continue
+            text, ok, reason = self._wing_label_and_reason(wing_config)
+            item.setText(text)
+            item.setIcon(wing_icon(wing_config))
+            # Another engine's Wing is normal: muted, not amber. Only a real problem
+            # (no category, Identity-only rules on a Time Wing) is a warning.
+            other = (not ok) and engine_registry.for_other_engine(wing_config, self._selected_engine_type())
+            item.setForeground(QColor("#64748B") if other else
+                               QColor(STATUS_COLORS["warn"]) if not ok else QColor(STATUS_COLORS["neutral"]))
+            if self._is_behaviour_wing(wing_config):
+                steps = self._behaviour_steps_text(wing_config)
+                item.setToolTip((reason + "\n\n" if not ok else "") + steps)
+            else:
+                item.setToolTip(reason if not ok
+                                else f"Time window: {wing_config.time_window_minutes} minutes")
+
+    @staticmethod
+    def _is_behaviour_wing(wing_config) -> bool:
+        from ..config.wing_config import WING_CATEGORY_BEHAVIOUR, normalize_wing_category
+        return normalize_wing_category(
+            getattr(wing_config, 'wing_category', None)) == WING_CATEGORY_BEHAVIOUR
+
+    @staticmethod
+    def _behaviour_steps_text(wing_config) -> str:
+        """A Behaviour Wing's steps, read-only (they are edited in the Wing
+        Creator, which double-clicking the Wing opens)."""
+        from ..config.wing_config import behaviour_step_label
+        lines = []
+        for i, step in enumerate(getattr(wing_config, 'steps', None) or []):
+            line = behaviour_step_label(step, i)
+            if isinstance(step, dict):
+                what = step.get('rule_id') or step.get('activity') or ''
+                what = ", ".join(what) if isinstance(what, (list, tuple)) else str(what)
+                if what and what != step.get('label'):
+                    line += f": {what}"
+                if step.get('actor', 'person') != 'person':
+                    line += f" [{step.get('actor')}]"
+            lines.append(line)
+        within = getattr(wing_config, 'within_minutes', None)
+        order = "in order" if getattr(wing_config, 'ordered', True) is not False else "in any order"
+        head = f"Behaviour steps, {order}" + (f", within {within} minutes" if within else "")
+        return "\n".join([head + ":"] + (lines or ["(no steps)"])
+                         + ["", "Double-click to edit in the Wing Creator."])
     
     def _on_pipeline_name_changed(self):
         """Handle pipeline name change with validation."""
@@ -366,10 +462,13 @@ class PipelineBuilderWidget(QWidget):
             if not is_unique:
                 apply_status_to_label(self.name_validation_label, "WARN", f"{error_msg}")
                 set_status(self.name_validation_label, "warn")
+                self.name_validation_label.setVisible(True)
             else:
                 self.name_validation_label.setText("")
+                self.name_validation_label.setVisible(False)
         else:
             self.name_validation_label.setText("")
+            self.name_validation_label.setVisible(False)
         
         self._on_modified()
     
@@ -382,6 +481,7 @@ class PipelineBuilderWidget(QWidget):
         
         # Feathers list
         self.feathers_list = QListWidget()
+        self.feathers_list.setIconSize(QSize(16, 16))  # the Feather art, at the Wing pair's height
         self.feathers_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.feathers_list.customContextMenuRequested.connect(self._show_feather_context_menu)
         self.feathers_list.itemDoubleClicked.connect(self._edit_feather)
@@ -391,7 +491,10 @@ class PipelineBuilderWidget(QWidget):
         buttons_layout = QHBoxLayout()
         
         self.add_feather_btn = QPushButton("Add Feather")
-        self.add_feather_btn.setIcon(CrowEyeIcons.feather())
+        # No icon: the primary button's hover runs indigo -> cyan (#818CF8 ->
+        # #22D3EE), and the cyan end is the Feather art's own colour (about
+        # 1.6:1 on hover). Brand art never sits on a primary button; Create
+        # Feather beside it, on the dark button, keeps the Feather.
         self.add_feather_btn.clicked.connect(self._add_feather)
         set_variant(self.add_feather_btn, "primary")
         buttons_layout.addWidget(self.add_feather_btn)
@@ -424,6 +527,8 @@ class PipelineBuilderWidget(QWidget):
         
         # Wings list
         self.wings_list = QListWidget()
+        # Each Wing shows two icons: the wing, then the engine that runs it.
+        self.wings_list.setIconSize(pair_icon_size(16))
         self.wings_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.wings_list.customContextMenuRequested.connect(self._show_wing_context_menu)
         self.wings_list.itemDoubleClicked.connect(self._edit_wing)
@@ -433,7 +538,10 @@ class PipelineBuilderWidget(QWidget):
         buttons_layout = QHBoxLayout()
         
         self.add_wing_btn = QPushButton("Add Wing")
-        self.add_wing_btn.setIcon(CrowEyeIcons.wing())
+        # No icon: the Wing art is the primary button's own indigo (#6366F2 on
+        # #6366F1, contrast 1.0) and would vanish into it. Brand art never sits
+        # on a primary button; Create Wing beside it, on the dark button, keeps
+        # the Wing.
         self.add_wing_btn.clicked.connect(self._add_wing)
         set_variant(self.add_wing_btn, "primary")
         buttons_layout.addWidget(self.add_wing_btn)
@@ -489,6 +597,12 @@ class PipelineBuilderWidget(QWidget):
         self.case_name_input.setText(pipeline.case_name)
         self.case_id_input.setText(pipeline.case_id)
         self.investigator_input.setText(pipeline.investigator)
+        engine_index = self.engine_combo.findData(
+            engine_registry.normalize_engine_type(getattr(pipeline, 'engine_type', None)
+                                                  or engine_registry.IDENTITY_BASED))
+        blocked = self.engine_combo.blockSignals(True)
+        self.engine_combo.setCurrentIndex(max(engine_index, 0))
+        self.engine_combo.blockSignals(blocked)
         
         # Load feathers
         self.feathers_list.clear()
@@ -530,7 +644,8 @@ class PipelineBuilderWidget(QWidget):
                 investigator=self.investigator_input.text().strip(),
                 output_directory=output_dir,
                 created_date=datetime.now().isoformat(),
-                last_modified=datetime.now().isoformat()
+                last_modified=datetime.now().isoformat(),
+                engine_type=self._selected_engine_type()
             )
         else:
             # Update existing pipeline
@@ -544,6 +659,7 @@ class PipelineBuilderWidget(QWidget):
             self.current_pipeline.case_id = self.case_id_input.text().strip()
             self.current_pipeline.investigator = self.investigator_input.text().strip()
             self.current_pipeline.output_directory = output_dir
+            self.current_pipeline.engine_type = self._selected_engine_type()
             self.current_pipeline.last_modified = datetime.now().isoformat()
         
         # Use default scoring config (semantic rules managed elsewhere)
@@ -637,7 +753,36 @@ class PipelineBuilderWidget(QWidget):
                             f"'{ref_db_filename}'"
                         )
         
+        # Wings the chosen engine will not run: not an error (the run skips
+        # them and says why), but named here so it is never a surprise.
+        not_run, other_engine = [], []
+        engine_type = self._selected_engine_type()
+        for i in range(self.wings_list.count()):
+            wing_config = self.wings_list.item(i).data(Qt.UserRole)
+            if wing_config is None or engine_registry.check_wing(wing_config, engine_type)[0]:
+                continue
+            if engine_registry.for_other_engine(wing_config, engine_type):
+                other_engine.append(wing_config.wing_name)       # normal: each engine runs its own
+            else:
+                not_run.append(wing_config.wing_name)            # a real problem with the Wing
+
+        spec = engine_registry.get_spec(engine_type)
+        other_note = ""
+        if other_engine:
+            other_note = (f"<br><span style='color:#94A3B8'>{len(other_engine)} Wing"
+                          f"{'s are' if len(other_engine) != 1 else ' is'} for other engines and "
+                          f"{'are' if len(other_engine) != 1 else 'is'} run by them, not by the "
+                          f"{spec.display_name}.</span>")
+            self.validation_label.setToolTip("For other engines:\n" + "\n".join(other_engine))
+
         # Update validation label
+        if not errors and not_run:
+            body = (f"Pipeline configuration is valid, but {len(not_run)} Wing"
+                    f"{'s' if len(not_run) != 1 else ''} cannot run until fixed:<br>"
+                    + "<br>".join(f"&bull; {n}" for n in not_run) + other_note)
+            apply_status_to_label(self.validation_label, "WARN", body)
+            set_status(self.validation_label, "warn")
+            return (True, errors)
         if errors:
             # Rich-text body so the Crow-Eye error icon sits next to the
             # heading; the bullet list keeps the existing line-per-error
@@ -646,7 +791,7 @@ class PipelineBuilderWidget(QWidget):
             apply_status_to_label(self.validation_label, "ERROR", body)
             set_status(self.validation_label, "bad")
         else:
-            apply_status_to_label(self.validation_label, "OK", "Pipeline configuration is valid")
+            apply_status_to_label(self.validation_label, "OK", "Pipeline configuration is valid" + other_note)
             set_status(self.validation_label, "ok")
         
         return (len(errors) == 0, errors)
@@ -818,6 +963,7 @@ class PipelineBuilderWidget(QWidget):
         tooltip = self._create_enhanced_tooltip(feather_config)
         item.setToolTip(tooltip)
         
+        item.setIcon(CrowEyeIcons.feather())
         self.feathers_list.addItem(item)
         
         # Add to pipeline if exists
@@ -873,6 +1019,11 @@ class PipelineBuilderWidget(QWidget):
         """Launch Wing Creator"""
         try:
             from PyQt5.QtWidgets import QApplication
+            from correlation_engine.wings.ui.wing_type_dialog import choose_wing_type
+            # The type first: the Creator opens shaped for it. Cancelled, no Creator.
+            category = choose_wing_type(self)
+            if not category:
+                return
             from correlation_engine.wings.ui.main_window import WingsCreatorWindow
             from correlation_engine.config import ConfigManager
             from pathlib import Path
@@ -900,7 +1051,11 @@ class PipelineBuilderWidget(QWidget):
             
             # Replace the config manager with one pointing to our output directory
             wing_window.config_manager = ConfigManager(str(configs_dir))
-            
+
+            wing_window.start_new_wing(category)
+            # A saved Wing joins the list at once, not at the watcher's next tick.
+            wing_window.wing_saved.connect(lambda _path: self._check_for_new_configs())
+
             wing_window.show()
             self._track_child_window(wing_window)
 
@@ -919,6 +1074,7 @@ class PipelineBuilderWidget(QWidget):
         item.setData(Qt.UserRole, wing_config)
         item.setToolTip(f"Time window: {wing_config.time_window_minutes} minutes")
         self.wings_list.addItem(item)
+        self._refresh_wing_labels()
         
         # Add to pipeline if exists
         if self.current_pipeline:
@@ -1052,6 +1208,7 @@ class PipelineBuilderWidget(QWidget):
                         tooltip = self._create_enhanced_tooltip(feather_config, wing_config.wing_name)
                         item.setToolTip(tooltip)
                         
+                        item.setIcon(CrowEyeIcons.feather())
                         self.feathers_list.addItem(item)
                         
                         # Add to pipeline if exists
@@ -1073,6 +1230,7 @@ class PipelineBuilderWidget(QWidget):
                         tooltip = f"[WARN] Database not found: {feather_config.output_database}\n\n{tooltip}"
                         item.setToolTip(tooltip)
                         
+                        item.setIcon(CrowEyeIcons.feather())
                         self.feathers_list.addItem(item)
                         
                         # Add to pipeline if exists
@@ -1153,6 +1311,7 @@ class PipelineBuilderWidget(QWidget):
                         tooltip = f"[WARN] Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
+                    item.setIcon(CrowEyeIcons.feather())
                     self.feathers_list.addItem(item)
                     
                     # Add to pipeline if exists
@@ -1184,6 +1343,7 @@ class PipelineBuilderWidget(QWidget):
                         tooltip = f"[WARN] Feather not created yet - Click 'Create Feather' to build it\n{tooltip}"
                     item.setToolTip(tooltip)
                     
+                    item.setIcon(CrowEyeIcons.feather())
                     self.feathers_list.addItem(item)
                     placeholders_created += 1
         
@@ -1416,7 +1576,9 @@ class PipelineBuilderWidget(QWidget):
                             anchor_priority=wing_config.anchor_priority
                         )
                         
-                        # Create Wing with feathers
+                        # Create Wing with feathers. The rules and the category
+                        # come along: without them the editor saved the Wing
+                        # back with no rules and asked for a category it had.
                         wing_window.wing = Wing(
                             wing_id=wing_config.wing_id,
                             wing_name=wing_config.wing_name,
@@ -1425,7 +1587,13 @@ class PipelineBuilderWidget(QWidget):
                             author=wing_config.author,
                             created_date=wing_config.created_date,
                             feathers=feathers,
-                            correlation_rules=correlation_rules
+                            correlation_rules=correlation_rules,
+                            semantic_rules=list(wing_config.semantic_rules or []),
+                            use_weighted_scoring=getattr(wing_config, 'use_weighted_scoring', True),
+                            scoring=getattr(wing_config, 'scoring', None) or {},
+                            wing_category=getattr(wing_config, 'wing_category', None),
+                            # A Behaviour Wing's steps, time range, subject, alert.
+                            **behaviour_fields_of(wing_config)
                         )
                         wing_window.load_wing_to_ui()
                         wing_window.status_bar.showMessage(f"Editing wing: {wing_config.wing_name}")
@@ -2065,6 +2233,7 @@ class PipelineBuilderWidget(QWidget):
                                 item = QListWidgetItem(f"{feather_name} ({artifact_type})")
                                 item.setData(Qt.UserRole, feather_metadata) # Store metadata directly
                                 item.setToolTip(f"Database: {db_path}")
+                                item.setIcon(CrowEyeIcons.feather())
                                 self.feathers_list.addItem(item)
                                 
                                 print(f"[Pipeline Builder] [OK] Loaded feather (fallback): {feather_name}")

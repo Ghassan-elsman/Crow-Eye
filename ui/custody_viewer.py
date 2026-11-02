@@ -18,7 +18,7 @@ import os
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-# The site's meaning colours (ui/site_theme.STATUS_COLORS) - same meanings, site tones
+# The site's meaning colours (ui/app_theme.STATUS_COLORS) - same meanings, site tones
 GREEN, RED, AMBER, CYAN, SLATE, BLUE = "#4ADE80", "#FDA4AF", "#FBBF24", "#22D3EE", "#94A3B8", "#38BDF8"
 
 
@@ -142,6 +142,25 @@ def _ledger_details(event, f):
         if event in ("case opened", "case created"):
             return "Crow-Eye %s%s" % (f.get("tool_version", ""),
                                       ", elevated" if f.get("elevated") else "")
+        if event == "feathers built":
+            built = f.get("built") or []
+            failed = f.get("failed") or []
+            return "%d feather(s) into %s%s%s" % (
+                len(built), f.get("output", ""),
+                ", %d not built" % len(failed) if failed else "",
+                ", cancelled" if f.get("cancelled") else "")
+        if event == "user behaviour analysis built":
+            return "%s  (%s events, rules v%s, SHA-256 %s)" % (
+                f.get("path", ""), f.get("events", "?"), f.get("rules_version", ""),
+                sha(f.get("sha256")))
+        if event == "analysis configuration saved":
+            return "%s: %s  (SHA-256 %s)" % (f.get("what", ""), f.get("path", ""), sha(f.get("sha256")))
+        if event == "evidence source opened":
+            return "%s: %s" % (f.get("tool", ""), f.get("source", ""))
+        if event.startswith("shadow copy "):
+            return "%s on %s" % (f.get("shadow_copy_id", ""), f.get("volume", ""))
+        if event == "behaviour engine run":
+            return json.dumps(f, default=str)[:300]
         if event == "image scanned":
             return "%s  (%s, %s partition(s))" % (", ".join(os.path.basename(p) for p in
                                                            f.get("image") or []),
@@ -154,7 +173,7 @@ def _ledger_details(event, f):
 def _chip(text, color):
     lbl = QtWidgets.QLabel(text)
     lbl.setStyleSheet(
-        "QLabel { color: %s; border: 1px solid %s; border-radius: 9px; padding: 4px 12px;"
+        "QLabel { color: %s; border: 3px solid %s; border-radius: 9px; padding: 4px 12px;"
         " background: transparent; font-size: 13px; font-weight: 700; }" % (color, color))
     lbl.setProperty("keepStyle", True)          # the verdict pill: its colour is the meaning
     return lbl
@@ -207,8 +226,8 @@ class CustodyViewerDialog(QtWidgets.QDialog):
             self.intact = False
         self.case_root = self.data.get("case_dir") or os.path.dirname(os.path.dirname(path))
         try:
-            from ui.site_theme import begin_site_theme
-            begin_site_theme(self)              # the sheet before the children exist
+            from ui.app_theme import begin_theme
+            begin_theme(self)              # the sheet before the children exist
         except Exception:
             pass
         self._build()
@@ -224,7 +243,7 @@ class CustodyViewerDialog(QtWidgets.QDialog):
         top = QtWidgets.QHBoxLayout()
         heading = QtWidgets.QLabel("Chain of Custody")
         try:
-            from ui.site_theme import set_role
+            from ui.app_theme import set_role
             set_role(heading, "title")
         except Exception:
             heading.setStyleSheet("QLabel { color: #E2E8F0; font-size: 22px; font-weight: 800; }")
@@ -545,7 +564,11 @@ class CustodyViewerDialog(QtWidgets.QDialog):
         colours = {"run started": BLUE, "run ended": GREEN, "export written": CYAN,
                    "evidence imported": CYAN, "evidence import failed": RED,
                    "settings changed": AMBER, "database changed": AMBER,
-                   "case opened": SLATE, "case created": SLATE, "image scanned": SLATE}
+                   "case opened": SLATE, "case created": SLATE, "image scanned": SLATE,
+                   "feathers built": AMBER, "user behaviour analysis built": AMBER,
+                   "analysis configuration saved": AMBER, "evidence source opened": SLATE,
+                   "shadow copy created": AMBER, "shadow copy deleted": AMBER,
+                   "shadow copy delete-failed": RED}
         for e in entries:
             if "damaged" in e:
                 item = _item(["?", "", "damaged line", e["damaged"], "", ""])
@@ -615,7 +638,7 @@ class CustodyViewerDialog(QtWidgets.QDialog):
         view.setReadOnly(True)
         view.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
         try:
-            from ui.site_theme import log_view_sheet, keep_style
+            from ui.app_theme import log_view_sheet, keep_style
             view.setStyleSheet(log_view_sheet())
             keep_style(view)
         except Exception:
@@ -702,9 +725,9 @@ class CustodyViewerDialog(QtWidgets.QDialog):
         except Exception:
             pass
         try:
-            from ui.site_theme import apply_site_theme, set_variant
+            from ui.app_theme import apply_theme, set_variant
             from ui.parse_status_dialog import _readable
-            apply_site_theme(self)
+            apply_theme(self)
             for b in self.findChildren(QtWidgets.QPushButton):
                 if b.property("variant") is None:
                     set_variant(b, "ghost")

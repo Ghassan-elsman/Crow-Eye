@@ -1,0 +1,59 @@
+{
+  "config_name": "risky_download_opened_behaviour",
+  "wing_name": "Program From a Risky Source, Later Opened (Behaviour)",
+  "wing_id": "default_behaviour_risky_download_opened_001",
+  "wing_category": "behaviour",
+  "description": "Within one hour, one person downloads a file from a source UBA rates risky (a file-sharing, paste or anonymising host, or a download the browser flagged) and a program downloaded in that hour is marked opened in the browser's download list. UBA rules: browser_download_risky_source and browser_download_opened (only downloads of kind 'program'). The browser records THAT a download was opened, not when: both steps are timed at the download, so the hour is between the two downloads, and the opening came at some point after. The steps are matched by time and person, not by file name: check that the opened program is the risky download in the evidence.",
+  "proves": "A person opened a program downloaded close to a download from a risky source",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Download from a risky source",
+      "rule_id": "browser_download_risky_source"
+    },
+    {
+      "label": "Program marked opened in the download list",
+      "rule_id": "browser_download_opened",
+      "conditions": [
+        {
+          "field_name": "details.file_kind",
+          "operator": "equals",
+          "value": "program"
+        }
+      ]
+    }
+  ],
+  "ordered": false,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1204.002",
+      "T1105"
+    ],
+    "tactic": [
+      "execution",
+      "command_and_control"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "execution",
+    "download",
+    "browser",
+    "default"
+  ],
+  "case_types": [
+    "malware",
+    "insider"
+  ]
+}

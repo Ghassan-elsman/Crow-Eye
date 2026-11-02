@@ -2397,171 +2397,203 @@ def parse_alias_c_value(binary_data: bytes) -> dict:
         return dict(empty)
 
 
-def _reconstruct_pidl_path(binary_data: bytes) -> dict:
+# Where a known folder sits when the hive does not say otherwise (Windows'
+# defaults). A root shell item names a folder by GUID; the path it stands for
+# is the user's, and a redirected folder (OneDrive\Documents) is only known
+# from the hive's own User Shell Folders - see known_folders_from_hive().
+DEFAULT_KNOWN_FOLDER_PATHS = {
+    '59031A47-3F72-44A7-89C5-5595FE6B30EE': '%USERPROFILE%',          # the user's files
+    '5E6C858F-0E22-4760-9AFE-EA3317B67173': '%USERPROFILE%',
+    'B4BFCC3A-DB2C-424C-B029-7FE99A87C641': '%USERPROFILE%\\Desktop',
+    '088E3905-0323-4B02-9826-5D99428E115F': '%USERPROFILE%\\Downloads',
+    '374DE290-123F-4565-9164-39C4925E467B': '%USERPROFILE%\\Downloads',
+    '7D83EE9B-2244-4E70-B1F5-5393042AF1E4': '%USERPROFILE%\\Downloads',
+    'D3162B92-9365-467A-956B-92703ACA08AF': '%USERPROFILE%\\Documents',
+    'FDD39AD0-238F-46AF-ADB4-6C85480369C7': '%USERPROFILE%\\Documents',
+    'F42EE2D3-909F-4907-8871-4C22FC0BF756': '%USERPROFILE%\\Documents',
+    '450D8FBA-AD25-11D0-98A8-0800361B1103': '%USERPROFILE%\\Documents',
+    '24AD3AD4-A569-4530-98E1-AB02F9417AA8': '%USERPROFILE%\\Pictures',
+    '33E28130-4E1E-4676-835A-98395C3BC3BB': '%USERPROFILE%\\Pictures',
+    '0DDD015D-B06C-45D5-8C4C-F59713854639': '%USERPROFILE%\\Pictures',
+    '3ADD1653-EB32-4CB0-BBD7-DFA0ABB5ACCA': '%USERPROFILE%\\Pictures',
+    'F86FA3AB-70D2-4FC7-9C99-FCBF05467F3A': '%USERPROFILE%\\Videos',
+    '18989B1D-99B5-455B-841C-AB7C74E4DDFC': '%USERPROFILE%\\Videos',
+    '35286A68-3C57-41A1-BBB1-0EAE73D76C95': '%USERPROFILE%\\Videos',
+    'A0953C92-50DC-43BF-BE83-3742FED03C9C': '%USERPROFILE%\\Videos',
+    '3DFDF296-DBEC-4FB4-81D1-6A3438BCF4DE': '%USERPROFILE%\\Music',
+    '4BD8D571-6D19-48D3-BE97-422220080E43': '%USERPROFILE%\\Music',
+    'A0C69A99-21C8-4671-8703-7934162FCF1D': '%USERPROFILE%\\Music',
+    '1CF1260C-4DD0-4EBB-811F-33C572699FDE': '%USERPROFILE%\\Music',
+    '018D5C66-4533-4307-9B53-224DE2ED1FE6': '%USERPROFILE%\\OneDrive',
+    '0762D272-C50A-4BB0-A382-697DCD729B80': '%SystemDrive%\\Users',
+    '6D809377-6AF0-444B-8957-A3773F02200E': '%ProgramFiles%',
+    '7C5A40EF-A0FB-4BFC-874A-C0F2E0B9FA8E': '%ProgramFiles(x86)%',
+    'F38BF404-1D43-42F2-9305-67DE0B28FC23': '%SystemRoot%',
+    '1AC14E77-02E7-4E5D-B744-2EB1AE5198B7': '%SystemRoot%\\System32',
+}
+
+# User Shell Folders value name -> the GUIDs a PIDL may use for that folder.
+_SHELL_FOLDER_VALUE_GUIDS = {
+    'desktop': ('B4BFCC3A-DB2C-424C-B029-7FE99A87C641',),
+    'personal': ('D3162B92-9365-467A-956B-92703ACA08AF', 'FDD39AD0-238F-46AF-ADB4-6C85480369C7',
+                 'F42EE2D3-909F-4907-8871-4C22FC0BF756', '450D8FBA-AD25-11D0-98A8-0800361B1103'),
+    'my pictures': ('24AD3AD4-A569-4530-98E1-AB02F9417AA8', '33E28130-4E1E-4676-835A-98395C3BC3BB',
+                    '0DDD015D-B06C-45D5-8C4C-F59713854639', '3ADD1653-EB32-4CB0-BBD7-DFA0ABB5ACCA'),
+    'my video': ('F86FA3AB-70D2-4FC7-9C99-FCBF05467F3A', '18989B1D-99B5-455B-841C-AB7C74E4DDFC',
+                 '35286A68-3C57-41A1-BBB1-0EAE73D76C95', 'A0953C92-50DC-43BF-BE83-3742FED03C9C'),
+    'my music': ('3DFDF296-DBEC-4FB4-81D1-6A3438BCF4DE', '4BD8D571-6D19-48D3-BE97-422220080E43',
+                 'A0C69A99-21C8-4671-8703-7934162FCF1D', '1CF1260C-4DD0-4EBB-811F-33C572699FDE'),
+    '{374de290-123f-4565-9164-39c4925e467b}': ('088E3905-0323-4B02-9826-5D99428E115F',
+                                               '374DE290-123F-4565-9164-39C4925E467B',
+                                               '7D83EE9B-2244-4E70-B1F5-5393042AF1E4'),
+}
+
+
+def known_folders_from_hive(user_shell_folders=None, onedrive=None, profile=None) -> dict:
+    """GUID -> folder path for one user, from what their NTUSER hive says.
+
+    ``user_shell_folders``: the values of
+    Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders
+    (name -> path, e.g. Personal -> %USERPROFILE%\\OneDrive\\Documents).
+    ``onedrive``: Environment\\OneDrive (the OneDrive root), if set.
+    ``profile``: the profile folder, to expand %USERPROFILE% (live: the
+    running user's; offline: left as %USERPROFILE% when not known).
+    Anything the hive does not set keeps Windows' default location."""
+    out = dict(DEFAULT_KNOWN_FOLDER_PATHS)
+    for name, value in (user_shell_folders or {}).items():
+        if not value or not isinstance(value, str):
+            continue
+        key = str(name).strip().lower()
+        guids = _SHELL_FOLDER_VALUE_GUIDS.get(key, ())
+        if not guids and key.startswith('{') and key.endswith('}'):
+            guids = (key[1:-1].upper(),)
+        for g in guids:
+            out[g] = value
+    if onedrive:
+        out['018D5C66-4533-4307-9B53-224DE2ED1FE6'] = onedrive
+    if profile:
+        for g, v in list(out.items()):
+            if v.upper().startswith('%USERPROFILE%'):
+                out[g] = profile.rstrip('\\') + v[len('%USERPROFILE%'):]
+    return out
+
+
+_NESTED_VOLUME = re.compile(rb'[\x19\x17]\x00[\x20-\x2F]([A-Za-z]):\\')
+# An absolute path written out in UTF-16 inside a property-store item (the
+# Windows 11 Gallery root's items carry the file's path this way).
+_UTF16_ABSOLUTE_PATH = re.compile(rb'[A-Za-z]\x00:\x00\\\x00(?:[^\x00]\x00|[^\x00][^\x00])+?\x00\x00')
+
+
+def _pidl_items(binary_data: bytes):
+    offset = 0
+    while offset + 2 <= len(binary_data):
+        size = struct.unpack('<H', binary_data[offset:offset + 2])[0]
+        if size == 0 or offset + size > len(binary_data):
+            break
+        yield binary_data[offset:offset + size]
+        offset += size
+
+
+def _reconstruct_pidl_path(binary_data: bytes, known_folders: dict = None) -> dict:
     """
-    Reconstruct full path from PIDL (Pointer to Item IDentifier List) by traversing all Shell Items.
-    
-    Args:
-        binary_data: Binary PIDL data containing multiple Shell Items
-    
-    Returns:
-        Dictionary containing:
-        - path: Full reconstructed path
-        - drive_letter: Drive letter (if found)
-        - components: List of path components
+    The path a PIDL (an ID list of shell items) points at, item by item.
+
+    - 0x1F root item: a known folder by GUID; its path comes from
+      ``known_folders`` (the user's own, see known_folders_from_hive) or
+      Windows' default. "This PC" adds nothing (a volume follows). A root
+      item can carry the volume inside it ("/D:\\").
+    - 0x20-0x2F volume: the drive ("C:").
+    - 0x30-0x3F file entry: its long name (0xBEEF0004), else its 8.3 name.
+    - 0x74 delegate item ("CFSF"): a file entry wrapped by a namespace
+      extension - the wrapped entry's name. The signature itself is not a name.
+    - 0x40-0x4F network location.
+    - Anything else falls back to a guarded generic read.
+
+    The drive comes only from a volume or a known folder's path, never from
+    a byte scan of another item (which gave PowerPoint's folder drive "P:").
+
+    Returns path, drive_letter and components. Verified item by item against
+    Windows' own SHGetPathFromIDList on live LastVisitedPidlMRU /
+    OpenSavePidlMRU values.
     """
-    result = {
-        'path': '',
-        'drive_letter': '',
-        'components': []
-    }
-    
+    result = {'path': '', 'drive_letter': '', 'components': []}
     try:
         if not binary_data or len(binary_data) < 2:
             return result
-        
-        offset = 0
-        path_components = []
-        first_item = True
-        
-        # Traverse all Shell Items in the PIDL
-        while offset < len(binary_data) - 1:
-            # Read size of Shell Item (2 bytes, little-endian)
-            if offset + 2 > len(binary_data):
-                break
-            
-            size = struct.unpack('<H', binary_data[offset:offset + 2])[0]
-            
-            # Size of 0 indicates end of list
-            if size == 0:
-                break
-            
-            # Ensure we don't read beyond buffer
-            if offset + size > len(binary_data):
-                break
-            
-            # Extract this Shell Item
-            item_data = binary_data[offset:offset + size]
-            
-            # Parse the item
-            if len(item_data) > 2:
-                type_indicator = item_data[2]
-                
-                logger.debug(f"Processing Shell Item at offset {offset}: type=0x{type_indicator:02X}, size={size}")
-                
-                # For the first item, always try to extract drive letter aggressively
-                if first_item and not result['drive_letter']:
-                    drive = _extract_drive_path(item_data)
-                    if drive:
-                        result['drive_letter'] = drive
-                        logger.debug(f"Extracted drive from first item: {drive}")
-                    first_item = False
-                
-                # Drive letter (0x20-0x2F range)
-                if 0x20 <= type_indicator <= 0x2F:
-                    drive = _extract_drive_path(item_data)
-                    if drive:
-                        result['drive_letter'] = drive
-                        path_components.append(drive)
-                        logger.debug(f"Added drive component: {drive}")
-                
-                # File system object (0x30-0x3F range)
-                elif 0x30 <= type_indicator <= 0x3F:
-                    names = _extract_filesystem_names(item_data)
-                    # Prefer long name over short name
-                    name = names.get('long_name') or names.get('short_name', '')
-                    if name:
-                        path_components.append(name)
-                        logger.debug(f"Added filesystem component: {name}")
-                    
-                    # If no drive letter found yet, try to extract from this item
-                    # Sometimes drive info is embedded in filesystem items
-                    if not result['drive_letter']:
-                        drive = _extract_drive_path(item_data)
-                        if drive:
-                            result['drive_letter'] = drive
-                            logger.debug(f"Found embedded drive letter: {drive}")
-                
-                # Network location (0x40-0x4F range)
-                elif 0x40 <= type_indicator <= 0x4F:
-                    network_path = _extract_network_path(item_data)
-                    if network_path:
-                        path_components.append(network_path)
-                        logger.debug(f"Added network component: {network_path}")
-                
-                # Unknown type - try generic extraction. Guarded, because this
-                # is a byte scan: unguarded it contributed components like
-                # `S"M` and `}D"pN` to otherwise correct paths.
-                else:
-                    generic_path = _extract_generic_path(item_data)
-                    if generic_path and not is_plausible_name(generic_path.replace('\\', '')):
-                        generic_path = ''
-                    if generic_path and len(generic_path) > 1:
-                        # Check if it contains a drive letter
-                        if len(generic_path) >= 2 and generic_path[1] == ':' and generic_path[0].isalpha():
-                            result['drive_letter'] = generic_path[:2].upper()
-                            path_components.append(result['drive_letter'])
-                            if len(generic_path) > 3:  # Has more than just "C:\"
-                                remaining = generic_path[3:] if generic_path[2] == '\\' else generic_path[2:]
-                                if remaining:
-                                    path_components.append(remaining)
-                            logger.debug(f"Extracted from generic: drive={result['drive_letter']}, path={generic_path}")
-                        elif generic_path:
-                            path_components.append(generic_path)
-                            logger.debug(f"Added generic component: {generic_path}")
-            
-            # Move to next Shell Item
-            offset += size
-        
-        # Clean up path components - remove invalid entries
-        cleaned_components = []
-        for component in path_components:
-            # Skip empty components
-            if not component or len(component) == 0:
+        folders = known_folders if known_folders is not None else DEFAULT_KNOWN_FOLDER_PATHS
+        components = []
+        for item in _pidl_items(binary_data):
+            if len(item) < 3:
                 continue
-            
-            # Skip components that are just special characters or numbers
-            # Valid components should have at least one letter or be a drive letter
-            if component and len(component) >= 2:
-                # Allow drive letters (C:, D:, etc.)
-                if len(component) == 2 and component[1] == ':' and component[0].isalpha():
-                    cleaned_components.append(component)
+            kind = item[2]
+            if kind == 0x1F:
+                nested = _NESTED_VOLUME.search(item)
+                if nested:
+                    components = [nested.group(1).decode('ascii').upper() + ':']
                     continue
-                
-                # Skip components that look like garbage (e.g., "+00", "++", etc.)
-                # Valid path components should contain letters or be meaningful
-                has_letter = any(c.isalpha() for c in component)
-                has_digit = any(c.isdigit() for c in component)
-                special_only = all(not c.isalnum() for c in component)
-                
-                # Skip if it's only special characters or looks like binary data
-                if special_only or (not has_letter and len(component) < 3):
-                    logger.debug(f"Skipping invalid component: {component}")
+                if len(item) < 20:
                     continue
-                
-                # Skip components that start with non-alphanumeric (except drive letters)
-                if component[0] not in 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789':
-                    logger.debug(f"Skipping component with invalid start: {component}")
+                guid = _format_guid(item[4:20])
+                if guid == '20D04FE0-3AEA-1069-A2D8-08002B30309D':      # This PC
+                    components = []
                     continue
-                
-                cleaned_components.append(component)
-        
-        # Build the full path from cleaned components
-        if cleaned_components:
-            result['path'] = '\\'.join(cleaned_components)
-            result['components'] = cleaned_components
-            logger.debug(f"Reconstructed path: {result['path']}, drive: {result['drive_letter']}")
-        else:
-            logger.debug("No valid path components found in PIDL")
-        
+                path = folders.get(guid)
+                if path:
+                    components = [c for c in path.split('\\') if c]
+                elif guid in _SPECIAL_FOLDER_GUIDS:
+                    components = [_SPECIAL_FOLDER_GUIDS[guid]]
+                else:
+                    components = ['{%s}' % guid]
+            elif 0x20 <= kind <= 0x2F:
+                drive = _extract_drive_path(item)
+                if drive:
+                    components = [drive]
+            elif 0x30 <= kind <= 0x3F:
+                names = _extract_filesystem_names(item)
+                name = names.get('long_name') or names.get('short_name', '')
+                if name:
+                    components.append(name)
+            elif kind == 0x74 and item[6:10] == b'CFSF':
+                # The 8.3 name is the wrapped entry's; the long name is in the
+                # extension chain, whose offset the OUTER item's last two
+                # bytes give.
+                name = (_extract_filesystem_names(item).get('long_name')
+                        or _extract_filesystem_names(item[10:]).get('short_name', ''))
+                if name:
+                    components.append(name)
+            elif 0x40 <= kind <= 0x4F:
+                network_path = _extract_network_path(item)
+                if network_path:
+                    components.append(network_path)
+            elif kind in (0x00, 0x01) and _UTF16_ABSOLUTE_PATH.search(item):
+                text = _UTF16_ABSOLUTE_PATH.search(item).group(0)[:-2].decode('utf-16-le', errors='ignore')
+                components = [c for c in text.split('\\') if c]
+                if components:
+                    components[0] = components[0].upper()
+            else:
+                generic = _extract_generic_path(item)
+                if generic and is_plausible_name(generic.replace('\\', '')) and len(generic) > 1:
+                    if len(generic) >= 2 and generic[1] == ':' and generic[0].isalpha():
+                        components = [c for c in generic.split('\\') if c]
+                        components[0] = components[0].upper()
+                    else:
+                        components.append(generic)
+        components = [c for c in components if c and c.strip()]
+        if components:
+            result['components'] = components
+            result['path'] = '\\'.join(components)
+            first = components[0]
+            if len(first) == 2 and first[1] == ':' and first[0].isalpha():
+                result['drive_letter'] = first.upper()
+            if len(components) == 1 and result['drive_letter']:
+                result['path'] = first.upper() + '\\'
         return result
-        
     except Exception as e:
         logger.error(f"Error reconstructing PIDL path: {e}")
         return result
 
 
-def parse_opensavemru_entry(binary_data: bytes) -> dict:
+def parse_opensavemru_entry(binary_data: bytes, known_folders: dict = None) -> dict:
     """
     Parse OpenSavePidlMRU registry entry containing Shell Item ID (PIDL) data.
     
@@ -2592,7 +2624,7 @@ def parse_opensavemru_entry(binary_data: bytes) -> dict:
             return result
         
         # Reconstruct full path from PIDL
-        pidl_data = _reconstruct_pidl_path(binary_data)
+        pidl_data = _reconstruct_pidl_path(binary_data, known_folders)
         
         if pidl_data['path']:
             # Localised folders arrive as resource references; resolve every
@@ -2625,7 +2657,7 @@ def parse_opensavemru_entry(binary_data: bytes) -> dict:
         return result
 
 
-def parse_lastsavemru_entry(binary_data: bytes) -> dict:
+def parse_lastsavemru_entry(binary_data: bytes, known_folders: dict = None) -> dict:
     """
     Parse LastVisitedPidlMRU registry entry containing application and folder path.
     
@@ -2679,7 +2711,7 @@ def parse_lastsavemru_entry(binary_data: bytes) -> dict:
             pidl_binary = binary_data[pidl_offset:]
             
             # Reconstruct full path from PIDL
-            pidl_data = _reconstruct_pidl_path(pidl_binary)
+            pidl_data = _reconstruct_pidl_path(pidl_binary, known_folders)
             
             if pidl_data['path']:
                 result['folder_path'] = pidl_data['path']

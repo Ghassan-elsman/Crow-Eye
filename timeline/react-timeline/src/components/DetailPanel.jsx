@@ -25,6 +25,20 @@ const USN_REASONS = {
   0x80000000: 'Close'
 };
 
+// A link end holds its row in `.source`; open it as the lane would - the full
+// row with the mark's id, type and time - so the panel shows every field and
+// lists the row's own links.
+function linkedRow(ev) {
+  return {
+    ...(ev.source || {}),
+    id: ev.id,
+    type: ev.type,
+    subType: ev.type,
+    _artifact_type: ev.type,
+    timestamp: ev.rawTimestamp || ev.timestamp,
+  };
+}
+
 function DetailPanel({ state, data, links, callBridge }) {
   const { selectedEvent, detailPanelCollapsed, setDetailPanelCollapsed, setDetailEvent, setSelectedEvent } = state;
 
@@ -139,7 +153,7 @@ function DetailPanel({ state, data, links, callBridge }) {
                    <div 
                      key={i} 
                      className="detail-panel__link-card"
-                     onClick={() => setSelectedEvent(ev)}
+                     onClick={() => setSelectedEvent(linkedRow(ev))}
                      style={{
                        background: 'var(--bg-elevated)',
                        border: '1px solid var(--border-default)',

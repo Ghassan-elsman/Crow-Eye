@@ -1,0 +1,66 @@
+{
+  "config_name": "usb_insert_mass_copy_behaviour",
+  "wing_name": "USB Insert, Then Mass Copy (Behaviour)",
+  "wing_id": "default_behaviour_usb_mass_copy_001",
+  "wing_category": "behaviour",
+  "description": "A USB device is plugged in and, within 30 minutes, at least 20 files appear to have been copied into one person's own folders. UBA rules: usb_connected, storage drives only (details.storage: a USBStorageDevices entry, or a USBDevices entry enumerated under USBSTOR or with a storage driver - the LAST connection time of each device, and no account: a machine step; mice, webcams and hubs are left out) then file_copy_inferred ($MFT: created after last modified, in the person's Desktop / Documents / Downloads; grouped per folder per day and timed at the first copy). The copy rule sees files ARRIVING on this disk; copies made TO the USB drive are not recorded on this volume.",
+  "proves": "Files appear to have been copied into a person's folders soon after a USB device was connected",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.1",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "USB storage drive connected (no account recorded)",
+      "rule_id": "usb_connected",
+      "actor": "machine",
+      "conditions": [
+        {
+          "field_name": "details.storage",
+          "operator": "equals",
+          "value": "yes"
+        }
+      ]
+    },
+    {
+      "label": "Files appear to have been copied",
+      "rule_id": "file_copy_inferred",
+      "min_count": 20,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 30,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1025"
+    ],
+    "tactic": [
+      "collection"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "usb",
+    "removable_media",
+    "collection",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "data_theft"
+  ]
+}

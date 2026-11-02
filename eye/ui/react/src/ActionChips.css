@@ -30,7 +30,7 @@
   display: inline-flex;
   align-items: stretch;
   border-radius: var(--radius-full);
-  border: 1px solid var(--color-border-accent);
+  border: 3px solid var(--color-border-accent);
   background: var(--color-accent-dim);
   overflow: hidden;
   -webkit-transition: background 0.15s, border-color 0.15s, transform 0.15s;

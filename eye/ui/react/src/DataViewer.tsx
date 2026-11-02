@@ -89,7 +89,7 @@ const DataViewer: React.FC<DataViewerProps> = ({
     console.log('Open file location:', path);
     
     // TODO: Call window.bridge.open_file_location(path) when bridge method is available
-    // This would be implemented in the EYE Bridge to open Windows Explorer at the file location
+    // This would be implemented in the Eye Bridge to open Windows Explorer at the file location
   };
 
   // Filter rows based on search text

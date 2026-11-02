@@ -15,7 +15,7 @@
         "ufile.io", "temp.sh", "filetransfer.io", "jumpshare.com", "send.vis.ee", "dbree.me",
         "uploadhaven.com", "turbobit.net", "nitroflare.com", "1fichier.com", "terabox.com",
         "smash.app", "fromsmash.com", "tusfiles.com", "oshi.at", "bashupload.com",
-        "limewire.com", "filedropper.com", "dosya.tc", "qiwi.gg", "buzzheavier.com"
+        "limewire.com", "filedropper.com", "dosya.tc", "qiwi.gg", "buzzheavier.com", "uploadfiles.io", "tmpfiles.org", "webhook.site", "pipedream.net", "requestbin.com", "hooks.slack.com", "api.telegram.org", "discord.com/api/webhooks", "discordapp.com/api/webhooks"
       ],
       "exclude": ["sharepoint.com", "docs.google.com", "sheets.google.com"]
     },
@@ -72,7 +72,7 @@
         "ngrok.com", "ngrok.io", "ngrok-free.app", "ngrok.app", "ngrok-free.dev",
         "localtunnel.me", "loca.lt", "trycloudflare.com", "serveo.net", "localhost.run",
         "lhr.life", "pinggy.io", "pinggy.link", "playit.gg", "localxpose.io", "telebit.cloud",
-        "tailscale.com", "zerotier.com", "devtunnels.ms"
+        "tailscale.com", "zerotier.com", "devtunnels.ms", "loclx.io"
       ],
       "exclude": []
     },

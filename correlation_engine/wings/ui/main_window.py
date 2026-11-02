@@ -13,27 +13,27 @@ from PyQt5.QtWidgets import (
     QInputDialog, QTabWidget, QTableWidget, QTableWidgetItem, QHeaderView,
     QCheckBox, QDoubleSpinBox
 )
-from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QFont, QColor, QIcon
 
-# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+# The site look (ui/app_theme.py); standalone it keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 def _look(widget, role=None, status=None, variant=None):
     """A role / meaning colour / button variant through the window sheet."""
-    if _site is None:
+    if _theme is None:
         return widget
     widget.setStyleSheet("")
     if role:
-        _site.set_role(widget, role)
+        _theme.set_role(widget, role)
     if status:
-        _site.set_status(widget, status)
+        _theme.set_status(widget, status)
     if variant:
-        _site.set_variant(widget, variant)
+        _theme.set_variant(widget, variant)
     return widget
 
 
@@ -45,7 +45,7 @@ _LOGIC = {"AND": "#4ADE80", "OR": "#FBBF24"}
 _SEVERITY = {"info": "#22D3EE", "low": "#4ADE80", "medium": "#FBBF24",
              "high": "#FDA4AF", "critical": "#FDA4AF"}
 
-# The window's own rules on top of the site sheet: editors inside table cells
+# The window's own rules on top of the theme sheet: editors inside table cells
 # (weight / tier / minimum score) are dense, or their digits clip.
 _WINGS_EXTRA = """
 QTableWidget QSpinBox, QTableWidget QDoubleSpinBox { padding: 0 4px; border-radius: 6px;
@@ -59,6 +59,18 @@ from ..core.wing_validator import WingValidator
 from .feather_widget import FeatherWidget
 from .json_viewer import JsonViewerDialog
 from .anchor_priority_widget import AnchorPriorityWidget
+from .category_dialog import CATEGORY_CHOICES, ask_wing_category
+from .behaviour_steps_editor import (
+    BehaviourStepsEditor, EDITOR_QSS, find_artifacts_dir,
+)
+from ...config.wing_config import (
+    WING_CATEGORY_BEHAVIOUR, WING_CATEGORY_IDENTITY, WING_CATEGORY_TIME,
+    behaviour_fields_of, normalize_wing_category,
+)
+
+# The behaviour step editor's own rules (its step well, dense condition rows,
+# the violet "Your rule" chip) ride on the window sheet.
+_WINGS_EXTRA = _WINGS_EXTRA + EDITOR_QSS
 
 # Import config system
 try:
@@ -70,39 +82,81 @@ except ImportError:
     print("Warning: Config system not available")
 
 
+def build_scoring_config(existing_scoring, interpretation_levels):
+    """The scoring dict a saved wing config carries when weighted scoring is on.
+
+    Starts from the wing's own scoring dict so keys the editor has no widget
+    for survive the save - `score_excluded_feathers` and `cap_when_present`
+    in Execution Without Trace. Rebuilding the dict from `enabled` and
+    `score_interpretation` alone dropped them: Prefetch's 0.0 weight then read
+    as "unset", took the global default, and AmCache + ShimCache + a present
+    Prefetch scored the top "trace gap" label again.
+    """
+    scoring = dict(existing_scoring or {})
+    scoring['enabled'] = True
+    scoring['score_interpretation'] = {
+        level['level']: {'min': level['min'], 'label': level['label']}
+        for level in interpretation_levels
+    }
+    return scoring
+
+
 class WingsCreatorWindow(QMainWindow):
     """Main window for Wings Creator"""
-    
+
+    # The path a Wing was saved to (the Execution tab puts it back in the
+    # loaded pipeline).
+    wing_saved = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.wing = Wing()
+        # The file the Wing was opened from, offered first when it is saved.
+        self.source_path = None
         self.feather_widgets = []
         self.current_config = None # Store current wing config
         self.config_manager = ConfigManager() if CONFIG_AVAILABLE else None
         self.case_directory = None # Store case directory for feather path resolution
+        # The extra sheet, for parts themed after they are built (a new step).
+        self._theme_extra = _WINGS_EXTRA
         # Freed when closed: the opener (pipeline_builder) only holds it
         # until it is destroyed, and nothing reads it after it closes.
         self.setAttribute(Qt.WA_DeleteOnClose)
-        # The site sheet BEFORE the children exist, the roles once built.
-        if _site is not None:
-            _site.begin_site_theme(self, extra=_WINGS_EXTRA)
+        # The theme sheet BEFORE the children exist, the roles once built.
+        if _theme is not None:
+            _theme.begin_theme(self, extra=_WINGS_EXTRA)
         self.init_ui()
-        self._apply_site_look()
-    
+        self._apply_category_ui()
+        self._apply_theme()
+
     def set_case_directory(self, case_directory: str):
         """Set the case directory for feather path resolution"""
         self.case_directory = case_directory
         print(f"[Wings Creator] Case directory set: {case_directory}")
+        # "New behaviour..." tests a table rule on this case's artifacts.
+        if hasattr(self, 'behaviour_group'):
+            self.behaviour_group.set_artifacts_dir(find_artifacts_dir(case_directory))
     
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Crow-Eye Wings Creator")
         from ...gui.crow_eye_icons import CrowEyeIcons
         self.setWindowIcon(CrowEyeIcons.wing())
-        self.setGeometry(100, 100, 1400, 900)
-        
+        # 1400 x 900, or the screen less its taskbar when that is smaller.
+        from PyQt5.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        area = screen.availableGeometry() if screen is not None else None
+        if area is not None:
+            w, h = min(1400, area.width() - 40), min(900, area.height() - 40)
+            self.setGeometry(area.x() + (area.width() - w) // 2, area.y() + (area.height() - h) // 2, w, h)
+        else:
+            self.setGeometry(100, 100, 1400, 900)
+
         # Create central widget with scroll area
         central_widget = QWidget()
+        # The theme paints a window's ground only on QDialog or #siteWindow:
+        # without it the header and the tab bar sat on Qt's light grey.
+        central_widget.setObjectName("siteWindow")
         self.setCentralWidget(central_widget)
         
         main_layout = QVBoxLayout(central_widget)
@@ -129,6 +183,10 @@ class WingsCreatorWindow(QMainWindow):
         
         # Create status bar
         self.status_bar = QStatusBar()
+        # Outside #siteWindow, so it keeps its own ground (theme sheet has none for it).
+        self.status_bar.setProperty("keepStyle", True)
+        self.status_bar.setStyleSheet("QStatusBar { background: #0B0F1A; color: #94A3B8; "
+                                      "border-top: 1px solid #1E293B; }")
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Ready to create a new Wing")
     
@@ -137,14 +195,24 @@ class WingsCreatorWindow(QMainWindow):
         header_layout = QHBoxLayout()
         
         # Title
-        title_label = QLabel("WINGS CREATOR")
-        if _site is not None:
-            _site.set_role(title_label, "title")
+        from ...gui.crow_eye_icons import icon_label_html
+        title_label = QLabel(icon_label_html("wing", "WINGS CREATOR", 24))
+        if _theme is not None:
+            _theme.set_role(title_label, "title")
         else:
             title_label.setFont(QFont("Consolas", 12, QFont.Bold))
         title_label.setAlignment(Qt.AlignLeft)
         header_layout.addWidget(title_label)
-        
+
+        # The Wing's type, always in view: a click opens the type cards again.
+        self.type_chip = QPushButton()
+        self.type_chip.setObjectName("wingTypeChip")
+        self.type_chip.setCursor(Qt.PointingHandCursor)
+        self.type_chip.setToolTip("The engine that runs this Wing. Click to change the type.")
+        self.type_chip.clicked.connect(self.change_wing_type)
+        header_layout.addSpacing(12)
+        header_layout.addWidget(self.type_chip)
+
         header_layout.addStretch()
         
         # Action buttons
@@ -182,11 +250,16 @@ class WingsCreatorWindow(QMainWindow):
         # Wing basic info
         form_layout.addWidget(self.create_basic_info_section())
         
-        # Feathers section
-        form_layout.addWidget(self.create_feathers_section())
-        
-        # Correlation rules section
-        form_layout.addWidget(self.create_correlation_rules_section())
+        # Feathers section (a Behaviour Wing names none: the behaviour step
+        # editor below takes its place)
+        self.feathers_group = self.create_feathers_section()
+        form_layout.addWidget(self.feathers_group)
+        self.behaviour_group = self.create_behaviour_section()
+        form_layout.addWidget(self.behaviour_group)
+
+        # Correlation rules section (feather rows: not shown for a Behaviour Wing)
+        self.correlation_group = self.create_correlation_rules_section()
+        form_layout.addWidget(self.correlation_group)
         
         # Wing logic section
         form_layout.addWidget(self.create_wing_logic_section())
@@ -245,6 +318,30 @@ class WingsCreatorWindow(QMainWindow):
         id_layout.addWidget(self.wing_id_label)
         id_layout.addStretch()
         layout.addLayout(id_layout)
+
+        # Category: the one engine that runs this Wing.
+        from PyQt5.QtWidgets import QComboBox
+        category_layout = QHBoxLayout()
+        category_label = QLabel("Category:")
+        category_label.setMinimumWidth(120)
+        self.category_combo = QComboBox()
+        from ...gui.crow_eye_icons import pair_icon_size, wing_icon
+        self.category_combo.setIconSize(pair_icon_size(16))
+        self.category_combo.addItem("Choose a category...", None)
+        for key, label, _help in CATEGORY_CHOICES:
+            engine = {"time": "Time-Window engine", "identity": "Identity engine",
+                      "behaviour": "Behavioural engine"}[key]
+            self.category_combo.addItem(wing_icon(key), f"{label}  -  {engine}", key)
+        self.category_combo.currentIndexChanged.connect(self.on_category_changed)
+        category_layout.addWidget(category_label)
+        category_layout.addWidget(self.category_combo)
+        category_layout.addStretch()
+        layout.addLayout(category_layout)
+
+        self.category_note = QLabel("")
+        self.category_note.setWordWrap(True)
+        _look(self.category_note, role="note", status="warn")
+        layout.addWidget(self.category_note)
         
         # Description
         desc_label = QLabel("Description:")
@@ -274,7 +371,7 @@ class WingsCreatorWindow(QMainWindow):
         group = QGroupBox()
         layout = QVBoxLayout()
         from ...gui.crow_eye_icons import group_title_label
-        layout.addWidget(group_title_label("feather", "Feather Selection (Minimum 1 Required)"))
+        layout.addWidget(group_title_label("feather", "Feather Selection (Minimum 2 Required)"))
         
         # Container for feather widgets
         self.feathers_container = QVBoxLayout()
@@ -282,6 +379,10 @@ class WingsCreatorWindow(QMainWindow):
         
         # Add feather button
         add_btn = QPushButton("+ Add Feather")
+        # No icon: this is a primary button, whose hover runs indigo -> cyan,
+        # the Wing's and the Feather's own colours (the Feather drops to about
+        # 1.6:1 on hover). Brand art never sits on a primary button; the
+        # section title above carries the Feather.
         add_btn.clicked.connect(self.add_feather)
         _look(add_btn, variant="primary")
         layout.addWidget(add_btn)
@@ -289,6 +390,232 @@ class WingsCreatorWindow(QMainWindow):
         group.setLayout(layout)
         return group
     
+    def create_behaviour_section(self):
+        """A Behaviour Wing's steps, order and time range, subject and alert
+        (behaviour_steps_editor.py) - shown in place of the Feathers."""
+        editor = BehaviourStepsEditor(self)
+        editor.changed.connect(self.on_behaviour_changed)
+        editor.status_message.connect(lambda text: self.status_bar.showMessage(text))
+        editor.setVisible(False)
+        return editor
+
+    def on_behaviour_changed(self):
+        """The editor's fields onto the Wing, and the note re-checked."""
+        for key, value in self.behaviour_group.behaviour().items():
+            setattr(self.wing, key, value)
+        self._apply_category_ui()
+        self.update_status()
+
+    def _own_rules(self):
+        """The Wing's own rules, without the global rules the editor merges in
+        for display (those are saved in Settings, not with the Wing)."""
+        rules = getattr(self, 'wing_semantic_rules', None)
+        if rules is None:
+            rules = self.wing.semantic_rules or []
+
+        def scope(rule):
+            return rule.get('scope') if isinstance(rule, dict) else getattr(rule, 'scope', None)
+        return [r for r in rules if isinstance(r, dict) and scope(r) != 'global']
+
+    def _mark_rules_edited(self):
+        """Mark a shipped Wing whose rules the analyst changed, so a reload
+        keeps them (config.wing_config.WingConfig.from_dict)."""
+        from ...config.wing_config import rules_differ_from_shipped
+        self.wing.rules_edited = bool(getattr(self.wing, 'rules_edited', False)) or             rules_differ_from_shipped(self.wing.wing_id, self._own_rules())
+        return self.wing.rules_edited
+
+    def _build_wing_config(self, config_name, feather_refs, scoring_config):
+        """The WingConfig both saves write. It carries everything the Wing
+        has: the two saves built it field by field and left out the rules,
+        tags, case types, version and authorship, so a saved Wing reloaded
+        with no rules of its own."""
+        meta = getattr(self.wing, 'metadata', None)
+        # A Behaviour Wing's fields already carry its own rules.
+        extra = dict(self._behaviour_config_fields())
+        extra.setdefault('semantic_rules', self._own_rules())
+        return WingConfig(
+            config_name=config_name,
+            wing_name=self.wing.wing_name,
+            wing_id=self.wing.wing_id,
+            description=self.wing.description,
+            proves=self.wing.proves,
+            author=self.wing.author,
+            feathers=feather_refs,
+            time_window_minutes=self.wing.correlation_rules.time_window_minutes,
+            minimum_matches=self.wing.correlation_rules.minimum_matches,
+            target_application=self.wing.correlation_rules.target_application,
+            target_file_path=self.wing.correlation_rules.target_file_path,
+            target_event_id=self.wing.correlation_rules.target_event_id,
+            apply_to=self.wing.correlation_rules.apply_to,
+            anchor_priority=self.wing.correlation_rules.anchor_priority,
+            use_weighted_scoring=self.enable_weighted_scoring_cb.isChecked(),
+            scoring=scoring_config,
+            wing_category=self.wing.wing_category,
+            rules_edited=self._mark_rules_edited(),
+            tags=list(getattr(meta, 'tags', []) or []),
+            case_types=list(getattr(meta, 'case_types', []) or []),
+            version=getattr(self.wing, 'version', '1.0') or '1.0',
+            eye_authorship=getattr(self.wing, 'eye_authorship', None),
+            **extra
+        )
+
+    def _behaviour_own_rules(self):
+        """A Behaviour Wing's own rules. The global rules the editor merges in
+        for Time and Identity Wings match feather rows, which a Behaviour Wing
+        has none of: they are not part of it, so they are neither checked nor
+        saved with it."""
+        rules = getattr(self, 'wing_semantic_rules', None)
+        if rules is None:
+            rules = self.wing.semantic_rules or []
+
+        def scope(rule):
+            return rule.get('scope') if isinstance(rule, dict) else getattr(rule, 'scope', None)
+        return [r for r in rules if isinstance(r, dict) and scope(r) != 'global']
+
+    def on_category_changed(self, _index=None):
+        """Keep the Wing and the editor in step with the chosen category."""
+        category = normalize_wing_category(self.category_combo.currentData())
+        self.wing.wing_category = category
+        if category == WING_CATEGORY_BEHAVIOUR and hasattr(self, 'behaviour_group'):
+            self.on_behaviour_changed()
+        self._apply_category_ui()
+
+    def _apply_category_ui(self):
+        category = self.wing.wing_category
+        behaviour = category == WING_CATEGORY_BEHAVIOUR
+        if hasattr(self, 'feathers_group'):
+            # A Behaviour Wing that still has Feathers keeps the section, so
+            # they can be removed.
+            self.feathers_group.setVisible(not behaviour or bool(self.feather_widgets))
+            self.behaviour_group.setVisible(behaviour)
+        # Time window, anchor priority, target application and "minimum
+        # matches ... feathers" are the feather engines' settings.
+        if hasattr(self, 'correlation_group'):
+            self.correlation_group.setVisible(not behaviour)
+        if hasattr(self, 'min_matches_spin'):
+            self.min_matches_spin.setVisible(not behaviour)
+            self.min_matches_label.setVisible(not behaviour)
+        # Scoring and Semantic Mappings weigh and label Feather matches; a
+        # Behaviour Wing has neither.
+        if hasattr(self, 'tab_widget'):
+            for i in range(self.tab_widget.count()):
+                if self.tab_widget.tabText(i) in ("Scoring", "Semantic Mappings"):
+                    self.tab_widget.setTabVisible(i, not behaviour)
+        self._update_type_chip(category)
+        advanced_present = False
+        try:
+            from ...config.wing_config import WingConfig
+            advanced_present = WingConfig.semantic_rules_are_advanced(
+                getattr(self, 'wing_semantic_rules', None) or self.wing.semantic_rules)
+        except Exception:
+            pass
+        if hasattr(self, 'advanced_rules_checkbox'):
+            time_wing = category == WING_CATEGORY_TIME
+            self.advanced_rules_checkbox.setEnabled(not time_wing or advanced_present)
+            self.advanced_rules_checkbox.setToolTip(
+                "A Time Wing cannot carry advanced rules: the Time-Window engine cannot "
+                "evaluate them. Make it an Identity Wing to use them." if time_wing else "")
+            if time_wing and not advanced_present:
+                self.advanced_rules_checkbox.setChecked(False)
+        if not hasattr(self, 'category_note'):
+            return
+        from ...config.wing_config import category_problems
+        if behaviour:
+            # The same check the model validator makes (steps, time range,
+            # subject, alert), live as the steps are edited.
+            problems = category_problems(category, self._behaviour_own_rules(),
+                                         self.feather_widgets,
+                                         behaviour=behaviour_fields_of(self.wing))
+        else:
+            problems = category_problems(category, getattr(self, 'wing_semantic_rules', None)
+                                         or self.wing.semantic_rules, [])
+        if category is None:
+            self.category_note.setText("This Wing has no category, so it does not run. "
+                                       "Choose Time, Identity or Behaviour.")
+        elif problems:
+            self.category_note.setText(" ".join(problems))
+        else:
+            self.category_note.setText("")
+        self.category_note.setVisible(bool(self.category_note.text()))
+
+    _TYPE_COLOURS = {WING_CATEGORY_TIME: "#4ADE80", WING_CATEGORY_IDENTITY: "#60A5FA",
+                     WING_CATEGORY_BEHAVIOUR: "#A78BFA"}
+
+    def _update_type_chip(self, category):
+        if not hasattr(self, 'type_chip'):
+            return
+        from ...gui.crow_eye_icons import pair_icon_size, wing_icon
+        from ...config.wing_config import WING_CATEGORY_LABELS
+        colour = self._TYPE_COLOURS.get(category, "#F59E0B")
+        if category in WING_CATEGORY_LABELS:
+            self.type_chip.setIcon(wing_icon(category))
+            self.type_chip.setIconSize(pair_icon_size(16))
+            self.type_chip.setText(f"{WING_CATEGORY_LABELS[category]}   Change")
+        else:
+            self.type_chip.setIcon(QIcon())
+            self.type_chip.setText("Choose the Wing's type")
+        self.type_chip.setStyleSheet(
+            "QPushButton#wingTypeChip { background: transparent; border: 1px solid %s; "
+            "border-radius: 13px; padding: 4px 12px; color: %s; }"
+            "QPushButton#wingTypeChip:hover { background: rgba(148, 163, 184, 0.12); }"
+            % (colour, colour))
+
+    def change_wing_type(self):
+        """The type cards, from the header chip."""
+        from .wing_type_dialog import choose_wing_type
+        from ...config.wing_config import WingConfig
+        advanced = WingConfig.semantic_rules_are_advanced(
+            getattr(self, 'wing_semantic_rules', None) or self.wing.semantic_rules)
+        choice = choose_wing_type(self, self.wing.wing_category, advanced, changing=True)
+        if choice and choice != self.wing.wing_category:
+            self._set_category_combo(choice)
+            if choice == WING_CATEGORY_BEHAVIOUR and hasattr(self, 'behaviour_group'):
+                self.on_behaviour_changed()
+            self.status_bar.showMessage(
+                f"Type changed: {self.category_combo.currentText()} - save the Wing to keep it")
+
+    def start_new_wing(self, category=None):
+        """A blank Wing of the chosen type; asks the type when none is given.
+        Returns False when the type cards were cancelled."""
+        if category is None:
+            from .wing_type_dialog import choose_wing_type
+            category = choose_wing_type(self)
+            if not category:
+                return False
+        self.wing = Wing()
+        # Load global semantic mappings and rules for the new wing
+        self.wing_semantic_mappings = []
+        self.wing_semantic_rules = []
+        self.load_global_semantic_mappings_silently()
+        self.source_path = None
+        self.load_wing_to_ui(ask_category=False)
+        self._set_category_combo(category)
+        if category == WING_CATEGORY_BEHAVIOUR and hasattr(self, 'behaviour_group'):
+            self.on_behaviour_changed()
+        from ...config.wing_config import WING_CATEGORY_LABELS
+        self.status_bar.showMessage(f"New {WING_CATEGORY_LABELS.get(category, 'Wing')}")
+        return True
+
+    def _set_category_combo(self, category):
+        index = self.category_combo.findData(normalize_wing_category(category))
+        blocked = self.category_combo.blockSignals(True)
+        self.category_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.category_combo.blockSignals(blocked)
+        self.wing.wing_category = normalize_wing_category(category)
+        self._apply_category_ui()
+
+    def _ask_category_if_missing(self):
+        """An uncategorised Wing cannot run: ask before it is edited."""
+        if self.wing.wing_category is not None:
+            return
+        from ...config.wing_config import WingConfig
+        advanced = WingConfig.semantic_rules_are_advanced(self.wing.semantic_rules)
+        choice = ask_wing_category(self, self.wing.wing_name, advanced)
+        if choice:
+            self._set_category_combo(choice)
+            self.status_bar.showMessage(
+                f"Category set: {self.category_combo.currentText()} - save the Wing to keep it")
+
     def create_correlation_rules_section(self):
         """Create correlation rules section"""
         group = QGroupBox("Correlation Settings")
@@ -425,13 +752,20 @@ class WingsCreatorWindow(QMainWindow):
         
         # Minimum matches
         matches_layout = QHBoxLayout()
-        matches_label = QLabel("Minimum matches required:")
+        # It counts the feathers that must CORROBORATE the one a match is
+        # anchored on. "Minimum matches required: 1 feathers" read as one
+        # feather in total, while the validator wanted two.
+        matches_label = QLabel("Corroborating feathers:")
         matches_label.setMinimumWidth(120)
+        self.min_matches_label = matches_label
         self.min_matches_spin = QSpinBox()
         self.min_matches_spin.setMinimum(1)
         self.min_matches_spin.setMaximum(10)
         self.min_matches_spin.setValue(1)
-        self.min_matches_spin.setSuffix(" feathers")
+        self.min_matches_spin.setSuffix(" + the anchor")
+        self.min_matches_spin.setToolTip(
+            "How many other feathers must hold the same evidence as the one the match is anchored on. "
+            "1 means two feathers in all; it must be less than the number of feathers in the Wing.")
         self.min_matches_spin.valueChanged.connect(self.on_min_matches_changed)
         matches_layout.addWidget(matches_label)
         matches_layout.addWidget(self.min_matches_spin)
@@ -448,8 +782,8 @@ class WingsCreatorWindow(QMainWindow):
         
         # Enable weighted scoring checkbox
         self.enable_weighted_scoring_cb = QCheckBox("Enable Weighted Scoring")
-        if _site is not None:
-            self.enable_weighted_scoring_cb.setFont(_site.font("ui", 13, QFont.Bold))
+        if _theme is not None:
+            self.enable_weighted_scoring_cb.setFont(_theme.font("ui", 13, QFont.Bold))
         self.enable_weighted_scoring_cb.stateChanged.connect(self.on_weighted_scoring_toggled)
         layout.addWidget(self.enable_weighted_scoring_cb)
         
@@ -607,8 +941,8 @@ class WingsCreatorWindow(QMainWindow):
             "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
         )
         self.advanced_rules_checkbox.setChecked(False)
-        if _site is not None:
-            self.advanced_rules_checkbox.setFont(_site.font("ui", 13, QFont.Bold))
+        if _theme is not None:
+            self.advanced_rules_checkbox.setFont(_theme.font("ui", 13, QFont.Bold))
         self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
         layout.addWidget(self.advanced_rules_checkbox)
 
@@ -617,8 +951,8 @@ class WingsCreatorWindow(QMainWindow):
         self.advanced_rules_note.setTextFormat(Qt.RichText)
         self.advanced_rules_note.setText(status_label_html(
             "bolt",
-            "Advanced rules are supported by the Identity-Based engine only. Running a wing "
-            "that contains them on the Time-Window engine will prompt you to switch engines.",
+            "Advanced rules need an Identity Wing: the Time-Window engine cannot evaluate "
+            "them, and a Time Wing that carries them is refused when saved or run.",
             size_px=12,
         ))
         self.advanced_rules_note.setWordWrap(True)
@@ -735,8 +1069,8 @@ class WingsCreatorWindow(QMainWindow):
             "Enable advanced rules (absence / sequence / threshold / nested / cross-feather)"
         )
         self.advanced_rules_checkbox.setChecked(False)
-        if _site is not None:
-            self.advanced_rules_checkbox.setFont(_site.font("ui", 13, QFont.Bold))
+        if _theme is not None:
+            self.advanced_rules_checkbox.setFont(_theme.font("ui", 13, QFont.Bold))
         self.advanced_rules_checkbox.toggled.connect(self._toggle_advanced_rules)
         layout.addWidget(self.advanced_rules_checkbox)
 
@@ -745,8 +1079,8 @@ class WingsCreatorWindow(QMainWindow):
         self.advanced_rules_note.setTextFormat(Qt.RichText)
         self.advanced_rules_note.setText(status_label_html(
             "bolt",
-            "Advanced rules are supported by the Identity-Based engine only. Running a wing "
-            "that contains them on the Time-Window engine will prompt you to switch engines.",
+            "Advanced rules need an Identity Wing: the Time-Window engine cannot evaluate "
+            "them, and a Time Wing that carries them is refused when saved or run.",
             size_px=12,
         ))
         self.advanced_rules_note.setWordWrap(True)
@@ -1023,6 +1357,14 @@ class WingsCreatorWindow(QMainWindow):
         if scoring and 'score_interpretation' in scoring:
             self.interpretation_levels = []
             for level_key, level_data in scoring['score_interpretation'].items():
+                if not isinstance(level_data, dict):
+                    # A bare threshold: Wing.from_dict's default for a file
+                    # with no scoring (every Behaviour Wing) is
+                    # CentralizedScoreConfig's {level: min}.
+                    try:
+                        level_data = {'min': float(level_data or 0.0)}
+                    except (TypeError, ValueError):
+                        level_data = {}
                 self.interpretation_levels.append({
                     'level': level_key,
                     'label': level_data.get('label', level_key),
@@ -1048,22 +1390,24 @@ class WingsCreatorWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
         
-        new_action = QAction("New Wing", self)
+        # Each File action works on a Wing file, so each shows the Wing.
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        new_action = QAction(CrowEyeIcons.wing(), "New Wing", self)
         new_action.setShortcut("Ctrl+N")
         new_action.triggered.connect(self.new_wing)
         file_menu.addAction(new_action)
         
-        open_action = QAction("Open Wing", self)
+        open_action = QAction(CrowEyeIcons.wing(), "Open Wing", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_wing)
         file_menu.addAction(open_action)
         
-        save_action = QAction("Save Wing", self)
+        save_action = QAction(CrowEyeIcons.wing(), "Save Wing", self)
         save_action.setShortcut("Ctrl+S")
         save_action.triggered.connect(self.save_wing)
         file_menu.addAction(save_action)
         
-        save_as_action = QAction("Save Wing As...", self)
+        save_as_action = QAction(CrowEyeIcons.wing(), "Save Wing As...", self)
         save_as_action.setShortcut("Ctrl+Shift+S")
         save_as_action.triggered.connect(self.save_wing_as)
         file_menu.addAction(save_as_action)
@@ -1100,14 +1444,14 @@ class WingsCreatorWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
-    def _apply_site_look(self, root=None):
-        """The site look (ui/site_theme.py) - one sheet, the site fonts.
+    def _apply_theme(self, root=None):
+        """The site look (ui/app_theme.py) - one sheet, the site fonts.
 
         It used to load wings/ui/wings_styles.qss (and an inline fallback
         theme when the file was missing). ``root``: a part built later (a
         feather row added with + Add Feather) is themed on its own."""
-        if _site is not None:
-            _site.apply_site_theme(self, root=root, extra=_WINGS_EXTRA)
+        if _theme is not None:
+            _theme.apply_theme(self, root=root, extra=_WINGS_EXTRA)
 
     # Event handlers
     def on_wing_name_changed(self, text):
@@ -1181,7 +1525,7 @@ class WingsCreatorWindow(QMainWindow):
         
         self.feather_widgets.append(feather_widget)
         self.feathers_container.addWidget(feather_widget)
-        self._apply_site_look(root=feather_widget)
+        self._apply_theme(root=feather_widget)
         
         self.update_status()
         self.update_event_id_visibility()
@@ -1197,8 +1541,10 @@ class WingsCreatorWindow(QMainWindow):
             for i, fw in enumerate(self.feather_widgets, 1):
                 fw.set_feather_number(i)
             
+            self.wing.feathers = [fw.get_feather_spec() for fw in self.feather_widgets]
             self.update_status()
             self.update_event_id_visibility()
+            self._apply_category_ui()
     
     def on_feather_changed(self):
         """Handle feather configuration change"""
@@ -1253,6 +1599,8 @@ class WingsCreatorWindow(QMainWindow):
             
             # Feather name (read-only)
             name_item = QTableWidgetItem(feather_spec.feather_id or f"Feather {i+1}")
+            from ...gui.crow_eye_icons import CrowEyeIcons
+            name_item.setIcon(CrowEyeIcons.feather())
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.weights_table.setItem(i, 0, name_item)
             
@@ -2126,6 +2474,12 @@ class WingsCreatorWindow(QMainWindow):
     
     def update_status(self):
         """Update status bar"""
+        if self.wing.wing_category == WING_CATEGORY_BEHAVIOUR:
+            steps = len(self.wing.steps or [])
+            self.status_bar.showMessage(
+                (f"Wing: {self.wing.wing_name} | " if self.wing.wing_name else "")
+                + f"Behaviour steps: {steps}")
+            return
         feather_count = len(self.feather_widgets)
         if self.wing.wing_name:
             self.status_bar.showMessage(
@@ -2136,11 +2490,13 @@ class WingsCreatorWindow(QMainWindow):
     
     def view_json(self):
         """Show JSON viewer dialog"""
+        self._sync_behaviour_to_wing()
         dialog = JsonViewerDialog(self.wing, self)
         dialog.exec_()
     
     def save_wing(self):
         """Save wing to file"""
+        self._sync_behaviour_to_wing()
         # Validate wing
         is_valid, errors = WingValidator.validate_wing(self.wing)
         
@@ -2154,7 +2510,7 @@ class WingsCreatorWindow(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Save Wing",
-            f"{self.wing.wing_name}.json" if self.wing.wing_name else "wing.json",
+            self.source_path or (f"{self.wing.wing_name}.json" if self.wing.wing_name else "wing.json"),
             "JSON Files (*.json);;All Files (*)"
         )
         
@@ -2163,11 +2519,15 @@ class WingsCreatorWindow(QMainWindow):
                 # Update wing with semantic mappings and rules before saving
                 self.wing.semantic_mappings = self.wing_semantic_mappings
                 self.wing.semantic_rules = self.wing_semantic_rules if hasattr(self, 'wing_semantic_rules') else []
-                
+                self._sync_behaviour_to_wing()
+                self._mark_rules_edited()
+
                 self.wing.save_to_file(file_path)
-                
+                self.source_path = file_path
+
                 # Auto-save wing configuration after saving wing
                 self._auto_save_wing_config()
+                self.wing_saved.emit(file_path)
                 
                 QMessageBox.information(
                     self,
@@ -2182,6 +2542,25 @@ class WingsCreatorWindow(QMainWindow):
                     f"Failed to save wing:\n{str(e)}"
                 )
     
+    def _sync_behaviour_to_wing(self):
+        """A Behaviour Wing carries what the step editor shows, and only its
+        own rules (not the global ones merged in for display)."""
+        if self.wing.wing_category != WING_CATEGORY_BEHAVIOUR:
+            return
+        for key, value in self.behaviour_group.behaviour().items():
+            setattr(self.wing, key, value)
+        self.wing.semantic_rules = self._behaviour_own_rules()
+
+    def _behaviour_config_fields(self):
+        """The behaviour fields a saved WingConfig carries (none for a Time or
+        Identity Wing, whose files save exactly as before)."""
+        if self.wing.wing_category != WING_CATEGORY_BEHAVIOUR:
+            return {}
+        self._sync_behaviour_to_wing()
+        fields = behaviour_fields_of(self.wing)
+        fields['semantic_rules'] = list(self.wing.semantic_rules or [])
+        return fields
+
     def save_wing_as(self):
         """Save wing as new file"""
         self.save_wing()
@@ -2316,17 +2695,24 @@ class WingsCreatorWindow(QMainWindow):
             correlation_rules=correlation_rules,
             semantic_rules=semantic_rules,
             use_weighted_scoring=use_weighted_scoring,
-            scoring=scoring
+            scoring=scoring,
+            wing_category=getattr(wing_config, 'wing_category', None),
+            # A Behaviour Wing's steps, time range, subject and alert.
+            **behaviour_fields_of(wing_config)
         )
-        
+
         print(f"[Wing Creator] Created Wing with {len(wing.feathers)} feathers")
         print(f"[Wing Creator] Wing has {len(wing.semantic_rules)} semantic rules")
         print(f"[Wing Creator] Wing use_weighted_scoring: {wing.use_weighted_scoring}")
         
         return wing
     
-    def load_wing_to_ui(self):
-        """Load wing data into UI"""
+    def load_wing_to_ui(self, ask_category=True):
+        """Load wing data into UI.
+
+        An opened Wing with no category is asked for one first (modal); a new
+        blank Wing (``ask_category=False``) chooses it in the form.
+        """
         print(f"[Wing Creator] load_wing_to_ui called")
         print(f"[Wing Creator] Wing name: {self.wing.wing_name}")
         print(f"[Wing Creator] Number of feathers in wing: {len(self.wing.feathers)}")
@@ -2380,7 +2766,7 @@ class WingsCreatorWindow(QMainWindow):
             
             self.feather_widgets.append(feather_widget)
             self.feathers_container.addWidget(feather_widget)
-            self._apply_site_look(root=feather_widget)
+            self._apply_theme(root=feather_widget)
             feather_widget.show() # Explicitly show the widget
             print(f"[Wing Creator] - Widget added and shown")
         
@@ -2431,6 +2817,9 @@ class WingsCreatorWindow(QMainWindow):
         
         print(f"[Wing Creator] Total: {len(self.wing_semantic_mappings)} mappings + {len(self.wing_semantic_rules)} rules")
 
+        # A Behaviour Wing: its steps, order and time range, subject, alert.
+        self.behaviour_group.set_behaviour(behaviour_fields_of(self.wing))
+
         # Update the table with all rules
         self.update_semantic_mappings_table()
 
@@ -2446,7 +2835,11 @@ class WingsCreatorWindow(QMainWindow):
 
         # Load weighted scoring configuration
         self._load_scoring_to_ui()
-    
+
+        self._set_category_combo(getattr(self.wing, 'wing_category', None))
+        if ask_category:
+            self._ask_category_if_missing()
+
     def new_wing(self):
         """Create new wing"""
         reply = QMessageBox.question(
@@ -2457,16 +2850,11 @@ class WingsCreatorWindow(QMainWindow):
         )
         
         if reply == QMessageBox.Yes:
-            self.wing = Wing()
-            # Load global semantic mappings and rules for the new wing
-            self.wing_semantic_mappings = []
-            self.wing_semantic_rules = []
-            self.load_global_semantic_mappings_silently()
-            self.load_wing_to_ui()
-            self.status_bar.showMessage("New wing created")
+            self.start_new_wing()
     
     def test_wing(self):
         """Test wing configuration"""
+        self._sync_behaviour_to_wing()
         is_valid, errors = WingValidator.validate_wing(self.wing)
         
         if is_valid:
@@ -2499,6 +2887,7 @@ class WingsCreatorWindow(QMainWindow):
             return
         
         # Validate wing first
+        self._sync_behaviour_to_wing()
         is_valid, errors = WingValidator.validate_wing(self.wing)
         if not is_valid:
             reply = QMessageBox.question(
@@ -2540,36 +2929,12 @@ class WingsCreatorWindow(QMainWindow):
             # Build scoring configuration
             scoring_config = {}
             if self.enable_weighted_scoring_cb.isChecked():
-                score_interpretation = {}
-                for level in self.interpretation_levels:
-                    score_interpretation[level['level']] = {
-                        'min': level['min'],
-                        'label': level['label']
-                    }
-                scoring_config = {
-                    'enabled': True,
-                    'score_interpretation': score_interpretation
-                }
+                scoring_config = build_scoring_config(
+                    getattr(self.wing, 'scoring', None),
+                    self.interpretation_levels)
             
-            config = WingConfig(
-                config_name=config_name,
-                wing_name=self.wing.wing_name,
-                wing_id=self.wing.wing_id,
-                description=self.wing.description,
-                proves=self.wing.proves,
-                author=self.wing.author,
-                feathers=feather_refs,
-                time_window_minutes=self.wing.correlation_rules.time_window_minutes,
-                minimum_matches=self.wing.correlation_rules.minimum_matches,
-                target_application=self.wing.correlation_rules.target_application,
-                target_file_path=self.wing.correlation_rules.target_file_path,
-                target_event_id=self.wing.correlation_rules.target_event_id,
-                apply_to=self.wing.correlation_rules.apply_to,
-                anchor_priority=self.wing.correlation_rules.anchor_priority,
-                use_weighted_scoring=self.enable_weighted_scoring_cb.isChecked(),
-                scoring=scoring_config
-            )
-            
+            config = self._build_wing_config(config_name, feather_refs, scoring_config)
+
             # Save configuration
             saved_path = self.config_manager.save_wing_config(config)
             
@@ -2616,36 +2981,12 @@ class WingsCreatorWindow(QMainWindow):
             # Build scoring configuration
             scoring_config = {}
             if self.enable_weighted_scoring_cb.isChecked():
-                score_interpretation = {}
-                for level in self.interpretation_levels:
-                    score_interpretation[level['level']] = {
-                        'min': level['min'],
-                        'label': level['label']
-                    }
-                scoring_config = {
-                    'enabled': True,
-                    'score_interpretation': score_interpretation
-                }
+                scoring_config = build_scoring_config(
+                    getattr(self.wing, 'scoring', None),
+                    self.interpretation_levels)
             
-            config = WingConfig(
-                config_name=config_name,
-                wing_name=self.wing.wing_name,
-                wing_id=self.wing.wing_id,
-                description=self.wing.description,
-                proves=self.wing.proves,
-                author=self.wing.author,
-                feathers=feather_refs,
-                time_window_minutes=self.wing.correlation_rules.time_window_minutes,
-                minimum_matches=self.wing.correlation_rules.minimum_matches,
-                target_application=self.wing.correlation_rules.target_application,
-                target_file_path=self.wing.correlation_rules.target_file_path,
-                target_event_id=self.wing.correlation_rules.target_event_id,
-                apply_to=self.wing.correlation_rules.apply_to,
-                anchor_priority=self.wing.correlation_rules.anchor_priority,
-                use_weighted_scoring=self.enable_weighted_scoring_cb.isChecked(),
-                scoring=scoring_config
-            )
-            
+            config = self._build_wing_config(config_name, feather_refs, scoring_config)
+
             # Save configuration silently
             saved_path = self.config_manager.save_wing_config(config)
             self.current_config = config
@@ -2792,7 +3133,7 @@ class WingsCreatorWindow(QMainWindow):
                     # Add to container
                     self.feather_widgets.append(feather_widget)
                     self.feathers_container.addWidget(feather_widget)
-                    self._apply_site_look(root=feather_widget)
+                    self._apply_theme(root=feather_widget)
                     
                     loaded_count += 1
                     print(f"[Wings Creator] Loaded feather {i+1}: {feather_ref.feather_id}")
@@ -2840,8 +3181,15 @@ class WingsCreatorWindow(QMainWindow):
                     details
                 )
             
+            # A Behaviour Wing's steps, time range, subject and alert.
+            for key, value in behaviour_fields_of(config).items():
+                setattr(self.wing, key, value)
+            self.behaviour_group.set_behaviour(behaviour_fields_of(config))
+
             self.current_config = config
             self.status_bar.showMessage(f"Configuration loaded: {config_name}")
+            self._set_category_combo(getattr(config, 'wing_category', None))
+            self._ask_category_if_missing()
             
         except Exception as e:
             QMessageBox.critical(

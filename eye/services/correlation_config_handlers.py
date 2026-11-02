@@ -40,7 +40,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from correlation_engine.config.eye_authorship import EyeAuthorship
-from correlation_engine.config.wing_config import WingConfig, WingFeatherReference
+from correlation_engine.config.wing_config import (
+    BEHAVIOUR_FIELDS, WING_CATEGORIES, WING_CATEGORY_BEHAVIOUR, WingConfig,
+    WingFeatherReference, category_problems, normalize_wing_category,
+)
 from correlation_engine.config.semantic_mapping import (
     SemanticMapping,
     SemanticRule,
@@ -99,11 +102,16 @@ class CorrelationConfigHandlers:
             wing_name = (params.get("wing_name") or "").strip()
             proves = (params.get("proves") or "").strip()
             feathers_raw = params.get("feathers") or []
+            wing_category = normalize_wing_category(params.get("wing_category"))
             if not wing_name:
                 return self._fail("Missing required parameter: `wing_name`.")
             if not proves:
                 return self._fail("Missing required parameter: `proves` (what this wing forensically demonstrates).")
-            if not feathers_raw:
+            if wing_category is None:
+                return self._fail(
+                    "Missing or unknown parameter: `wing_category` - one of "
+                    f"{', '.join(WING_CATEGORIES)}. It decides which engine runs the Wing.")
+            if not feathers_raw and wing_category != WING_CATEGORY_BEHAVIOUR:
                 return self._fail("Missing required parameter: `feathers` (at least one feather reference).")
 
             # Build the wing
@@ -130,7 +138,16 @@ class CorrelationConfigHandlers:
                 tags=list(params.get("tags") or []),
                 case_types=list(params.get("case_types") or []),
                 eye_authorship=authorship,
+                wing_category=wing_category,
             )
+            # A Behaviour Wing's steps, time range, subject and alert; the
+            # same shape the Wing files carry (see wing_config.BEHAVIOUR_FIELDS).
+            for field_name in BEHAVIOUR_FIELDS:
+                if params.get(field_name) is not None:
+                    setattr(wing, field_name, params[field_name])
+            problems = wing.category_problems()
+            if problems:
+                return self._fail(" ".join(problems))
 
             # ---- Persist ----
             wings_dir = self._case_wings_dir()
@@ -207,6 +224,25 @@ class CorrelationConfigHandlers:
                 if list_field in params and params[list_field] is not None:
                     setattr(wing, list_field, list(params[list_field]))
                     diff_summary_parts.append(list_field)
+            for field_name in BEHAVIOUR_FIELDS:
+                if params.get(field_name) is not None:
+                    setattr(wing, field_name, params[field_name])
+                    diff_summary_parts.append(field_name)
+            if params.get("wing_category") is not None:
+                category = normalize_wing_category(params.get("wing_category"))
+                if category is None:
+                    return self._fail(
+                        f"Unknown `wing_category` {params.get('wing_category')!r} - one of "
+                        f"{', '.join(WING_CATEGORIES)}.")
+                if category != wing.wing_category:
+                    wing.wing_category = category
+                    diff_summary_parts.append("wing_category")
+            # The same refusals as the Wing Creator: a Wing saved without a
+            # category, or a Time Wing carrying rules only the Identity engine
+            # can evaluate, would be skipped at run time.
+            problems = wing.category_problems()
+            if problems:
+                return self._fail(" ".join(problems))
 
             # Evidence link for the edit itself (still GEP-2).
             edit_related_evidence = list(params.get("related_evidence") or [])

@@ -91,7 +91,7 @@
 
 .budget-summary {
   background: #f9fafb;
-  border: 1px solid #e5e7eb;
+  border: 3px solid #e5e7eb;
   border-radius: 8px;
   padding: 16px;
   margin-bottom: 24px;
@@ -127,7 +127,7 @@
   margin-top: 12px;
   padding: 12px;
   background: #fef2f2;
-  border: 1px solid #fecaca;
+  border: 3px solid #fecaca;
   border-radius: 6px;
   font-size: 13px;
   color: #991b1b;
@@ -199,7 +199,7 @@
   height: 18px;
   border-radius: 50%;
   background: white;
-  border: 2px solid #3b82f6;
+  border: 3px solid #3b82f6;
   cursor: pointer;
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
   transition: all 0.2s ease;

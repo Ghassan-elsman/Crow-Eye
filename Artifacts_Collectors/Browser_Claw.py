@@ -886,25 +886,47 @@ def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
 
 
 def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
-    """Open a copied SQLite DB read-only. Returns None if it will not open.
+    """Open a copied SQLite DB for reading, recovered first. None if it will
+    not open, or is torn after recovery.
 
-    ``db_path`` is always our private copy, never the evidence. It is opened
-    with plain ``mode=ro`` so SQLite applies the copied ``-wal``: with
-    ``immutable=1`` it ignores the WAL, and rows the browser had committed but
-    not yet checkpointed silently vanished (measured: 1 of 2 rows read).
-    ``immutable=1`` is kept only as the fallback for a copy SQLite refuses to
-    open normally.
+    ``db_path`` is always our private copy (``_copy_sqlite_with_sidecars``),
+    never the evidence, so it is opened READ-WRITE: SQLite then rolls back a
+    hot ``-journal`` (a copy taken while the browser was writing) and
+    checkpoints a copied ``-wal``, and what is read is the browser's last
+    committed state. The old order - ``mode=ro``, then ``immutable=1`` - could
+    not roll a hot journal back (``mode=ro`` refuses it), so it fell to
+    ``immutable=1``, which read the file as it lay: the transaction's
+    half-written rows, looking like evidence (Sentinel P1, 2026-11-01). A copy
+    that still fails ``quick_check`` after recovery is not read at all and is
+    named in the log. Once recovered the connection is query-only.
     """
-    base = "file:" + db_path.replace("?", "%3f").replace("#", "%23")
-    for query in ("?mode=ro", "?mode=ro&immutable=1"):
+    try:
+        conn = sqlite3.connect(db_path, timeout=5)
+    except sqlite3.Error as exc:
+        logger.debug("Could not open %s: %s", db_path, exc)
+        return None
+    try:
+        conn.execute("SELECT count(*) FROM sqlite_master").fetchone()
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+        if str(mode).lower() == "wal":
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+        check = [r[0] for r in conn.execute("PRAGMA quick_check")]
+        if check != ["ok"]:
+            logger.warning("Browser database copy %s is damaged after recovery "
+                           "(%s); it was not read", db_path, "; ".join(
+                               str(c) for c in check[:3]))
+            conn.close()
+            return None
+        conn.execute("PRAGMA query_only = 1")
+        conn.row_factory = sqlite3.Row
+        return conn
+    except sqlite3.Error as exc:
+        logger.debug("Could not recover %s: %s", db_path, exc)
         try:
-            conn = sqlite3.connect(base + query, uri=True, timeout=5)
-            conn.execute("SELECT name FROM sqlite_master LIMIT 1").fetchall()
-            conn.row_factory = sqlite3.Row
-            return conn
-        except sqlite3.Error as exc:
-            logger.debug("Could not open %s (%s): %s", db_path, query, exc)
-    return None
+            conn.close()
+        except sqlite3.Error:
+            pass
+        return None
 
 
 def _has_table(conn: sqlite3.Connection, name: str) -> bool:
@@ -1079,9 +1101,9 @@ class _Writer:
         held ~113k Brave rows twice (all of its downloads, autofill and
         credentials). A row is already present when the same row, with every
         path below the copy root moved to the original volume (or back), is
-        stored: every column but parsed_at, provenance (user, SID) included,
-        so another machine's profile never matches. The row keeps its own
-        path when it IS new - the copy's path stays the evidence it came from.
+        stored: every column but parsed_at and the SID (see _NOT_IDENTITY),
+        the user included. The row keeps its own path when it IS new - the
+        copy's path stays the evidence it came from.
         """
         col = "original_path" if table == "browser_files" else "source_path"
         if col not in columns:
@@ -1096,7 +1118,7 @@ class _Writer:
         stored = self._stored_paths[table]
         if not stored:
             return rows
-        idx = [i for i, c in enumerate(columns) if c != "parsed_at"]
+        idx = [i for i, c in enumerate(columns) if c not in _NOT_IDENTITY]
         sql = "SELECT 1 FROM %s WHERE %s LIMIT 1" % (
             table, " AND ".join("%s IS ?" % columns[i] for i in idx))
         keep = []
@@ -1172,7 +1194,7 @@ class _Writer:
                 with_null = [r for r in rows if any(r[i] is None for i in kidx)]
                 if with_null:
                     insert_new(self.conn, table, columns, with_null,
-                               [c for c in columns if c != "parsed_at"], self.tally)
+                               [c for c in columns if c not in _NOT_IDENTITY], self.tally)
                     rows = [r for r in rows if not any(r[i] is None for i in kidx)]
             if not rows:
                 pass
@@ -1218,10 +1240,21 @@ class _Writer:
                     self.tally.add(table, len(rows), self.conn.total_changes - before)
                 else:
                     insert_new(self.conn, table, columns, rows,
-                               [c for c in columns if c != "parsed_at"], self.tally)
+                               [c for c in columns if c not in _NOT_IDENTITY], self.tally)
             self.stats[table] = self.stats.get(table, 0) + n_read
         except sqlite3.Error as exc:
             logger.warning("[Browser] insert into %s failed: %s", table, exc)
+
+
+# Columns that are never part of a row's identity. ``parsed_at`` differs on
+# every run. ``sid`` is not read from the browser files: it is this run's
+# lookup of the profile's owner - the live parse resolves it from this
+# machine's ProfileList, an offline parse only from a SOFTWARE hive collected
+# with the case (and leaves it empty without one). Crow-Claw's copy of a
+# profile parsed after the live profile (case 7.10.2026: no SOFTWARE hive in
+# the collection) therefore differed in the SID alone and was stored again,
+# whole. The owner stays identified by user_name and the profile path.
+_NOT_IDENTITY = ("parsed_at", "sid")
 
 
 def _prov_tuple(ps: ProfileSource, source_path: str, now: str) -> tuple:

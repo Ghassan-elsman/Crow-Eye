@@ -15,6 +15,7 @@ import logging
 import base64
 import os
 import json
+import re
 from dataclasses import fields
 
 # Markers stamped onto report blocks created by the automatic case-open triage
@@ -839,7 +840,9 @@ class ReportEngine:
                 "edit_history": self.edit_history,
                 "metadata": {
                     "block_count": len(self.blocks),
-                    "last_modified": datetime.now().isoformat()
+                    "last_modified": datetime.now().isoformat(),
+                    # case name, reason, objectives and section counts for the report header
+                    "case": self.case_facts(),
                 }
             }
     
@@ -1011,6 +1014,99 @@ class ReportEngine:
         self._cover_page_metadata = case_metadata.copy()
         self.logger.info(f"Cover page set for case {case_metadata['case_number']}")
     
+    # ---- case header, findings, contents (the exported report's first page) ----
+    _KIND_NAMES = {"text": "Finding", "table": "Table", "chart": "Chart", "timeline": "Timeline",
+                   "heatmap": "Heatmap", "image": "Image", "reference": "Evidence",
+                   "chat": "Conversation", "chain_of_custody": "Chain of custody"}
+
+    def case_facts(self) -> Dict[str, Any]:
+        """What the report can state about its case: name, reason, objectives (from the
+        case's eye_case_context.json), the folder, and when it was generated (UTC)."""
+        from datetime import timezone
+        facts = {"generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")}
+        case_dir = self.case_directory or ""
+        if case_dir:
+            facts["case_name"] = os.path.basename(os.path.normpath(case_dir))
+            try:
+                with open(os.path.join(case_dir, "eye_case_context.json"), encoding="utf-8") as fh:
+                    ctx = json.load(fh) or {}
+                for key in ("case_name", "investigation_reason", "investigation_objectives",
+                            "investigation_start_date"):
+                    if str(ctx.get(key) or "").strip():
+                        facts[key] = str(ctx[key]).strip()
+            except Exception:
+                pass
+        meta = self._cover_page_metadata or {}
+        for key in ("case_number", "investigator_name", "organization", "classification_level"):
+            if str(meta.get(key) or "").strip():
+                facts[key] = str(meta[key]).strip()
+        kinds = {}
+        for b in self.blocks:
+            kinds[b.block_type] = kinds.get(b.block_type, 0) + 1
+        facts["sections"] = kinds
+        return facts
+
+    def _block_label(self, block) -> str:
+        title = (getattr(block, "title", "") or getattr(block, "caption", "") or "").strip()
+        if not title and getattr(block, "block_type", "") == "reference":
+            title = (getattr(block, "reference_text", "") or "").strip().split("\n")[0][:90]
+        return title or self._KIND_NAMES.get(getattr(block, "block_type", ""), "Section")
+
+    @staticmethod
+    def _first_sentence(markdown_text: str, limit: int = 180) -> str:
+        text = re.sub(r"\*+|__|`", "", markdown_text or "")
+        text = re.sub(r"[#>|]+", " ", text)
+        text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+        text = " ".join(text.split())
+        m = re.search(r"^(.{20,}?[.!?])\s", text + " ")
+        out = m.group(1) if m else text
+        return out if len(out) <= limit else out[:limit - 1].rstrip() + "\u2026"
+
+    def _render_case_header(self, title: str) -> str:
+        esc = self._escape_html
+        f = self.case_facts()
+        facts = [("Case", f.get("case_number") or f.get("case_name") or "-")]
+        if f.get("investigation_reason"):
+            facts.append(("Reason", f["investigation_reason"]))
+        if f.get("investigator_name"):
+            facts.append(("Investigator", f["investigator_name"]))
+        facts.append(("Generated", f["generated_utc"]))
+        kinds = f.get("sections") or {}
+        facts.append(("Sections", ", ".join("%d %s" % (n, self._KIND_NAMES.get(k, k).lower()
+                                                      + ("s" if n != 1 and not self._KIND_NAMES.get(k, k).endswith("y") else ""))
+                                           for k, n in kinds.items()) or "none"))
+        fact_html = "".join('<div class="fact"><dt>%s</dt><dd>%s</dd></div>' % (esc(k), esc(v))
+                            for k, v in facts)
+        findings = []
+        for i, b in enumerate(self.blocks, 1):
+            if getattr(b, "block_type", "") == "text" and (getattr(b, "title", "") or "").strip():
+                findings.append('<li><a href="#sec-%d"><span class="num">%d</span><span class="ft">'
+                                '<strong>%s</strong><span>%s</span></span></a></li>' % (
+                                    i, i, esc(b.title.strip()),
+                                    esc(self._first_sentence(getattr(b, "markdown_content", "")))))
+        contents = "".join('<li><a href="#sec-%d"><span class="num">%d</span>%s<span class="kind">%s</span></a></li>'
+                           % (i, i, esc(self._block_label(b)),
+                              esc(self._KIND_NAMES.get(b.block_type, b.block_type)))
+                           for i, b in enumerate(self.blocks, 1))
+        objectives = ('<p class="objectives"><span>Objectives</span> %s</p>' % esc(f["investigation_objectives"])
+                      if f.get("investigation_objectives") else "")
+        return ('<header class="report-header">'
+                '<div class="eyebrow">Crow-Eye &middot; Eye forensic report</div>'
+                '<h1>%s</h1><dl class="facts">%s</dl>%s</header>'
+                '%s'
+                '<nav class="contents" aria-label="Contents"><h2>Contents</h2><ol>%s</ol></nav>'
+                % (esc(title), fact_html, objectives,
+                   ('<section class="findings" aria-label="Key findings"><h2>Key findings</h2><ol>%s</ol></section>'
+                    % "".join(findings)) if findings else "",
+                   contents))
+
+    def _wrap_section(self, n: int, block, html: str) -> str:
+        severity = str((getattr(block, "metadata", None) or {}).get("severity") or "").lower()
+        sev = (' data-severity="%s"' % severity) if severity in ("critical", "high", "medium") else ""
+        return ('<div class="report-section" id="sec-%d"%s><div class="sec-label"><span class="num">%d</span>'
+                '<span class="kind">%s</span></div>%s</div>'
+                % (n, sev, n, self._escape_html(self._KIND_NAMES.get(block.block_type, block.block_type)), html))
+
     def _render_cover_page(self) -> str:
         """
         Render cover page HTML with semantic header element.
@@ -1050,7 +1146,7 @@ class ReportEngine:
             cover_html.append(f'<p><strong>Organization:</strong> {organization}</p>')
         
         if classification:
-            cover_html.append(f'<p style="margin-top: 24px; padding: 12px 24px; background: rgba(249, 115, 22, 0.1); border: 1px solid var(--accent); border-radius: 8px;"><strong>Classification:</strong> {classification}</p>')
+            cover_html.append(f'<p style="margin-top: 24px; padding: 12px 24px; background: rgba(99, 102, 241, 0.1); border: 1px solid var(--accent); border-radius: 8px;"><strong>Classification:</strong> {classification}</p>')
         
         cover_html.append('</div>')
         cover_html.append('</header>')
@@ -1439,27 +1535,14 @@ class ReportEngine:
         
         {toc_html}
         
-        <header class="report-header">
-            <h1>{self._escape_html(title)}</h1>
-            <p class="report-meta">Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
-        </header>
-        
-        <section class="arch-description">
-            <h3>Windows Boot Disk Explorer</h3>
-            <p>NTFS structure access, MFT/USN Journal mapping, and granular file lifecycle tracking.</p>
-        </section>
-
-        <section class="arch-description">
-            <h3>EYE Intelligence Chat Interface</h3>
-            <p>RAG-driven forensic synthesis with real-time database correlation.</p>
-        </section>
+        {self._render_case_header(title)}
 
         <main class="report-content">
-{''.join(blocks_html)}
+{''.join(self._wrap_section(i, b, h) for i, (b, h) in enumerate(zip(self.blocks, blocks_html), 1))}
         </main>
-        
+
         <footer class="report-footer">
-            <p>EYE Forensic Assistant Report - {len(self.blocks)} blocks</p>
+            <p>{self._escape_html(self.case_facts().get("case_name") or "Case")} &middot; Crow-Eye &middot; Eye report &middot; {len(self.blocks)} sections &middot; generated {self._escape_html(self.case_facts().get("generated_utc", ""))}</p>
         </footer>
     </div>
 </body>
@@ -1539,6 +1622,7 @@ class ReportEngine:
                         if block.chart_type == "line":
                              ds["borderColor"] = colors[idx % len(colors)]
         
+        config = self._exportable_chart_config(config)
         alt_text = self._generate_chart_alt_text(block.chart_type, block.title)
         escaped_alt_text = self._escape_html(alt_text)
         
@@ -1548,6 +1632,46 @@ class ReportEngine:
             <script>new Chart(document.getElementById('{chart_id}'), {json.dumps(config)});</script>
         </section>"""
     
+    @staticmethod
+    def _exportable_chart_config(config: Dict[str, Any]) -> Dict[str, Any]:
+        """The stored Chart.js config made drawable by Chart.js 4 in the
+        exported page: 'horizontalBar' is a Chart.js 2 type (4 draws nothing
+        for it) and becomes a bar with indexAxis 'y'; the chart fills its
+        400 px box instead of keeping an aspect ratio that clipped it; axes,
+        legend and title get the report's dark ink where none was given. The
+        stored config is not changed (the PDF's SVG export reads it)."""
+        import copy
+        cfg = copy.deepcopy(config or {})
+        options = cfg.setdefault("options", {})
+        if cfg.get("type") == "horizontalBar":
+            cfg["type"] = "bar"
+            options["indexAxis"] = "y"
+        options["responsive"] = True
+        options["maintainAspectRatio"] = False
+        plugins = options.setdefault("plugins", {})
+        legend = plugins.setdefault("legend", {})
+        legend.setdefault("labels", {}).setdefault("color", "#CBD5E1")
+        title = plugins.setdefault("title", {})
+        title.setdefault("color", "#E2E8F0")
+        if cfg.get("type") in ("pie", "doughnut"):
+            for ds in (cfg.get("data") or {}).get("datasets") or []:
+                ds.setdefault("borderColor", "#0B1220")
+        elif cfg.get("type") == "radar":
+            r = options.setdefault("scales", {}).setdefault("r", {})
+            r.setdefault("grid", {}).setdefault("color", "rgba(148, 163, 184, 0.15)")
+            r.setdefault("angleLines", {}).setdefault("color", "rgba(148, 163, 184, 0.15)")
+            r.setdefault("pointLabels", {}).setdefault("color", "#CBD5E1")
+            r.setdefault("ticks", {}).setdefault("backdropColor", "transparent")
+        else:
+            scales = options.setdefault("scales", {})
+            for axis in ("x", "y"):
+                a = scales.setdefault(axis, {})
+                a.setdefault("ticks", {}).setdefault("color", "#94A3B8")
+                a.setdefault("grid", {}).setdefault("color", "rgba(148, 163, 184, 0.12)")
+                if axis == ("x" if options.get("indexAxis") == "y" else "y"):
+                    a.setdefault("beginAtZero", True)
+        return cfg
+
     def _generate_chart_alt_text(self, chart_type: str, title: str) -> str:
         """
         Generate descriptive alt text for chart accessibility.
@@ -1772,12 +1896,12 @@ class ReportEngine:
             
             entry_html = f"""
             <div class="custody-entry" style="
-                background: rgba(249, 115, 22, 0.05);
+                background: rgba(99, 102, 241, 0.05);
                 border: 2px solid var(--accent);
                 border-radius: 12px;
                 padding: 20px;
                 margin-bottom: 16px;
-                box-shadow: 0 2px 8px rgba(249, 115, 22, 0.1);
+                box-shadow: 0 2px 8px rgba(99, 102, 241, 0.1);
             ">
                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 12px;">
                     <div>
@@ -1809,7 +1933,7 @@ class ReportEngine:
         
         return f"""
         <section class="report-block chain-of-custody-block" id="{block.block_id}" style="
-            background: linear-gradient(135deg, rgba(249, 115, 22, 0.03) 0%, rgba(6, 182, 212, 0.03) 100%);
+            background: linear-gradient(135deg, rgba(99, 102, 241, 0.03) 0%, rgba(6, 182, 212, 0.03) 100%);
             border: 2px solid var(--accent);
             border-radius: 24px;
             padding: 40px;
@@ -1959,10 +2083,39 @@ class ReportEngine:
     def _get_embedded_css(self) -> str:
         return """
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Space+Mono:wght@400;700&family=Syne:wght@800&display=swap');
-:root { --bg: #0a0c10; --bg1: #0f1218; --bg2: #151a22; --border: #1e2a3a; --tx: #e8edf5; --tx2: #8899aa; --accent: #f97316; --identity: #06b6d4; }
-body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif; padding: 40px 24px; }
-.report-header h1 { font-family: 'Syne', sans-serif; font-size: 40px; color: #fff; }
-.report-block { background: var(--bg1); border: 1px solid var(--border); border-radius: 24px; padding: 40px; margin-bottom: 48px; }
+:root { --bg: #0a0c10; --bg1: #0f1218; --bg2: #151a22; --border: #1e2a3a; --tx: #e8edf5; --tx2: #94a3b8; --tx3: #64748b; --accent: #818cf8; --accent-strong: #6366f1; --identity: #06b6d4; --warn: #fbbf24; --urgent: #f87171; }
+body { background: var(--bg); color: var(--tx); font-family: 'Inter', system-ui, sans-serif; padding: 40px max(16px, 4vw); line-height: 1.55; }
+.report-container { max-width: 1120px; margin: 0 auto; }
+.report-header { padding: 8px 0 28px; border-bottom: 1px solid var(--border); margin-bottom: 28px; }
+.report-header .eyebrow { color: var(--accent); font: 700 11px 'Space Mono', monospace; letter-spacing: 1.6px; text-transform: uppercase; }
+.report-header h1 { font-family: 'Inter', system-ui, sans-serif; font-weight: 700; font-size: 34px; letter-spacing: -0.4px; color: #fff; margin: 10px 0 20px; text-wrap: balance; }
+.report-header .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 0; }
+.report-header .fact { background: var(--bg1); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; min-width: 0; }
+.report-header dt { color: var(--tx3); font: 700 10.5px 'Inter', sans-serif; letter-spacing: 1px; text-transform: uppercase; }
+.report-header dd { margin: 4px 0 0; color: var(--tx); font-size: 14px; overflow-wrap: anywhere; }
+.report-header .objectives { color: var(--tx2); margin: 16px 0 0; max-width: 75ch; }
+.report-header .objectives span { color: var(--tx3); font-weight: 700; font-size: 11px; letter-spacing: 1px; text-transform: uppercase; margin-right: 8px; }
+.findings, .contents { margin-bottom: 28px; }
+.findings h2, .contents h2 { font-size: 13px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--tx2); margin: 0 0 12px; }
+.findings ol, .contents ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.findings a, .contents a { display: flex; gap: 12px; align-items: baseline; text-decoration: none; color: var(--tx); border: 1px solid var(--border); background: var(--bg1); border-radius: 8px; padding: 10px 14px; }
+.findings a:hover, .contents a:hover { border-color: var(--accent-strong); }
+.findings .ft { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.findings .ft span { color: var(--tx2); font-size: 13.5px; }
+.contents ol { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 6px; }
+.contents a { padding: 7px 12px; font-size: 14px; }
+.contents .kind { margin-left: auto; color: var(--tx3); font-size: 11px; letter-spacing: 0.8px; text-transform: uppercase; white-space: nowrap; }
+.num { flex: none; min-width: 26px; color: var(--accent); font: 700 12px 'Space Mono', monospace; }
+.report-section { margin-bottom: 24px; scroll-margin-top: 16px; }
+.sec-label { display: flex; gap: 8px; align-items: baseline; margin: 0 0 8px 2px; }
+.sec-label .kind { color: var(--tx3); font-size: 11px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.report-section[data-severity="critical"] .report-block { border-left: 3px solid var(--urgent); }
+.report-section[data-severity="high"] .report-block, .report-section[data-severity="medium"] .report-block { border-left: 3px solid var(--warn); }
+.report-block { background: var(--bg1); border: 1px solid var(--border); border-radius: 12px; padding: 24px 28px; margin-bottom: 0; }
+.report-block h2 { margin: 0 0 12px; font-size: 20px; color: #fff; text-wrap: balance; }
+.text-content { color: #cbd5e1; max-width: 80ch; }
+.report-footer { border-top: 1px solid var(--border); margin-top: 32px; padding-top: 16px; color: var(--tx3); font-size: 12px; }
+@media print { body { padding: 0; } .report-section { break-inside: avoid-page; } .contents, .findings { break-after: page; } a { color: inherit; } }
 
 .forensic-table { 
     width: 100%; 
@@ -2004,8 +2157,8 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
 
 /* Striped rows - explicit background color for PDF */
 .forensic-table tr.striped-row { 
-    background: rgba(249, 115, 22, 0.05);
-    background-color: rgba(249, 115, 22, 0.05);
+    background: rgba(148, 163, 184, 0.05);
+    background-color: rgba(148, 163, 184, 0.05);
     /* Ensure striped background is preserved in PDF */
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
@@ -2043,7 +2196,7 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
     color-adjust: exact;
 }
 
-.ai-message { background: rgba(249, 115, 22, 0.1); border-left: 3px solid var(--accent); padding: 16px; border-radius: 8px; }
+.ai-message { background: rgba(99, 102, 241, 0.1); border-left: 3px solid var(--accent); padding: 16px; border-radius: 8px; }
 
 /* Timeline styling */
 .timeline-event { position: relative; padding: 24px; border-left: 2px solid var(--border); margin-left: 20px; }
@@ -2063,7 +2216,7 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
 .chat-transcript { display: flex; flex-direction: column; gap: 16px; }
 .chat-message { padding: 16px; border-radius: 12px; max-width: 85%; }
 .user-message { align-self: flex-end; background: var(--bg2); border: 1px solid var(--border); color: var(--tx); }
-.assistant-message { align-self: flex-start; background: rgba(249, 115, 22, 0.08); border: 1px solid rgba(249, 115, 22, 0.2); color: var(--tx); border-left: 3px solid var(--accent); }
+.assistant-message { align-self: flex-start; background: rgba(99, 102, 241, 0.08); border: 1px solid rgba(99, 102, 241, 0.2); color: var(--tx); border-left: 3px solid var(--accent); }
 
 /* Print and PDF-specific styles */
 @media print {
@@ -2231,9 +2384,15 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
         
         return "\n".join(md_parts)
 
-    def export_markdown_file(self, output_path: str, title: str = "Forensic Investigation Report") -> None:
+    def export_markdown_file(self, output_path: str, title: str = "Forensic Investigation Report",
+                             exact_path: bool = False,
+                             report_type: Optional[str] = None) -> str:
         """
         Export report as a Markdown file with automatic organization and indexing.
+
+        ``exact_path`` writes to ``output_path`` as given even when a case is set
+        (the report is still indexed), so a path an investigator approved is the
+        path written. Returns the path of the file written.
         """
         md_content = self.export_markdown()
         
@@ -2247,11 +2406,13 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             case_number = self._cover_page_metadata.get("case_number", "UNKNOWN") if self._cover_page_metadata else "UNKNOWN"
 
             # but strip redundant extensions/timestamps if possible
-            report_type = output_path
-            if output_path.endswith('.md'):
-                report_type = os.path.splitext(os.path.basename(output_path))[0]
+            if not report_type:
+                report_type = output_path
+                if output_path.endswith('.md'):
+                    report_type = os.path.splitext(os.path.basename(output_path))[0]
             
-            final_output_path = case_manager.get_report_path(case_number, report_type, "md")
+            if not exact_path:
+                final_output_path = case_manager.get_report_path(case_number, report_type, "md")
             
             with open(final_output_path, 'w', encoding='utf-8') as f:
                 f.write(md_content)
@@ -2271,8 +2432,10 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             with open(final_output_path, 'w', encoding='utf-8') as f:
                 f.write(md_content)
             self.logger.info(f"Markdown exported to: {final_output_path}")
+        return final_output_path
 
-    def export_pdf(self, output_path: str, config: Optional[Dict[str, Any]] = None) -> None:
+    def export_pdf(self, output_path: str, config: Optional[Dict[str, Any]] = None,
+                   exact_path: bool = False, report_type: Optional[str] = None) -> str:
         """
         Export report as PDF using PDFExporter with enhanced quality settings.
         
@@ -2288,7 +2451,15 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
                 - color_space: str "RGB" or "CMYK" (default "RGB")
                 - embed_fonts: bool (default True)
                 - print_optimized: bool (default False)
+            exact_path: write to ``output_path`` as given even when a case is
+                        set (the report is still indexed)
+            report_type: the type recorded in the case's report index; by
+                        default derived from ``output_path`` (with
+                        ``exact_path`` that is the file's stem, so pass it)
                 
+        Returns:
+            The path of the file written.
+
         Raises:
             ImportError: If weasyprint is not installed
             
@@ -2331,10 +2502,12 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             # Extract case_number and report_type from metadata or use defaults
             case_number = self._cover_page_metadata.get("case_number", "UNKNOWN") if self._cover_page_metadata else "UNKNOWN"
             # Use output_path as report_type identifier when case_directory is provided
-            report_type = output_path if not output_path.endswith('.pdf') else os.path.splitext(os.path.basename(output_path))[0]
+            if not report_type:
+                report_type = output_path if not output_path.endswith('.pdf') else os.path.splitext(os.path.basename(output_path))[0]
             
             # Generate standardized filename and path
-            final_output_path = case_manager.get_report_path(case_number, report_type, "pdf")
+            if not exact_path:
+                final_output_path = case_manager.get_report_path(case_number, report_type, "pdf")
             
             # Export to PDF using PDFExporter
             exporter.export(html_content, final_output_path, metadata)
@@ -2360,8 +2533,10 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             # Fall back to current working directory when case_directory is None
             exporter.export(html_content, final_output_path, metadata)
             self.logger.info(f"PDF exported to: {final_output_path}")
+        return final_output_path
     
-    def export_html(self, output_path: str, title: str = "Forensic Investigation Report") -> None:
+    def export_html(self, output_path: str, title: str = "Forensic Investigation Report",
+                    exact_path: bool = False, report_type: Optional[str] = None) -> str:
         """
         Export report as HTML file.
         
@@ -2373,7 +2548,14 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             output_path: Path to output HTML file (used when case_directory is None)
                         or report_type identifier (used when case_directory is provided)
             title: Report title for HTML document
-            
+            exact_path: write to ``output_path`` as given even when a case is
+                        set (the report is still indexed)
+            report_type: the type recorded in the case's report index; by
+                        default derived from ``output_path`` (with
+                        ``exact_path`` that is the file's stem, so pass it)
+
+        Returns:
+            The path of the file written.
         """
         # Render HTML content
         html_content = self.render_html(title)
@@ -2389,10 +2571,12 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             # Extract case_number and report_type from metadata or use defaults
             case_number = self._cover_page_metadata.get("case_number", "UNKNOWN") if self._cover_page_metadata else "UNKNOWN"
             # Use output_path as report_type identifier when case_directory is provided
-            report_type = output_path if not output_path.endswith('.html') else os.path.splitext(os.path.basename(output_path))[0]
+            if not report_type:
+                report_type = output_path if not output_path.endswith('.html') else os.path.splitext(os.path.basename(output_path))[0]
             
             # Generate standardized filename and path
-            final_output_path = case_manager.get_report_path(case_number, report_type, "html")
+            if not exact_path:
+                final_output_path = case_manager.get_report_path(case_number, report_type, "html")
             
             # Write HTML to file
             with open(final_output_path, 'w', encoding='utf-8') as f:
@@ -2420,3 +2604,4 @@ body { background: var(--bg); color: var(--tx); font-family: 'Inter', sans-serif
             with open(final_output_path, 'w', encoding='utf-8') as f:
                 f.write(html_content)
             self.logger.info(f"HTML exported to: {final_output_path}")
+        return final_output_path

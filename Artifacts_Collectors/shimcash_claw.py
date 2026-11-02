@@ -783,8 +783,14 @@ class ShimCacheParser:
         # entry, every older one moves down a slot, gets a new hash, and was
         # stored again on the next parse. The same program with the same
         # timestamp and size is the same entry wherever it sits.
+        #
+        # raw_entry is part of the content: a packaged (Store) app's record has
+        # no path and no time - its identity is in raw_entry - so keyed on
+        # (path, time, size) alone, 172 different apps on one machine fell into
+        # 6 groups and 166 of them were dropped as "duplicates" of each other.
+        # entry_hash already included raw_entry; this key did not.
         known_content = set(cursor.execute(
-            "SELECT path, last_modified, data_size FROM shimcache_entries"))
+            "SELECT path, raw_entry, last_modified, data_size FROM shimcache_entries"))
 
         for entry in entries:
             # Format datetime consistently without timezone info and milliseconds
@@ -797,7 +803,7 @@ class ShimCacheParser:
                     last_modified_str = str(entry.last_modified).split('.')[0]
             else:
                 last_modified_str = None
-            content = (entry.path, last_modified_str, entry.data_size)
+            content = (entry.path, entry.raw_entry, last_modified_str, entry.data_size)
 
             # Check for duplicates
             if entry.entry_hash in known or content in known_content:

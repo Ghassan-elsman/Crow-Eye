@@ -12,6 +12,7 @@ This module provides the core identity correlation functionality:
 """
 
 import logging
+from correlation_engine.engine.gui_pump import pump_gui
 import re
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any, Tuple
@@ -3635,11 +3636,7 @@ class IdentityBasedEngineAdapter:
                     print(f"[Identity Engine] Progress: {progress_pct:.0f}% ({identities_processed:,}/{total_identities:,} identities, {matches_created:,} matches)")
                     
                     # Force GUI update to prevent freezing
-                    try:
-                        from PyQt5.QtWidgets import QApplication
-                        QApplication.processEvents()
-                    except Exception as e:
-                        pass # Ignore if not in GUI context
+                    pump_gui()  # GUI thread only; a worker must not run GUI events
                     
                     last_progress_log = identities_processed
             

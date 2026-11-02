@@ -2,7 +2,16 @@
 
 Welcome to the Crow-Eye Correlation Engine documentation! This directory contains comprehensive documentation for developers and contributors.
 
-## 🚀 What's New: Latest Features (v0.7.1 - Comprehensive Dual-Engine Update)
+## 🚀 What's New in Crow-Eye 0.15.0: the Behavioural Engine
+
+- **A third engine.** `engine/behavioural_engine.py` runs **Behaviour Wings** over the behaviours User Behavior found, one person (SID) at a time, finding chains of them in order or in any order within a set number of minutes. Two people's actions are never chained together.
+- **Every Wing has a category** (Time, Identity or Behaviour); `engine/engine_registry.py` routes it to its engine, and a Wing given to the wrong engine is skipped with the reason.
+- **35 Wings ship** in `integration/default_wings/`: 11 Identity, 6 Time, 18 Behaviour.
+- **Behaviour Results** (`gui/behaviour_results_view.py`) lists each hit with the person, the Wing and its steps; **Open in User Behavior** goes back to the behaviours.
+- **Behaviour is context, never corroboration**: a behaviour hit is shown beside Time and Identity matches and never adds to their score.
+- **The Time-Window and Identity engines are deterministic**: the same results and match ids on every run.
+
+## Earlier: v0.7.1 - Comprehensive Dual-Engine Update
 
 The Correlation Engine is production-ready with a robust dual-engine architecture for optimal performance and analytical flexibility:
 

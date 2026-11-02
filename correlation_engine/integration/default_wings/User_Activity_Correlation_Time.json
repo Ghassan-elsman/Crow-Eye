@@ -1,0 +1,374 @@
+{
+  "config_name": "user_activity_correlation_time",
+  "wing_name": "User Activity Correlation (Time)",
+  "wing_id": "default_wing_activity_001_time",
+  "wing_category": "time",
+  "description": "Proves user activity using weighted scoring based on user interaction evidence strength. Uses a tiered approach with explicit user interaction artifacts (UserAssist, RecentDocs, MRU) weighted highest, followed by navigation evidence (ShellBags, TypedPaths), and temporal system confirmation (Security Logs).",
+  "proves": "User actively interacted with the system",
+  "author": "Crow-Eye Team",
+  "created_date": "2024-12-23T00:00:00Z",
+  "last_modified": "2026-08-22T00:00:00Z",
+  "version": "1.0",
+  "feathers": [
+    {
+      "feather_config_name": "UserAssist_CrowEyeFeather",
+      "feather_database_path": "feathers/UserAssist_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "userassist",
+      "weight": 0.3,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "RecentDocs_CrowEyeFeather",
+      "feather_database_path": "feathers/RecentDocs_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "recentdocs",
+      "weight": 0.2,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "OpenSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/OpenSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "opensavemru",
+      "weight": 0.2,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "LastSaveMRU_CrowEyeFeather",
+      "feather_database_path": "feathers/LastSaveMRU_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "lastsavemru",
+      "weight": 0.2,
+      "tier": 1,
+      "tier_name": "Explicit user interaction"
+    },
+    {
+      "feather_config_name": "ShellBags_CrowEyeFeather",
+      "feather_database_path": "feathers/ShellBags_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "shellbags",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Navigation & exploration"
+    },
+    {
+      "feather_config_name": "TypedPaths_CrowEyeFeather",
+      "feather_database_path": "feathers/TypedPaths_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "typedpaths",
+      "weight": 0.1,
+      "tier": 2,
+      "tier_name": "Navigation & exploration"
+    },
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "security_logs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Temporal system confirmation"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "File system activity"
+    },
+    {
+      "feather_id": "app_perms",
+      "artifact_type": "AppPermissions",
+      "feather_config_name": "AppPermissions_CrowEyeFeather",
+      "feather_database_path": "feathers/AppPermissions_CrowEyeFeather.db",
+      "tier": 2,
+      "tier_name": "Capability consent and last use",
+      "weight": 0.1
+    }
+  ],
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "Registry",
+    "Logs",
+    "MFT"
+  ],
+  "use_weighted_scoring": true,
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.6,
+        "label": "Confirmed User Activity"
+      },
+      "likely": {
+        "min": 0.35,
+        "label": "Likely User Activity"
+      },
+      "insufficient": {
+        "min": 0.0,
+        "label": "Insufficient Evidence"
+      }
+    }
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "user_file_access",
+      "confidence": 0.5,
+      "name": "User File Access (OR)",
+      "semantic_value": "User Accessed File",
+      "description": "RecentDocs OR OpenSaveMRU indicates user accessed a file",
+      "conditions": [
+        {
+          "feather_id": "recentdocs",
+          "field_name": "row_data",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_folder_navigation",
+      "confidence": 0.5,
+      "name": "User Folder Navigation",
+      "semantic_value": "User Navigated Folders",
+      "description": "ShellBags indicate user browsed folders",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_app_interaction",
+      "confidence": 0.5,
+      "name": "User Application Interaction",
+      "semantic_value": "User Interacted with Application",
+      "description": "UserAssist shows user launched or interacted with an application",
+      "conditions": [
+        {
+          "feather_id": "userassist",
+          "field_name": "program_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_typed_path",
+      "confidence": 0.5,
+      "name": "User Typed Path",
+      "semantic_value": "User Manually Typed Path",
+      "description": "TypedPaths shows user manually entered a path in Explorer",
+      "conditions": [
+        {
+          "feather_id": "typedpaths",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "low"
+    },
+    {
+      "rule_id": "user_file_save",
+      "confidence": 0.5,
+      "name": "User File Save Activity (AND)",
+      "semantic_value": "User Saved File",
+      "description": "LastSaveMRU AND OpenSaveMRU together indicate user saved a file",
+      "conditions": [
+        {
+          "feather_id": "lastsavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "user_login_activity",
+      "name": "User Login with Activity (AND)",
+      "semantic_value": "User Logged In and Active",
+      "description": "Security logs show login AND user activity artifacts",
+      "conditions": [
+        {
+          "feather_id": "security_logs",
+          "field_name": "event_id",
+          "operator": "equals",
+          "value": "4624"
+        },
+        {
+          "feather_id": "userassist",
+          "field_name": "program_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "authentication",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "user_any_activity",
+      "confidence": 0.5,
+      "name": "Any User Activity (OR)",
+      "semantic_value": "User Activity Detected",
+      "description": "UserAssist OR RecentDocs OR ShellBags indicates user activity",
+      "conditions": [
+        {
+          "feather_id": "userassist",
+          "field_name": "program_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "recentdocs",
+          "field_name": "row_data",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_document_work",
+      "confidence": 0.5,
+      "name": "Document Work Activity (AND)",
+      "semantic_value": "User Working on Documents",
+      "description": "RecentDocs AND OpenSaveMRU together indicate document work",
+      "conditions": [
+        {
+          "feather_id": "recentdocs",
+          "field_name": "row_data",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "opensavemru",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "user_navigation_evidence",
+      "confidence": 0.5,
+      "name": "Navigation Evidence (OR)",
+      "semantic_value": "User Navigation Detected",
+      "description": "ShellBags OR TypedPaths indicates user navigation",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "typedpaths",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "file_access",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ua_capability_last_used",
+      "name": "Application Used A Capability",
+      "semantic_value": "Application Used A Capability",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info",
+      "confidence": 0.85,
+      "logic_operator": "AND",
+      "conditions": [
+        {
+          "feather_id": "app_perms",
+          "field_name": "last_used_start",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "tactic": [
+        "collection"
+      ],
+      "technique_id": [
+        "T1123",
+        "T1125"
+      ],
+      "description": "Windows records, per application, when it last used the microphone, camera or location. That is the registry's own record of surveillance-capable access and it carries a real event time, so it places on the timeline beside whatever else the user was doing."
+    }
+  ],
+  "tags": [
+    "user_activity",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "user_activity",
+    "data_theft",
+    "insider_threat"
+  ]
+}

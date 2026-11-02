@@ -19,8 +19,8 @@ from pathlib import Path
 
 # Import styles
 from styles import CrowEyeStyles
-from ui.site_theme import (apply_site_theme, begin_site_theme, set_role, set_variant, set_card, keep_style,
-                           level_pill, log_view_sheet, font as site_font)
+from ui.app_theme import (apply_theme, begin_theme, set_role, set_variant, set_card, keep_style,
+                           level_pill, log_view_sheet, font as theme_font)
 
 # Eye AI settings persistence (pure JSON helpers, no Qt)
 try:
@@ -145,6 +145,12 @@ def _wrap_checkbox_text(cb, text_style):
     return label
 
 
+# Settings draws its outlines 3 px wide - cards, fields, buttons, tables, tabs and
+# the outlined labels - in the theme's colours made solid (ui/app_theme.thick_outlines).
+from ui.app_theme import thick_outlines as _thick_outlines
+_SETTINGS_OUTLINES = _thick_outlines("QDialog#CrowEyeSettings")
+
+
 class SettingsDialog(QtWidgets.QDialog):
     """Centralized settings dialog for Crow Eye."""
     
@@ -178,7 +184,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.semantic_manager = SemanticMappingManager()
             self._load_semantic_mappings()
         
-        begin_site_theme(self)
+        self.setObjectName("CrowEyeSettings")
+        begin_theme(self, extra=_SETTINGS_OUTLINES)
         self.setup_ui()
         self.apply_styles()
         self.load_settings()
@@ -229,6 +236,7 @@ class SettingsDialog(QtWidgets.QDialog):
         # Updates section is EXE-only: build it only when the updater package ships
         # (the main/portable build has no `update/` -> no auto-update UI at all).
         self.updates_panel = self.create_updates_panel() if _UPDATER_AVAILABLE else None
+        self.user_behavior_panel = self.create_user_behavior_panel()
         self.logs_panel = self.create_logs_panel()
 
         self.content_stack.addWidget(self.general_panel)
@@ -240,8 +248,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.content_stack.addWidget(self.eye_ai_panel)
         if self.updates_panel is not None:
             self.content_stack.addWidget(self.updates_panel)
+        # User Behavior sits just before Logs: index 8 with the Updates page, 7
+        # without - matching its nav button below.
+        self.content_stack.addWidget(self.user_behavior_panel)
         # Logs is added LAST so its stack index is a fixed function of whether the
-        # Updates page exists (8 with it, 7 without) - matching the nav button below.
+        # Updates page exists (9 with it, 8 without) - matching the nav button below.
         self.content_stack.addWidget(self.logs_panel)
         
         # Bottom buttons
@@ -290,7 +301,7 @@ class SettingsDialog(QtWidgets.QDialog):
         title_label = QtWidgets.QLabel("Settings")
         title_label.setContentsMargins(19, 0, 0, 18)
         set_role(title_label, "title")
-        title_label.setFont(site_font("ui", 22, QtGui.QFont.ExtraBold, upper=True, spacing=104))
+        title_label.setFont(theme_font("ui", 22, QtGui.QFont.ExtraBold, upper=True, spacing=104))
         sidebar_layout.addWidget(title_label)
         
         # Navigation buttons
@@ -321,7 +332,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.nav_buttons.append(parsing_btn)
 
         eye_ai_btn = self.create_nav_button("Eye AI", 6)
-        eye_ai_btn.setIcon(QtGui.QIcon("GUI Resources/the Eye AI agent transparent.png"))
+        # the mark fills a third of its canvas: trimmed, it reads at 20 px
+        _eye_icon = CrowEyeStyles.resource_icon("GUI Resources", "the Eye AI agent transparent.png", trim=True)
+        if _eye_icon is not None:
+            eye_ai_btn.setIcon(_eye_icon)
         eye_ai_btn.setIconSize(QtCore.QSize(20, 20))
         sidebar_layout.addWidget(eye_ai_btn)
         self.nav_buttons.append(eye_ai_btn)
@@ -331,8 +345,24 @@ class SettingsDialog(QtWidgets.QDialog):
             sidebar_layout.addWidget(updates_btn)
             self.nav_buttons.append(updates_btn)
 
-        # Logs is the last stack page: index 8 when the Updates page exists, else 7.
-        logs_index = 8 if _UPDATER_AVAILABLE else 7
+        # User Behavior is the page before Logs: index 8 when the Updates page
+        # exists, else 7. switch_panel marks the active button by its position in
+        # nav_buttons, so the buttons are appended in stack order.
+        uba_index = 8 if _UPDATER_AVAILABLE else 7
+        uba_btn = self.create_nav_button("User Behavior", uba_index, "identity")
+        # the same drawing as the main window's User Behavior button, in its rose
+        try:
+            from ui.artifact_icons import tinted_svg_icon
+            _uba_icon = tinted_svg_icon(CrowEyeStyles.resource_path("GUI Resources", "icons", "uba.svg") or "", "#FB7185")
+            if _uba_icon is not None:
+                uba_btn.setIcon(_uba_icon)
+        except Exception:
+            pass
+        sidebar_layout.addWidget(uba_btn)
+        self.nav_buttons.append(uba_btn)
+
+        # Logs is the last stack page: index 9 when the Updates page exists, else 8.
+        logs_index = uba_index + 1
         logs_btn = self.create_nav_button("Logs", logs_index, "file")
         sidebar_layout.addWidget(logs_btn)
         self.nav_buttons.append(logs_btn)
@@ -600,7 +630,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QSpinBox {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 2px solid #475569;
+                border: 3px solid #475569;
                 border-radius: 6px;
                 padding: 8px 12px;
                 min-height: 35px;
@@ -609,11 +639,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-family: 'Segoe UI', sans-serif;
             }
             QSpinBox:hover {
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 background-color: #263449;
             }
             QSpinBox:focus {
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 background-color: #263449;
             }
             QSpinBox::up-button {
@@ -689,7 +719,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QSpinBox {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 2px solid #475569;
+                border: 3px solid #475569;
                 border-radius: 6px;
                 padding: 8px 12px;
                 min-height: 35px;
@@ -698,11 +728,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 font-family: 'Segoe UI', sans-serif;
             }
             QSpinBox:hover {
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 background-color: #263449;
             }
             QSpinBox:focus {
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 background-color: #263449;
             }
             QSpinBox::up-button {
@@ -784,17 +814,17 @@ class SettingsDialog(QtWidgets.QDialog):
             QCheckBox::indicator {
                 width: 24px;
                 height: 24px;
-                border: 2px solid #475569;
+                border: 1px solid #475569;
                 border-radius: 4px;
                 background-color: #1E293B;
             }
             QCheckBox::indicator:hover {
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 background-color: #263449;
             }
             QCheckBox::indicator:checked {
                 background-color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 image: none;
             }
         """)
@@ -843,17 +873,17 @@ class SettingsDialog(QtWidgets.QDialog):
             QCheckBox::indicator {
                 width: 24px;
                 height: 24px;
-                border: 2px solid #475569;
+                border: 1px solid #475569;
                 border-radius: 4px;
                 background-color: #1E293B;
             }
             QCheckBox::indicator:hover {
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 background-color: #263449;
             }
             QCheckBox::indicator:checked {
                 background-color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 image: none;
             }
         """)
@@ -901,17 +931,17 @@ class SettingsDialog(QtWidgets.QDialog):
             QCheckBox::indicator {
                 width: 24px;
                 height: 24px;
-                border: 2px solid #475569;
+                border: 1px solid #475569;
                 border-radius: 4px;
                 background-color: #1E293B;
             }
             QCheckBox::indicator:hover {
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 background-color: #263449;
             }
             QCheckBox::indicator:checked {
                 background-color: #00FFFF;
-                border: 2px solid #00FFFF;
+                border: 1px solid #00FFFF;
                 image: none;
             }
         """)
@@ -973,10 +1003,10 @@ class SettingsDialog(QtWidgets.QDialog):
                 min-height: 40px;
                 font-size: 14px;
                 padding: 10px 15px;
-                border: 2px solid #475569;
+                border: 3px solid #475569;
             }
             QLineEdit:focus {
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
             }
         """)
         self.search_input.textChanged.connect(self.filter_cases)
@@ -1029,7 +1059,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton {
                 background-color: #DC2626;
                 color: #FFFFFF;
-                border: 2px solid #EF4444;
+                border: 3px solid #EF4444;
                 border-radius: 8px;
                 padding: 12px 24px;
                 font-weight: 700;
@@ -1038,7 +1068,7 @@ class SettingsDialog(QtWidgets.QDialog):
             }
             QPushButton:hover {
                 background-color: #EF4444;
-                border: 2px solid #F87171;
+                border: 3px solid #F87171;
             }
             QPushButton:pressed {
                 background-color: #B91C1C;
@@ -1046,7 +1076,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton:disabled {
                 background-color: #64748B;
                 color: #94A3B8;
-                border: 2px solid #475569;
+                border: 3px solid #475569;
             }
         """)
         self.remove_case_btn.setToolTip("Remove the selected case from history (files will not be deleted)")
@@ -1149,7 +1179,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton {
                 background-color: #0E7490;
                 color: #FFFFFF;
-                border: 2px solid #22D3EE;
+                border: 3px solid #22D3EE;
                 border-radius: 8px;
                 padding: 12px 24px;
                 font-weight: 700;
@@ -1158,7 +1188,7 @@ class SettingsDialog(QtWidgets.QDialog):
             }
             QPushButton:hover {
                 background-color: #0891B2;
-                border: 2px solid #67E8F9;
+                border: 3px solid #67E8F9;
             }
             QPushButton:pressed {
                 background-color: #155E75;
@@ -1166,7 +1196,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton:disabled {
                 background-color: #64748B;
                 color: #94A3B8;
-                border: 2px solid #475569;
+                border: 3px solid #475569;
             }
         """)
         self.clone_case_btn.setToolTip(
@@ -1258,7 +1288,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton {
                 background-color: #DC2626;
                 color: #FFFFFF;
-                border: 2px solid #EF4444;
+                border: 3px solid #EF4444;
                 border-radius: 6px;
                 padding: 8px 16px;
                 font-weight: 600;
@@ -1296,7 +1326,7 @@ class SettingsDialog(QtWidgets.QDialog):
             QPushButton {
                 background-color: #F59E0B;
                 color: #FFFFFF;
-                border: 2px solid #FBBF24;
+                border: 3px solid #FBBF24;
                 border-radius: 6px;
                 padding: 8px 16px;
                 font-weight: 600;
@@ -1310,7 +1340,7 @@ class SettingsDialog(QtWidgets.QDialog):
         
         # Six buttons in one row: the site's dense size, so the uppercase
         # labels fit the 830px page instead of being squeezed and clipped.
-        from ui.site_theme import set_dense
+        from ui.app_theme import set_dense
         for b in (add_btn, edit_btn, delete_btn, import_btn, export_btn, reset_btn):
             set_dense(b)
         toolbar.addWidget(add_btn)
@@ -1393,7 +1423,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 color: #E2E8F0;
                 font-size: 14px;
                 font-weight: 700;
-                border: 1px solid #334155;
+                border: 3px solid #334155;
                 border-radius: 6px;
                 margin-top: 12px;
                 padding: 18px;
@@ -1555,7 +1585,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 color: #E2E8F0;
                 font-size: 14px;
                 font-weight: 700;
-                border: 1px solid #334155;
+                border: 3px solid #334155;
                 border-radius: 6px;
                 margin-top: 12px;
                 padding: 18px;
@@ -1615,8 +1645,116 @@ class SettingsDialog(QtWidgets.QDialog):
         auto_layout.addWidget(auto_explain)
 
         layout.addWidget(auto_group)
+        layout.addWidget(self._create_ntfs_integrity_group(group.styleSheet()))
         layout.addStretch()
-        return panel
+
+        # Three groups no longer fit a short window: scroll, as the Eye page does.
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(panel)
+        scroll.setStyleSheet("QScrollArea{border:none;background:#0F172A;}")
+        scroll.viewport().setStyleSheet("background:#0F172A;")
+        return scroll
+
+    # The checks the MFT parser runs in this version, in the order shown
+    # (key, rule IDs, label). Kept beside ntfs_integrity.BUILT_CHECKS, which
+    # test_ntfs_integrity_settings.py compares it with.
+    NTFS_INTEGRITY_CHECKS = (
+        ('ntfs_integrity_digest_map', 'D1',
+         "What changed between parses: deleted and reused records"),
+        ('ntfs_integrity_lsn_checks', 'D3',
+         "A record LSN above every LSN in $LogFile"),
+        ('ntfs_integrity_usn_continuity', 'D4',
+         "USN journal deleted, being deleted, or not active"),
+        ('ntfs_integrity_logfile_continuity', 'D5',
+         "$LogFile restart pages that disagree, or an emptied log"),
+        ('ntfs_integrity_timestomp', 'D7',
+         "Timestomping: $STANDARD_INFORMATION earlier than $FILE_NAME"),
+        ('ntfs_integrity_wipe_detect', 'D9',
+         "In-use records wiped or emptied"),
+        ('ntfs_integrity_structural', 'D10, D29',
+         "Record structure (fixups, BAAD, sizes, link count) and the $MFT bitmap"),
+    )
+
+    def _create_ntfs_integrity_group(self, frame_style):
+        """Settings -> Parsing -> NTFS integrity checks: the master switch, one
+        box per check, and the delta parse - separate, so turning the checks
+        off never changes how the MFT is parsed."""
+        box = QtWidgets.QGroupBox("NTFS integrity checks")
+        box.setStyleSheet(frame_style)
+        lay = QtWidgets.QVBoxLayout(box)
+        lay.setSpacing(10)
+        strong = "QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600; }"
+        plain = "QCheckBox { color: #E2E8F0; font-size: 12px; }"
+        help_style = "QLabel { color: #94A3B8; font-size: 12px; }"
+
+        self.mft_delta_parse_checkbox = QtWidgets.QCheckBox(
+            "Re-parse only the MFT records that changed")
+        self.mft_delta_parse_checkbox.setStyleSheet(strong)
+        lay.addWidget(self.mft_delta_parse_checkbox)
+        delta_explain = QtWidgets.QLabel(
+            "On a second parse of the same volume in the same case, every MFT record is "
+            "still read and compared with a sealed digest of the last parse; only the "
+            "records that changed are parsed again. The USN journal is not relied on for "
+            "this - it can be deleted, it wraps, and it never sees an offline edit. A "
+            "change to the last-access time alone is not re-parsed. Off, every parse reads "
+            "the whole MFT as before.")
+        delta_explain.setWordWrap(True)
+        delta_explain.setStyleSheet(help_style)
+        lay.addWidget(delta_explain)
+
+        self.ntfs_integrity_checkbox = QtWidgets.QCheckBox(
+            "Check the MFT for signs of tampering")
+        self.ntfs_integrity_checkbox.setStyleSheet(strong)
+        lay.addWidget(self.ntfs_integrity_checkbox)
+
+        self.ntfs_check_checkboxes = {}
+        checks = QtWidgets.QWidget()
+        checks_lay = QtWidgets.QVBoxLayout(checks)
+        checks_lay.setContentsMargins(24, 0, 0, 0)
+        checks_lay.setSpacing(6)
+        for key, rules, label in self.NTFS_INTEGRITY_CHECKS:
+            cb = QtWidgets.QCheckBox("%s  (%s)" % (label, rules))
+            cb.setStyleSheet(plain)
+            checks_lay.addWidget(cb)
+            self.ntfs_check_checkboxes[key] = cb
+        lay.addWidget(checks)
+        self._ntfs_checks_widget = checks
+        self.ntfs_integrity_checkbox.toggled.connect(checks.setEnabled)
+
+        explain = QtWidgets.QLabel(
+            "Run while the MFT is parsed, live or from a collected $MFT. Findings go to the "
+            "MFT tab's \"Integrity Findings\" table, and each parse writes an integrity "
+            "manifest per volume to the case's chain-of-custody ledger.\n\n"
+            "A check that is turned off is written to that ledger at every parse, so an "
+            "empty result from a silenced check is never mistaken for a clean one.")
+        explain.setWordWrap(True)
+        explain.setStyleSheet(help_style)
+        lay.addWidget(explain)
+        return box
+
+    def _ntfs_integrity_values(self):
+        """The group's values, as GlobalConfig fields ({} when not built)."""
+        if not hasattr(self, 'ntfs_integrity_checkbox'):
+            return {}
+        out = {'ntfs_integrity_enabled': self.ntfs_integrity_checkbox.isChecked(),
+               'mft_delta_parse': self.mft_delta_parse_checkbox.isChecked()}
+        for key, cb in self.ntfs_check_checkboxes.items():
+            out[key] = cb.isChecked()
+        return out
+
+    def _load_ntfs_integrity(self, config):
+        if not hasattr(self, 'ntfs_integrity_checkbox'):
+            return
+        master = bool(getattr(config, 'ntfs_integrity_enabled', True))
+        self.ntfs_integrity_checkbox.setChecked(master)
+        self.mft_delta_parse_checkbox.setChecked(bool(getattr(config, 'mft_delta_parse', True)))
+        for key, cb in self.ntfs_check_checkboxes.items():
+            cb.setChecked(bool(getattr(config, key, True)))
+        # toggled() only fires on a change: set the boxes' state explicitly.
+        self._ntfs_checks_widget.setEnabled(master)
 
     # ------------------------------------------------------------------ Logs --
     _LOG_TITLE_STYLE = """
@@ -1660,6 +1798,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "image_parsing.log": "Image parsing",
             "parsing_errors.log": "Image parsing",
             "partition_info.json": "Image parsing",
+            "app_acquisition.log": "App Acquisition",
             "app.log": "Application (before a case)",
         }
         if f in exact:
@@ -1940,6 +2079,15 @@ class SettingsDialog(QtWidgets.QDialog):
         QScrollBar::corner { background: #0B1226; }
     """
 
+    def create_user_behavior_panel(self):
+        """Settings -> User Behavior: turn behaviour rules on and off.
+
+        The page lives in ui/uba_rules_settings.py; it writes the same
+        uba_disabled_rules setting as the User Behavior window's Rules view.
+        """
+        from ui.uba_rules_settings import UserBehaviorSettingsPage
+        return UserBehaviorSettingsPage()
+
     def create_logs_panel(self):
         """Browse and read every log this case has produced, grouped by component."""
         panel = QtWidgets.QWidget()
@@ -1993,7 +2141,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._logs_tree.setHeaderHidden(True)
         self._logs_tree.setMinimumWidth(240)
         self._logs_tree.setStyleSheet("""
-            QTreeWidget { background-color: #0B1226; color: #E2E8F0; border: 1px solid #334155;
+            QTreeWidget { background-color: #0B1226; color: #E2E8F0; border: 3px solid #334155;
                           border-radius: 6px; font-size: 14px; font-weight: 600; }
             QTreeWidget::item { padding: 5px 3px; }
             QTreeWidget::item:selected { background-color: #1E293B; color: #00FFFF; }
@@ -2075,9 +2223,12 @@ class SettingsDialog(QtWidgets.QDialog):
         # From the install, not the working directory: relative, the icon was
         # missing whenever Crow-Eye was started from another folder.
         _res = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        title_icon.setPixmap(
-            QtGui.QPixmap(os.path.join(_res, "GUI Resources", "the Eye AI agent transparent.png")).scaled(
-                28, 28, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        # trimmed: the mark fills only a third of its canvas, so untrimmed it
+        # was a speck beside the title
+        _eye_pix = QtGui.QPixmap(os.path.join(_res, "GUI Resources", "the Eye AI agent transparent.png"))
+        if not _eye_pix.isNull():
+            _eye_pix = CrowEyeStyles._trim_transparent(_eye_pix)
+        title_icon.setPixmap(_eye_pix.scaled(34, 34, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         title = QtWidgets.QLabel("Eye AI")
         title.setStyleSheet("""
             QLabel {
@@ -2112,7 +2263,7 @@ class SettingsDialog(QtWidgets.QDialog):
         conn_card = QtWidgets.QFrame()
         conn_card.setObjectName("eyeConnCard")
         conn_card.setStyleSheet(
-            "QFrame#eyeConnCard { background-color: #1E293B; border: 1px solid #334155; border-radius: 8px; }"
+            "QFrame#eyeConnCard { background-color: #1E293B; border: 3px solid #334155; border-radius: 8px; }"
             "QFrame#eyeConnCard QLabel { background: transparent; border: none; }")
         conn_layout = QtWidgets.QVBoxLayout(conn_card)
         conn_layout.setContentsMargins(16, 14, 16, 14)
@@ -2144,6 +2295,36 @@ class SettingsDialog(QtWidgets.QDialog):
         conn_buttons.addWidget(self.eye_configure_btn)
         conn_buttons.addStretch(1)
         conn_layout.addLayout(conn_buttons)
+
+        # Effort: how much the model thinks and works per reply. Claude 5 models and
+        # OpenAI's reasoning models take it; the defaults differ by model (Sonnet 5.5
+        # runs at high), so the investigator sets it here once. Saved at once.
+        effort_row = QtWidgets.QHBoxLayout()
+        effort_row.setSpacing(10)
+        effort_label = QtWidgets.QLabel("Effort")
+        effort_label.setToolTip("How much the model thinks and works on each reply")
+        self.eye_effort_combo = QtWidgets.QComboBox()
+        for text, value in (("Model default", None), ("Low - fastest, cheapest", "low"),
+                            ("Medium - recommended for investigations", "medium"),
+                            ("High", "high"), ("Extra high", "xhigh"), ("Max - slowest", "max")):
+            self.eye_effort_combo.addItem(text, value)
+        self.eye_effort_combo.setToolTip(
+            "Claude 5 models (Anthropic) and OpenAI reasoning models take an effort level. "
+            "Medium suits the Eye's multi-step investigations; high and above think longer and "
+            "cost more. Other models ignore it.")
+        try:
+            from eye.services.config_manager import ConfigManager as _ECM
+            _cur = (_ECM().load_config() or {}).get("effort")
+        except Exception:
+            _cur = None
+        _i = self.eye_effort_combo.findData(_cur)
+        self.eye_effort_combo.setCurrentIndex(_i if _i >= 0 else 0)
+        self.eye_effort_combo.currentIndexChanged.connect(self._eye_effort_changed)
+        effort_row.addWidget(effort_label)
+        self.eye_effort_combo.setMaximumWidth(380)
+        effort_row.addWidget(self.eye_effort_combo)
+        effort_row.addStretch(1)
+        conn_layout.addLayout(effort_row)
         self.eye_test_status = QtWidgets.QLabel("")
         keep_style(self.eye_test_status)        # green / red after a test
         self.eye_test_status.setWordWrap(True)
@@ -2175,10 +2356,10 @@ class SettingsDialog(QtWidgets.QDialog):
         checkbox_style = """
             QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600;
                         font-family: 'Segoe UI', sans-serif; spacing: 10px; }
-            QCheckBox::indicator { width: 24px; height: 24px; border: 2px solid #475569;
+            QCheckBox::indicator { width: 24px; height: 24px; border: 1px solid #475569;
                         border-radius: 4px; background-color: #1E293B; }
-            QCheckBox::indicator:hover { border: 2px solid #00FFFF; background-color: #263449; }
-            QCheckBox::indicator:checked { background-color: #00FFFF; border: 2px solid #00FFFF; }
+            QCheckBox::indicator:hover { border: 1px solid #00FFFF; background-color: #263449; }
+            QCheckBox::indicator:checked { background-color: #00FFFF; border: 1px solid #00FFFF; }
         """
         # Style BOTH QSpinBox and QDoubleSpinBox (the Evidence Confidence field is a
         # QDoubleSpinBox and was previously unstyled), and fully style the up/down
@@ -2186,13 +2367,13 @@ class SettingsDialog(QtWidgets.QDialog):
         # the native buttons cleanly, which is why they looked "missing the style".
         spin_style = """
             QSpinBox, QDoubleSpinBox {
-                background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
+                background-color: #1E293B; color: #FFFFFF; border: 3px solid #475569;
                 border-radius: 6px; padding: 6px 10px; min-height: 30px;
                 font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
             }
             QSpinBox:hover, QSpinBox:focus,
             QDoubleSpinBox:hover, QDoubleSpinBox:focus {
-                border: 2px solid #00FFFF; background-color: #263449;
+                border: 3px solid #00FFFF; background-color: #263449;
             }
             QSpinBox::up-button, QDoubleSpinBox::up-button {
                 subcontrol-origin: border; subcontrol-position: top right;
@@ -2225,7 +2406,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 border-top: 7px solid #0F172A;
             }
             QSpinBox:disabled, QDoubleSpinBox:disabled {
-                background-color: #1E293B; color: #64748B; border: 2px solid #334155;
+                background-color: #1E293B; color: #64748B; border: 3px solid #334155;
             }
         """
         desc_style = "QLabel { color: #94A3B8; font-size: 11px; font-style: italic; padding-top: 3px; }"
@@ -2234,12 +2415,12 @@ class SettingsDialog(QtWidgets.QDialog):
         # a QLineEdit — so they rendered as default white boxes).
         input_style = """
             QLineEdit {
-                background-color: #1E293B; color: #FFFFFF; border: 2px solid #475569;
+                background-color: #1E293B; color: #FFFFFF; border: 3px solid #475569;
                 border-radius: 6px; padding: 6px 10px; min-height: 30px;
                 font-size: 13px; font-weight: 600; font-family: 'Segoe UI', sans-serif;
             }
-            QLineEdit:hover, QLineEdit:focus { border: 2px solid #00FFFF; background-color: #263449; }
-            QLineEdit:disabled { background-color: #1E293B; color: #64748B; border: 2px solid #334155; }
+            QLineEdit:hover, QLineEdit:focus { border: 3px solid #00FFFF; background-color: #263449; }
+            QLineEdit:disabled { background-color: #1E293B; color: #64748B; border: 3px solid #334155; }
         """
         # Small non-italic sub-label sitting inline next to an input (e.g. "Model:",
         # "Endpoint:", "Max recalled turns:") — legible, not shrunken like desc_style.
@@ -2433,7 +2614,7 @@ class SettingsDialog(QtWidgets.QDialog):
         narr_layout.setSpacing(5)
         self.eye_max_narratives_spin = QtWidgets.QSpinBox()
         self.eye_max_narratives_spin.setRange(1, 30)
-        self.eye_max_narratives_spin.setValue(12)
+        self.eye_max_narratives_spin.setValue(4)
         self.eye_max_narratives_spin.setStyleSheet(spin_style)
         narr_desc = _tip_label("Upper bound on the activities/behaviors the plan splits the verdict into.")
         narr_desc.setWordWrap(True)
@@ -2451,7 +2632,7 @@ class SettingsDialog(QtWidgets.QDialog):
         subnarr_layout.setSpacing(5)
         self.eye_max_sub_narratives_spin = QtWidgets.QSpinBox()
         self.eye_max_sub_narratives_spin.setRange(1, 20)
-        self.eye_max_sub_narratives_spin.setValue(8)
+        self.eye_max_sub_narratives_spin.setValue(3)
         self.eye_max_sub_narratives_spin.setStyleSheet(spin_style)
         subnarr_desc = _tip_label("Upper bound on the evidence-bearing steps inside EACH narrative.")
         subnarr_desc.setWordWrap(True)
@@ -3306,7 +3487,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setIcon(QMessageBox.Question)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        apply_site_theme(msg_box)
+        apply_theme(msg_box)
         
         if msg_box.exec_() == QMessageBox.Yes:
             if item_type == "advanced":
@@ -3391,7 +3572,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        apply_site_theme(msg_box)
+        apply_theme(msg_box)
         
         if msg_box.exec_() == QMessageBox.Yes:
             # Clear all global mappings
@@ -3475,7 +3656,7 @@ class SettingsDialog(QtWidgets.QDialog):
         msg_box.setDefaultButton(QMessageBox.No)
         
         # Apply cyberpunk styling
-        apply_site_theme(msg_box)
+        apply_theme(msg_box)
         
         reply = msg_box.exec_()
         
@@ -3517,6 +3698,8 @@ class SettingsDialog(QtWidgets.QDialog):
         # Parsing: parse straight after a collection (Offline Importer, image).
         self.auto_parse_checkbox.setChecked(
             getattr(config, 'auto_parse_after_collection', True))
+        # Parsing: NTFS integrity checks and the delta MFT parse.
+        self._load_ntfs_integrity(config)
         # Semantic Mappings: the semantic mapping engine's options.
         if hasattr(self, 'semantic_workers_spin'):
             self.semantic_workers_spin.setValue(int(getattr(config, 'semantic_worker_count', 4)))
@@ -3538,8 +3721,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.eye_enable_decomposition_checkbox.setChecked(bool(eye_ai.get("enable_decomposition", True)))
                 self.eye_max_subq_spin.setValue(int(eye_ai.get("max_sub_questions", 6)))
                 self.eye_enable_hierarchy_checkbox.setChecked(bool(eye_ai.get("enable_hierarchy", True)))
-                self.eye_max_narratives_spin.setValue(int(eye_ai.get("max_narratives", 12)))
-                self.eye_max_sub_narratives_spin.setValue(int(eye_ai.get("max_sub_narratives", 8)))
+                self.eye_max_narratives_spin.setValue(int(eye_ai.get("max_narratives", 4)))
+                self.eye_max_sub_narratives_spin.setValue(int(eye_ai.get("max_sub_narratives", 3)))
                 self.eye_max_iterations_spin.setValue(int(eye_ai.get("max_iterations", 300)))
                 self.eye_enable_premise_checkbox.setChecked(bool(eye_ai.get("enable_premise_verification", True)))
                 self.eye_enable_question_memory_checkbox.setChecked(bool(eye_ai.get("enable_question_memory", True)))
@@ -3568,6 +3751,22 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._refresh_tool_capability_label(backend, model)
             except Exception as e:
                 print(f"[Settings] Could not load Eye AI settings: {e}")
+
+    def _eye_effort_changed(self, _index):
+        """Save the effort level to the Eye's config; an open Eye picks it up on its next start."""
+        value = self.eye_effort_combo.currentData()
+        try:
+            from eye.services.config_manager import ConfigManager
+            mgr = ConfigManager()
+            conf = mgr.load_config() or {}
+            if value:
+                conf["effort"] = value
+            else:
+                conf.pop("effort", None)
+            mgr.save_config(conf)
+            self.eye_test_status.setText("Effort saved: %s." % (value or "the model's default"))
+        except Exception as e:
+            self.eye_test_status.setText("<span style='color:#F59E0B'>Effort not saved: %s</span>" % e)
 
     def _eye_connection_text(self, eye_ai):
         """The connection card's summary: type, provider, model, key state."""
@@ -3746,8 +3945,15 @@ class SettingsDialog(QtWidgets.QDialog):
                 cascade_tree_expansion_enabled=self.cascade_expansion_checkbox.isChecked(),
                 parser_allow_snapshot_creation=self.snapshot_creation_checkbox.isChecked(),
                 auto_parse_after_collection=self.auto_parse_checkbox.isChecked(),
-                **self._semantic_engine_values()
+                **self._semantic_engine_values(),
+                **self._ntfs_integrity_values()
             )
+
+            # Settings -> User Behavior: only the switches flipped on that page,
+            # applied onto uba_disabled_rules as it is now (rule_switches).
+            if getattr(self, "user_behavior_panel", None) is not None:
+                if not self.user_behavior_panel.apply():
+                    print("[Settings] The User Behavior rule switches were not saved")
 
             # Persist Eye AI settings to configs/eye_config.json
             if write_eye_ai_settings is not None:
@@ -3797,7 +4003,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 
                 # Save mappings to file
                 try:
-                    self.semantic_manager.save_to_file(mappings_file, scope='global')
+                    self.semantic_manager.save_to_file(mappings_file, scope='global',
+                                                       only_changes=True)
                 except Exception as e:
                     print(f"Error saving semantic mappings: {e}")
             
@@ -3807,7 +4014,7 @@ class SettingsDialog(QtWidgets.QDialog):
             msg_box.setText("Settings have been saved successfully.")
             msg_box.setIcon(QMessageBox.Information)
             msg_box.setStandardButtons(QMessageBox.Ok)
-            apply_site_theme(msg_box)
+            apply_theme(msg_box)
             msg_box.exec_()
             
             self.accept()
@@ -3819,12 +4026,12 @@ class SettingsDialog(QtWidgets.QDialog):
             msg_box.setText(f"Failed to save settings:\n{str(e)}")
             msg_box.setIcon(QMessageBox.Critical)
             msg_box.setStandardButtons(QMessageBox.Ok)
-            apply_site_theme(msg_box)
+            apply_theme(msg_box)
             msg_box.exec_()
     
     def apply_styles(self):
-        """The site's look (ui/site_theme.py), as the loading dialog has."""
-        apply_site_theme(self)
+        """The site's look (ui/app_theme.py), as the loading dialog has."""
+        apply_theme(self, extra=_SETTINGS_OUTLINES)
     
     def _format_datetime(self, dt):
         """Format datetime for display."""
@@ -3852,9 +4059,9 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
         """
         super().__init__(parent)
         self.mapping = mapping
-        begin_site_theme(self)
+        begin_theme(self)
         self.setup_ui()
-        apply_site_theme(self)
+        apply_theme(self)
 
         if mapping:
             self.load_mapping(mapping)

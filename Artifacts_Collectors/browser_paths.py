@@ -228,7 +228,8 @@ _partition_cache = {}
 
 def _collection_partition(acq_dir: str) -> Optional[str]:
     """The Windows partition a Crow-Claw collection was taken from, read from
-    the ``collection_manifest.json`` it wrote beside its Browser folder."""
+    the ``collection_manifest.json`` it wrote beside its Browser folder, else
+    from the case's chain-of-custody records (``_custody_partition``)."""
     key = os.path.normcase(os.path.abspath(acq_dir))
     if key not in _partition_cache:
         part = None
@@ -239,8 +240,68 @@ def _collection_partition(acq_dir: str) -> Optional[str]:
         except (OSError, ValueError, AttributeError):
             part = None
         part = str(part or "").strip().rstrip("\\/")
+        if not re.match(r"^[A-Za-z]:$", part):
+            part = _custody_partition(acq_dir) or ""
         _partition_cache[key] = part if re.match(r"^[A-Za-z]:$", part) else None
     return _partition_cache[key]
+
+
+# One copied source in a custody record, as utils/custody.add_source writes it:
+# {"source": "C:\\Users\\...", ..., "copy": "...\\Browser\\live\\Users\\..."}.
+_CUSTODY_SOURCE = re.compile(rb'"source":\s*"((?:[^"\\]|\\.)*)"')
+_CUSTODY_COPY = re.compile(rb'"copy":\s*"((?:[^"\\]|\\.)*)"')
+
+
+def _custody_partition(acq_dir: str) -> Optional[str]:
+    """The drive letter of the browser files Crow-Claw copied into
+    ``<acq_dir>\\Browser\\live``, per the case's chain-of-custody records.
+
+    Crow-Claw records every copy with the path it read (``C:\\Users\\bob\\...
+    \\History``) and the path it wrote (``...\\Browser\\live\\Users\\bob\\...
+    \\History``). A letter is taken only from an entry whose source path, below
+    the drive, IS the copy's path below ``Browser\\live`` - the record says so,
+    nothing is assumed. A collection without a manifest (one interrupted
+    before Crow-Claw wrote it, or a case folder copied without it) is mapped
+    this way. The records can be large, so they are scanned as bytes, once.
+    """
+    import glob
+    import json
+    acq = os.path.abspath(acq_dir)
+    copy_root = os.path.normcase(os.path.join(acq, BROWSER_CASE_DIR, LIVE_SOURCE_TAG)) + "\\"
+    cases = [os.path.dirname(acq)] if os.path.basename(acq).lower() == "live_acquisition" else []
+    cases.append(acq)
+    files = []
+    for case in cases:
+        logs = os.path.join(case, "logs")
+        files += sorted(glob.glob(os.path.join(logs, "custody_*.json")), reverse=True)
+        files += sorted(glob.glob(os.path.join(logs, "custody_parts", "*", "*.jsonl")), reverse=True)
+    marker = ("\\\\%s\\\\%s\\\\" % (BROWSER_CASE_DIR, LIVE_SOURCE_TAG)).lower().encode()
+    for path in files:
+        try:
+            with open(path, "rb") as fh:
+                data = fh.read()
+        except OSError:
+            continue
+        if marker not in data.lower():
+            continue
+        sources = list(_CUSTODY_SOURCE.finditer(data))
+        for i, m in enumerate(sources):
+            end = sources[i + 1].start() if i + 1 < len(sources) else len(data)
+            c = _CUSTODY_COPY.search(data, m.end(), end)
+            if not c:
+                continue
+            try:
+                source = json.loads(b'"' + m.group(1) + b'"')
+                copy = json.loads(b'"' + c.group(1) + b'"')
+            except ValueError:
+                continue
+            copy_n = os.path.normcase(os.path.abspath(copy))
+            drive = re.match(r"^([A-Za-z]:)\\(.+)$", source or "")
+            if not drive or not copy_n.startswith(copy_root):
+                continue
+            if os.path.normcase(drive.group(2)) == copy_n[len(copy_root):]:
+                return drive.group(1).upper()
+    return None
 
 
 def collected_copy_origin(file_path: str):
@@ -252,8 +313,8 @@ def collected_copy_origin(file_path: str):
     ``C:\\Users\\bob\\AppData\\...``. Here ``copy_root`` is that
     ``...\\Browser\\live`` folder and ``original_root`` the volume it was copied
     from (``C:``), taken from the collection's own manifest
-    (``paths.windows_partition``) - never assumed. Without a manifest the copy
-    is not mapped. Neither root ends in a separator.
+    (``paths.windows_partition``), else from the case's custody record of the
+    copy - never assumed. With neither, the copy is not mapped. Neither root ends in a separator.
 
     Used for a row's IDENTITY only: a profile parsed live and then again from
     the collected copy is the same evidence, and its rows must not be stored

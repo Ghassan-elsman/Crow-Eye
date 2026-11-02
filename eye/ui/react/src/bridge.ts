@@ -1,5 +1,5 @@
 /**
- * QWebChannel Bridge Integration for EYE Forensic Assistant
+ * QWebChannel Bridge Integration for Eye Forensic Assistant
  * 
  * This module handles the initialization and communication with the Python backend
  * through PyQt5's QWebChannel. It provides TypeScript-safe access to Python methods
@@ -50,6 +50,8 @@ const signalListeners = {
   narrativeMapUpdated: [] as NarrativeMapUpdatedCallback[],
   narrativeInvestigationComplete: [] as NarrativeInvestigationCompleteCallback[],
   narrativeMapFocus: [] as NarrativeMapFocusCallback[],
+  backendStatus: [] as Array<(status: BackendStatus) => void>,
+  backendDoctor: [] as Array<(report: DoctorReport) => void>,
 };
 
 /**
@@ -69,17 +71,24 @@ export function initializeBridge(): Promise<EYEBridge> {
   }
 
   bridgeInitPromise = new Promise((resolve, reject) => {
+    // Never wait for ever: a QWebChannel callback that never fires left the Eye on
+    // its loading screen with nothing said.
+    const timer = setTimeout(() => {
+      bridgeInitPromise = null;
+      reject(new Error('The Eye could not reach Crow-Eye (no answer in 15 s)'));
+    }, 15000);
+    const done = (fn: () => void) => { clearTimeout(timer); fn(); };
     // Check if running in PyQt5 QWebEngineView
     if (!window.qt || !window.qt.webChannelTransport) {
       console.warn('QWebChannel transport not available - running in standalone mode');
-      reject(new Error('QWebChannel not available'));
+      done(() => reject(new Error('QWebChannel not available')));
       return;
     }
 
     // Check if QWebChannel constructor is available
     if (!window.QWebChannel) {
       console.error('QWebChannel constructor not found');
-      reject(new Error('QWebChannel constructor not available'));
+      done(() => reject(new Error('QWebChannel constructor not available')));
       return;
     }
 
@@ -91,7 +100,7 @@ export function initializeBridge(): Promise<EYEBridge> {
 
         if (!bridge) {
           console.error('Bridge object not found in QWebChannel');
-          reject(new Error('Bridge object not available'));
+          done(() => reject(new Error('Bridge object not available')));
           return;
         }
 
@@ -103,11 +112,11 @@ export function initializeBridge(): Promise<EYEBridge> {
 
         bridgeInitialized = true;
         console.log('QWebChannel bridge initialized successfully');
-        resolve(bridge);
+        done(() => resolve(bridge));
       });
     } catch (error) {
       console.error('Failed to initialize QWebChannel:', error);
-      reject(error);
+      done(() => reject(error));
     }
   });
 
@@ -126,6 +135,33 @@ export function initializeBridge(): Promise<EYEBridge> {
  * @param bridge The initialized EYEBridge object
  */
 function connectSignalListeners(bridge: any) {
+  // The backend doctor's full report (run_backend_doctor).
+  if (bridge.backend_doctor_result && bridge.backend_doctor_result.connect) {
+    bridge.backend_doctor_result.connect((json: string) => {
+      try {
+        const report = JSON.parse(json) as DoctorReport;
+        signalListeners.backendDoctor.forEach(cb => {
+          try { cb(report); } catch (error) { console.error('backend doctor callback', error); }
+        });
+      } catch (error) {
+        console.error('Malformed backend doctor report', error);
+      }
+    });
+  }
+  // The model backend's state, while it is checked and after (start_backend_check).
+  if (bridge.backend_status_changed && bridge.backend_status_changed.connect) {
+    bridge.backend_status_changed.connect((json: string) => {
+      try {
+        const status = JSON.parse(json) as BackendStatus;
+        signalListeners.backendStatus.forEach(cb => {
+          try { cb(status); } catch (error) { console.error('backend status callback', error); }
+        });
+      } catch (error) {
+        console.error('Malformed backend status', error);
+      }
+    });
+  }
+
   // Connect to query_complete signal
   if (bridge.query_complete && bridge.query_complete.connect) {
     bridge.query_complete.connect((responseJson: string) => {
@@ -637,16 +673,79 @@ export async function switchActiveModel(modelName: string): Promise<boolean> {
 }
 
 /**
- * Snapshot of whether the EYE is currently wired up to its AI backend.
- * Used by the chat "EYE Synchronization" step to decide whether to proceed
+ * Snapshot of whether the Eye is currently wired up to its AI backend.
+ * Used by the chat "Eye Synchronization" step to decide whether to proceed
  * with the triage handshake or surface a clear disconnect message.
  */
 export interface BackendStatus {
+  /** checking | connected | failed | not_configured */
+  state?: 'checking' | 'connected' | 'failed' | 'not_configured';
+  /** seconds waited so far (checking) or taken (connected / failed) */
+  seconds?: number;
   connected: boolean;
   backend: string | null;
   model: string | null;
   integration_type: string | null;
   detail: string;
+  /** the backend doctor's checks, attached to a finished check */
+  doctor?: DoctorReport;
+}
+
+/** One fix the backend doctor offers: applied by apply_backend_fix, or by the UI. */
+export interface DoctorFix {
+  action: 'set_model' | 'set_effort' | 'open_setup' | 'retry';
+  label: string;
+  value?: string;
+}
+
+export interface DoctorCheck {
+  id: string;
+  title: string;
+  status: 'ok' | 'warn' | 'fail' | 'skip';
+  detail: string;
+  fix?: DoctorFix | null;
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  summary: string;
+  backend?: string;
+  model?: string;
+  seconds?: number;
+  checks: DoctorCheck[];
+}
+
+/** Run every setup check for the configured model; the report arrives on onBackendDoctor. */
+export async function runBackendDoctor(): Promise<boolean> {
+  if (!window.bridge || typeof window.bridge.run_backend_doctor !== 'function') return false;
+  try {
+    await window.bridge.run_backend_doctor();
+    return true;
+  } catch (error) {
+    console.error('Error running the backend doctor:', error);
+    return false;
+  }
+}
+
+/** Apply one of the doctor's fixes (set_model / set_effort); the backend is then re-checked. */
+export async function applyBackendFix(fix: DoctorFix): Promise<{ ok: boolean; detail: string }> {
+  if (!window.bridge || typeof window.bridge.apply_backend_fix !== 'function') {
+    return { ok: false, detail: 'This version of the Eye cannot apply fixes.' };
+  }
+  try {
+    const parsed = JSON.parse(await window.bridge.apply_backend_fix(JSON.stringify(fix)));
+    return { ok: !!parsed?.success, detail: parsed?.data?.detail || parsed?.error || '' };
+  } catch (error) {
+    return { ok: false, detail: String(error) };
+  }
+}
+
+/** Register for the backend doctor's reports; returns an unsubscribe function. */
+export function onBackendDoctor(callback: (report: DoctorReport) => void): () => void {
+  signalListeners.backendDoctor.push(callback);
+  return () => {
+    signalListeners.backendDoctor = signalListeners.backendDoctor.filter(cb => cb !== callback);
+  };
 }
 
 /**
@@ -677,6 +776,31 @@ export async function getBackendStatus(): Promise<BackendStatus> {
     console.error('Error checking backend status:', error);
     return { ...fallback, detail: error instanceof Error ? error.message : String(error) };
   }
+}
+
+/**
+ * Start a model-backend check on a worker thread (never blocks the Eye).
+ * Progress and the outcome arrive through onBackendStatusChanged.
+ */
+export async function startBackendCheck(): Promise<BackendStatus | null> {
+  if (!window.bridge || typeof window.bridge.start_backend_check !== 'function') {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(await window.bridge.start_backend_check());
+    return parsed && parsed.data ? (parsed.data as BackendStatus) : null;
+  } catch (error) {
+    console.error('Error starting the backend check:', error);
+    return null;
+  }
+}
+
+/** Register for the model backend's state; returns an unsubscribe function. */
+export function onBackendStatusChanged(callback: (status: BackendStatus) => void): () => void {
+  signalListeners.backendStatus.push(callback);
+  return () => {
+    signalListeners.backendStatus = signalListeners.backendStatus.filter(cb => cb !== callback);
+  };
 }
 
 /**
@@ -954,7 +1078,7 @@ export async function getGepComplianceStatus(): Promise<GepComplianceResponse> {
   }
 }
 
-/** Activity Audit — chronological log of every query the EYE made,
+/** Activity Audit — chronological log of every query the Eye made,
  * the evidence each tool call returned, and every change to the report. */
 export type AuditEntryType =
   | 'user_query'

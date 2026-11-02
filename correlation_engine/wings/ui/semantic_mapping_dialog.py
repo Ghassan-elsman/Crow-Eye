@@ -11,24 +11,24 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
-from ...config.semantic_mapping import SemanticCondition, SemanticRule
+from ...config.semantic_mapping import SemanticCondition, SemanticRule, rule_is_advanced
 import uuid
 
-# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+# The site look (ui/app_theme.py); standalone it keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 def _role(widget, role):
-    if _site is not None:
-        _site.set_role(widget, role)
+    if _theme is not None:
+        _theme.set_role(widget, role)
 
 
 def _status(widget, kind):
-    if _site is not None:
-        _site.set_status(widget, kind)
+    if _theme is not None:
+        _theme.set_status(widget, kind)
 
 
 def _variant(widget, variant, compact=False, cell=False):
@@ -38,17 +38,17 @@ def _variant(widget, variant, compact=False, cell=False):
         widget.setProperty("compact", True)
     if cell:
         widget.setProperty("cell", True)
-    if _site is not None:
-        _site.set_variant(widget, variant)
+    if _theme is not None:
+        _theme.set_variant(widget, variant)
 
 
 def _dialog_extra():
-    """The dialog's own rules on top of the site sheet: the condition tables
+    """The dialog's own rules on top of the theme sheet: the condition tables
     are dense (22px rows of combos / edits), the preview is a mono well, and
     the semantic-output fields keep their cyan edge."""
-    if _site is None:
+    if _theme is None:
         return ""
-    mono = _site.families()[1]
+    mono = _theme.families()[1]
     return """
 QTableWidget QComboBox, QTableWidget QLineEdit { padding: 0 4px; border-radius: 6px;
     font-size: 12px; min-height: 0; }
@@ -56,13 +56,13 @@ QTableWidget QComboBox::drop-down { width: 14px; }
 QTableWidget QComboBox::down-arrow { margin-right: 3px; }
 QPushButton[compact="true"] { padding: 2px 10px; min-height: 0; font-size: 12px; border-radius: 7px; }
 QPushButton[cell="true"] { padding: 0; min-height: 0; border-radius: 6px; }
-QLineEdit[emphasis="true"] { border: 1px solid rgba(34, 211, 238, 0.60); }
-QLineEdit[emphasis="true"]:focus { border: 1px solid %(CYAN)s; }
-QLabel#rulePreview { background: %(BG)s; color: %(CYAN)s; border: 1px solid %(LINE)s;
+QLineEdit[emphasis="true"] { border: 3px solid #19869C; }
+QLineEdit[emphasis="true"]:focus { border: 3px solid %(CYAN)s; }
+QLabel#rulePreview { background: %(BG)s; color: %(CYAN)s; border: 3px solid %(LINE)s;
     border-radius: 10px; padding: 8px; font-family: '%(mono)s'; font-size: 12px; }
-QFrame#conditionGroup { background: %(BG)s; border: 1px solid %(LINE)s; border-radius: 10px; }
-QFrame#modeBar { background: %(CARD)s; border: 1px solid %(LINE)s; border-radius: 12px; }
-""" % dict(BG=_site.BG, CARD=_site.CARD, LINE=_site.LINE, CYAN=_site.CYAN, mono=mono)
+QFrame#conditionGroup { background: %(BG)s; border: 3px solid %(LINE)s; border-radius: 10px; }
+QFrame#modeBar { background: %(CARD)s; border: 3px solid %(LINE)s; border-radius: 12px; }
+""" % dict(BG=_theme.BG, CARD=_theme.CARD, LINE=_theme.LINE, CYAN=_theme.CYAN, mono=mono)
 
 
 class SemanticMappingDialog(QDialog):
@@ -103,23 +103,24 @@ class SemanticMappingDialog(QDialog):
         if self.mapping and (self.mapping.get('conditions') or mapping_advanced):
             self.mode = 'advanced'
 
-        if _site is not None:
-            _site.begin_site_theme(self, extra=_dialog_extra())
+        if _theme is not None:
+            _theme.begin_theme(self, extra=_dialog_extra())
         self.init_ui()
         self.load_mapping()
 
     @staticmethod
     def _mapping_is_advanced(mapping) -> bool:
-        """Detect whether a rule dict uses any Identity-engine-only capability."""
+        """Whether a rule dict needs the advanced editor: anything the Identity
+        engine alone evaluates (``rule_is_advanced``, the one definition), plus
+        the fields only the advanced editor shows - ATT&CK tags and the
+        comparison operators. Those two are editor modes, not engine needs."""
         if not isinstance(mapping, dict):
             return False
-        if str(mapping.get('rule_type', 'match')).lower() != 'match':
+        if rule_is_advanced(mapping):
             return True
-        if mapping.get('condition_groups') or mapping.get('technique_id') or mapping.get('tactic'):
+        if mapping.get('technique_id') or mapping.get('tactic'):
             return True
         for cond in mapping.get('conditions', []) or []:
-            if isinstance(cond, dict) and (cond.get('negate') or cond.get('compare_to_feather')):
-                return True
             if isinstance(cond, dict) and cond.get('operator') not in (None, 'equals', 'contains', 'regex', 'wildcard'):
                 return True
         return False
@@ -397,22 +398,22 @@ class SemanticMappingDialog(QDialog):
         bb.rejected.connect(self.reject)
         layout.addWidget(bb)
         
-        self._apply_site_look()
+        self._apply_theme()
         self._mode_changed()
         if self.allow_advanced:
             self._rule_type_changed()
         self.update()
     
-    def _apply_site_look(self):
-        """The site look, once (ui/site_theme.py).
+    def _apply_theme(self):
+        """The site look, once (ui/app_theme.py).
 
         This used to be _style(): a 230-line sheet in the old palette that
         showEvent wiped and set again on every show - each show re-polished
         the whole dialog, and the per-widget sheets fought it. The labels'
         own sheets become roles here; rows added later take the dialog
         sheet through their properties."""
-        if _site is not None:
-            _site.apply_site_theme(self, extra=_dialog_extra())
+        if _theme is not None:
+            _theme.apply_theme(self, extra=_dialog_extra())
 
     def _mode_changed(self):
         adv = self.adv_radio.isChecked()

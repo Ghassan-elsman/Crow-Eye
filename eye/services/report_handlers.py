@@ -316,36 +316,16 @@ class ReportHandlers:
         except Exception as e:
             return {"success": False, "error": str(e)}
 
-    def handle_export_report(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        """Trigger the export of the current report workspace to a file."""
-        fmt = params.get("format", "html").lower()
-        
-        if fmt not in ["html", "pdf", "markdown", "md"]:
-            return {"success": False, "error": f"Unsupported export format: {fmt}"}
-            
-        # Determine a friendly report type (e.g., "technical_analysis")
+    def handle_export_report(self, params: Dict[str, Any], **_ignored) -> Dict[str, Any]:
+        """Never writes a report: the one write path is the approval dialog.
 
-        # as the ReportEngine/CaseDirectoryManager will do it more reliably.
-        report_type = params.get("report_type") or params.get("title") or "Forensic_Report"
-        
-        # Sanitize report type for filename
-        import re
-        report_type = re.sub(r'[^\w\-]', '_', report_type)
-        
-        try:
-            if fmt == "html":
-                self.cm.report_engine.export_html(report_type)
-            elif fmt == "pdf":
-                self.cm.report_engine.export_pdf(report_type)
-            elif fmt in ["markdown", "md"]:
-                self.cm.report_engine.export_markdown_file(report_type)
-                    
-            return {
-                "success": True, 
-                "format": fmt, 
-                "report_type": report_type,
-                "message": f"Report exported successfully as {fmt.upper()} to the case 'Reports' directory."
-            }
-        except Exception as e:
-            self.logger.error(f"Failed to export report: {e}")
-            return {"success": False, "error": f"Export failed: {str(e)}"}
+        A model's ``export_report`` call is routed by
+        ``ContextManager._execute_tool`` to the investigator's approval dialog;
+        the main thread writes the file and records it in the custody ledger
+        (``EYEBridge._export_report``). This handler stays registered only so
+        the tool name resolves; it always refuses, so nothing can write a
+        report around the dialog and the ledger.
+        """
+        return {"success": False,
+                "error": "export_report requires investigator approval through "
+                         "the export dialog; nothing was written."}

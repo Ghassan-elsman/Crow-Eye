@@ -217,11 +217,12 @@ This document provides a comprehensive overview of the Crow-Eye Correlation Engi
 
 ## What is the Correlation Engine?
 
-The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimized system designed for in-depth forensic analysis. It leverages a **dual-engine architecture**—the **Time-Window Scanning Engine (TWSE)** and the **Identity-Based Correlation Engine (IBCE)**—each tailored for different use cases and dataset characteristics. Both engines deliver `O(N log N)` performance.
+The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimized system designed for in-depth forensic analysis. It runs **three engines** - the **Time-Window Scanning Engine (TWSE)**, the **Identity-Based Correlation Engine (IBCE)** and the **Behavioural Engine** - each answering a different question. TWSE and IBCE deliver `O(N log N)` performance; the Behavioural engine works one person at a time over the behaviours User Behavior found.
 
-### Dual-Engine Architecture:
+### The Three Engines:
 1.  **Time-Window Scanning Engine (TWSE)**: A revolutionary `O(N log N)` systematic temporal analysis approach that scans through forensic timelines in fixed intervals. It's designed for any dataset size with exceptional memory efficiency, achieving significant speed improvements through optimizations like quick empty-window checks, caching, parallel processing, and a two-phase architecture. Semantic analysis is primarily handled in a post-correlation phase for performance.
 2.  **Identity-Based Correlation Engine (IBCE)**: The **default engine type** for Crow-eye. A powerful `O(N log N)` strategy that groups records by identity first, then creates temporal anchors within each identity's timeline. Optimized for large datasets with streaming support, it excels at robust identity extraction, normalization, and applying semantic rules and scoring directly during the correlation process. It handles identity case-sensitivity intelligently based on the artifact type (e.g., case-sensitive for SIDs and Hashes).
+3.  **Behavioural Engine**: Runs Behaviour Wings (18 ship) over the behaviours User Behavior Analytics found, one person (SID) at a time, finding chains of them in order or in any order within a set number of minutes. It reads no Feathers; every hit points to the behaviours, which point to the artifact rows, and it never adds to a Time or Identity match's score.
 
 ### Core Architectural Principles:
 -   **Modularity and Extensibility**: Components are loosely coupled, allowing for independent development and easy integration of new features or strategies.

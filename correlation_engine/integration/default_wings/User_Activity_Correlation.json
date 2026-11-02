@@ -1,7 +1,8 @@
 {
   "config_name": "user_activity_correlation",
-  "wing_name": "User Activity Correlation",
+  "wing_name": "User Activity Correlation (Identity)",
   "wing_id": "default_wing_activity_001",
+  "wing_category": "identity",
   "description": "Proves user activity using weighted scoring based on user interaction evidence strength. Uses a tiered approach with explicit user interaction artifacts (UserAssist, RecentDocs, MRU) weighted highest, followed by navigation evidence (ShellBags, TypedPaths), and temporal system confirmation (Security Logs).",
   "proves": "User actively interacted with the system",
   "author": "Crow-Eye Team",
@@ -123,6 +124,7 @@
   "semantic_rules": [
     {
       "rule_id": "user_file_access",
+      "confidence": 0.5,
       "name": "User File Access (OR)",
       "semantic_value": "User Accessed File",
       "description": "RecentDocs OR OpenSaveMRU indicates user accessed a file",
@@ -147,6 +149,7 @@
     },
     {
       "rule_id": "user_folder_navigation",
+      "confidence": 0.5,
       "name": "User Folder Navigation",
       "semantic_value": "User Navigated Folders",
       "description": "ShellBags indicate user browsed folders",
@@ -165,6 +168,7 @@
     },
     {
       "rule_id": "user_app_interaction",
+      "confidence": 0.5,
       "name": "User Application Interaction",
       "semantic_value": "User Interacted with Application",
       "description": "UserAssist shows user launched or interacted with an application",
@@ -183,6 +187,7 @@
     },
     {
       "rule_id": "user_typed_path",
+      "confidence": 0.5,
       "name": "User Typed Path",
       "semantic_value": "User Manually Typed Path",
       "description": "TypedPaths shows user manually entered a path in Explorer",
@@ -201,6 +206,7 @@
     },
     {
       "rule_id": "user_file_save",
+      "confidence": 0.5,
       "name": "User File Save Activity (AND)",
       "semantic_value": "User Saved File",
       "description": "LastSaveMRU AND OpenSaveMRU together indicate user saved a file",
@@ -249,6 +255,7 @@
     },
     {
       "rule_id": "user_any_activity",
+      "confidence": 0.5,
       "name": "Any User Activity (OR)",
       "semantic_value": "User Activity Detected",
       "description": "UserAssist OR RecentDocs OR ShellBags indicates user activity",
@@ -279,6 +286,7 @@
     },
     {
       "rule_id": "user_document_work",
+      "confidence": 0.5,
       "name": "Document Work Activity (AND)",
       "semantic_value": "User Working on Documents",
       "description": "RecentDocs AND OpenSaveMRU together indicate document work",
@@ -303,6 +311,7 @@
     },
     {
       "rule_id": "user_navigation_evidence",
+      "confidence": 0.5,
       "name": "Navigation Evidence (OR)",
       "semantic_value": "User Navigation Detected",
       "description": "ShellBags OR TypedPaths indicates user navigation",

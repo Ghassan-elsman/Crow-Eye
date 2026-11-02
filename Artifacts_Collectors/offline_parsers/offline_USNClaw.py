@@ -81,6 +81,14 @@ except ImportError:
     print("Warning: tqdm not available - progress bar disabled")
 
 
+# A USN record's length, when it is one: 8-byte aligned, at least a V2 header
+# rounded up, and never longer than this. NTFS writes no record across a
+# journal page, so anything longer is not a record, and waiting for the rest
+# of it is what stalled the parse.
+USN_MIN_RECORD_BYTES = 56
+USN_MAX_RECORD_BYTES = 65536
+
+
 def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
     """
     Read and parse a USN journal file from disk.
@@ -147,6 +155,9 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                 # Prepend leftover from previous chunk
                 data = leftover_bytes + chunk
                 bytes_processed += len(chunk)
+                # The file offset of data[0]. Records start on 8-byte
+                # boundaries of the FILE, which a skip has to land on.
+                base = bytes_processed - len(data)
                 
                 # Update progress bar
                 if pbar:
@@ -158,9 +169,33 @@ def read_journal_file(file_path, cursor, conn, volume_letter="OFFLINE"):
                     try:
                         # Read record length
                         rec_len = struct.unpack_from("<I", data, offset)[0]
-                        
+
+                        if rec_len == 0:
+                            # A zero run, not a record: $J is sparse, and
+                            # every journal page is padded with zeros to its
+                            # end. Read as "an incomplete record" it was
+                            # carried over for ever and nothing after it was
+                            # parsed. Skip to the next non-zero byte, back to
+                            # its 8-byte boundary (a 256-byte record's length
+                            # is 00 01 00 00), and never backwards.
+                            rest = data[offset:].lstrip(b"\x00")
+                            if not rest:
+                                offset = len(data)
+                                continue
+                            found = base + len(data) - len(rest)
+                            offset = max(offset + 8, found - found % 8 - base)
+                            continue
+
+                        if (rec_len < USN_MIN_RECORD_BYTES or
+                                rec_len > USN_MAX_RECORD_BYTES or rec_len % 8):
+                            # A length no record has: step over it rather
+                            # than wait for bytes that will never complete it.
+                            failed_count += 1
+                            offset += 8
+                            continue
+
                         # Check if we have complete record
-                        if rec_len <= 0 or offset + rec_len > len(data):
+                        if offset + rec_len > len(data):
                             # Incomplete record - save for next iteration
                             leftover_bytes = data[offset:]
                             break

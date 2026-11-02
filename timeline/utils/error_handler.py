@@ -306,7 +306,7 @@ class ErrorHandler(QObject):
                 color: #E2E8F0;
                 font-family: 'Consolas', 'Courier New', monospace;
                 font-size: 10pt;
-                border: 1px solid #334155;
+                border: 3px solid #334155;
                 border-radius: 4px;
                 padding: 8px;
             }

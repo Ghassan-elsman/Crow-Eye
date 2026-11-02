@@ -18,5 +18,45 @@
     "backend": "gemini",
     "model": "gemini-2.5-flash",
     "probe_version": 1
+  },
+  "anthropic::claude-sonnet-5-5": {
+    "support": "native",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "'claude-' is a documented function-calling family",
+    "probed_at": 1793562507.8966317,
+    "backend": "anthropic",
+    "model": "claude-sonnet-5-5",
+    "probe_version": 1
+  },
+  "claude_code::sonnet": {
+    "support": "native",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "Claude Code returns Eye's tool calls as structured JSON",
+    "probed_at": 1793598383.8174376,
+    "backend": "claude_code",
+    "model": "sonnet",
+    "probe_version": 1
+  },
+  "claude_code::haiku": {
+    "support": "native",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "Claude Code returns Eye's tool calls as structured JSON",
+    "probed_at": 1793614985.4814405,
+    "backend": "claude_code",
+    "model": "haiku",
+    "probe_version": 1
+  },
+  "claude_code::opus": {
+    "support": "native",
+    "confidence": "known",
+    "source": "family_registry",
+    "evidence": "Claude Code returns Eye's tool calls as structured JSON",
+    "probed_at": 1793648888.6484168,
+    "backend": "claude_code",
+    "model": "opus",
+    "probe_version": 1
   }
 }

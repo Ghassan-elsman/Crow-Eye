@@ -79,7 +79,8 @@ from Artifacts_Collectors import registry_transaction_log
 from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
                                             decode_binary_sid, SRUM_EXTRA_COLUMNS,
                                             dedupe_exact, _custody_sha256,
-                                            _custody_repair_note, insert_srum_rows)
+                                            _custody_repair_note, insert_srum_rows,
+                                            ensure_timeline_build_columns)
 from utils.dedupe_insert import Tally
 
 # Try to import Registry library for registry hive parsing
@@ -244,7 +245,9 @@ SCHEMA_APP_TIMELINE = """
         cycles_wob INTEGER,
         disk_raw INTEGER,
         network_bytes_raw INTEGER,
-        network_tail_raw INTEGER
+        network_tail_raw INTEGER,
+        pe_link_time TEXT,
+        pe_checksum TEXT
     )
 """
 
@@ -414,6 +417,8 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         cursor.execute(SCHEMA_ENERGY_USAGE)
         cursor.execute(SCHEMA_APP_TIMELINE)
         cursor.execute(SCHEMA_METADATA)
+        # A timeline table from before the build columns gets them in place.
+        ensure_timeline_build_columns(cursor)
 
         # Bring a pre-recovery srum_metadata up to the current column set.
         try:
@@ -645,6 +650,14 @@ class IDResolver:
                 logger.debug(f"Unresolved App ID: {app_id}")
 
             return (f"AppID_{app_id}", f"AppID_{app_id}", "")
+
+    def resolve_app_build(self, app_id: int) -> Tuple[str, str]:
+        """(pe_link_time, pe_checksum) the AppId names, ('', '') when none
+        (the live parser's resolve_app_build, on this map)."""
+        if app_id in self.app_id_map:
+            parts = parse_srum_app_id(self.app_id_map[app_id])
+            return (parts["pe_link_time"], parts["pe_checksum"])
+        return ("", "")
     
     def resolve_sid(self, user_id: int) -> Tuple[str, str]:
         """
@@ -880,7 +893,7 @@ class ESEDatabaseParser:
                         logger.info("Attempting soft recovery (esentutl /r SRU) with %d log file(s)...", logs_copied)
                         try:
                             rec = subprocess.run('esentutl /r SRU /l"{d}" /s"{d}" /d"{d}" /i'.format(d=temp_dir),
-                                                 shell=True, capture_output=True, text=True, timeout=180)
+                                                 capture_output=True, text=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                             if rec.returncode == 0:
                                 if ESEDB_LIBRARY == "dissect":
                                     self.ese_db = EseDB(open(temp_srudb, 'rb'))
@@ -908,7 +921,7 @@ class ESEDatabaseParser:
                         capture_output=True,
                         text=True,
                         timeout=120
-                    )
+                    , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     _custody_repair_note(temp_srudb, _before,
                                          result.returncode == 0
                                          or "Operation completed successfully" in (result.stdout or ""))
@@ -1844,12 +1857,16 @@ class ESEDatabaseParser:
                     user_sid, user_name = resolver.resolve_sid(user_id) if user_id else ("Unknown", "Unknown")
 
                     end_time = self._convert_int64_filetime(value_of(record, 'EndTime'))
+                    pe_link_time, pe_checksum = (resolver.resolve_app_build(app_id)
+                                                 if app_id else ("", ""))
 
                     parsed_record = {
                         'timestamp': format_forensic_timestamp(timestamp),
                         'app_name': app_name,
                         'app_path': app_path,
                         'hosted_services': hosted_services,
+                        'pe_link_time': pe_link_time,
+                        'pe_checksum': pe_checksum,
                         'user_sid': user_sid,
                         'user_name': user_name,
                         'end_time': format_forensic_timestamp(end_time) if end_time else None,
@@ -2157,7 +2174,8 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 logger.info(f"Inserting {len(timeline_records)} Application Timeline records into database...")
                 columns = ['timestamp', 'app_name', 'app_path', 'hosted_services',
                            'user_sid', 'user_name', 'end_time'] + \
-                          [column for column, _source in parser.APP_TIMELINE_FIELDS]
+                          [column for column, _source in parser.APP_TIMELINE_FIELDS] + \
+                          ['pe_link_time', 'pe_checksum']
                 statement = "INSERT INTO srum_app_timeline (%s) VALUES (%s)" % (
                     ", ".join(columns), ", ".join("?" * len(columns)))
                 rows = [tuple(record[c] for c in columns) for record in timeline_records]

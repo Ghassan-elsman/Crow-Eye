@@ -8,6 +8,7 @@ driven through a 2-narrative plan — asserting the seeded Narrative Map nodes f
 """
 
 import json
+import os
 import logging
 import shutil
 import tempfile
@@ -110,6 +111,26 @@ class TestResolveByEvidence(unittest.TestCase):
 
     def test_not_proven_when_empty_results(self):
         v, _ = self.qp._resolve_by_evidence(self.step, [])
+        self.assertEqual(v, "NOT-PROVEN")
+
+    def test_a_failed_query_inside_a_successful_call_proves_nothing(self):
+        # _execute_tool reports success whenever the handler did not raise; the
+        # handler's own success:False + error used to read as non-empty data.
+        results = [{"tool_name": "query_database", "success": True,
+                    "result": {"success": False, "error": "no such column: run_key"}}]
+        v, _ = self.qp._resolve_by_evidence(self.step, results)
+        self.assertEqual(v, "NOT-PROVEN")
+
+    def test_an_empty_result_proves_nothing(self):
+        results = [{"tool_name": "query_database", "success": True,
+                    "result": {"success": True, "data": [], "row_count": 0}}]
+        v, _ = self.qp._resolve_by_evidence(self.step, results)
+        self.assertEqual(v, "NOT-PROVEN")
+
+    def test_unrelated_rows_prove_nothing(self):
+        results = [{"tool_name": "query_database", "success": True,
+                    "result": {"success": True, "data": [{"name": "chrome.exe", "count": 4}]}}]
+        v, _ = self.qp._resolve_by_evidence(self.step, results)
         self.assertEqual(v, "NOT-PROVEN")
 
 
@@ -318,6 +339,73 @@ class TestHierarchyEndToEnd(unittest.TestCase):
         self.assertFalse(any(n.get("state") == "open" for n in g["narratives"]),
                          "a sub-narrative/narrative was left open after the run")
 
+    @patch("time.sleep", return_value=None)
+    def test_answered_skips_the_moot_steps(self, _s):
+        # 2026-11-01: "which USB storage devices were connected?" was planned into 21
+        # steps; the case holds none, and every per-device step was worked anyway for
+        # ~18 minutes. ANSWERED ends the plan once the question is settled.
+        plan_json = json.dumps({
+            "verdict": "USB storage devices were connected",
+            "narratives": [
+                {"claim": "storage devices are recorded",
+                 "sub_narratives": [{"claim": "USBSTOR has entries", "evidence_needed": "USBSTOR",
+                                     "tools": ["query_database"]},
+                                    {"claim": "first connection time per device", "evidence_needed": "times",
+                                     "tools": ["query_database"]}]},
+                {"claim": "event logs corroborate",
+                 "sub_narratives": [{"claim": "device events logged", "evidence_needed": "events",
+                                     "tools": ["query_database"]}]},
+            ],
+        })
+        seen = []
+
+        def gen(*a, **k):
+            message = k.get("user_message", "") or (a[1] if len(a) > 1 else "")
+            if "sub_narratives" in message:
+                return {"content": plan_json, "tool_calls": []}
+            step = "CURRENT SUB-NARRATIVE" in message      # a per-step prompt, not the synthesis
+            if step and "USBSTOR has entries" in message:
+                seen.append("step1")
+                return {"content": "SUBVERDICT: ANSWERED || USBStorageDevices holds 0 rows: no USB "
+                                   "storage device is recorded, so per-device times are moot"}
+            if step and ("first connection time" in message or "device events logged" in message):
+                seen.append("moot step asked")
+                return {"content": "SUBVERDICT: NOT-PROVEN || x"}
+            return {"content": "No USB storage device is recorded in this case."}
+
+        self.cm.model_router.generate.side_effect = gen
+        self.processor.process_query("which USB storage devices were connected?")
+
+        self.assertEqual(seen, ["step1"], "a step after ANSWERED was still sent to the model")
+        g = self.nms.load_graph()
+        narrs = {(n.get("meta") or {}).get("created_from"): n for n in g["narratives"]}
+        self.assertFalse(any(n.get("state") == "open" for n in g["narratives"]))
+        moot = narrs["plan:nar:1:sub:0"]
+        self.assertEqual(moot["state"], "negative")
+        # The card's own text stays the plan's; why it was not worked is on the audit chain.
+        audit = open(os.path.join(self.dir, "EYE_Logs", "narrative_map_audit.jsonl"), encoding="utf-8").read()
+        self.assertIn("Not checked: the question was already answered", audit)
+
+    def test_answered_is_parsed(self):
+        v, r = QueryProcessor._parse_subverdict("Done.\nSUBVERDICT: ANSWERED || no storage devices")
+        self.assertEqual((v, r), ("ANSWERED", "no storage devices"))
+
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNextStepGuidance(unittest.TestCase):
+    """The six-database sweep is asked for only when the question is about whether
+    something exists / was installed / was run (it used to follow every round)."""
+
+    def test_existence_questions_get_the_sweep(self):
+        for q in ("Was 7-Zip ever installed or run on this machine?", "Is mimikatz present on disk?"):
+            self.assertIn("Amcache", QueryProcessor._next_step_guidance(q), q)
+
+    def test_direct_questions_do_not(self):
+        for q in ("What is the computer name?", "Which USB devices were connected?",
+                  "Was any event log cleared?"):
+            g = QueryProcessor._next_step_guidance(q)
+            self.assertNotIn("Amcache", g, q)
+            self.assertIn("answer", g)

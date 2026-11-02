@@ -211,12 +211,12 @@ class TimePeriodFilterWidget(QtWidgets.QWidget):
         self.end_datetime.dateTimeChanged.connect(self._on_datetime_changed)
     
     def _apply_styles(self):
-        """The site look comes from the window it sits in (apply_site_theme on
+        """The site look comes from the window it sits in (apply_theme on
         DatabaseSearchDialog clears per-widget sheets). Standalone, it themes
         itself."""
         if self.window() is self:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
 
     def _on_filter_toggled(self, checked: bool):
         """Handle filter enable/disable toggle."""
@@ -692,7 +692,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self._busy_banner.setWordWrap(True)
         self._busy_banner.setStyleSheet(
             "QLabel { background: rgba(245,158,11,0.12); color: #FBBF24;"
-            " border: 1px solid #F59E0B; border-radius: 6px; padding: 8px 10px;"
+            " border: 3px solid #F59E0B; border-radius: 6px; padding: 8px 10px;"
             " font-weight: 600; }")
         self._busy_banner.setProperty("keepStyle", True)
         self._busy_banner.hide()
@@ -944,7 +944,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         container.setStyleSheet(f"""
             QWidget {{
                 background-color: {Colors.BG_PANELS};
-                border: 2px solid {Colors.ACCENT_BLUE};
+                border: 3px solid {Colors.ACCENT_BLUE};
                 border-radius: 4px;
             }}
         """)
@@ -1280,10 +1280,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
     
     def _apply_styles(self):
         """The site's look - the loading dialog's fonts, cards, pill buttons and
-        quiet tables - as ONE sheet on the window (ui/site_theme.py). The old
+        quiet tables - as ONE sheet on the window (ui/app_theme.py). The old
         per-widget sheets (blue headers, emerald selection, neon titles) are
         cleared; the busy banner keeps its amber."""
-        from ui.site_theme import apply_site_theme, set_role, set_variant
+        from ui.app_theme import apply_theme, set_role, set_variant
         set_variant(self.search_button, "primary")
         set_variant(self.cancel_button, "danger")
         for b in (self.export_button, self.clear_button, self.close_button,
@@ -1297,7 +1297,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.search_button.setMinimumHeight(34)
         self.cancel_button.setMinimumHeight(34)
         set_role(self.results_info_label, "mono")
-        apply_site_theme(self)
+        apply_theme(self)
 
     # ========================================================================
     # Database Tree Population (Task 4.2)
@@ -1327,6 +1327,32 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         return [(c, by_category[c]) for c in ordered]
 
     def _load_available_databases(self):
+        """Discover the case's databases on a worker, then fill the tree.
+
+        Discovery opens every database, counts every table and samples its
+        timestamps - seconds to tens of seconds on a large case, and it ran in this
+        dialog's constructor, so Database Search took that long to open with
+        Crow-Eye frozen (2026-11-01). The window now opens at once and says so."""
+        if not self.search_engine:
+            self.logger.warning("Cannot load databases - search engine not initialized")
+            return
+        from data.database_discovery_manager import DatabaseDiscoveryManager
+        from ui.app_acquisition_dialog import _Worker
+        case_directory = self.search_engine.case_directory
+
+        def discover(report):
+            manager = DatabaseDiscoveryManager(case_directory)
+            found = manager.discover_databases_with_metadata(verify_timestamps=True, sample_size=50)
+            return manager, found
+
+        self.results_info_label.setText("Discovering the case's databases...")
+        worker = _Worker(discover, self)
+        worker.finished_ok.connect(lambda r: self._populate_available_databases(*r))
+        worker.failed.connect(lambda m: self.results_info_label.setText("Database discovery failed: %s" % m))
+        self._discovery_worker = worker
+        worker.start()
+
+    def _populate_available_databases(self, discovery_manager, enhanced_databases):
         """
         Load and populate the database tree with discovered databases using enhanced metadata.
         Displays GUI tab names, load status indicators, and timestamp support badges.
@@ -1337,23 +1363,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             self.logger.warning("Cannot load databases - search engine not initialized")
             return
         
+        self._discovery_worker = None
+        self.results_info_label.setText("")
         try:
-            # Import DatabaseDiscoveryManager
-            from data.database_discovery_manager import DatabaseDiscoveryManager
-            
-            # Get case directory from search engine
-            case_directory = self.search_engine.case_directory
-            
-            # Create discovery manager
-            discovery_manager = DatabaseDiscoveryManager(case_directory)
-            
-            # Discover databases with enhanced metadata
-            self.logger.info("Discovering databases with enhanced metadata...")
-            enhanced_databases = discovery_manager.discover_databases_with_metadata(
-                verify_timestamps=True,
-                sample_size=50  # Smaller sample for faster discovery
-            )
-            
             self.logger.info(f"Discovered {len(enhanced_databases)} databases with metadata")
             
             # Check if any databases are available
@@ -3601,7 +3613,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             width: 38px;
             height: 38px;
             background: rgba(59, 130, 246, 0.25);
-            border: 2px solid rgba(59, 130, 246, 0.5);
+            border: 3px solid #234A8B;
             border-radius: 8px;
             display: flex;
             align-items: center;
@@ -3691,7 +3703,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         }}
         .kpi-card {{
             background: #f8fafc;
-            border: 1px solid #e2e8f0;
+            border: 3px solid #e2e8f0;
             border-radius: 6px;
             padding: 16px 20px;
             text-align: center;
@@ -3724,7 +3736,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         .param {{
             padding: 10px 14px;
             background: #f8fafc;
-            border: 1px solid #e2e8f0;
+            border: 3px solid #e2e8f0;
             border-radius: 4px;
         }}
         .param .p-label {{
@@ -3751,7 +3763,7 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         }}
         .db-group {{
             margin-bottom: 24px;
-            border: 1px solid #e2e8f0;
+            border: 3px solid #e2e8f0;
             border-radius: 6px;
             overflow: hidden;
             page-break-inside: avoid;
@@ -4503,7 +4515,7 @@ class SavedSearchesDialog(QtWidgets.QDialog):
         
         # Title
         title_label = QtWidgets.QLabel("Saved Searches")
-        from ui.site_theme import set_role
+        from ui.app_theme import set_role
         set_role(title_label, "title")
         layout.addWidget(title_label)
         
@@ -4697,12 +4709,12 @@ class SavedSearchesDialog(QtWidgets.QDialog):
             )
     
     def _apply_styles(self):
-        """The site's look (ui/site_theme.py), as Database Search has."""
-        from ui.site_theme import apply_site_theme, set_variant
+        """The site's look (ui/app_theme.py), as Database Search has."""
+        from ui.app_theme import apply_theme, set_variant
         set_variant(self.load_button, "primary")
         set_variant(self.delete_button, "danger")
         set_variant(self.close_button, "ghost")
-        apply_site_theme(self)
+        apply_theme(self)
 
     def get_selected_search(self):
         """

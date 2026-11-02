@@ -66,10 +66,18 @@ def load_app_fonts():
     return families
 
 
+_family_seen = {}
+
+
 def _available(family):
-    from PyQt5.QtGui import QFontDatabase
-    load_app_fonts()
-    return family in QFontDatabase().families()
+    # QFontDatabase().families() lists every installed face (about 2 ms a call), and a window
+    # asks for its fonts dozens of times as it is built. The bundled fonts are registered once,
+    # before the first answer, so the answer cannot change afterwards.
+    if family not in _family_seen:
+        from PyQt5.QtGui import QFontDatabase
+        load_app_fonts()
+        _family_seen[family] = family in QFontDatabase().families()
+    return _family_seen[family]
 
 
 def ui_family():
@@ -80,3 +88,36 @@ def ui_family():
 def mono_family():
     """'JetBrains Mono' when it loaded, otherwise 'Consolas'."""
     return MONO_FAMILY if _available(MONO_FAMILY) else MONO_FALLBACK
+
+
+# Text rendering. Qt 5's default Windows font engine (GDI) hints every glyph to
+# whole pixels and rounds every advance, so a bundled face at the small sizes
+# the hints and table cells use (11-12 px Barlow Semi Condensed) came out with
+# words run together and letters bunched ("Applies semanticmappings at
+# identity-levelfor"). DirectWrite with vertical-only hinting keeps baselines
+# and horizontal strokes on the pixel grid but places letters at their real
+# widths, so spacing is even and the text no longer looks smudged.
+_DIRECTWRITE = "windows:fontengine=directwrite"
+
+
+def qt_platform_args(argv):
+    """argv for the QApplication, with the DirectWrite font engine on Windows.
+
+    Passed as a command-line option rather than through QT_QPA_PLATFORM, so it
+    does not leak into child processes, and left alone when a platform is
+    already chosen (QT_QPA_PLATFORM=offscreen in the tests, or -platform)."""
+    args = list(argv)
+    if (sys.platform == "win32" and not os.environ.get("QT_QPA_PLATFORM")
+            and "-platform" not in args):
+        args += ["-platform", _DIRECTWRITE]
+    return args
+
+
+def apply_text_rendering(app):
+    """Vertical-only hinting as the application default; every widget's font,
+    stylesheet fonts included, inherits it. Needs the DirectWrite engine
+    (qt_platform_args); GDI ignores the preference."""
+    from PyQt5.QtGui import QFont
+    font = app.font()
+    font.setHintingPreference(QFont.PreferVerticalHinting)
+    app.setFont(font)

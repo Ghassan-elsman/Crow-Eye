@@ -1,8 +1,8 @@
 """
-Message Box Helper for EYE AI Forensic Assistant.
+Message Box Helper for Eye AI Forensic Assistant.
 
 This module provides styled QMessageBox dialogs that are consistent with
-the dark theme used throughout the EYE interface.
+the dark theme used throughout the Eye interface.
 """
 
 from PyQt5.QtWidgets import QMessageBox, QApplication
@@ -23,7 +23,7 @@ QMessageBox QLabel {
 QMessageBox QPushButton {
     background-color: #1E293B;
     color: #E5E7EB;
-    border: 1px solid #334155;
+    border: 3px solid #334155;
     border-radius: 6px;
     padding: 8px 16px;
     font-size: 10pt;
@@ -33,7 +33,7 @@ QMessageBox QPushButton {
 }
 QMessageBox QPushButton:hover {
     background-color: #334155;
-    border: 1px solid #00FFFF;
+    border: 3px solid #00FFFF;
 }
 QMessageBox QPushButton:pressed {
     background-color: #475569;
@@ -41,7 +41,7 @@ QMessageBox QPushButton:pressed {
 QMessageBox QTextEdit {
     background-color: #1E293B;
     color: #E5E7EB;
-    border: 1px solid #334155;
+    border: 3px solid #334155;
     border-radius: 4px;
 }
 """

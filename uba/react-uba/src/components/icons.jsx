@@ -4,6 +4,8 @@
  * names are resolved through ALIASES; unknown names fall back to a file.
  */
 
+import { ACTIVITY_ICONS } from './activityIcons.js'
+
 const P = {
   login: <><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" /><polyline points="10 17 15 12 10 7" /><line x1="15" y1="12" x2="3" y2="12" /></>,
   logout: <><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" y1="12" x2="9" y2="12" /></>,
@@ -73,6 +75,19 @@ export function Icon({ name, size = 18, color = 'currentColor', strokeWidth = 2,
       strokeLinejoin="round" style={style} aria-hidden="true">
       {P[key]}
     </svg>
+  )
+}
+
+// Full-colour Windows-look drawing for a behaviour activity. The colours are
+// the drawing's own, so no tint is applied; who acted is shown by the card's
+// dot and actor pill. An analyst-created rule shows the user_rule drawing.
+export function ActivityIcon({ activity, userRule = false, size = 20, style }) {
+  const markup = ACTIVITY_ICONS[userRule ? 'user_rule' : activity]
+    || ACTIVITY_ICONS.file_opened
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      style={style} aria-hidden="true"
+      dangerouslySetInnerHTML={{ __html: markup }} />
   )
 }
 

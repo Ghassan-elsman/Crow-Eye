@@ -93,7 +93,7 @@ const InputBar: React.FC<InputBarProps> = ({
             onKeyDown={handleKeyDown}
             placeholder={switchingTo
               ? `Queue a message for ${switchingTo}… (will send when sync completes)`
-              : 'Ask EYE about forensic artifacts... (Shift+Enter for new line)'}
+              : 'Ask Eye about forensic artifacts... (Shift+Enter for new line)'}
             disabled={disabled}
             rows={1}
             aria-label="Message input"

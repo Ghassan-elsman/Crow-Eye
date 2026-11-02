@@ -34,7 +34,7 @@ from typing import Dict, List, Any, Optional
 import logging
 import json
 
-from eye.backends.base import LLMBackend
+from eye.backends.base import LLMBackend, _get, _num
 
 
 class GeminiBackend(LLMBackend):
@@ -295,8 +295,14 @@ class GeminiBackend(LLMBackend):
                     content += "\n\n[⚠ Output truncated at the model's max output tokens — ask for the remainder or narrow the request.]"
             except Exception:
                 pass
+            _m = getattr(resp, "usage_metadata", None)
+            _cached = _num(_m, "cached_content_token_count") or 0
+            usage = self.record_usage(max(0, (_num(_m, "prompt_token_count") or 0) - _cached),
+                                      (_num(_m, "candidates_token_count") or 0)
+                                      + (_num(_m, "thoughts_token_count") or 0),
+                                      cache_read=_cached, model=self.model_name)
             return {"content": content, "tool_calls": tool_calls,
-                    "tools_unsupported": tools_unsupported}
+                    "tools_unsupported": tools_unsupported, "usage": usage}
         except Exception as e:
             self.logger.error(f"Cloud (Gemini) error: {e}")
             raise

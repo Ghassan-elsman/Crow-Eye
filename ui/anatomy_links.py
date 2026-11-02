@@ -96,6 +96,10 @@ ANATOMY_LINKS = {
     "MFT_data_attributes_table": (
         "mft_anatomy", "data-attributes",
         "How $DATA is stored, resident and non-resident"),
+    "MFT_integrity_findings_table": (
+        "mft_anatomy", "record",
+        "The FILE record header the integrity checks read: LSN, update "
+        "sequence, flags and sizes"),
 
     # --- AmCache: built at runtime from the hive's own schema ---------------
     "Amcache_InventoryApplication_table": (

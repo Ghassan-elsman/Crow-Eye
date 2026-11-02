@@ -32,7 +32,7 @@ Fires when expected evidence is present but required-absent evidence is missing.
 ```json
 {
   "rule_id": "exec_no_prefetch", "name": "Execution With No Prefetch Trace",
-  "semantic_value": "Prefetch Trace Suppressed", "rule_type": "absence",
+  "semantic_value": "Prefetch Trace Missing", "rule_type": "absence",
   "severity": "high", "technique_id": ["T1070.004", "T1562.001"],
   "absence": {
     "expect_present": [{ "feather_id": "amcache", "field_name": "executable_name", "operator": "wildcard", "value": "*" }],

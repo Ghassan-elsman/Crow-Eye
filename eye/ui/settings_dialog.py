@@ -1,5 +1,5 @@
 """
-Context Window Settings Dialog for EYE AI Forensic Assistant.
+Context Window Settings Dialog for Eye AI Forensic Assistant.
 
 This module provides a settings dialog for configuring context window management
 and token budgets. The dialog uses tabs to organize different configuration sections
@@ -117,9 +117,9 @@ class ContextWindowSettingsDialog(QDialog):
         main_layout.addLayout(button_layout)
     
     def _apply_styling(self):
-        """The site's look (ui/site_theme.py): the loading dialog's fonts,
+        """The site's look (ui/app_theme.py): the loading dialog's fonts,
         cards, pill tabs and buttons - one sheet for the whole dialog."""
-        from ui.site_theme import apply_site_theme, set_role, set_variant, scrollable_tabs
+        from ui.app_theme import apply_theme, set_role, set_variant, scrollable_tabs
         # A page taller than the window scrolls (its rows used to be squeezed
         # until the spin boxes clipped their own numbers).
         scrollable_tabs(self.tabs)
@@ -128,7 +128,7 @@ class ContextWindowSettingsDialog(QDialog):
         set_variant(self.reset_button, "ghost")
         for w in (self.save_button, self.cancel_button, self.reset_button):
             w.setFixedHeight(36)
-        apply_site_theme(self)
+        apply_theme(self)
         set_role(self._title_label, "title")
 
     def _create_backend_tab(self):

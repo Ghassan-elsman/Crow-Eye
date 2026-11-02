@@ -793,6 +793,12 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `accessed_time` | TIMESTAMP |
 | `mft_modified_time` | TIMESTAMP |
 | `file_attributes` | INTEGER |
+| `lsn` | INTEGER |
+| `fixup_ok` | INTEGER |
+
+`lsn` is the record's $LogFile sequence number (header 0x08) as of the parse that last stored the
+row; `fixup_ok` is 1 when the update-sequence check passed (0: a torn read, or a record written
+without its update sequence). A delta re-parse leaves an unchanged record's row as it was.
 
 
 ### Table: `mft_standard_info`
@@ -814,6 +820,14 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `security_id` | INTEGER |
 | `quota_charged` | INTEGER |
 | `usn` | INTEGER |
+| `created_filetime` | INTEGER |
+| `modified_filetime` | INTEGER |
+| `accessed_filetime` | INTEGER |
+| `mft_modified_filetime` | INTEGER |
+
+The `*_filetime` columns are the raw FILETIME values (100 ns ticks since 1601, UTC); the TIMESTAMP
+columns keep whole seconds. Compare ticks to judge a timestomp. NULL on rows from cases parsed
+before these columns existed.
 
 
 ### Table: `mft_file_names`
@@ -833,6 +847,10 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `allocated_size` | INTEGER |
 | `real_size` | INTEGER |
 | `flags` | INTEGER |
+| `created_filetime` | INTEGER |
+| `modified_filetime` | INTEGER |
+| `accessed_filetime` | INTEGER |
+| `mft_modified_filetime` | INTEGER |
 
 
 ### Table: `mft_data_attributes`
@@ -846,6 +864,44 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `resident` | INTEGER |
 | `size` | INTEGER |
 | `data_type` | TEXT |
+
+
+### Table: `ntfs_integrity_findings`
+
+What the NTFS integrity checks found while the MFT was parsed. One row per finding;
+`finding_id` (PRIMARY KEY) is rule.check|volume|record|sequence|LSN, so a re-parse that finds the
+same thing stores nothing new. `evidence` is JSON with the values compared (FILETIME ticks with
+their UTC text, LSNs, sizes). `manifest_id` names the integrity manifest written for that volume
+and parse in the case's custody ledger (logs/custody_ledger.jsonl, event "ntfs integrity manifest").
+
+| Column | Type |
+|---|---|
+| `finding_id` | TEXT |
+| `volume_letter` | TEXT |
+| `volume_id` | TEXT |
+| `rule` | TEXT |
+| `check_name` | TEXT |
+| `check_group` | TEXT |
+| `severity` | TEXT |
+| `record_number` | INTEGER |
+| `sequence_number` | INTEGER |
+| `lsn` | INTEGER |
+| `file_name` | TEXT |
+| `detail` | TEXT |
+| `evidence` | TEXT |
+| `manifest_id` | TEXT |
+| `parse_mode` | TEXT |
+| `parsed_at` | TEXT |
+
+`rule`: D1 change between parses (record_deleted, record_reused, record_cleared - severity info),
+D3 record LSN above the highest $LogFile LSN, D4 USN journal state, D5 $LogFile restart pages,
+D7 $STANDARD_INFORMATION earlier than $FILE_NAME (si_created_before_fn_created; si_mft_changed_before_fn_created =
+created AND entry-changed both earlier), D9 a wiped or emptied in-use record, D10 structure (BAAD,
+fixup mismatch, bytes in use, link count), D29 the $MFT bitmap against the in-use flag. A
+`check_name` ending in `_volume` is one row for a volume-wide pattern; `_more` counts findings
+past the per-check listing cap. `severity` is high / medium / low / info. `parse_mode` is full or
+delta. An empty table is not proof of a clean volume when a check was turned off: the ledger has
+an "integrity check disabled" line for each.
 
 
 ## Database: `mft_usn_correlated_analysis.db`
@@ -924,6 +980,92 @@ journal's window is not recorded.
 | `usn_new` | INTEGER |
 | `parsed_at` | TEXT |
 
+
+## Database: `partition_analysis.db`
+
+The disks and partitions of the machine at collection time, live only (an image has no partition
+analysis of its own). Each run replaces the previous rows: this is a snapshot, not a history.
+Sizes are bytes.
+
+### Table: `disks`
+
+| Column | Type |
+|---|---|
+| `disk_index` | INTEGER |
+| `size` | INTEGER |
+| `model` | TEXT |
+| `interface_type` | TEXT |
+| `partition_style` | TEXT |
+| `boot_mode` | TEXT |
+| `disk_signature` | TEXT |
+| `disk_guid` | TEXT |
+| `serial_number` | TEXT |
+| `firmware_type` | TEXT |
+| `is_removable` | INTEGER |
+| `is_usb` | INTEGER |
+| `media_type` | TEXT |
+| `is_bootable` | INTEGER |
+| `source` | TEXT |
+
+### Table: `partitions`
+
+| Column | Type |
+|---|---|
+| `disk_index` | INTEGER |
+| `partition_index` | INTEGER |
+| `device` | TEXT |
+| `mountpoint` | TEXT |
+| `fstype` | TEXT |
+| `total_size` | INTEGER |
+| `used_size` | INTEGER |
+| `free_size` | INTEGER |
+| `percent_used` | REAL |
+| `partition_type` | TEXT |
+| `volume_label` | TEXT |
+| `partition_guid` | TEXT |
+| `partition_offset` | INTEGER |
+| `volume_serial` | TEXT |
+| `is_boot`, `is_system`, `is_efi_system`, `is_hidden`, `is_active` | INTEGER |
+| `cluster_size` | INTEGER |
+| `mft_bytes` | INTEGER |
+| `usn_bytes` | INTEGER |
+| `vss_used` | INTEGER |
+| `vss_allocated` | INTEGER |
+| `vss_max` | INTEGER |
+| `vss_copies` | INTEGER |
+| `vss_diff_volume` | TEXT |
+| `vss_oldest` | TEXT |
+| `vss_newest` | TEXT |
+| `layout_note` | TEXT |
+
+The layout columns describe a mounted NTFS volume and are 0 / empty for every other partition.
+`mft_bytes` is the $MFT's size on disk; `usn_bytes` is what the USN journal (`$UsnJrnl:$J`)
+occupies on disk now, not its configured maximum. `vss_used` / `vss_allocated` / `vss_max` are
+Windows' shadow-copy storage for the volume (Win32_ShadowStorage), `vss_copies` how many shadow
+copies existed at collection, `vss_oldest` / `vss_newest` their creation times in UTC, and
+`vss_diff_volume` the volume holding the storage when it is not the volume itself.
+`layout_note` says why a value is missing (not elevated, no journal).
+
+A volume with `vss_copies = 0` and `vss_allocated = 0` had no shadow copies **at that moment**;
+it does not show that copies were deleted. Compare two collections, and the process evidence
+for `vssadmin.exe` / `wmic.exe`, before calling it anti-forensics (MITRE T1490).
+
+### Table: `volume_extents`
+
+| Column | Type |
+|---|---|
+| `disk_index` | INTEGER |
+| `partition_index` | INTEGER |
+| `mountpoint` | TEXT |
+| `kind` | TEXT |
+| `offset_bytes` | INTEGER |
+| `length_bytes` | INTEGER |
+
+Where each structure physically sits: `kind` is `mft`, `usn` or `vss` (shadow-copy store
+files in System Volume Information), `offset_bytes` counts from the start of the volume.
+Touching runs are joined, so the row count is not the file's fragment count; past 2048 runs per
+kind the closest are merged across their gaps, and `SUM(length_bytes)` then overstates the size.
+For sizes use `mft_bytes`, `usn_bytes` and `vss_allocated` on `partitions`.
 
 ## Database: `prefetch_data.db`
 
@@ -1653,6 +1795,14 @@ Local accounts, SAM merged with ProfileList. The table that maps a SID to a pers
 | `profile_loaded` | INTEGER |
 | `source` | TEXT |
 | `parsed_at` | TEXT |
+| `account_created` | TEXT |
+
+`account_created` is the last-write time of `SAM\Domains\Account\Users\Names\<username>` (UTC),
+the usual source for when a local account was created. A rename creates a new Names key, and an
+in-place Windows upgrade rewrites the built-in accounts' keys, so for those it is the rename or
+upgrade time. Empty (`''`, not NULL) when there is no SAM Names key for the account: `source`
+`'ProfileList'` or `'Artifact'`, or a SAM account without one; also empty for a Names key whose
+last-write time is zero.
 
 ### Table: `ScheduledTasks`
 
@@ -1945,6 +2095,17 @@ own last-write is in `key_last_write`.
 | `profile_image_path` | TEXT |
 | `profile_loaded` | INTEGER |
 | `parsed_at` | TEXT |
+| `profile_load_time` | TEXT |
+| `profile_unload_time` | TEXT |
+
+`profile_load_time` / `profile_unload_time` are ProfileList's `LocalProfileLoadTimeHigh/Low` and
+`LocalProfileUnloadTimeHigh/Low`, each pair one FILETIME (UTC): when the User Profile Service last
+loaded the profile's hive - an interactive logon, but also RunAs, a scheduled task set to run
+whether the user is logged on or not, or a service running as the user, so it is not by itself
+proof of an interactive logon - and last unloaded it (logoff, shutdown, the end of that use). A
+load later than the unload means the profile was loaded when the hive was captured, or was not
+cleanly unloaded (a crash or power loss). Empty (`''`) for service profiles, which carry neither
+value. Both follow the evidence: a re-parse of newer hives updates them.
 
 
 ### Table: `RecentDocs`
@@ -2870,6 +3031,80 @@ be tied to it.
 | `parsed_at` | TEXT |
 
 
+## Database: `shadow_copies.db`
+
+What changed between a volume's shadow copies and now, written by the Shadow Copies window's
+**Compare** (Artifacts_Collectors/shadow_compare.py). Each run reads the $MFT of every chosen state -
+the copies, oldest first, then the volume as it was when the run read it - and compares consecutive
+states record by record. A file is the same file in two states when its MFT sequence number is the
+same. States are numbered from 0 in `shadow_compare_runs.states` order; interval `k` is state `k` ->
+state `k + 1`. Paths are below the volume root, without the drive letter. Times are UTC.
+
+### Table: `shadow_compare_runs`
+
+| Column | Type |
+|---|---|
+| `run_id` | TEXT |
+| `volume` | TEXT |
+| `scope` | TEXT |
+| `states` | TEXT |
+| `finished_utc` | TEXT |
+| `status` | TEXT |
+| `file_rows` | INTEGER |
+
+`states` is JSON: one object per state with its `label` (`#232`, `hidden 19:48`, `now`) and how it
+was read. `scope` is the folder compared, empty for the whole volume. `status` `cancelled` means the
+counts are partial.
+
+### Table: `shadow_compare_folders`
+
+| Column | Type |
+|---|---|
+| `run_id` | TEXT |
+| `path` | TEXT |
+| `depth` | INTEGER |
+| `state` | INTEGER |
+| `size_bytes` | INTEGER |
+| `files` | INTEGER |
+
+A folder's size in one state: the sum of the logical sizes of every file below it, and how many.
+Hard links count once per name, so a folder's total can exceed the space it occupies. `path` ''
+is the volume root.
+
+### Table: `shadow_compare_folder_changes`
+
+| Column | Type |
+|---|---|
+| `run_id` | TEXT |
+| `path` | TEXT |
+| `interval` | INTEGER |
+| `added` | INTEGER |
+| `deleted` | INTEGER |
+| `changed` | INTEGER |
+
+Counted over everything below the folder. A file deleted and added again under the same name in
+one interval (most programs save that way) counts once, as changed.
+
+### Table: `shadow_compare_files`
+
+| Column | Type |
+|---|---|
+| `run_id` | TEXT |
+| `interval` | INTEGER |
+| `path` | TEXT |
+| `change` | TEXT |
+| `is_dir` | INTEGER |
+| `size_before` | INTEGER |
+| `size_after` | INTEGER |
+| `modified_before` | TEXT |
+| `modified_after` | TEXT |
+| `record` | INTEGER |
+
+`change` is `added`, `deleted`, `changed` (same file, new size or modified time) or `replaced`
+(deleted and re-created under the same name). At most 200,000 rows per run; the folder counts are
+never capped. `modified_*` is the $STANDARD_INFORMATION modified time, which a user-mode program can
+set: compare it with the USN journal before relying on it.
+
 ## Database: `shimcache.db`
 
 ### Table: `shimcache_entries`
@@ -3038,7 +3273,8 @@ Application timeline provider. Records how an application was used, not only
 that it ran: seconds in focus, seconds of keyboard and mouse input. This is the
 only SRUM table whose AppId uses the `!!name!time!hash![services]` form, so it
 is the only one that carries `hosted_services` - the service list that tells one
-svchost.exe record from another.
+svchost.exe record from another - and the build that ran (`pe_link_time`,
+`pe_checksum`), which tells two programs of one name apart.
 
 The interaction columns are sparse by nature. A service accrues CPU cycles for
 hours and never sees a keystroke, so a NULL there means no such activity in that
@@ -3051,6 +3287,8 @@ window, not a failed decode.
 | `app_name` | TEXT |
 | `app_path` | TEXT |
 | `hosted_services` | TEXT |
+| `pe_link_time` | TEXT - the PE link time (TimeDateStamp, UTC) the AppId names; a reproducible-build hash on Windows binaries, so a year like 2054 is normal |
+| `pe_checksum` | TEXT - the PE header CheckSum the AppId names, `0x%08X`; `0x00000000` = none written |
 | `user_sid` | TEXT |
 | `user_name` | TEXT |
 | `end_time` | TEXT |

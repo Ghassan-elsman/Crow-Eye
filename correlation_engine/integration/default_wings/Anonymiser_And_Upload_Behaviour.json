@@ -1,0 +1,52 @@
+{
+  "config_name": "anonymiser_and_upload_behaviour",
+  "wing_name": "Anonymiser Used Around a File-Sharing Upload (Behaviour)",
+  "wing_id": "default_behaviour_anonymiser_upload_001",
+  "wing_category": "behaviour",
+  "description": "Within one hour, one person visits an anonymising service (a web proxy, Tor gateway or VPN site in UBA's site categories) and submits a form to a file-sharing site, in either order. UBA rules: browser_visit_anonymiser and browser_upload_inferred. Both come from the person's own browser history, so the person is the profile owner.",
+  "proves": "A person used an anonymising service around an upload to a file-sharing site",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Anonymising service visited",
+      "rule_id": "browser_visit_anonymiser"
+    },
+    {
+      "label": "Form submitted to a file-sharing site",
+      "rule_id": "browser_upload_inferred"
+    }
+  ],
+  "ordered": false,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1090.003",
+      "T1567.002"
+    ],
+    "tactic": [
+      "command_and_control",
+      "exfiltration"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "exfiltration",
+    "anonymiser",
+    "browser",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "data_theft"
+  ]
+}

@@ -852,6 +852,20 @@
       }
     },
     {
+      "name": "recall_result",
+      "description": "Read in full an earlier tool result of this conversation that was shown to you as a one-line digest (older results are compacted to save context). Pass the [id] from the digest line. Use it when you need rows the digest does not show; it costs no database query.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "result_id": {
+            "type": "string",
+            "description": "The id in square brackets on the digest line, e.g. r1a2b3c4d."
+          }
+        },
+        "required": ["result_id"]
+      }
+    },
+    {
       "name": "read_imported_evidence",
       "description": "List or read VERBATIM-imported document evidence — third-party forensic reports, Gmail/e-mail exports (.eml/.mbox), browser-forensics tool output, PDFs/HTML/text — stored unconverted under Imported_Evidence/Documents/ with chain-of-custody SHA-256 hashes. Call with no arguments to list the available documents; call with a name to read its extracted text. Large documents are paged — follow the offset hint to continue reading.",
       "parameters": {
@@ -875,12 +889,42 @@
         "type": "object",
         "required": [
           "wing_name",
+          "wing_category",
           "proves",
-          "feathers",
-          "reason",
+                    "reason",
           "related_evidence"
         ],
         "properties": {
+          "steps": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Behaviour Wings only (required for them). Each step is one behaviour: {\"rule_id\": UBA rule id (built-in or analyst-created) OR \"activity\": UBA activity, optional \"conditions\": [{field_name, operator, value}] over behaviour-event fields (rule_id, activity, severity, actor_name, app_name, hour_local, aggregate_count, details.<key> ...), optional \"min_count\", optional \"actor\": person|machine|any}."
+          },
+          "ordered": {
+            "type": "boolean",
+            "description": "Behaviour Wings only: true = the steps must happen in the listed order; false = in any order."
+          },
+          "within_minutes": {
+            "type": "number",
+            "description": "Behaviour Wings only: the time range the whole set of steps must fit in, in minutes."
+          },
+          "max_gap_minutes": {
+            "type": "number",
+            "description": "Behaviour Wings only, ordered: the longest gap allowed between consecutive steps."
+          },
+          "subject": {
+            "type": "object",
+            "description": "Behaviour Wings only: whose behaviour is checked - {\"scope\": everyone|accounts|sids|groups, \"accounts\": [], \"sids\": [], \"groups\": [], \"include_service_accounts\": false}."
+          },
+          "alert": {
+            "type": "object",
+            "description": "Behaviour Wings only: {\"severity\": info|low|medium|high|critical, \"technique_id\": [], \"tactic\": []}."
+          },
+          "wing_category": {
+            "type": "string",
+            "enum": ["time", "identity", "behaviour"],
+            "description": "REQUIRED. The Wing's category, which decides the one engine that runs it: 'time' (Time-Window engine; no absence/sequence/threshold, nested-group, negated or cross-feather rules), 'identity' (Identity engine; any rule type), or 'behaviour' (Behavioural engine over UBA behaviour events; names no feathers)."
+          },
           "wing_name": {
             "type": "string",
             "description": "Human-readable wing name."
@@ -925,7 +969,7 @@
                 }
               }
             },
-            "description": "Feathers this wing correlates. At least one entry required."
+            "description": "Feathers this wing correlates. Required (at least one) for Time and Identity Wings; a Behaviour Wing names none."
           },
           "time_window_minutes": {
             "type": "integer",
@@ -988,6 +1032,36 @@
           "reason"
         ],
         "properties": {
+          "steps": {
+            "type": "array",
+            "items": {"type": "object"},
+            "description": "Behaviour Wings only (required for them). Each step is one behaviour: {\"rule_id\": UBA rule id (built-in or analyst-created) OR \"activity\": UBA activity, optional \"conditions\": [{field_name, operator, value}] over behaviour-event fields (rule_id, activity, severity, actor_name, app_name, hour_local, aggregate_count, details.<key> ...), optional \"min_count\", optional \"actor\": person|machine|any}."
+          },
+          "ordered": {
+            "type": "boolean",
+            "description": "Behaviour Wings only: true = the steps must happen in the listed order; false = in any order."
+          },
+          "within_minutes": {
+            "type": "number",
+            "description": "Behaviour Wings only: the time range the whole set of steps must fit in, in minutes."
+          },
+          "max_gap_minutes": {
+            "type": "number",
+            "description": "Behaviour Wings only, ordered: the longest gap allowed between consecutive steps."
+          },
+          "subject": {
+            "type": "object",
+            "description": "Behaviour Wings only: whose behaviour is checked - {\"scope\": everyone|accounts|sids|groups, \"accounts\": [], \"sids\": [], \"groups\": [], \"include_service_accounts\": false}."
+          },
+          "alert": {
+            "type": "object",
+            "description": "Behaviour Wings only: {\"severity\": info|low|medium|high|critical, \"technique_id\": [], \"tactic\": []}."
+          },
+          "wing_category": {
+            "type": "string",
+            "enum": ["time", "identity", "behaviour"],
+            "description": "Change the Wing's category: 'time', 'identity' or 'behaviour'. Required when the Wing has none yet. A Time Wing cannot carry advanced rules."
+          },
           "wing_id": {
             "type": "string",
             "description": "ID of the EYE-authored wing to edit."

@@ -84,7 +84,7 @@
 .history-message {
   padding: 16px;
   border-radius: 8px;
-  border: 1px solid #e5e7eb;
+  border: 3px solid #e5e7eb;
   background: white;
   transition: all 0.2s ease;
 }
@@ -161,19 +161,19 @@
 .history-badge--pinned {
   background: #fef3c7;
   color: #92400e;
-  border: 1px solid #fbbf24;
+  border: 3px solid #fbbf24;
 }
 
 .history-badge--evidence {
   background: #fee2e2;
   color: #991b1b;
-  border: 1px solid #fca5a5;
+  border: 3px solid #fca5a5;
 }
 
 .history-badge--summary {
   background: #dbeafe;
   color: #1e40af;
-  border: 1px solid #93c5fd;
+  border: 3px solid #93c5fd;
 }
 
 .history-message-content {
@@ -217,7 +217,7 @@
   margin-top: 12px;
   padding: 8px 12px;
   background: #fef2f2;
-  border: 1px solid #fecaca;
+  border: 3px solid #fecaca;
   border-radius: 6px;
   font-size: 12px;
   color: #991b1b;

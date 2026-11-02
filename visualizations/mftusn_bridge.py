@@ -210,6 +210,19 @@ def parse_file_id(value):
         return None, None, None
 
 
+def _ntfs_integrity():
+    """The MFT folder's ntfs_integrity module (the shared timestomp rules).
+    'MFT and USN journal' is not a package name, so it goes on sys.path."""
+    try:
+        import ntfs_integrity
+    except ImportError:
+        import os as _os, sys as _sys
+        _sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                                          "Artifacts_Collectors", "MFT and USN journal"))
+        import ntfs_integrity
+    return ntfs_integrity
+
+
 try:
     from visualizations.async_bridge import AsyncBridge
 except ImportError:                                  # run from its own folder
@@ -937,8 +950,11 @@ class MftUsnBridge(AsyncBridge):
         # second on both sides, so it could never fire; a rule that cannot
         # fire reads as "checked, nothing found". The old "SI modified before
         # created" rule is not used either - it is normal for copied files.
+        # The comparison is the shared rule's text (ntfs_integrity), the same
+        # as the correlator's partial index - which SQLite uses only when the
+        # query repeats it.
         _TS_WHERE = ("si_creation_time >= '2008-01-01' AND fn_creation_time >= '2008-01-01' "
-                     "AND si_creation_time > fn_creation_time")
+                     "AND " + _ntfs_integrity().timestomp_sql('si_created_after_fn_created'))
         # The candidates are counted and ranked from the correlator's partial
         # index (idx_corr_timestomp: only these rows), and only the _CAP shown
         # are read in full. Reading every candidate's row was 3.5 s for 22,891
@@ -1118,11 +1134,12 @@ class MftUsnBridge(AsyncBridge):
         # modal lists the first FILE_EVENTS and says how many there are.
         events = [{"t": x["t"], "cats": sorted(reason_cats(x["r"])), "flags": reason_flags(x["r"]),
                    "reason": x["r"], "name": x["un"] or x["fn"]} for x in timed[:FILE_EVENTS]]
-        # Timestomping flag on the head record (tight / low-false-positive).
-        def _real(v): return v and v >= "2008-01-01"
-        flags = []
-        if _real(head["sic"]) and _real(head["fnc"]) and head["sic"] > head["fnc"]:
-            flags.append("Standard-Info creation is newer than File-Name creation (possible forward-dating)")
+        # Timestomping flags on the head record: every SI-vs-FN comparison of
+        # the shared rule set (ntfs_integrity.TIMESTOMP_RULES) - forward-dating,
+        # and the parse's D7 back-dating checks. Whole seconds here; the
+        # parse judges D7 in ticks and writes ntfs_integrity_findings.
+        flags = [r.text for r in _ntfs_integrity().timestomp_hits(
+            head["sic"], head["sie"], head["fnc"], floor="2008-01-01")]
         renames = []
         if self._has_renames() and head["seq"] is not None:
             for r in self._query(CORR_DB,

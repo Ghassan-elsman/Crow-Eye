@@ -713,11 +713,8 @@ class CorrelationProgressReporter:
             except Exception as e:
                 logger.warning(f"Progress callback failed: {e}")
             # Force GUI repaint so the progress bar updates visually
-            try:
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
-            except ImportError:
-                pass
+            from correlation_engine.engine.gui_pump import pump_gui
+            pump_gui()  # GUI thread only; a worker must not run GUI events
     
     def force_report(self):
         """Force immediate progress report regardless of percentage threshold."""

@@ -218,6 +218,14 @@ class BatchedTextWidget:
         from PyQt5.QtCore import QTimer
         
         self.text_widget = text_widget
+        # The document drops its oldest lines itself. trim_to_size walked the cursor one line
+        # at a time in Python after every flush, and large flushes re-set the whole text
+        # (setPlainText of up to 10,000 lines) - the correlation run's progress bar froze
+        # while that happened (2026-11-01).
+        try:
+            text_widget.document().setMaximumBlockCount(10000)
+        except Exception:
+            pass
         self.batch_window_ms = batch_window_ms
         self.buffer = BatchedTextBuffer()
         self._flush_timer = QTimer()
@@ -272,30 +280,11 @@ class BatchedTextWidget:
             # Get all buffered text
             text = self.buffer.get_text()
             
-            # Use setPlainText for large batches (more efficient than insertText)
-            # For smaller batches, use insertText to preserve existing content
-            if len(text) > 5000:
-                # Large batch - use setPlainText with existing content
-                existing = self.text_widget.toPlainText()
-                combined = existing + '\n' + text if existing else text
-                
-                # Trim if needed before setting
-                lines = combined.split('\n')
-                if len(lines) > 10000:
-                    lines = lines[-10000:]
-                    combined = '\n'.join(lines)
-                    logger.info(f"Trimmed to 10,000 lines during large batch flush")
-                
-                self.text_widget.setPlainText(combined)
-            else:
-                # Small batch - use cursor insertion
-                cursor = self.text_widget.textCursor()
-                cursor.movePosition(QTextCursor.End)
-                cursor.insertText(text + '\n')
-                self.text_widget.setTextCursor(cursor)
-                
-                # Trim content if needed
-                self.trim_to_size()
+            # Always appended at the end: one insert per batch, whatever its size.
+            # The document's maximum block count trims the oldest lines.
+            cursor = QTextCursor(self.text_widget.document())
+            cursor.movePosition(QTextCursor.End)
+            cursor.insertText(text + '\n')
             
             # Defer scrolling to next event loop iteration (only if not already pending)
             if self._auto_scroll_enabled and not self._user_scrolled and not self._scroll_pending:
@@ -316,6 +305,8 @@ class BatchedTextWidget:
             from PyQt5.QtGui import QTextCursor
             
             document = self.text_widget.document()
+            if document.maximumBlockCount() > 0:
+                return                       # the document trims itself (see __init__)
             line_count = document.blockCount()
             
             if line_count > max_lines:

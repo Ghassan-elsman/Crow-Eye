@@ -27,6 +27,89 @@ from typing import Dict, Any, List, Optional
 from abc import ABC, abstractmethod
 
 
+# The system prompt is a stable core (identity, schema, tools) followed by context rebuilt
+# for every call (pinned evidence, the report so far, queries already run, retrieved
+# knowledge). ContextManager joins the two under this heading so a backend that caches
+# prompts can keep the core byte-identical and move the rest after the conversation:
+# 2026-11-01, one question on Claude re-sent ~230K uncached tokens on each of 66 calls
+# because the rebuilt part sat in front of the whole history.
+STEP_CONTEXT_HEADING = "## Context for this step"
+
+
+def split_step_context(system_prompt):
+    """(stable core, per-call context or "") from a system prompt built by ContextManager."""
+    marker = "\n\n" + STEP_CONTEXT_HEADING + "\n"
+    text = system_prompt or ""
+    i = text.find(marker)
+    if i < 0:
+        return text, ""
+    return text[:i], text[i + len(marker):]
+
+
+def describe_backend_error(exc) -> str:
+    """One sentence an investigator can act on, for any backend failure.
+
+    Every SDK raises its own classes, and ``str(exc)`` alone read as noise
+    ("Error code: 401 - {...}") or nothing at all (a timeout). Matched by class
+    name so the Anthropic, OpenAI and Gemini SDKs need not all be importable;
+    the original class and text are kept at the end so nothing is hidden.
+    """
+    if exc is None:
+        return ""
+    name = type(exc).__name__
+    text = str(exc).strip() or name
+    if name == "ClaudeCodeError":
+        # Already one plain sentence (claude_code_backend._plain_error).
+        return text
+    status = getattr(exc, "status_code", None)
+    plain = None
+    low = text.lower()
+    # Billing first: providers send it as a 400 or 402 or a 429 ("insufficient_quota"), and
+    # "the provider rejected the request" left the investigator checking the key.
+    if status == 402 or any(k in low for k in ("credit balance", "insufficient_quota", "billing",
+                                                "payment required", "exceeded your current quota")):
+        plain = ("The provider account has run out of credit - add credit in the provider's "
+                 "billing page, or switch to another model.")
+    elif name in ("AuthenticationError", "PermissionDeniedError") or status in (401, 403):
+        plain = "The API key was refused - check it in Settings -> Eye AI."
+    elif name == "NotFoundError" or status == 404:
+        plain = "The model was not found - pick another model or check its name."
+    elif name in ("RateLimitError",) or status == 429:
+        plain = "The provider is rate-limiting this key - wait a moment and try again."
+    elif name in ("APITimeoutError", "Timeout", "ReadTimeout", "ConnectTimeout", "TimeoutError",
+                  "TimeoutExpired"):
+        plain = "The model did not answer in time."
+    elif name in ("APIConnectionError", "ConnectionError", "ConnectError"):
+        plain = "Could not reach the provider - check the network or the local model service."
+    elif name in ("FileNotFoundError",):
+        plain = "The command-line tool for this backend was not found."
+    elif isinstance(status, int) and status >= 500:
+        plain = "The provider had a server error (%d) - try again shortly." % status
+    elif name in ("BadRequestError",) or status == 400:
+        plain = "The provider rejected the request."
+    if plain is None:
+        return "%s: %s" % (name, text)
+    return "%s (%s: %s)" % (plain, name, text[:300])
+
+
+USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+
+
+def _get(obj, name, default=0):
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        return obj.get(name, default)
+    return getattr(obj, name, default)
+
+
+def _num(obj, name) -> int:
+    """A token count from an SDK usage object, 0 when absent or not a number
+    (providers leave fields out; test doubles return mocks)."""
+    v = _get(obj, name, 0)
+    return int(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else 0
+
+
 class LLMBackend(ABC):
     """
     Abstract base class for all LLM backend implementations.
@@ -39,6 +122,32 @@ class LLMBackend(ABC):
     the translation between Eye's standard format and the provider's specific API.
     """
     
+    def record_usage(self, input_tokens=0, output_tokens=0, cache_read=0, cache_write=0,
+                     cost_usd=0.0, model=None) -> Dict[str, Any]:
+        """One reply's token use, in the same shape for every backend.
+
+        Only Claude Code reported usage before (2026-11-02), so the model badge and
+        the eval runner showed nothing for the API and local backends. Kept as
+        ``last_usage`` and summed into ``session_usage``; returned so the backend
+        can put it in its reply as ``usage``."""
+        u = {"input_tokens": int(input_tokens or 0), "output_tokens": int(output_tokens or 0),
+             "cache_read_input_tokens": int(cache_read or 0),
+             "cache_creation_input_tokens": int(cache_write or 0),
+             "cost_usd": float(cost_usd or 0.0)}
+        if model:
+            u["model"] = str(model)
+        self.last_usage = u
+        s = getattr(self, "session_usage", None)
+        if not isinstance(s, dict):
+            s = {"calls": 0, "cost_usd": 0.0}
+            s.update({k: 0 for k in USAGE_KEYS})
+        s["calls"] = s.get("calls", 0) + 1
+        for k in USAGE_KEYS:
+            s[k] = s.get(k, 0) + u[k]
+        s["cost_usd"] = s.get("cost_usd", 0.0) + u["cost_usd"]
+        self.session_usage = s
+        return u
+
     @abstractmethod
     def generate(
         self,

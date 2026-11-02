@@ -1,42 +1,18 @@
 /**
- * Report Block Component for EYE Forensic Assistant
+ * Report Block Component for Eye Forensic Assistant
  * 
  * Individual block rendering with inline editing capabilities for each block type.
  * Includes category-based styling for consistent forensic pillars.
  */
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useSortable } from '@dnd-kit/sortable';
 import { getBridge } from './bridge';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-  ArcElement
-} from 'chart.js';
-import { Bar, Line, Pie } from 'react-chartjs-2';
+import { ChartBlockContent, TimelineBlockContent, HeatmapBlockContent } from './ReportCharts';
 import './ReportBlockComponent.css';
 
-// Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  PointElement,
-  LineElement,
-  ArcElement,
-  Title,
-  Tooltip,
-  Legend
-);
 
 import { 
   type AnyBlock, 
@@ -58,39 +34,32 @@ interface ReportBlockComponentProps {
   block: AnyBlock;
   onDelete?: (blockId: string) => void;
   onUpdate?: (blockId: string, updatedBlock: AnyBlock) => void;
+  /** 1-based section number shown on the block and used as its anchor (sec-N). */
+  sectionNumber?: number;
+  /** 'half' when two small charts share a row (wide screens only). */
+  layout?: 'full' | 'half';
 }
 
 // --- Helpers ---
 
 /**
- * Maps forensic categories or keywords to consistent UI colors.
+ * Colour in the report carries meaning only (Crow-Eye rule: red = urgent).
+ * Every block shares the neutral accent; a block the Eye marked with a
+ * severity gets amber (high / medium) or red (critical). The old per-category
+ * rainbow (pink security, orange USB, purple persistence...) said nothing.
  */
-const getCategoryColor = (category?: string, title: string = "", index: number = 0) => {
-  const c = category?.toLowerCase() || '';
-  const t = title.toLowerCase();
+const getCategoryColor = (_category?: string, _title: string = "", _index: number = 0) => 'var(--accent)';
 
-  // Priority 1: Explicit Category Mapping
-  if (c === 'security') return '#ec4899'; // Security - Pink
-  if (c === 'execution') return '#10b981'; // Execution - Green
-  if (c === 'persistence') return '#8b5cf6'; // Persistence - Purple
-  if (c === 'identity') return '#06b6d4'; // Identity - Cyan
-  if (c === 'hardware') return '#f97316'; // Hardware - Orange
-  if (c === 'filesystem') return '#ef4444'; // FileSystem - Red
-  if (c === 'intent') return '#f59e0b'; // Intent - Amber
-  if (c === 'evidence') return '#8b5cf6'; // Evidence - Purple
+export const severityTone = (severity?: string): string | undefined => {
+  const s = (severity || '').toLowerCase();
+  if (s === 'critical') return '#f87171';
+  if (s === 'high' || s === 'medium') return '#fbbf24';
+  return undefined;
+};
 
-  // Priority 2: Keyword Fallback
-  if (t.includes('security') || t.includes('auth') || t.includes('logon') || t.includes('remote')) return '#ec4899';
-  if (t.includes('execution') || t.includes('prefetch') || t.includes('amcache') || t.includes('app')) return '#10b981';
-  if (t.includes('persistence') || t.includes('run') || t.includes('service') || t.includes('startup')) return '#8b5cf6';
-  if (t.includes('identity') || t.includes('user') || t.includes('account')) return '#06b6d4';
-  if (t.includes('usb') || t.includes('hardware') || t.includes('device')) return '#f97316';
-  if (t.includes('file') || t.includes('mft') || t.includes('usn') || t.includes('recycle')) return '#ef4444';
-  if (t.includes('intent') || t.includes('lnk') || t.includes('recent')) return '#f59e0b';
-  
-  // Default palette if no match
-  const palette = ['#f97316', '#06b6d4', '#ec4899', '#10b981', '#ff4d6a', '#8b5cf6'];
-  return palette[index % palette.length];
+export const KIND_NAMES: Record<string, string> = {
+  text: 'Finding', table: 'Table', chart: 'Chart', timeline: 'Timeline', heatmap: 'Heatmap',
+  image: 'Image', reference: 'Evidence', chat: 'Conversation', chain_of_custody: 'Chain of custody',
 };
 
 // --- Sub-Components ---
@@ -123,7 +92,7 @@ const TextBlockContent: React.FC<{ block: TextBlock, onUpdate?: any }> = ({ bloc
 
   return (
     <div className="text-block-view" onClick={() => setIsEditing(true)}>
-      <h3 className="text-block-title" style={{ color: getCategoryColor(block.category, block.title) }}>{block.title}</h3>
+      <h3 className="text-block-title">{block.title}</h3>
       <div className="text-block-content markdown-body">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>{block.markdown_content}</ReactMarkdown>
       </div>
@@ -225,124 +194,6 @@ const TableBlockContent: React.FC<{ block: TableBlock }> = ({ block }) => {
   );
 };
 
-const ChartBlockContent: React.FC<{ block: ChartBlock }> = ({ block }) => {
-  const chartRef = useRef<any>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  // Charts use { responsive: true, maintainAspectRatio: false }, so the canvas
-  // is sized from its container. When the report pane mounts with ~0 width (or
-  // is hidden behind a tab/split), Chart.js measures a tiny canvas. We must call
-  // .resize() — NOT .update() — to recompute the canvas from the container once
-  // it has real dimensions; .update() only redraws data and leaves the stale
-  // (tiny) pixel size, which is why charts previously only grew after the user
-  // dragged the panel.
-  useEffect(() => {
-    const resize = () => {
-      if (chartRef.current) {
-        chartRef.current.resize();
-        chartRef.current.update();
-      }
-    };
-
-    // Resize once after first layout settles.
-    const timer = setTimeout(resize, 200);
-
-    // Resize whenever the container's box changes (pane gains width / becomes
-    // visible / user drags the splitter) — self-corrects with no user action.
-    let observer: ResizeObserver | null = null;
-    if (containerRef.current && typeof ResizeObserver !== 'undefined') {
-      observer = new ResizeObserver(() => resize());
-      observer.observe(containerRef.current);
-    }
-
-    // Global reflow signal from the Python bridge (report updates / window show).
-    window.addEventListener('reflow-forensic-charts', resize);
-    return () => {
-      clearTimeout(timer);
-      if (observer) observer.disconnect();
-      window.removeEventListener('reflow-forensic-charts', resize);
-    };
-  }, []);
-
-  // If backend provided a pre-rendered Chart.js config, use it directly
-  if (block.metadata.chart_config) {
-    const config = block.metadata.chart_config;
-    return (
-      <div className="chart-block-view">
-        <div className="chart-container" ref={containerRef}>
-          {config.type === 'bar' && <Bar ref={chartRef} data={config.data} options={config.options} />}
-          {config.type === 'line' && <Line ref={chartRef} data={config.data} options={config.options} />}
-          {config.type === 'pie' && <Pie ref={chartRef} data={config.data} options={config.options} />}
-          {config.type === 'doughnut' && <Pie ref={chartRef} data={config.data} options={{...config.options, cutout: '50%'}} />}
-        </div>
-      </div>
-    );
-  }
-
-  // Fallback to local rendering for manual/legacy blocks
-  const themeColor = getCategoryColor(block.category, block.title);
-
-  const data = {
-    labels: block.labels,
-    datasets: block.datasets.map((ds, i) => ({
-      ...ds,
-      backgroundColor: ds.backgroundColor || getCategoryColor(block.category, block.title, i),
-      borderColor: ds.borderColor || getCategoryColor(block.category, block.title, i),
-      borderWidth: 1,
-    }))
-  };
-
-  const options = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { 
-        position: 'bottom' as const,
-        labels: { 
-          color: '#8899aa', 
-          font: { family: 'Space Mono', size: 10 },
-          boxWidth: 12,
-          padding: 15
-        } 
-      },
-      title: { 
-        display: true, 
-        text: block.title, 
-        color: themeColor, 
-        font: { size: 14, family: 'Syne', weight: 'bold' as const },
-        padding: { bottom: 20 }
-      },
-      tooltip: {
-        backgroundColor: '#1c2330',
-        titleFont: { family: 'Syne' },
-        bodyFont: { family: 'Space Mono' },
-        borderColor: themeColor,
-        borderWidth: 1
-      }
-    },
-    scales: block.chart_type !== 'pie' ? {
-      y: { 
-        ticks: { color: '#4a5a6a', font: { size: 10 } }, 
-        grid: { color: 'rgba(30, 42, 58, 0.5)' } 
-      },
-      x: { 
-        ticks: { color: '#4a5a6a', font: { size: 10 } }, 
-        grid: { display: false } 
-      }
-    } : undefined
-  };
-
-  return (
-    <div className="chart-block-view">
-      <div className="chart-container" ref={containerRef}>
-        {block.chart_type === 'bar' && <Bar ref={chartRef} data={data} options={options} />}
-        {block.chart_type === 'line' && <Line ref={chartRef} data={data} options={options} />}
-        {block.chart_type === 'pie' && <Pie ref={chartRef} data={data} options={options} />}
-      </div>
-    </div>
-  );
-};
-
 const ImageBlockContent: React.FC<{ block: ImageBlock }> = ({ block }) => (
   <div className="image-block-view">
     <img src={block.image_path} alt={block.caption} className="block-image" />
@@ -398,37 +249,6 @@ const ReferenceBlockContent: React.FC<{ block: ReferenceBlock }> = ({ block }) =
   );
 };
 
-const TimelineBlockContent: React.FC<{ block: TimelineBlock }> = ({ block }) => {
-  const themeColor = getCategoryColor(block.category, block.title);
-  return (
-    <div className="timeline-block-view">
-      <h4 style={{ color: themeColor }}>{block.title}</h4>
-      <div className="timeline-list">
-        {block.events.map((ev, i) => (
-          <div key={i} className="timeline-item" style={{ borderLeftColor: getCategoryColor(ev.category || block.category, ev.label) }}>
-            <span className="timeline-time">{new Date(ev.timestamp).toLocaleString()}</span>
-            <span className="timeline-label">{ev.label}</span>
-            <p className="timeline-desc">{ev.description}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-const HeatmapBlockContent: React.FC<{ block: HeatmapBlock }> = ({ block }) => {
-  return (
-    <div className="heatmap-block-view">
-      <h4>{block.title}</h4>
-      <div className="heatmap-grid" style={{ gridTemplateColumns: `repeat(${block.x_labels.length}, 1fr)` }}>
-        {block.intensity_values.flat().map((v, i) => (
-          <div key={i} className="heatmap-cell" style={{ opacity: v / 10, background: '#f97316' }} title={`Value: ${v}`} />
-        ))}
-      </div>
-    </div>
-  );
-};
-
 const CustodyBlockContent: React.FC<{ block: ChainOfCustodyBlock }> = ({ block }) => (
   <div className="custody-block-view">
     <table className="custody-table">
@@ -473,6 +293,8 @@ const ReportBlockComponent: React.FC<ReportBlockComponentProps> = ({
   block,
   onDelete,
   onUpdate,
+  sectionNumber,
+  layout = 'full',
 }) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: block.block_id });
@@ -498,7 +320,8 @@ const ReportBlockComponent: React.FC<ReportBlockComponentProps> = ({
     }
   };
 
-  const themeColor = getCategoryColor(block.category, (block as any).title || (block as any).caption || (block as any).reference_text);
+  const severity = String((block.metadata as any)?.severity || '').toLowerCase();
+  const tone = severityTone(severity);
 
   const provenanceGeneratedAt = block.metadata?.timestamp
     ? new Date(block.metadata.timestamp).toLocaleString()
@@ -524,10 +347,19 @@ const ReportBlockComponent: React.FC<ReportBlockComponentProps> = ({
   return (
     <div
       ref={setNodeRef}
-      style={{ ...style, ['--block-accent' as any]: themeColor }}
-      className={`report-block ${block.block_type}-block ${isDragging ? 'dragging' : ''}`}
+      id={sectionNumber ? `sec-${sectionNumber}` : undefined}
+      style={tone ? { ...style, ['--block-accent' as any]: tone } : style}
+      className={`report-block ${block.block_type}-block layout-${layout} ${tone ? 'has-severity' : ''} ${isDragging ? 'dragging' : ''}`}
+      data-severity={tone ? severity : undefined}
       {...attributes}
     >
+      {sectionNumber ? (
+        <div className="block-sec-label">
+          <span className="block-sec-num">{sectionNumber}</span>
+          <span className="block-sec-kind">{KIND_NAMES[block.block_type] || block.block_type}</span>
+          {tone && <span className="block-sec-severity">{severity}</span>}
+        </div>
+      ) : null}
       {/* Styled provenance hover card: reveals when this block was generated
           and by which investigator question. Replaces the plain browser
           tooltip; revealed on .report-block:hover (see .css). */}

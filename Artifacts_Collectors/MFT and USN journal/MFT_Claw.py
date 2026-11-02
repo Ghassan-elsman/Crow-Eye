@@ -36,6 +36,7 @@ import sqlite3
 import logging
 import datetime
 import binascii
+import itertools
 from abc import ABC, abstractmethod
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -87,7 +88,8 @@ logger = logging.getLogger(__name__)
 # Update-sequence fixups and the $MFT's own data runs live in utils/ntfs_runs,
 # shared with the raw-disk $MFT copier so a live parse and an offline import of
 # the copy read the same bytes. apply_fixups stays importable from here.
-from utils.ntfs_runs import apply_fixups, mft_layout, read_stream, RunMap, nonresident_header
+from utils.ntfs_runs import (apply_fixups, mft_layout, read_stream, RunMap, nonresident_header,
+                             fixup_stride)
 
 
 class MFTClawError(Exception):
@@ -236,6 +238,9 @@ class MFTRecord:
     # Header-derived metadata not currently surfaced through individual attributes
     hard_link_count: int = 0
     lsn: int = 0
+    # The update-sequence check (fixups) passed: False on a torn write or a
+    # record edited without its update sequence.
+    fixup_ok: bool = True
 
     # Computed fields
     primary_filename: str = ""
@@ -330,6 +335,12 @@ class StandardInformationParser(MFTAttributeParser):
                 'modified': modified,
                 'accessed': accessed,
                 'mft_modified': mft_modified,
+                # The raw FILETIME ticks: the TIMESTAMP columns keep whole
+                # seconds, and a timestomp is judged in 100 ns ticks.
+                'created_filetime': struct.unpack_from('<Q', attr_data, 0)[0],
+                'modified_filetime': struct.unpack_from('<Q', attr_data, 8)[0],
+                'mft_modified_filetime': struct.unpack_from('<Q', attr_data, 16)[0],
+                'accessed_filetime': struct.unpack_from('<Q', attr_data, 24)[0],
                 'flags': flags,
                 'max_versions': max_versions,
                 'version_number': version_number,
@@ -429,6 +440,10 @@ class FileNameParser(MFTAttributeParser):
                 'modified': modified,
                 'accessed': accessed,
                 'mft_modified': mft_modified,
+                'created_filetime': struct.unpack_from('<Q', attr_data, 8)[0],
+                'modified_filetime': struct.unpack_from('<Q', attr_data, 16)[0],
+                'mft_modified_filetime': struct.unpack_from('<Q', attr_data, 24)[0],
+                'accessed_filetime': struct.unpack_from('<Q', attr_data, 32)[0],
                 'allocated_size': allocated_size,
                 'real_size': real_size,
                 'flags': flags,
@@ -885,6 +900,28 @@ _CHILD_COLUMNS = {
                             "resident", "size", "data_type"],
 }
 
+# Written with the identity columns above but NOT part of the identity: the
+# raw FILETIME ticks of $STANDARD_INFORMATION and $FILE_NAME (the TIMESTAMP
+# columns keep whole seconds, and a timestomp is judged in ticks). Kept out of
+# the identity so a case parsed before they existed (NULL ticks) is not
+# stored a second time on its next parse.
+_FILETIME_COLUMNS = ["created_filetime", "modified_filetime", "accessed_filetime",
+                     "mft_modified_filetime"]
+_CHILD_EXTRA_COLUMNS = {
+    "mft_standard_info": _FILETIME_COLUMNS,
+    "mft_file_names": _FILETIME_COLUMNS,
+    "mft_data_attributes": [],
+}
+
+# The NTFS integrity checks' findings (ntfs_integrity.py), one row per finding,
+# identified by a stable finding_id - (rule, volume, record, sequence, LSN) -
+# so a re-parse that finds the same thing again stores nothing new.
+try:
+    from ntfs_integrity import FINDING_COLUMNS as _FINDING_COLUMNS
+except ImportError:                                    # loaded from another folder
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ntfs_integrity import FINDING_COLUMNS as _FINDING_COLUMNS
+
 
 class DatabaseManager:
     """Manages database operations for MFT Claw"""
@@ -932,6 +969,9 @@ class DatabaseManager:
             top = self.connection.execute("SELECT MAX(rowid) FROM %s" % table).fetchone()[0]
             self.child_start_rowid[table] = top or 0
             self.child_empty_at_start[table] = top is None
+        # finding_id is the table's PRIMARY KEY - the identity index already.
+        self.findings_empty_at_start = self.connection.execute(
+            "SELECT 1 FROM ntfs_integrity_findings LIMIT 1").fetchone() is None
         self.connection.commit()
 
     def _hold_write_lock(self):
@@ -989,7 +1029,14 @@ class DatabaseManager:
         stored yet (insert_new). The plain path runs under the write lock."""
         if not rows:
             return
-        cols = _CHILD_COLUMNS[table]
+        key_cols = _CHILD_COLUMNS[table]
+        extra = _CHILD_EXTRA_COLUMNS.get(table, [])
+        cols = key_cols + extra
+        if extra and any(len(r) == len(key_cols) for r in rows):
+            # A row in the identity-only shape (callers from before the tick
+            # columns): the ticks are unknown, stored as NULL.
+            pad = (None,) * len(extra)
+            rows = [tuple(r) + pad if len(r) == len(key_cols) else r for r in rows]
         vol_at = cols.index("volume_letter")
         by_volume = {}
         for r in rows:
@@ -1005,7 +1052,31 @@ class DatabaseManager:
                 self._volume_empty[(table, volume)] = self.connection.execute(
                     "SELECT MAX(rowid) FROM %s" % table).fetchone()[0] or 0
             else:
-                insert_new(self.connection, table, cols, vrows, cols, self.tally)
+                insert_new(self.connection, table, cols, vrows, key_cols, self.tally)
+
+    def insert_integrity_findings(self, rows):
+        """The NTFS integrity findings of one volume (ntfs_integrity rows, in
+        FINDING_COLUMNS order). A table that held nothing when the run began
+        takes the plain insert; otherwise only findings not stored yet
+        (insert_new on finding_id). Returns the rows written."""
+        if not rows:
+            return 0
+        conn = self.connection
+        self._hold_write_lock()
+        if self.findings_empty_at_start and conn.execute(
+                "SELECT 1 FROM ntfs_integrity_findings LIMIT 1").fetchone() is None:
+            conn.executemany(
+                "INSERT INTO ntfs_integrity_findings (finding_id, volume_letter, volume_id, rule, "
+                "check_name, check_group, severity, record_number, sequence_number, lsn, file_name, "
+                "detail, evidence, manifest_id, parse_mode, parsed_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+            self.tally.add("ntfs_integrity_findings", len(rows), len(rows))
+            written = len(rows)
+        else:
+            written = insert_new(conn, "ntfs_integrity_findings", _FINDING_COLUMNS, rows,
+                                 ["finding_id"], self.tally)
+        conn.commit()
+        return written
 
     # Secondary indexes the parse itself never reads (the record existence
     # check uses the primary key, the re-parse guard the identity indexes).
@@ -1026,6 +1097,16 @@ class DatabaseManager:
                 self.connection.execute("DROP INDEX %s" % name)
                 dropped.append(name)
         self.connection.commit()
+        # A bulk load writes millions of rows that a re-parse can always write
+        # again: no fsync per commit, and the WAL checkpointed once at the end
+        # (restore_secondary_indexes) rather than every 1000 pages. Commits
+        # were 5.5 s of a 39 s parse of 205,051 records.
+        try:
+            self.connection.execute("PRAGMA synchronous = OFF")
+            self.connection.execute("PRAGMA wal_autocheckpoint = 0")
+            self._bulk_load = True
+        except sqlite3.Error:
+            pass
         return dropped
 
     def restore_secondary_indexes(self):
@@ -1033,27 +1114,20 @@ class DatabaseManager:
         for sql in self.SECONDARY_INDEXES.values():
             self.connection.execute(sql)
         self.connection.commit()
+        if getattr(self, "_bulk_load", False):
+            self._bulk_load = False
+            try:
+                self.connection.execute("PRAGMA synchronous = NORMAL")
+                self.connection.execute("PRAGMA wal_autocheckpoint = 1000")
+                self.connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except sqlite3.Error:
+                pass
 
     @staticmethod
     def _configure_datetime_handling():
         """Configure proper datetime handling for Python 3.12+ compatibility"""
         # Register custom datetime adapters to avoid deprecation warnings
-        _zero = datetime.timedelta(0)
-
-        def adapt_datetime(dt):
-            """Convert datetime to ISO format string.
-
-            UTC (or naive, read as UTC) values from year 1000 on are formatted
-            directly - the same 'YYYY-MM-DD HH:MM:SS' format_forensic_timestamp
-            produces, without a strftime and an astimezone per value (14 per
-            MFT record: a fifth of the parse). Anything else goes through
-            format_forensic_timestamp as before."""
-            if dt is None:
-                return None
-            if dt.year >= 1000 and (dt.tzinfo is None or dt.utcoffset() == _zero):
-                return "%04d-%02d-%02d %02d:%02d:%02d" % (
-                    dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
-            return format_forensic_timestamp(dt)
+        adapt_datetime = adapt_datetime_value
         
         def convert_datetime(val):
             """Convert ISO format string back to datetime"""
@@ -1114,6 +1188,8 @@ class DatabaseManager:
             accessed_time TIMESTAMP,
             mft_modified_time TIMESTAMP,
             file_attributes INTEGER,
+            lsn INTEGER,
+            fixup_ok INTEGER,
             PRIMARY KEY (record_number, volume_letter)
         );
         
@@ -1134,6 +1210,10 @@ class DatabaseManager:
             security_id INTEGER,
             quota_charged INTEGER,
             usn INTEGER,
+            created_filetime INTEGER,
+            modified_filetime INTEGER,
+            accessed_filetime INTEGER,
+            mft_modified_filetime INTEGER,
             FOREIGN KEY(record_number, volume_letter) REFERENCES mft_records(record_number, volume_letter)
         );
         
@@ -1152,6 +1232,10 @@ class DatabaseManager:
             allocated_size INTEGER,
             real_size INTEGER,
             flags INTEGER,
+            created_filetime INTEGER,
+            modified_filetime INTEGER,
+            accessed_filetime INTEGER,
+            mft_modified_filetime INTEGER,
             FOREIGN KEY(record_number, volume_letter) REFERENCES mft_records(record_number, volume_letter)
         );
         
@@ -1166,7 +1250,28 @@ class DatabaseManager:
             data_type TEXT DEFAULT 'Default',
             FOREIGN KEY (record_number, volume_letter) REFERENCES mft_records(record_number, volume_letter)
         );
-        
+
+        -- NTFS integrity findings (ntfs_integrity.py): one row per finding,
+        -- finding_id = rule.check|volume|record|sequence|LSN, stable across parses
+        CREATE TABLE IF NOT EXISTS ntfs_integrity_findings (
+            finding_id TEXT PRIMARY KEY,
+            volume_letter TEXT,
+            volume_id TEXT,
+            rule TEXT,
+            check_name TEXT,
+            check_group TEXT,
+            severity TEXT,
+            record_number INTEGER,
+            sequence_number INTEGER,
+            lsn INTEGER,
+            file_name TEXT,
+            detail TEXT,
+            evidence TEXT,
+            manifest_id TEXT,
+            parse_mode TEXT,
+            parsed_at TEXT
+        );
+
         -- Create indexes for performance
         CREATE INDEX IF NOT EXISTS idx_mft_records_filename ON mft_records(file_name);
         CREATE INDEX IF NOT EXISTS idx_mft_records_extension ON mft_records(extension);
@@ -1175,9 +1280,41 @@ class DatabaseManager:
         
         try:
             self.connection.executescript(schema_sql)
+            self._add_new_columns()
             self.connection.commit()
         except sqlite3.Error as e:
             raise DatabaseError(f"Failed to create schema: {e}")
+
+    def _add_new_columns(self):
+        """Columns added after a case may already hold these tables: one ALTER
+        per column, each only when the column is missing. Written out one
+        statement at a time on purpose - a ("name", "DDL") tuple loop reads as
+        a table definition to Sentinel's extract-schema.js."""
+        conn = self.connection
+
+        def has(table, column):
+            return any(r[1] == column for r in conn.execute("PRAGMA table_info(%s)" % table))
+
+        if not has("mft_records", "lsn"):
+            conn.execute("ALTER TABLE mft_records ADD COLUMN lsn INTEGER")
+        if not has("mft_records", "fixup_ok"):
+            conn.execute("ALTER TABLE mft_records ADD COLUMN fixup_ok INTEGER")
+        if not has("mft_standard_info", "created_filetime"):
+            conn.execute("ALTER TABLE mft_standard_info ADD COLUMN created_filetime INTEGER")
+        if not has("mft_standard_info", "modified_filetime"):
+            conn.execute("ALTER TABLE mft_standard_info ADD COLUMN modified_filetime INTEGER")
+        if not has("mft_standard_info", "accessed_filetime"):
+            conn.execute("ALTER TABLE mft_standard_info ADD COLUMN accessed_filetime INTEGER")
+        if not has("mft_standard_info", "mft_modified_filetime"):
+            conn.execute("ALTER TABLE mft_standard_info ADD COLUMN mft_modified_filetime INTEGER")
+        if not has("mft_file_names", "created_filetime"):
+            conn.execute("ALTER TABLE mft_file_names ADD COLUMN created_filetime INTEGER")
+        if not has("mft_file_names", "modified_filetime"):
+            conn.execute("ALTER TABLE mft_file_names ADD COLUMN modified_filetime INTEGER")
+        if not has("mft_file_names", "accessed_filetime"):
+            conn.execute("ALTER TABLE mft_file_names ADD COLUMN accessed_filetime INTEGER")
+        if not has("mft_file_names", "mft_modified_filetime"):
+            conn.execute("ALTER TABLE mft_file_names ADD COLUMN mft_modified_filetime INTEGER")
     
     @staticmethod
     def _classify_data_type(data_attr: MFTAttribute) -> str:
@@ -1306,8 +1443,9 @@ class DatabaseManager:
                 INSERT OR REPLACE INTO mft_records (
                     record_number, file_name, volume_letter, extension,
                     file_size, in_use, is_directory, flags, mft_sequence_number, has_ads, ads_count,
-                    created_time, modified_time, accessed_time, mft_modified_time, file_attributes
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_time, modified_time, accessed_time, mft_modified_time, file_attributes,
+                    lsn, fixup_ok
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.record_number, record.primary_filename, record.volume_letter,
                 record.file_extension, record.file_size,
@@ -1315,7 +1453,7 @@ class DatabaseManager:
                 record.flags, record.sequence_number, 1 if record.has_ads else 0, record.ads_count,
                 record.get_creation_time(), record.get_modification_time(),
                 record.get_accessed_time(), record.get_mft_modified_time(),
-                record.file_attributes
+                record.file_attributes, record.lsn, 1 if record.fixup_ok else 0
             ))
             
             # Insert standard information if available
@@ -1347,85 +1485,18 @@ class DatabaseManager:
         """Bulk insert multiple MFT records for improved performance"""
         if not self.connection or not records:
             return
-        
+        self.insert_rows(*records_to_rows(records))
+
+    def insert_rows(self, main_records_data, standard_info_data, file_names_data,
+                    data_attributes_data):
+        """Insert the rows ``records_to_rows`` built (here or in a parse worker)."""
+        if not self.connection or not main_records_data:
+            return
         try:
             # Temporarily disable foreign keys for bulk insert performance
             # This is safe because we control the data integrity
             self.connection.execute("PRAGMA foreign_keys = OFF")
-            
-            # Prepare bulk data for main records
-            main_records_data = []
-            standard_info_data = []
-            file_names_data = []
-            data_attributes_data = []
-            
-            for record in records:
-                # Main record data
-                main_records_data.append((
-                    record.record_number, record.primary_filename, record.volume_letter,
-                    record.file_extension, record.file_size,
-                    1 if record.in_use else 0, 1 if record.is_directory else 0,
-                    record.flags, record.sequence_number, 1 if record.has_ads else 0, record.ads_count,
-                    record.get_creation_time(), record.get_modification_time(),
-                    record.get_accessed_time(), record.get_mft_modified_time(),
-                    record.file_attributes
-                ))
-                
-                # Standard information data
-                if record.standard_info:
-                    si_data = record.standard_info.data
-                    standard_info_data.append((
-                        record.record_number, record.primary_filename, record.volume_letter,
-                        si_data.get('created'), si_data.get('modified'),
-                        si_data.get('accessed'), si_data.get('mft_modified'),
-                        si_data.get('flags', 0), si_data.get('max_versions', 0),
-                        si_data.get('version_number', 0), si_data.get('class_id', 0),
-                        si_data.get('owner_id', 0), si_data.get('security_id', 0),
-                        si_data.get('quota_charged', 0), si_data.get('usn', 0)
-                    ))
-                
-                # File names data
-                for fn_attr in record.file_names:
-                    fn_data = fn_attr.data
-                    
-                    # Ensure parent_sequence is never NULL (same logic as _insert_file_name)
-                    parent_record = fn_data.get('parent_record', 0)
-                    parent_sequence = fn_data.get('parent_sequence', 0)
-                    
-                    # If parent_sequence is None or 0 but parent_record exists, default to 1
-                    if (parent_sequence is None or parent_sequence == 0) and parent_record > 0:
-                        parent_sequence = 1
-                    
-                    # Root directory (record 5) might have parent_record=0, ensure sequence is 0 not NULL
-                    if parent_sequence is None:
-                        parent_sequence = 0
-                    
-                    file_names_data.append((
-                        record.record_number, fn_data.get('file_name', ''), record.volume_letter,
-                        parent_record, parent_sequence, fn_data.get('namespace', 0), fn_data.get('flags', 0),
-                        fn_data.get('created'), fn_data.get('modified'),
-                        fn_data.get('accessed'), fn_data.get('mft_modified'),
-                        fn_data.get('allocated_size', 0), fn_data.get('real_size', 0)
-                    ))
-                
-                # Data attributes data - write each $DATA stream with a
-                # properly-classified data_type so the bulk path matches the
-                # single-row insert behaviour.
-                for data_attr in record.data_attributes:
-                    data_info = data_attr.data
-                    data_attributes_data.append((
-                        record.record_number, record.primary_filename, record.volume_letter,
-                        data_attr.attr_name,
-                        1 if data_info.get('resident', False) else 0,
-                        data_info.get('size', 0),
-                        self._classify_data_type(data_attr)
-                    ))
-                # Synthesized rows for non-$DATA NTFS attributes (ObjectID,
-                # Reparse:*, VolumeName, VolumeInfo, EaInfo, EA, IndexRoot,
-                # LoggedUtilStream, Hardlinks, ExtensionOf).  All share the same
-                # 7-column shape as $DATA so we extend the same list.
-                data_attributes_data.extend(self._extra_attr_rows(record))
-            
+
             # Bulk insert main records. A record already stored is replaced
             # by the current occupant (the key holds no sequence number); it is
             # counted as already present, not as new.
@@ -1440,8 +1511,9 @@ class DatabaseManager:
                     INSERT OR REPLACE INTO mft_records (
                         record_number, file_name, volume_letter, extension,
                         file_size, in_use, is_directory, flags, mft_sequence_number, has_ads, ads_count,
-                        created_time, modified_time, accessed_time, mft_modified_time, file_attributes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        created_time, modified_time, accessed_time, mft_modified_time, file_attributes,
+                        lsn, fixup_ok
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, main_records_data)
             
             # Child tables: only the rows not stored yet (identity = the whole
@@ -1473,8 +1545,9 @@ class DatabaseManager:
             INSERT INTO mft_standard_info (
                 record_number, file_name, volume_letter, created, modified, accessed, mft_modified,
                 flags, max_versions, version_number, class_id, owner_id, security_id,
-                quota_charged, usn
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                quota_charged, usn, created_filetime, modified_filetime, accessed_filetime,
+                mft_modified_filetime
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.record_number, record.primary_filename, record.volume_letter,
             si_data.get('created'), si_data.get('modified'),
@@ -1482,7 +1555,9 @@ class DatabaseManager:
             si_data.get('flags', 0), si_data.get('max_versions', 0),
             si_data.get('version_number', 0), si_data.get('class_id', 0),
             si_data.get('owner_id'), si_data.get('security_id'),
-            si_data.get('quota_charged'), si_data.get('usn')
+            si_data.get('quota_charged'), si_data.get('usn'),
+            si_data.get('created_filetime'), si_data.get('modified_filetime'),
+            si_data.get('accessed_filetime'), si_data.get('mft_modified_filetime')
         ))
     
     def _insert_file_name(self, record: MFTRecord, fn_attr: MFTAttribute):
@@ -1506,15 +1581,18 @@ class DatabaseManager:
             INSERT INTO mft_file_names (
                 record_number, file_name, volume_letter, parent_record, parent_sequence,
                 namespace, created, modified, accessed, mft_modified, allocated_size,
-                real_size, flags
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                real_size, flags, created_filetime, modified_filetime, accessed_filetime,
+                mft_modified_filetime
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             record.record_number, fn_data.get('file_name', ''), record.volume_letter,
             parent_record, parent_sequence,
             fn_data.get('namespace', 0), fn_data.get('created'),
             fn_data.get('modified'), fn_data.get('accessed'),
             fn_data.get('mft_modified'), fn_data.get('allocated_size', 0),
-            fn_data.get('real_size', 0), fn_data.get('flags', 0)
+            fn_data.get('real_size', 0), fn_data.get('flags', 0),
+            fn_data.get('created_filetime'), fn_data.get('modified_filetime'),
+            fn_data.get('accessed_filetime'), fn_data.get('mft_modified_filetime')
         ))
     
     def _insert_data_attribute(self, record: MFTRecord, data_attr: MFTAttribute):
@@ -1548,6 +1626,108 @@ class DatabaseManager:
         if self.connection:
             self.connection.close()
             self.connection = None
+
+def records_to_rows(records):
+    """The four tables' rows for parsed MFT records: mft_records,
+    mft_standard_info, mft_file_names, mft_data_attributes (with the
+    synthesized non-$DATA attribute rows). Shared by the insert and by the
+    parse workers (parse_chunk_rows), so the two never build a row differently."""
+    main_records_data = []
+    standard_info_data = []
+    file_names_data = []
+    data_attributes_data = []
+    for record in records:
+        # Main record data
+        main_records_data.append((
+            record.record_number, record.primary_filename, record.volume_letter,
+            record.file_extension, record.file_size,
+            1 if record.in_use else 0, 1 if record.is_directory else 0,
+            record.flags, record.sequence_number, 1 if record.has_ads else 0, record.ads_count,
+            record.get_creation_time(), record.get_modification_time(),
+            record.get_accessed_time(), record.get_mft_modified_time(),
+            record.file_attributes, record.lsn, 1 if record.fixup_ok else 0
+        ))
+        
+        # Standard information data
+        if record.standard_info:
+            si_data = record.standard_info.data
+            standard_info_data.append((
+                record.record_number, record.primary_filename, record.volume_letter,
+                si_data.get('created'), si_data.get('modified'),
+                si_data.get('accessed'), si_data.get('mft_modified'),
+                si_data.get('flags', 0), si_data.get('max_versions', 0),
+                si_data.get('version_number', 0), si_data.get('class_id', 0),
+                si_data.get('owner_id', 0), si_data.get('security_id', 0),
+                si_data.get('quota_charged', 0), si_data.get('usn', 0),
+                si_data.get('created_filetime'), si_data.get('modified_filetime'),
+                si_data.get('accessed_filetime'), si_data.get('mft_modified_filetime')
+            ))
+        
+        # File names data
+        for fn_attr in record.file_names:
+            fn_data = fn_attr.data
+            
+            # Ensure parent_sequence is never NULL (same logic as _insert_file_name)
+            parent_record = fn_data.get('parent_record', 0)
+            parent_sequence = fn_data.get('parent_sequence', 0)
+            
+            # If parent_sequence is None or 0 but parent_record exists, default to 1
+            if (parent_sequence is None or parent_sequence == 0) and parent_record > 0:
+                parent_sequence = 1
+            
+            # Root directory (record 5) might have parent_record=0, ensure sequence is 0 not NULL
+            if parent_sequence is None:
+                parent_sequence = 0
+            
+            file_names_data.append((
+                record.record_number, fn_data.get('file_name', ''), record.volume_letter,
+                parent_record, parent_sequence, fn_data.get('namespace', 0), fn_data.get('flags', 0),
+                fn_data.get('created'), fn_data.get('modified'),
+                fn_data.get('accessed'), fn_data.get('mft_modified'),
+                fn_data.get('allocated_size', 0), fn_data.get('real_size', 0),
+                fn_data.get('created_filetime'), fn_data.get('modified_filetime'),
+                fn_data.get('accessed_filetime'), fn_data.get('mft_modified_filetime')
+            ))
+        
+        # Data attributes data - write each $DATA stream with a
+        # properly-classified data_type so the bulk path matches the
+        # single-row insert behaviour.
+        for data_attr in record.data_attributes:
+            data_info = data_attr.data
+            data_attributes_data.append((
+                record.record_number, record.primary_filename, record.volume_letter,
+                data_attr.attr_name,
+                1 if data_info.get('resident', False) else 0,
+                data_info.get('size', 0),
+                DatabaseManager._classify_data_type(data_attr)
+            ))
+        # Synthesized rows for non-$DATA NTFS attributes (ObjectID,
+        # Reparse:*, VolumeName, VolumeInfo, EaInfo, EA, IndexRoot,
+        # LoggedUtilStream, Hardlinks, ExtensionOf).  All share the same
+        # 7-column shape as $DATA so we extend the same list.
+        data_attributes_data.extend(DatabaseManager._extra_attr_rows(record))
+    return main_records_data, standard_info_data, file_names_data, data_attributes_data
+
+
+_ZERO_OFFSET = datetime.timedelta(0)
+
+
+def adapt_datetime_value(dt):
+    """Convert datetime to ISO format string (the sqlite3 adapter).
+
+    UTC (or naive, read as UTC) values from year 1000 on are formatted
+    directly - the same 'YYYY-MM-DD HH:MM:SS' format_forensic_timestamp
+    produces, without a strftime and an astimezone per value (14 per
+    MFT record: a fifth of the parse). Anything else goes through
+    format_forensic_timestamp as before. Module level so a parse worker
+    formats its rows with exactly the code the insert would have used."""
+    if dt is None:
+        return None
+    if dt.year >= 1000 and (dt.tzinfo is None or dt.utcoffset() == _ZERO_OFFSET):
+        return "%04d-%02d-%02d %02d:%02d:%02d" % (
+            dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second)
+    return format_forensic_timestamp(dt)
+
 
 # Extension records whose base reference was not a record of this volume
 # (filled by merge_extension_records; read by the parser's report).
@@ -1691,6 +1871,20 @@ def _merge_extension_records(cur, conn, volume_letter, run_start_rowid, tally):
     return n
 
 
+def _resume_start(state, volume_letter):
+    """The first record to parse on this volume: 0, or one past the last record
+    this parse already processed on THIS volume. Keyed by volume because record
+    numbers are per volume; a shared counter skipped every volume after the
+    first (VM F-R)."""
+    done = state.get('last_processed_record_by_volume', {}).get(volume_letter, -1)
+    return max(0, done + 1)
+
+
+def _note_processed(state, volume_letter, record_num):
+    """Record the last record processed on this volume, for _resume_start."""
+    state.setdefault('last_processed_record_by_volume', {})[volume_letter] = record_num
+
+
 def _custody_raw_read(volume_letter, reader, records, allocated_bytes):
     """The $MFT read off the raw volume, in the run's chain-of-custody record.
 
@@ -1711,6 +1905,235 @@ def _custody_raw_read(volume_letter, reader, records, allocated_bytes):
                             % (runs, format(records, ","), format(allocated_bytes, ",")))
     except Exception:
         pass
+
+
+# ---------------------------------------------------------------------------
+# NTFS integrity: what the live volume says about itself (ntfs_integrity.py
+# holds the rules; these only read). Each returns a plain dict and never
+# raises - a fact that cannot be read is recorded as unavailable, with why.
+# ---------------------------------------------------------------------------
+FSCTL_QUERY_USN_JOURNAL = 0x000900F4
+ERROR_JOURNAL_DELETE_IN_PROGRESS = 1178
+ERROR_JOURNAL_NOT_ACTIVE = 1179
+
+
+def live_usn_journal(handle):
+    """D4's facts: FSCTL_QUERY_USN_JOURNAL on the open volume handle."""
+    try:
+        out = win32file.DeviceIoControl(handle, FSCTL_QUERY_USN_JOURNAL, None, 80)
+        (jid, first, nxt, lowest, max_usn, max_size, delta) = struct.unpack_from('<7Q', bytes(out), 0)
+        return {'available': True, 'state': 'active', 'journal_id': jid, 'first_usn': first,
+                'next_usn': nxt, 'lowest_valid_usn': lowest, 'max_usn': max_usn,
+                'max_size': max_size, 'allocation_delta': delta}
+    except Exception as e:
+        code = getattr(e, 'winerror', None) or (e.args[0] if getattr(e, 'args', None) else None)
+        if code == ERROR_JOURNAL_NOT_ACTIVE:
+            return {'available': True, 'state': 'not_active'}
+        if code == ERROR_JOURNAL_DELETE_IN_PROGRESS:
+            return {'available': True, 'state': 'delete_in_progress'}
+        return {'available': False, 'error': str(e)}
+
+
+def live_host_settings():
+    """NtfsDisableLastAccessUpdate and the tunneling values, as context for
+    the manifest (an absent value means the Windows default)."""
+    out = {}
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                            r"SYSTEM\CurrentControlSet\Control\FileSystem") as k:
+            for name in ("NtfsDisableLastAccessUpdate", "MaximumTunnelEntries",
+                         "MaximumTunnelEntryAgeInSeconds"):
+                try:
+                    out[name] = winreg.QueryValueEx(k, name)[0]
+                except OSError:
+                    out[name] = None
+    except Exception as e:
+        out['error'] = str(e)
+    return out
+
+
+def _fixed_record(volume_reader, number):
+    raw = volume_reader.read_mft_record(number)
+    from utils.ntfs_runs import fixup_stride
+    usa_count = struct.unpack_from('<H', raw, 6)[0] if len(raw) >= 8 else 0
+    fixed, _ok = apply_fixups(raw, fixup_stride(volume_reader.mft_record_size, usa_count))
+    return fixed
+
+
+def _metadata_stream(volume_reader, number, attr_type):
+    """(read(offset, n), size, how) for one attribute of a metadata record -
+    resident content or its data runs on the raw volume."""
+    from utils.ntfs_runs import metadata_attribute
+    cluster = volume_reader.sectors_per_cluster * volume_reader.bytes_per_sector
+    content, runs, header = metadata_attribute(volume_reader._read_at, volume_reader.runmap,
+                                               volume_reader.mft_record_size, cluster,
+                                               number, attr_type)
+    if content is not None:
+        return (lambda o, n: content[o:o + n]), len(content), 'resident'
+    if not runs or header is None:
+        raise ValueError("record %d has no attribute 0x%X" % (number, attr_type))
+    rm = RunMap(runs, cluster)
+    size = header['data_size']
+
+    def read(o, n):
+        # Raw volume reads are whole sectors: round the request out, then cut.
+        sec = volume_reader.bytes_per_sector
+        lo = o - o % sec
+        hi = o + n
+        hi += (-hi) % sec
+        data = read_stream(volume_reader._read_at, rm, lo, hi - lo)
+        return data[o - lo:o - lo + n]
+    return read, size, '%d data run(s)' % len(runs)
+
+
+def live_logfile(volume_reader):
+    """D3 / D5's facts: $LogFile (record 2) read through its data runs."""
+    try:
+        from logfile_restart import scan_logfile, summary
+        read, size, how = _metadata_stream(volume_reader, 2, NTFSConstants.ATTR_DATA)
+        s = summary(scan_logfile(read, size))
+        s['read'] = how
+        return s
+    except Exception as e:
+        return {'available': False, 'error': str(e)}
+
+
+def live_mft_bitmap(volume_reader):
+    """D29's input: the $MFT's own $BITMAP (record 0), one bit per record.
+    Returns (bytes or None, note)."""
+    try:
+        read, size, how = _metadata_stream(volume_reader, 0, NTFSConstants.ATTR_BITMAP)
+        return read(0, size), "read from the raw volume (%s, %d bytes)" % (how, size)
+    except Exception as e:
+        return None, "not read: %s" % e
+
+
+def volume_object_id(fixed_rec3):
+    """The $Volume record's $OBJECT_ID (record 3), as a GUID string or None."""
+    try:
+        from utils.ntfs_runs import attribute_stream
+        content, _runs, _h = attribute_stream(fixed_rec3, NTFSConstants.ATTR_OBJECT_ID)
+        if content and len(content) >= 16:
+            return ObjectIdParser._format_guid(content[:16])
+    except Exception:
+        pass
+    return None
+
+
+def _open_integrity_run(volume_letter, volume_reader, record_count, case_dir, db_connection):
+    """The NTFS integrity checks and delta parse for one live volume, started
+    (ntfs_integrity.IntegrityRun) - or None, with the reason logged and put
+    in custody, when they cannot start. A parse never fails because of them."""
+    try:
+        from ntfs_integrity import IntegrityRun
+        from ntfs_digest_map import runlist_hash
+        try:
+            objid = volume_object_id(_fixed_record(volume_reader, 3))
+        except Exception:
+            objid = None
+        identity = {'source': 'live', 'label': volume_letter,
+                    'serial': '%016X' % getattr(volume_reader, 'volume_serial', 0),
+                    'volume_object_id': objid,
+                    'runlist_hash': runlist_hash(getattr(volume_reader.runmap, 'runs', None))}
+        run = IntegrityRun(volume=volume_letter, source='live', case_dir=case_dir,
+                           record_size=volume_reader.mft_record_size, record_count=record_count,
+                           identity=identity, reread=volume_reader.read_mft_record,
+                           source_path=r"\\.\%s:\$MFT" % volume_letter)
+        pre = {'usn': live_usn_journal(volume_reader.handle), 'host_settings': live_host_settings()}
+        if run.on['ntfs_integrity_lsn_checks'] or run.on['ntfs_integrity_logfile_continuity'] \
+                or run.need_map:
+            pre['logfile'] = live_logfile(volume_reader)
+        run.begin(db_connection, pre)
+        return run
+    except Exception as e:
+        logger.warning(f"NTFS integrity checks unavailable on {volume_letter}: ({e}); "
+                       f"parsing every record without them")
+        try:
+            from utils import custody as _custody
+            _custody.ledger(case_dir, "mft baseline reset", volume=volume_letter,
+                            reason="integrity_unavailable", error=str(e))
+            _custody.warn("NTFS integrity checks did not run on %s: %s" % (volume_letter, e))
+        except Exception:
+            pass
+        return None
+
+
+def open_file_integrity_run(volume_label, mft_path, record_size, record_count, case_dir,
+                            db_connection):
+    """The integrity checks and delta parse for a $MFT copied out as a file
+    (offline_MFTClaw, an image's extracted $MFT). What a file copy cannot say
+    is recorded as unavailable: the USN journal's state and the $MFT bitmap
+    live elsewhere on the volume. A $LogFile beside the $MFT is read when
+    the collection brought one. None when the checks cannot start."""
+    try:
+        from ntfs_integrity import IntegrityRun
+        from ntfs_digest_map import runlist_hash
+        from utils.ntfs_runs import unnamed_data_runs, fixup_stride
+        runs, objid = None, None
+        with open(mft_path, 'rb') as fh:
+            rec0 = fh.read(record_size)
+            fh.seek(3 * record_size)
+            rec3 = fh.read(record_size)
+        for raw, which in ((rec0, 0), (rec3, 3)):
+            if raw[:4] != b'FILE':
+                continue
+            fixed, _ok = apply_fixups(raw, fixup_stride(record_size, struct.unpack_from('<H', raw, 6)[0]))
+            if which == 0:
+                runs = unnamed_data_runs(fixed)[0]
+            else:
+                objid = volume_object_id(fixed)
+        identity = {'source': 'file', 'label': volume_label, 'serial': None,
+                    'volume_object_id': objid, 'runlist_hash': runlist_hash(runs)}
+        run = IntegrityRun(volume=volume_label, source='file', case_dir=case_dir,
+                           record_size=record_size, record_count=record_count,
+                           identity=identity, reread=None, source_path=mft_path)
+        pre = {'usn': {'available': False, 'note': 'a $MFT file copy does not carry the '
+                                                   'USN journal state'}}
+        logfile = os.path.join(os.path.dirname(os.path.abspath(mft_path)), '$LogFile')
+        if os.path.isfile(logfile):
+            from logfile_restart import scan_logfile_path, summary
+            pre['logfile'] = summary(scan_logfile_path(logfile))
+            pre['logfile']['read'] = logfile
+        else:
+            pre['logfile'] = {'available': False, 'note': 'no $LogFile beside the $MFT copy'}
+        run.begin(db_connection, pre)
+        return run
+    except Exception as e:
+        logger.warning(f"NTFS integrity checks unavailable for {mft_path}: ({e}); "
+                       f"parsing every record without them")
+        try:
+            from utils import custody as _custody
+            _custody.ledger(case_dir, "mft baseline reset", volume=volume_label,
+                            reason="integrity_unavailable", error=str(e))
+        except Exception:
+            pass
+        return None
+
+
+def finish_file_integrity_run(run, db_manager):
+    post = {'logfile': run.facts.get('pre', {}).get('logfile'),
+            'bitmap': None,
+            'bitmap_note': 'a $MFT file copy does not carry the $MFT:$BITMAP (it is in record 0 '
+                           'as a non-resident attribute, on the volume)'}
+    return run.finish(db_manager.connection, post, db_manager.insert_integrity_findings)
+
+
+def _finish_integrity_run(run, volume_reader, db_manager):
+    """After the parse: the facts read after the records ($LogFile's highest
+    LSN must be read AFTER them for D3), then findings, map and manifest."""
+    post = {}
+    try:
+        if run.on['ntfs_integrity_lsn_checks'] or run.on['ntfs_integrity_logfile_continuity']:
+            post['logfile'] = live_logfile(volume_reader)
+        if run.on['ntfs_integrity_structural'] or run.on['ntfs_integrity_wipe_detect']:
+            post['bitmap'], post['bitmap_note'] = live_mft_bitmap(volume_reader)
+            # A mismatch on a live volume is judged again on a fresh read.
+            post['reread_bitmap'] = lambda: live_mft_bitmap(volume_reader)[0]
+        post['usn'] = live_usn_journal(volume_reader.handle)
+    except Exception as e:
+        logger.warning(f"NTFS integrity facts after the read: {e}")
+    return run.finish(db_manager.connection, post, db_manager.insert_integrity_findings)
 
 
 class VolumeReader:
@@ -1769,6 +2192,8 @@ class VolumeReader:
             # Get MFT cluster location
             mft_cluster = struct.unpack('<Q', boot_sector[48:56])[0]
             self.mft_lcn = mft_cluster
+            # The volume serial number (0x48): part of the digest map's identity.
+            self.volume_serial = struct.unpack('<Q', boot_sector[0x48:0x50])[0]
             
             # Calculate MFT record size
             clusters_per_record = struct.unpack('<b', boot_sector[64:65])[0]
@@ -2132,6 +2557,10 @@ class MFTParser:
         
         # Start timer for this volume
         self.volume_start_time = time.time()
+        # Progress is per volume: the record count runs across the whole parse,
+        # so the second volume read 16580% against its own total (VM F-R).
+        self._volume_base = self.stats['processed_records']
+        self._last_logged_milestone = 0
         if self.parsing_start_time is None:
             self.parsing_start_time = time.time()
         
@@ -2157,7 +2586,19 @@ class MFTParser:
             self.stats['total_mft_size_bytes'] = allocated_bytes
             self.stats['estimated_file_count'] = file_count_estimate
             _custody_raw_read(volume_letter, volume_reader, logical_records, allocated_bytes)
-            
+
+            # NTFS integrity checks + delta parse (ntfs_integrity.py): every
+            # record is still read and digested; on a re-parse of this volume
+            # in this case only the records that changed are parsed. None when
+            # they cannot start - then every record is parsed, as before.
+            case_dir = os.path.dirname(os.path.abspath(self.config.output_directory))
+            integrity = _open_integrity_run(volume_letter, volume_reader, logical_records,
+                                            case_dir, self.db_manager.connection)
+            if integrity is not None:
+                logger.info(f"[MFT] {volume_letter}: {integrity.mode} parse"
+                            + (f" ({integrity.reason})" if integrity.reason else
+                               " - only records changed since the last parse are parsed"))
+
 
             
             # Scan for slack space records if allocated size is larger than logical size
@@ -2173,19 +2614,20 @@ class MFTParser:
             
             # Parse MFT records with optimized batch processing
             # Parse logical records first, then slack space records
-            start_record = max(0, self.state.get('last_processed_record', -1) + 1)
+            # Per volume (VM F-R). One counter for the whole parse left the
+            # first volume's last record - a slack-space number, past its
+            # logical end - as the start of the next, so every volume after
+            # the first parsed nothing and still reported success.
+            start_record = _resume_start(self.state, volume_letter)
             
-            # Determine which records to parse
-            records_to_parse = []
-            
-            # Add logical records
-            if start_record < logical_records:
-                records_to_parse.extend(range(start_record, logical_records))
-                
-            # Add slack space records (these are beyond logical EOF)
-            records_to_parse.extend(slack_space_records)
-            
-            total_records_to_parse = len(records_to_parse)
+            # Determine which records to parse: the logical records, then the
+            # slack space records beyond logical EOF. A range and the slack
+            # list chained, not one list: a list of every record number was
+            # 3.3 million ints, about 120 MB held for the whole parse.
+            logical = range(start_record, logical_records) \
+                if start_record < logical_records else range(0)
+            records_to_parse = itertools.chain(logical, slack_space_records)
+            total_records_to_parse = len(logical) + len(slack_space_records)
             logger.info(f"Will parse {total_records_to_parse:,} total records ({logical_records - start_record:,} logical + {len(slack_space_records):,} slack space)")
             
             # Initialize path cache and batch containers
@@ -2218,9 +2660,43 @@ class MFTParser:
             chunk_records = max(1, (1 << 20) // rec_size)
             chunk_first, chunk_data = -1, b''
             self.stats['not_file_records'] = 0
+            self.stats.setdefault('unchanged_records', 0)
+            want = None                 # records of this chunk to parse (None: all)
+            done_before = 0             # records parsed by the workers (progress offset)
 
             try:
-                for i, record_num in enumerate(records_to_parse):
+                workers = mft_parse_workers(len(logical))
+                if workers and len(logical):
+                    logger.info(f"Parsing {len(logical):,} records on {workers} worker processes")
+                    big = max(1, (4 << 20) // rec_size)       # 4 MB reads for the workers
+
+                    def _live_chunks():
+                        rn = logical.start
+                        while rn < logical.stop:
+                            n = min(big, logical.stop - rn)
+                            yield rn, volume_reader.read_mft_records(rn, n)
+                            rn += n
+
+                    def _on_chunk(first, n, parsed, counts):
+                        nonlocal done_before
+                        counts = counts or {}
+                        self.stats['parsed_data_size_bytes'] += 1024 * parsed
+                        for key in ('in_use_records', 'directory_records', 'file_records',
+                                    'ads_records', 'not_file_records', 'unchanged_records'):
+                            self.stats[key] = self.stats.get(key, 0) + counts.get(key, 0)
+                        self.stats['deleted_records'] = (self.stats.get('deleted_records', 0)
+                                                         + counts.get('deleted_records', 0))
+                        self.stats['processed_records'] += n
+                        done_before += n
+                        _note_processed(self.state, volume_letter, first + n - 1)
+                        self._report_progress(done_before / total_records_to_parse * 100,
+                                              first + n - 1, total_records_to_parse)
+
+                    _parsed, integrity = parse_chunks_parallel(
+                        _live_chunks(), volume_letter, rec_size, self.db_manager, batch_size,
+                        workers, on_chunk=_on_chunk, integrity=integrity)
+                    records_to_parse = iter(slack_space_records)
+                for i, record_num in enumerate(records_to_parse, done_before):
                     try:
                         # Read and parse record
                         if not (chunk_first <= record_num < chunk_first + len(chunk_data) // rec_size):
@@ -2230,12 +2706,30 @@ class MFTParser:
                                 n = 1
                             chunk_first = record_num
                             chunk_data = volume_reader.read_mft_records(record_num, n)
+                            want = None
+                            if integrity is not None and record_num < logical_records:
+                                try:
+                                    want = integrity.scan_chunk(record_num, chunk_data, n)
+                                except Exception as e:
+                                    # From here on every record is parsed, and no
+                                    # map is written (it would be incomplete).
+                                    logger.error(f"NTFS integrity scan stopped at record "
+                                                 f"{record_num}: {e}; parsing every record")
+                                    integrity, want = None, None
                         pos = (record_num - chunk_first) * rec_size
                         raw_record = chunk_data[pos:pos + rec_size]
                         if raw_record[:4] not in (b'FILE', b'BAAD'):
                             # Never-used slot (zeros) or a hole: nothing to parse.
                             self.stats['not_file_records'] += 1
-                        mft_record = self._parse_mft_record(record_num, volume_letter, raw_record)
+                        if want is not None and record_num not in want:
+                            # Unchanged since the last parse: its rows are in
+                            # the case already.
+                            mft_record = None
+                            self.stats['unchanged_records'] += 1
+                        else:
+                            if integrity is not None:
+                                raw_record = integrity.replacement(record_num) or raw_record
+                            mft_record = self._parse_mft_record(record_num, volume_letter, raw_record)
 
                         if mft_record:
                             # Add to batch for bulk processing
@@ -2245,7 +2739,7 @@ class MFTParser:
                             self._update_statistics(mft_record)
 
                         self.stats['processed_records'] += 1
-                        self.state['last_processed_record'] = record_num
+                        _note_processed(self.state, volume_letter, record_num)
 
                         # Process batch when full
                         if len(batch_records) >= batch_size:
@@ -2299,8 +2793,13 @@ class MFTParser:
                 except Exception:
                     pass
 
+            if integrity is not None:
+                try:
+                    manifest = _finish_integrity_run(integrity, volume_reader, self.db_manager)
+                    self._note_integrity(volume_letter, integrity, manifest)
+                except Exception as e:
+                    logger.error(f"NTFS integrity checks on {volume_letter} did not finish: {e}")
 
-            
             # Mark volume as processed
             if 'volumes_processed' not in self.state:
                 self.state['volumes_processed'] = []
@@ -2320,6 +2819,27 @@ class MFTParser:
             if volume_reader:
                 volume_reader.close()
     
+    def _note_integrity(self, volume_letter, run, manifest):
+        """The integrity run's outcome in the stats, the log and the result."""
+        c = manifest.get('counts') or {}
+        found = manifest.get('findings') or {}
+        changed = c.get('semantic_changed', 0) + c.get('new_since_last_parse', 0)
+        entry = {'volume': volume_letter, 'mode': run.mode, 'reason': run.reason,
+                 'records_read': c.get('records_read', 0),
+                 'records_parsed': changed if run.mode == 'delta' else c.get('records_read', 0),
+                 'findings': sum(found.values()), 'findings_written': c.get('findings_written', 0),
+                 'manifest_id': manifest.get('manifest_id'),
+                 'map_written': (manifest.get('map') or {}).get('written')}
+        self.stats.setdefault('integrity', []).append(entry)
+        if run.mode == 'delta':
+            logger.info(f"[MFT] {volume_letter}: delta parse - {changed:,} of "
+                        f"{c.get('records_read', 0):,} records changed since the last parse and "
+                        f"were parsed; {c.get('noise_full_changed_semantic_same', 0):,} changed only "
+                        f"in what is not stored (access time, run lists, slack)")
+        logger.info(f"[MFT] {volume_letter}: NTFS integrity - {entry['findings']:,} finding(s) "
+                    f"({', '.join('%s %d' % kv for kv in sorted(found.items())) or 'none'}); "
+                    f"manifest {entry['manifest_id']}")
+
     def _parse_mft_record(self, record_number: int, volume_letter: str, raw_data: bytes) -> Optional[MFTRecord]:
         """Parse a raw MFT record"""
         if len(raw_data) < 48:
@@ -2330,9 +2850,12 @@ class MFTParser:
             if raw_data[0:4] != NTFSConstants.MFT_RECORD_SIGNATURE:
                 return None
 
-            # The two bytes at the end of each 512-byte stride are the update
-            # sequence number until the fixup array puts the real ones back.
-            raw_data, fixups_ok = apply_fixups(raw_data)
+            # The two bytes at the end of each stride are the update sequence
+            # number until the fixup array puts the real ones back. The stride
+            # comes from the record size and the array's length (512 on every
+            # volume seen, 4Kn included), never assumed.
+            raw_data, fixups_ok = apply_fixups(
+                raw_data, fixup_stride(len(raw_data), struct.unpack_from('<H', raw_data, 6)[0]))
             if not fixups_ok:
                 logger.debug(f"MFT record {record_number}: update sequence mismatch (torn write)")
 
@@ -2358,7 +2881,8 @@ class MFTParser:
                 sequence_number=sequence_number,
                 hard_link_count=hard_link_count,
                 lsn=lsn,
-                base_record_ref=base_record_ref
+                base_record_ref=base_record_ref,
+                fixup_ok=bool(fixups_ok)
             )
 
             # Parse attributes
@@ -2575,7 +3099,7 @@ class MFTParser:
         """Report parsing progress on a single line, adapting to terminal width"""
         import shutil
         
-        processed = self.stats['processed_records']
+        processed = self.stats['processed_records'] - getattr(self, '_volume_base', 0)
         
         # Use provided parameters or calculate from stats
         if progress_pct is not None and total_records is not None:
@@ -2771,6 +3295,252 @@ def get_available_volumes() -> List[str]:
     
     return volumes
 
+# --------------------------------------------------------------------------
+# Parallel record parsing
+#
+# The parse of a record is a pure function of its bytes: no state crosses
+# from one record to the next (the integrity run, which does carry state,
+# stays in the parent). A first parse of a 3.3 M-record C: spent most of its
+# 10-12 minutes in this pure-Python work on one core, so it is spread over a
+# few worker processes: the parent reads, runs the integrity scan (which
+# decides what to parse) and inserts; the workers turn each chunk's bytes into
+# the four tables' rows, timestamps already formatted. Chunks come back in
+# order, so the rows - and their rowids - are the ones a single process writes.
+
+class _ChunkParser:
+    """What a worker needs of MFTParser: the record parse and nothing else (no
+    database, no log files)."""
+
+    def __init__(self):
+        self.attr_registry = AttributeParserRegistry()
+
+    _parse_mft_record = MFTParser._parse_mft_record
+    _parse_attributes = MFTParser._parse_attributes
+    _parse_single_attribute = MFTParser._parse_single_attribute
+    _categorize_attribute = MFTParser._categorize_attribute
+
+
+_WORKER_PARSER = None
+
+
+def _mft_worker_init(paths):
+    for path in reversed(paths or []):
+        if path not in sys.path:
+            sys.path.insert(0, path)
+
+
+def _formatted(rows):
+    out = []
+    for row in rows:
+        out.append(tuple(adapt_datetime_value(v) if isinstance(v, datetime.datetime) else v
+                         for v in row))
+    return out
+
+
+def parse_chunk_rows(volume_letter, first, data, rec_size, want=None, replacements=None,
+                     integrity_ctx=None):
+    """Parse the records in ``data`` (consecutive, the first numbered
+    ``first``) into the rows of the four MFT tables. ``want``: the record
+    numbers to parse (None: all). With ``integrity_ctx`` the chunk's
+    integrity work is done here too (ntfs_integrity.precompute_chunk).
+    Returns (records in the chunk, records parsed, counts, rows, integrity
+    results - None when there was none to do, False when the parent must
+    scan this chunk itself; the rows are then not built)."""
+    global _WORKER_PARSER
+    n = len(data) // rec_size
+    pre = None
+    if integrity_ctx is not None:
+        from ntfs_integrity import precompute_chunk
+        pre = precompute_chunk(integrity_ctx, first, data, n)
+        if pre is None:
+            return n, 0, None, None, False
+    if _WORKER_PARSER is None:
+        _WORKER_PARSER = _ChunkParser()
+    parser = _WORKER_PARSER
+    records = []
+    counts = {'not_file_records': 0, 'unchanged_records': 0, 'in_use_records': 0,
+              'deleted_records': 0, 'directory_records': 0, 'file_records': 0, 'ads_records': 0}
+    for k in range(n):
+        rn = first + k
+        raw = data[k * rec_size:(k + 1) * rec_size]
+        if raw[:4] not in (b'FILE', b'BAAD'):
+            counts['not_file_records'] += 1
+        if want is not None and rn not in want:
+            counts['unchanged_records'] += 1
+            continue
+        if replacements and rn in replacements:
+            raw = replacements[rn]
+        record = parser._parse_mft_record(rn, volume_letter, raw)
+        if not record:
+            continue
+        records.append(record)
+        if not record.in_use:
+            counts['deleted_records'] += 1
+            continue
+        counts['in_use_records'] += 1
+        counts['directory_records' if record.is_directory else 'file_records'] += 1
+        if record.has_ads:
+            counts['ads_records'] += 1
+    rows = tuple(_formatted(table) for table in records_to_rows(records))
+    return n, len(records), counts, rows, pre
+
+
+def mft_parse_workers(record_count):
+    """How many worker processes parse the records (0: parse in this process).
+
+    CROWEYE_MFT_WORKERS or the 'mft_parse_workers' setting decide when set;
+    otherwise up to 4 on a machine with the cores for it, and none for a small
+    $MFT, where starting the workers costs more than it saves."""
+    value = os.environ.get('CROWEYE_MFT_WORKERS')
+    if value in (None, ''):
+        try:
+            from config.case_history_manager import read_global_setting
+            value = read_global_setting('mft_parse_workers', None)
+        except Exception:
+            value = None
+    if value not in (None, '', 'auto'):
+        try:
+            return max(0, int(value))
+        except (TypeError, ValueError):
+            pass
+    if record_count < 50000:
+        return 0
+    return max(0, min(4, (os.cpu_count() or 1) // 2 - 1))
+
+
+def parse_chunks_parallel(chunks, volume_letter, rec_size, db_manager, batch_size, workers,
+                          on_chunk=None, integrity=None):
+    """Parse ``chunks`` - (first, data), in record order - on ``workers``
+    processes and insert their rows through ``db_manager``; run the
+    ``integrity`` scan (ntfs_integrity.IntegrityRun) over them on the way.
+
+    On a full parse with no prior map the workers do each chunk's integrity
+    work as well and this process applies it in order (apply_chunk); with a
+    prior map the scan runs here first, as it decides what to parse. A chunk
+    a worker cannot finish alone (a live torn read to re-read), a worker that
+    died and a pool that would not start are handled here, with the same
+    functions, so the scan sees every chunk once and no row is written twice.
+
+    ``on_chunk(first, n, parsed, counts)`` runs here after each chunk, in
+    order. Returns (records parsed, the integrity run - None if its scan
+    stopped, which is logged, and its map must then not be written)."""
+    import collections
+    import concurrent.futures
+    import multiprocessing
+    paths = [os.path.dirname(os.path.abspath(__file__))] + list(sys.path)
+    pending = collections.deque()
+    tables = ([], [], [], [])
+    totals = {'parsed': 0, 'local_chunks': 0}
+    state = {'integrity': integrity}
+    ictx = None
+    if integrity is not None:
+        try:
+            ictx = integrity.worker_context()
+        except Exception:                                    # noqa: BLE001
+            ictx = None
+
+    def _stop_integrity(first, e):
+        logger.error("NTFS integrity scan stopped at record %s: %s; parsing every record", first, e)
+        state['integrity'] = None
+
+    def _scan(first, data, n):
+        """The parent's own scan: (records to parse or None, replacements)."""
+        run = state['integrity']
+        if run is None:
+            return None, None
+        try:
+            want = run.scan_chunk(first, data, n)
+        except Exception as e:                               # noqa: BLE001
+            _stop_integrity(first, e)
+            return None, None
+        repl = None
+        if run.replacements:
+            repl = {rn: b for rn, b in run.replacements.items() if first <= rn < first + n}
+        return want, repl
+
+    def _flush():
+        if tables[0] or tables[1] or tables[2] or tables[3]:
+            db_manager.insert_rows(*tables)
+            db_manager.commit()
+            for t in tables:
+                t.clear()
+
+    def _local(args):
+        totals['local_chunks'] += 1
+        return parse_chunk_rows(*args)
+
+    def _take(args, result):
+        vol, first, data, rs, want, repl, ctx = args
+        if result is None:                                   # the worker failed
+            result = _local(args)
+        n, parsed, counts, rows, pre = result
+        if pre is False:
+            # Needs this process: scan here (with the re-read), parse here.
+            want, repl = _scan(first, data, n)
+            n, parsed, counts, rows, pre = _local((vol, first, data, rs, want, repl, None))
+        elif pre is not None and state['integrity'] is not None:
+            try:
+                state['integrity'].apply_chunk(first, n, pre)
+            except Exception as e:                           # noqa: BLE001
+                _stop_integrity(first, e)
+        for t, part in zip(tables, rows):
+            t.extend(part)
+        totals['parsed'] += parsed
+        if on_chunk is not None:
+            on_chunk(first, n, parsed, counts)
+        if len(tables[0]) >= batch_size:
+            _flush()
+
+    def _get(future):
+        if future is None:
+            return None
+        try:
+            return future.result()
+        except Exception as e:                               # noqa: BLE001 - a worker died
+            logger.warning("MFT parse worker failed (%s); that chunk is parsed in this process", e)
+            return None
+
+    pool = None
+    if workers:
+        try:
+            pool = concurrent.futures.ProcessPoolExecutor(
+                max_workers=workers, mp_context=multiprocessing.get_context('spawn'),
+                initializer=_mft_worker_init, initargs=(paths,))
+        except Exception as e:                               # noqa: BLE001
+            logger.warning("MFT parse workers did not start (%s); parsing in this process", e)
+    try:
+        for first, data in chunks:
+            n = len(data) // rec_size
+            use_ctx = ictx if state['integrity'] is not None else None
+            if use_ctx is None:
+                want, repl = _scan(first, data, n)
+            else:
+                want, repl = None, None
+            args = (volume_letter, first, data, rec_size, want, repl, use_ctx)
+            future = None
+            if pool is not None:
+                try:
+                    future = pool.submit(parse_chunk_rows, *args)
+                except Exception as e:                       # noqa: BLE001 - broken pool
+                    logger.warning("MFT parse workers stopped (%s); parsing in this process", e)
+                    pool.shutdown(wait=False, cancel_futures=True)
+                    pool = None
+            pending.append((args, future))
+            while pending and (pool is None or len(pending) > workers * 2):
+                args0, fut = pending.popleft()
+                _take(args0, _get(fut))
+        while pending:
+            args0, fut = pending.popleft()
+            _take(args0, _get(fut))
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=True, cancel_futures=True)
+    _flush()
+    if totals['local_chunks']:
+        logger.info("%d chunk(s) of the $MFT were parsed in this process", totals['local_chunks'])
+    return totals['parsed'], state['integrity']
+
+
 def main():
     """Main entry point for MFT Claw - Automatic Analysis Mode"""
     # This run's counts only: a run that fails early must not hand on the
@@ -2868,7 +3638,9 @@ def main():
         LAST_COUNTS = mft_parser.db_manager.tally.as_result(
             primary="mft_records",
             volumes=len(volumes), volumes_processed=success_count,
-            extension_records_skipped=stats.get('extension_records_skipped', 0))
+            extension_records_skipped=stats.get('extension_records_skipped', 0),
+            unchanged_records=stats.get('unchanged_records', 0),
+            integrity=stats.get('integrity', []))
         _t = LAST_COUNTS
         logger.info(f"MFT records: {_t['records']:,} - new: {_t['inserted']:,}, "
                     f"already in the database: {_t['duplicates']:,} "

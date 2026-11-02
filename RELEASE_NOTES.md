@@ -2,6 +2,330 @@
 
 ---
 
+## Version 0.15.0 — Sentinel Glance
+
+**Release date:** 2026-11-02 · Figures are measured on the build machine and the cases named.
+
+---
+
+### Overview
+
+Many of the tools in this release were **built for Crow-Eye Sentinel**, our paid enterprise platform, and we are giving them to the community in the open-source Crow-Eye, **free**. Every investigator working a case and every researcher studying a machine should have them.
+
+Sentinel itself is much more than Crow-Eye on many machines. It is **Continuous Forensic Reconstruction**: agents parse every endpoint fully, on their own schedules, and keep its history, so the evidence is already gathered when a breach is found months later. It compares each scan with the last to show what changed, learns how people normally work and flags the patterns that come before data leaves, runs Wing Rules across the whole fleet, works alongside the EDR you already have and forwards to your SIEM or SOAR. Its control plane, cases and chain of custody stay on your own servers.
+
+This release does five things:
+
+- **Puts every file within reach.** The **File Browser** opens this machine, any shadow copy, a forensic image or the case's saved file listing, and shows beside each file what the case knows about it. **App Acquisition** takes a program and everything that belongs to it into the case in one step, each item with the reason it was taken.
+- **Recovers what was lost.** Shadow copies, including those Windows no longer lists, can be browsed, compared and recovered from. Deleted files come back from their MFT record, with a warning when their space has been reused.
+- **Says how far the file system can be trusted.** NTFS integrity checks run with every MFT parse, and a re-parse reads only the records that changed.
+- **Reads behaviour as chains, person by person.** A third correlation engine, the **Behavioural engine**, runs 18 new Behaviour Wings over what User Behavior finds. Analysts can write their own behaviour rules and switch any rule off.
+- **Proves every step.** Every collection, recovery, restore, export and integrity check is written to the case's chain of custody and its logs.
+
+The release at a glance, in numbers, is at the end of these notes.
+
+### Highlights
+
+- **File Browser, live and offline.** Browse this machine now or at any shadow copy, a forensic image (any partition or its own shadow copies), or the case's saved file listing with its deleted entries, long after the machine is gone. Select any file and see every artifact that names it: Prefetch, Amcache, ShimCache, BAM/DAM, UserAssist, LNK, Jump Lists, Recycle Bin, MFT and USN, SRUM, browser downloads and Shellbags. Collect files into the case, put an earlier version back, or recover a deleted file from its MFT record, each hashed and recorded in the chain of custody.
+- **App Acquisition.** Name a program and Crow-Eye gathers everything that belongs to it, from this machine or an image: its program folder, per-user data and caches, ProgramData, Prefetch, shortcuts, Jump Lists and registry keys. Each item comes with the reason it was taken, everything is hashed into the chain of custody, and its databases open straight in Database Search and Eye.
+- **Shadow Copies window:** every copy of a volume, hidden ones included, where its storage sits, what made it, which were removed, and what changed between any two.
+- **Recover into the case:** files from a shadow copy, a changed file from the **What changed** list, or a **deleted file from its MFT record**, each with its SHA-256 and a chain-of-custody record. Everything is listed under **Case → Recovered & Collected Files…**.
+- **NTFS integrity checks and delta MFT parsing:** timestomping, wiped records, structure, bitmap, LSN and journal checks; a re-parse reads only what changed.
+- **The Behavioural engine** and **35 default Wings**: 11 Identity, 6 Time and 18 Behaviour.
+- **A new side menu and top bar**, and an **Export** that asks what and how.
+- **A live Parse All starts parsing in seconds, and the MFT parses on several cores:** a first parse of a 3.3-million-record C: takes 194 s.
+- **Eye answers precisely with few model calls,** checks the values in each answer against the evidence it read, and can use a Claude Code or Codex sign-in as its model.
+
+---
+
+### File Browser
+
+**Side menu → Tools → Live File Browser** opens this machine, choosing **Now** or any shadow copy. **Side menu → Offline Analysis → Offline File Browser** opens a forensic image (any partition, or one of its own shadow copies) or the **saved listing**: the case's parsed `$MFT`, browsable later with no access to the machine, deleted entries included.
+
+- **What the case knows about it.** Select a file or folder and the side panel lists every parsed artifact that names it: Prefetch, Amcache, ShimCache, BAM/DAM, UserAssist, LNK, Jump Lists, Recycle Bin, MFT and USN, SRUM, browser downloads and Shellbags.
+- **Folder sizes**, a **Share of this folder** column, a typed path bar, Back / Forward / Up, and a right-click menu.
+- **Collect ticked into the case** copies files with their SHA-256, a check against the source, a manifest and a chain-of-custody record. SQLite databases among them get a working copy that Database Search and Eye read at once.
+- **Recover ticked…** puts an earlier version back: into the case, onto the machine (beside the current file, never over it, hashed and recorded), or both.
+- **Recover deleted files from their MFT record.** In the saved listing, right-click a deleted file and choose **Recover deleted … into the case**. Its bytes are read back through its MFT record from this machine's volume or from the image the case came from.
+  - **Checked first:** the record is still deleted, its sequence number is the one the listing showed, and it holds the same name. A record reused since is refused in words.
+  - **Every cluster checked** against the volume's bitmap. A file whose clusters are in use again is still saved, and marked **may be overwritten** with how many.
+  - **Read before anything is written,** so the case's own new files can never take the freed records first.
+  - **Tested on this machine's C:**: a 300,000-byte file and a 14-byte file, deleted and recovered byte for byte.
+  - **Refused, with the reason:** compressed and encrypted (EFS) files.
+- **Opens at once,** in about 0.6 s on the build machine. It finds the saved listing's volumes from each volume's system records (4 ms on a 3.3-million-record case), and lists fixed drives and removable drives with media, so a disconnected network drive or an empty card reader never holds the window.
+
+### App Acquisition
+
+**Side menu → Tools → Live App Acquisition**, or **Offline Analysis → Offline App Acquisition** for an image.
+
+- **A program and everything that belongs to it:**
+  - its program folder;
+  - per-user data and caches, and ProgramData;
+  - Prefetch, shortcuts and Jump Lists;
+  - its registry keys (for example "4 registry keys (HKLM 3, HKU 1)").
+
+  Each item comes with the reason it was included, so you can untick what you don't want.
+- Copies are hashed into the chain of custody with an `app_manifest.json`. Databases are made ready for Database Search and Eye.
+- **Precise matching:** generic names such as `uninstall.exe` are never taken as part of a program on their own.
+- The 7-Zip footprint is gathered in **1.2 s**.
+- A program can also be recovered from a shadow copy.
+
+### Shadow Copies and Recovery
+
+Open **Side menu → Tools → Shadow Copies**.
+
+- **Every copy, including the hidden ones.** Windows lists only the copies it still exposes. Crow-Eye reads the volume's own VSS catalog with its own reader and rebuilds the rest from their stores. Checked against Windows' own devices, it found 0 differences in 22,800 sampled blocks.
+- **Where each copy's storage sits on the disk**, drawn to scale with the `$MFT` and the USN journal, and how much space shadow storage takes against what Windows has allocated and the maximum it may use.
+- **What made each copy**, from:
+  - System Restore's own metadata;
+  - events 8193/8194, 8300–8302 and VSS 8231 (the requester's command line);
+  - the `VSS\Diag` key;
+  - Crow-Eye's own custody records.
+- **Which copies were removed**, from the removals Windows logged, so a copy that vanished with no logged removal stands out.
+- **What changed:** compare any copies with each other and with now, for the whole volume or one folder. Each folder gets its size in every state and added / deleted / changed counts, and each file is listed with its sizes and times before and after.
+- **Recover from What changed.** Select files and click **Recover selected into the case**, or right-click one. A deleted file is taken from the copy it was still in, and an added or changed file from the newer state. **Open in the File Browser at …** shows it in place.
+- **Browse this copy** opens the copy in the File Browser.
+- The live copies are listed in **1.3 s**.
+- **When a volume has no shadow copies, the window says why.** It names the removals Windows logged (for example "5 removals in the last 24 hours, the last at 11:26 UTC (volsnap event 33)": the oldest copy deleted to keep shadow storage under its limit), or says that none were ever logged. It adds the storage used, allocated and allowed, and the volume's free space. The File Browser's **Moment** row says the same.
+
+### Recovered & Collected Files
+
+**Case → Recovered & Collected Files…** lists every run that took files from evidence into the case, newest first:
+- programs acquired;
+- files collected;
+- files recovered from a shadow copy;
+- deleted files recovered from their MFT record;
+- files restored onto the machine.
+
+For each file it shows its SHA-256, whether the copy matched its source, and the overwrite risk for a deleted file. The folder and the run's custody record open from there.
+
+### NTFS Integrity and Delta MFT Parsing
+
+- **NTFS integrity checks, on by default.** They run while the MFT is parsed, live or from a collected `$MFT`:
+  - timestomping ($STANDARD_INFORMATION earlier than $FILE_NAME, judged in 100 ns ticks);
+  - in-use records wiped or emptied;
+  - record structure (BAAD, update-sequence mismatches, sizes, link counts);
+  - the `$MFT` bitmap against each record;
+  - record LSNs against `$LogFile`;
+  - the state of the USN journal and `$LogFile`.
+
+  Records deleted or reused between two parses are listed too. The findings are in the new **MFT → Integrity Findings** tab.
+- **A re-parse of the MFT parses only what changed.** Every record is still read, digested and compared with a sealed digest map kept in the case. On the build machine's C: (3.3 million records) the whole compare took **31 s** and found 54 changed records; only those 54 were parsed again. Turn it off in **Settings → Parsing**.
+- **Linked to the chain of custody.** One integrity manifest per volume is written to the case ledger. A check that is switched off is recorded at every parse, so an empty result is never mistaken for a clean one.
+- **Focused timestomping findings.** "MFT-entry-changed earlier than $FILE_NAME created" fires only when the creation time was moved back too, so files that installers, pip and archive extraction create with an older change time are left out: 5,851 findings on the build machine's C:, each one worth a look. The volume-wide findings say what the files have in common.
+- **Raw times and record state:** `mft_records` gains `lsn` and `fixup_ok`. `mft_standard_info` and `mft_file_names` gain the raw FILETIME of each time. 4Kn volumes are read with their real record size.
+
+### The Behavioural Engine and Behaviour Wings
+
+- **A third correlation engine.** The **Time-Window engine** finds traces from different artifacts in one time window. The **Identity engine** groups everything about one program or file. The new **Behavioural engine** reads the behaviours User Behavior found, one person (SID) at a time, and finds chains of them: in order or in any order, within a set number of minutes. Two people's actions are never chained together.
+- **Every Wing has a category** (Time, Identity or Behaviour) that decides which engine runs it. The Wing Creator has a type picker and a step editor for Behaviour Wings. A Wing given to the wrong engine is skipped with the reason.
+- **18 Behaviour Wings ship ready to run.** Among them:
+  - USB Insert, Then Mass Copy;
+  - Files Gathered, Then Uploaded;
+  - Remote-Access Site, Then a Program Download;
+  - Failed Sign-ins, Then a Successful One;
+  - Off-Hours Sign-in, Then a Credential Tool;
+  - Log Clearing After an Admin Sign-in;
+  - Mass Encryption With Recovery Inhibition.
+
+  Crow-Eye now ships **35 default Wings**: 11 Identity, 6 Time and 18 Behaviour.
+- **Behaviour Results** lists each hit with the person, the Wing and its steps in order. **Open in User Behavior** goes back to the behaviours themselves.
+- **Behaviour is context, never corroboration.** A behaviour hit is shown beside Time and Identity matches (`behaviour_context`) but never adds to their score.
+
+### User Behavior
+
+- **Your own behaviour rules** in the Behaviour Rule Creator, saved beside the 81 built-in ones and usable as steps of a Behaviour Wing.
+- **Rule switches** in **Settings → User Behavior** and in the window's new **Rules** tab. Each event names the user (SID) behind it.
+- **The analysis is kept with the case** (`UBA/uba_events.db`) and reopened at once, and is rebuilt when the rules change (rules version 3).
+- **USB events say whether the device was a storage drive.** "Volume opened" says whether the volume is a USB volume, a network share or an internal disk; C: and internal partitions are never called removable.
+- **A System-log clear (event 104) names who did it.**
+
+### Correlation Engine
+
+- **Feathers build in the background.** Crow-Eye stays usable while they build, and a compact progress list in the Pipeline tab shows each Feather as it starts, its time, and why one was skipped or failed. Opening the Correlation Engine rebuilds only the Feathers that are missing or out of date. On the build machine all 42 build in 12 s.
+- **Wings for another engine are shown as what they are.** They are a normal part of a pipeline, so they are listed in muted text with the engine that runs them. A Wing with no category, or a Time Wing carrying Identity-only rules, shows as a warning.
+- **A progress bar for the whole run:** Wing N of M, then the current phase, always moving forward. The log and the diagnostics list are written in batches, so the window stays responsive through runs with tens of thousands of log lines.
+- **Repeatable runs.** Each Wing reads its own copy of every feather and Wings load in name order, so a pipeline gives the same results every time it runs.
+- **Built-in date reading.** Crow-Eye reads every date format itself, AmCache's slash dates included, so matches group by time identically on every system.
+- **Correlation results load in the background.** After a run, or with Load Results, the matches are read and grouped into identities on a worker. The Identity tab shows its loading steps and fills when they are done.
+- **The Identities Found chart is in the Summary tab**, leaving each Wing's results to its matches.
+- **Double-clicking an identity shows everything.** A Summary tab gives the type, variants, anchors, records, Feathers, Wings, score, confidence, first and last seen, the per-Feather and per-Wing tables and the rule and ATT&CK hits. The Records tab shows which Wing and anchor each record came from, sorts, and hides internal fields. An anchor shows its Wing, score, confidence, time spread and file, and the Behavioural engine's context.
+- **The Time-Window and Identity engines are fast and deterministic:** the same results and match ids on every run. Feathers are built in SQLite, and stale ones are rebuilt. Wing targets and anchor priority are honoured, and so is the Identity engine's minimum match count.
+- **Precise removable-media matches.** The USB / Removable Media Wings count a drive as removable only on real evidence: the LNK drive type stays the proof, and other drives are named "a drive other than C:".
+- **More remote-control, transfer and tunnel tools recognised, matched precisely:**
+  - remote control: ScreenConnect, Splashtop, Atera, NinjaOne, MeshAgent, Action1 and others;
+  - transfer: MEGAcmd, restic, azcopy, gsutil and croc;
+  - tunnels: cloudflared, chisel, frpc and loclx.
+
+  `nc.exe`, `ncat` and `ftp` match those tools only, never Windows' own `mobsync.exe` or `truncate.exe`, or Git's `git-remote-ftp.exe`. Webhook and bot upload endpoints count as file-sharing sites.
+- **Engine, Wing and Feather icons** throughout, and each Results tab shows the engine that made it. The Correlation window scrolls to keep every panel at full size.
+- **Numbered tabs and a clear Pipeline Manager.** The tabs read **1 Pipeline Manager**, **2 Execution**, **3 Results**: the order you use them. Pipeline Metadata is laid out in two columns, with Output Directory in the form, so the Feathers and Wings lists are in view on a 768 px screen and the whole tab fits at 1080 p.
+
+### Parsers
+
+- **The MFT is parsed on several cores.** Records are parsed in worker processes, and on a first parse each record's integrity checks run there too; the rows, the findings and the digest map are the ones a single process writes. A first live parse of C: (3,320,633 records, integrity checks on) takes **194 s**, and the bulk load writes without waiting on the disk at every commit. Up to four workers, by the machine's cores; a small `$MFT` is parsed in one process.
+- **Open/Save and LastVisited MRU paths decode in full:** 288 of 288 live entries.
+- **ShimCache includes packaged-app (Store) records.**
+- **AmCache feathers use each table's own time column.** SYSTEM-hive tables carry their last-written dates, and ActiveComputerName is dated.
+- **User accounts get their creation time** (SAM `Names\<user>`), and profiles their load and unload times.
+- **The same evidence read two ways is stored once.** SRUM opened clean and then recovered, AmCache and a browser profile parsed live and then from Crow-Claw's copy, and event logs read live and from an exported `.evtx` each add their rows once.
+- **A collected `$MFT` from a disk already in the case is stored as that disk**, not as a second full copy.
+- **A browser database copied while the browser was writing is read as committed**, never half-written.
+- **Per-user copies past 260 characters** are copied where long paths are off (the Windows default), and a refused destination is said as "destination path too long".
+- **SRUM or Prefetch switched off on the host** reads **Disabled on host**, with the date its data ends.
+- **The SRUM application timeline names the build that ran:** two new columns, PE Link Time (UTC) and PE CheckSum, tell apart programs with one name, such as `python.exe` from a venv, the Store and python.org. Cases parsed earlier are filled in on their next SRUM parse, with no row stored twice. Windows binaries are built reproducibly, so a link time in a year like 2054 is a build hash, not a date.
+- **SRUM names the program for a Store app** whose app id ends in `.Exe` (`py-manager.exe`).
+
+### Partition Window
+
+- **The disk bar shows `$MFT`, the USN journal and shadow-copy storage at their real positions**, with a used / allocated / maximum meter. There is one card per disk, with partitions coloured by role.
+- It opens in **2.5 s**.
+
+### Interface
+
+- **A new side menu:**
+  - **Parse all Artifacts** and **Run Correlation** on top, then **Export** and **Linking**;
+  - three collapsible sections: Live Analysis, Tools and Offline Analysis;
+  - a green dot beside each artifact the case holds.
+- **A new top bar:** Create case and Open case, Database Search, Timeline, User Behavior and Eye AI, with Settings one click away (**Ctrl+,**).
+- **Export asks what and how:** CSV, JSON, both, or an HTML report, any of the case's tables (MFT/USN, SRUM, Browser and Recycle Bin included), and the folder.
+- **Parse all Artifacts stands out:** a green button with a soft, breathing glow and a new icon whose scan line sweeps the evidence; **Run Correlation** has a new linked-nodes icon in violet. Both pause while Crow-Eye is busy and when the window is minimised.
+- **Clear previous and next tab buttons.** When a row of tabs is too wide for the window, its scroll buttons are cyan chevrons in their own outlined buttons, brighter on hover and dimmed when there is nothing more on that side.
+- **A welcome on the first start** points to the User Guide on crow-eye.com, and **Help → Welcome…** opens it again.
+- **Export runs in the background.** Crow-Eye stays usable while tables are written. Its own window shows each table's progress on Crow-Eye's loading bar, and **Stop** works within a table. When it finishes, the window becomes a result card listing what was written and where, with **Open report** and **Open folder** buttons.
+- **A styled HTML report:** a header card (case, UTC time, tables, rows), sticky column headings and readable rows, in the site's colours.
+- **Tool buttons with a calm hover:** Database Search, Timeline, User Behavior and Eye AI deepen slightly and their edge lights.
+- **Dynamic Linking runs in the background.** Link Gathering runs its rules on a worker, with its own database connection, and the linked-row counts after **Run Dynamic Linking** are counted in the background too.
+- **Database Search opens at once** and finds and samples the case's databases in the background.
+- **User Behavior opens fast:** its first screen appears in 0.06 s on a test case.
+- **A quiet tab hover:** a darker tab with a teal edge.
+- **Sentinel's artifact icons** on the parser buttons and tabs, clearer text rendering, and loading screens with steps in the new windows.
+
+### Timeline
+
+- **Registry, event-log and Prefetch links are drawn.** A link card opens its full row, the Prefetch last-access time is plotted, and SRUM marks stay in range.
+
+### Eye AI
+
+- **The Eye opens without a wait.** The model check runs in the background with a time limit, the opening splash and the loading screen show the real steps, and the screen closes as soon as the case context and history are in.
+- **Connect first.** When no model answers, or none is set up, the Eye opens on a **Connect a model** panel. It names the backend and model and gives the reason in plain words (key refused, model not found, rate limit, no answer in time, server unreachable), with **Open setup** and **Retry**. The header shows checking, connected or failed.
+- **Slow answers and errors are reported.** After 20 s with no reply the chat says the model is slow to answer. A backend error is given as a sentence plus the error type the SDK returned. Cloud APIs get 120 s per request and one retry; the connection check gives up after 20 s.
+- **Claude Code as Eye's model.** Eye can run on the Claude Code installed on the machine, on the analyst's own Claude sign-in. No API key is needed.
+  - Choose it in Settings -> Eye AI -> Local command-line agent -> Claude Code. Models: sonnet, opus, fable, haiku. Effort applies too.
+  - Claude Code's own tools, plug-ins, hooks and project files stay switched off. Only Eye's tools touch the evidence, and every call still goes through Eye's guardrails.
+  - Eye's tool requests come back as structured JSON, the whole conversation is sent, and Claude's prompt cache is reused between steps.
+  - An API key in the environment is never passed on, so the sign-in is what gets used.
+  - One Claude Code process stays open for each investigation and receives only what is new at each step. Earlier steps are read back from Claude's cache, and there is no start-up wait per step, which keeps a Claude plan's usage low.
+  - Errors are said plainly: not signed in, the plan's usage limit, a conversation too long for the model, an unknown model, or Claude being busy (which Eye retries). When the plan's limit is reached, Eye says it covers every Claude model.
+  - The model badge shows the session's model calls, tokens sent, cached and written, and their list-price value.
+- **Codex CLI as Eye's model.**
+  - **Your sign-in.** Eye can also run on OpenAI's Codex CLI, using your ChatGPT sign-in; no API key is needed.
+  - **How to choose it.** Settings -> Eye AI -> Local command-line agent -> Codex CLI.
+  - **Read-only, in an empty folder.** Codex runs read-only, in an empty folder, with its replies in a fixed structure.
+  - **Only Eye reads the evidence.** If Codex tries to run a command, change a file or browse on its own, that turn is stopped.
+- **Token use from every model.**
+  - **Every backend reports it.** Claude Code and the Anthropic, OpenAI, Gemini, Ollama and LM Studio backends report tokens sent, read from cache and written. The model badge shows each session's totals.
+  - **Clear Claude Code errors.** A Claude Code turn that fails says why.
+  - **Retried once.** A turn that fails without a provider error is retried once in a fresh session.
+- **Gemini CLI note.** Google has retired the Gemini CLI's free individual tier. The setup page says so and points to the Gemini API backend.
+- **Precise answers.**
+  - **Proven means proven by data.** A step is proven only by a tool result that succeeded, holds rows, and bears on the step.
+  - **Plans fit the question.** A direct question gets a short plan. An open question ("what happened") gets a full one. The defaults are up to 4 narratives with 3 steps each.
+  - **Sweeps when they matter.** The six-database sweep (Amcache, Prefetch, Uninstall keys, ShimCache, SRUM, MFT) is asked for when the question is whether something exists, was installed or was run.
+  - **Background knowledge that matches the question.**
+    - USB and device, storage, logon, account, shutdown, Wi-Fi, service and recycle questions bring in the knowledge that covers them.
+    - Knowledge files go in by relevant section, so each step carries only what bears on it.
+  - **Every answer is checked against the evidence.** Each time, device ID, SID, hash and path in an answer is looked up in what the tools returned in the conversation. Any not found are listed under the answer and recorded in the compliance trail. A time that matches the evidence only after a whole-hour shift is listed apart, with the shift, because the time-zone conversion is the part to verify. Times under *Next steps* are plans, not findings, and are not checked.
+- **Lean investigations.**
+  - **Compact tool results.**
+    - Tool results reach the model in compact JSON, with the full row set kept for the data viewer.
+    - Older tool results are sent as one-line digests once they grow large. The new `recall_result` tool reads any of them back in full, and the stored, sealed history keeps them whole.
+  - **A call budget.** A question has a budget of model calls (30 by default), after which Eye answers from what it has and says so.
+  - **Only the tools a question needs.** The Correlation Engine authoring tools are offered for questions about Wings, mappings or correlation.
+  - **A question set for measuring Eye.** `python -m eye.evals.run_eval` runs a set of questions with verified answers through Eye on any backend. It scores each answer and records model calls, tokens, time and the values the claim check could not find.
+- **Prompt caching for a whole investigation.** The case-memory overview (each narrative's verdict and status) leads the per-step context, so the fixed part of the prompt stays cached on the Anthropic API and on Claude Code from the first step to the last, and the overview is never cut.
+- **Claude's prompt is cached.** The stable part of the Eye's prompt stays identical between calls, and the part rebuilt for every call comes after the conversation, so Claude reads the rest back from its cache at a tenth of the price.
+- **Report layout.**
+  - The report opens with the case: name, reason, and what it contains. Below that, a Key findings strip lists each finding with its first sentence; select one to jump to it.
+  - Sections are numbered. On wide screens a contents list stays beside the report, and two small charts (pie, doughnut, radar) share a row.
+  - Colour carries meaning: a finding marked high or medium severity is edged amber, and only critical is red.
+  - The exported HTML report starts with the same case facts, key findings and numbered contents, with indigo accents.
+- **Report charts, redrawn.**
+  - Each chart is headed by its own title and a readout: total, peak or largest share, and the number of labels and series.
+  - Values are written on the bars, shares on the slices, and a doughnut shows its total in the middle. **Show the numbers** lists the data behind the chart.
+  - Horizontal bar, radar and scatter charts are supported.
+  - Charts use Crow-Eye's chart palette and dark axis colours; red is kept for what is urgent.
+  - Timelines are drawn as a timeline: each event with its time as recorded, the gap since the one before, and its category.
+  - Heatmaps draw their grid, with labels, values and a scale.
+  - The exported HTML report draws the same charts, in the dark theme.
+- **Case Summary window.**
+  - The case overview and the conclusion sit side by side, which leaves more room for the tables.
+  - The conclusion has its own card, with its markdown rendered.
+  - Report Findings uses the same split view as the other tabs. Its detail pane renders text as markdown, tables in the report palette, and charts as bars.
+- **Claude 5 models:** Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 are in the model list, each with a 1M-token context. Haiku 5.5 is marked **lowest cost**.
+- **A setup check for every model backend.** The Eye checks, in order:
+  - the provider and the model name, including typos such as "opuse" for Claude Code's "opus";
+  - the API key: whether it is stored, whether it belongs to that provider, and whether it is a shortened copy;
+  - whether the command-line tool is installed, or the local server is running;
+  - the connection, and one tiny real request that catches an account out of credit;
+  - tool use and effort.
+
+  Each problem comes with its fix ("Use 'opus'", "Use medium", the billing page). It runs on its own when the Eye opens, from **Check everything** on the connect panel, from **Check model setup** in the model menu, and when you type "check model setup" in the chat, which works even while the model is down. Every result is written to the case's `EYE_Logs`.
+- **Effort** in Settings -> Eye AI: how much the model thinks and works per reply. Claude 5 models take it as their effort level, OpenAI reasoning models as `reasoning_effort`. Medium is recommended for investigations.
+- **An investigation stops once the question is answered.** A plan can end early when the evidence already settles the question, for example when no USB storage device exists, so per-device times are moot. The steps it skips are recorded as not checked, never as disproven.
+- **Errors say what to do.** An account out of credit is named as such, with the billing page. A failed investigation offers **Check the model setup**.
+- **Initialize Case Context redesigned**, and Edit Case Context restyled.
+- **Exporting the model's settings needs approval** and is written to the chain of custody.
+- Engine, Wing and Feather icons appear in the trace. Eye can write Behaviour Wings and reads the stored User Behavior analysis.
+
+### Chain of Custody and Logs
+
+Every new tool writes to the case's chain of custody (the per-run record and the hash-chained ledger) and to the case's logs:
+- App Acquisition, File Browser collections and restores;
+- recoveries from shadow copies, and deleted files carved from the MFT (with the record, sequence and overwrite risk of each);
+- sources opened for reading;
+- NTFS integrity manifests;
+- feathers built, Wings and pipelines saved, the stored behaviour analysis, and the Eye's model export.
+
+A file read from a shadow copy rebuilt by Crow-Eye's own reader is recorded with the copy that held it.
+
+**A live Parse All starts parsing in seconds.** The size and times of each evidence file are taken before the parse, in about 1 s; the files are then hashed from the run's own shadow copy, the same point-in-time bytes the parsers read, while the parsers work, and the run waits for the hashes before it deletes the copy. Locked hives such as SAM and SECURITY get a SHA-256 too, read from the copy. Without a shadow copy (not elevated, or creation switched off) the files are hashed before parsing, four at a time. The shadow copy is made without the 5-second VSS writer check, which runs only when a creation fails. On this machine the steps before the first parser take 6.5 s (20 s with the VSS service cold).
+
+---
+
+### Known Limitations
+
+- **Deleted-file recovery reads NTFS only**, and refuses NTFS-compressed and EFS-encrypted files. A file whose clusters were reused is recovered as it lies and marked **may be overwritten**; its bytes may belong to another file.
+- **Recover deleted files from the case's own drive with care.** Recovery reads every file before it writes anything, but files larger than 256 MB are read after the case's own files are written. Where possible, keep the case on another drive.
+- **The saved listing** recovers deleted files from this machine's volume or from an image you choose. A listing made from a collected `$MFT` alone has no volume to read the bytes from.
+
+### Compatibility and Upgrading
+
+- **Existing cases open as they are.** Parse the MFT again to get the integrity findings and the delta map. The first parse after the upgrade is a full one.
+- **User Behavior rebuilds a stored analysis** the first time it opens a case (rules version 3).
+- **New settings:**
+  - **Settings → Parsing:** the NTFS integrity checks, one switch each, and **Re-parse only the MFT records that changed**;
+  - **Settings → User Behavior:** rule switches and your own rules.
+- **New case folders:**
+  - `app_acquisition/` holds programs acquired, files collected, and files recovered (`Recovered_<source>_<UTC>/`);
+  - `Restores/` holds the record of files put back onto the machine;
+  - `state/` holds the MFT digest map.
+
+### 0.15.0 at a Glance
+
+| | **0.15.0** |
+|---|---:|
+| Default Wings | **35** (11 Identity, 6 Time, 18 Behaviour) |
+| Correlation engines | **3** (Time-Window, Identity, Behavioural) |
+| Re-parsing C: (3.3M records), records parsed again | **54**, the ones that changed |
+| First live MFT parse of C: (3.3M records) | **194 s**, on several cores |
+| Live Open/Save MRU paths decoded | **288 of 288** |
+| Deleted files recoverable from their MFT record | **yes** |
+| Eye question set answered correctly (13 verified questions, Claude Haiku) | **13 of 13** |
+| Eye model calls per question on that set | **about 8** |
+
+---
+
 ## Version 0.14.1 — Whole-Disk Evidence, Chain of Custody & Large-Case Correlation
 
 **Release date:** 2026-10-10 · **Baseline:** 0.14.0. Figures are measured against that release.

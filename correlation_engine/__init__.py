@@ -17,7 +17,7 @@ Release, still current):
 - 78-test regression suite locking in the contract
 """
 
-__version__ = "0.14.1"
+__version__ = "0.15.0"
 __author__ = "Crow-Eye Forensics"
 
 # Import optimization module

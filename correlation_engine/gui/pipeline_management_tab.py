@@ -21,8 +21,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QIcon
 
-# The site look (ui/site_theme.py): roles and variants, no per-widget sheets
-from ui.site_theme import apply_site_theme, set_role, set_variant, STATUS_COLORS
+# The site look (ui/app_theme.py): roles and variants, no per-widget sheets
+from ui.app_theme import apply_theme, set_role, set_variant, STATUS_COLORS
 from PyQt5.QtGui import QColor
 
 
@@ -49,7 +49,7 @@ def _theme_dialog(dialog, button_box):
         extra = engine_extra()
     except Exception:
         extra = ""
-    apply_site_theme(dialog, extra=extra)
+    apply_theme(dialog, extra=extra)
 
 
 def _shared_configuration_manager(case_directory):
@@ -83,6 +83,38 @@ def _shared_configuration_manager(case_directory):
         print(f"[Pipeline Management] Could not prepare ConfigurationManager ({e}); "
               f"continuing without live configuration updates")
         return None
+
+
+def _pipeline_wing_rows(pipeline_data: dict):
+    """(engine_type, rows) for a saved pipeline: every Wing with its category
+    and whether the pipeline's engine runs it (engine_registry decides, and
+    gives the reason a Wing will not run)."""
+    import contextlib
+    import io
+    from ..config.wing_config import WingConfig, wing_category_label
+    from ..engine import engine_registry
+    engine_type = pipeline_data.get('engine_type') or engine_registry.IDENTITY_BASED
+    rows = []
+    for raw in pipeline_data.get('wing_configs', []) or []:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                wing = WingConfig.from_dict(json.loads(json.dumps(raw)))
+        except Exception:
+            wing = raw
+        try:
+            runs, reason = engine_registry.check_wing(wing, engine_type)
+        except engine_registry.UnknownEngineError as e:
+            runs, reason = False, str(e)
+        rows.append({
+            'name': engine_registry.wing_display_name(wing),
+            'category': wing_category_label(engine_registry.wing_category_of(wing)),
+            'runs': runs,
+            'reason': reason,
+            'needs': engine_registry.needed_engine_label(wing),
+        })
+    return engine_type, rows
 
 
 class PipelineManagementTab(QWidget):
@@ -175,10 +207,13 @@ class PipelineManagementTab(QWidget):
         
         # Pipeline table
         self.pipeline_table = QTableWidget()
-        self.pipeline_table.setColumnCount(5)
+        self.pipeline_table.setColumnCount(6)
         self.pipeline_table.setHorizontalHeaderLabels([
-            "Pipeline Name", "Wings", "Feathers", "Last Modified", "Default"
+            "Pipeline Name", "Wings", "Feathers", "Last Modified", "Default", "Engine"
         ])
+        from .crow_eye_icons import CrowEyeIcons
+        self.pipeline_table.horizontalHeaderItem(1).setIcon(CrowEyeIcons.wing())
+        self.pipeline_table.horizontalHeaderItem(2).setIcon(CrowEyeIcons.feather())
         self.pipeline_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.pipeline_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.pipeline_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -191,6 +226,7 @@ class PipelineManagementTab(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents) # Feathers
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents) # Last Modified
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents) # Default
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents) # Engine
         
         self.pipeline_table.setMinimumHeight(300)
         
@@ -317,11 +353,23 @@ class PipelineManagementTab(QWidget):
         name_item.setData(Qt.UserRole + 1, pipeline_data) # Store pipeline data
         self.pipeline_table.setItem(row, 0, name_item)
         
-        # Wings count
+        # Wings count, and how many the pipeline's engine will not run
         wings_count = len(pipeline_data.get('wing_configs', []))
-        wings_item = QTableWidgetItem(str(wings_count))
+        engine_type, wing_rows = _pipeline_wing_rows(pipeline_data)
+        not_run = [w for w in wing_rows if not w['runs']]
+        wings_item = QTableWidgetItem(
+            f"{wings_count} ({len(not_run)} won't run)" if not_run else str(wings_count))
         wings_item.setTextAlignment(Qt.AlignCenter)
+        if not_run:
+            wings_item.setForeground(QColor(STATUS_COLORS["warn"]))
+            wings_item.setToolTip("\n".join(w['reason'] for w in not_run))
         self.pipeline_table.setItem(row, 1, wings_item)
+
+        from ..engine import engine_registry
+        engine_item = QTableWidgetItem(engine_registry.display_name_or_raw(engine_type))
+        from .crow_eye_icons import engine_icon
+        engine_item.setIcon(engine_icon(engine_type))
+        self.pipeline_table.setItem(row, 5, engine_item)
         
         # Feathers count
         feathers_count = len(pipeline_data.get('feather_configs', []))
@@ -395,22 +443,38 @@ class PipelineManagementTab(QWidget):
         details.append(f"<p><b>Case ID:</b> {pipeline_data.get('case_id', 'N/A')}</p>")
         details.append(f"<p><b>Investigator:</b> {pipeline_data.get('investigator', 'N/A')}</p>")
         
-        # Wings
-        wings = pipeline_data.get('wing_configs', [])
-        if wings:
-            details.append(f"<p><b>Wings ({len(wings)}):</b></p>")
+        # Wings, each with its category; the ones this pipeline's engine will
+        # not run are named, with the engine they need.
+        from html import escape
+        from ..engine import engine_registry
+        engine_type, wing_rows = _pipeline_wing_rows(pipeline_data)
+        from .crow_eye_icons import engine_icon_name, icon_label_html
+        details.append("<p>" + icon_label_html(
+            engine_icon_name(engine_type) or "",
+            f"<b>Engine:</b> {escape(engine_registry.display_name_or_raw(engine_type))}", 14) + "</p>")
+        if wing_rows:
+            not_run = [w for w in wing_rows if not w['runs']]
+            details.append("<p>" + icon_label_html("wing", f"<b>Wings ({len(wing_rows)}):</b>", 14) + "</p>")
+            if not_run:
+                names = ", ".join(escape(w['name']) for w in not_run)
+                details.append(
+                    f"<p style='color: {STATUS_COLORS['warn']};'><b>{len(not_run)} Wing"
+                    f"{'s' if len(not_run) != 1 else ''} won't run with this engine:</b> {names}</p>")
             details.append("<ul>")
-            for wing in wings[:5]: # Show first 5
-                wing_name = wing.get('wing_name', 'Unknown')
-                details.append(f"<li>{wing_name}</li>")
-            if len(wings) > 5:
-                details.append(f"<li><i>... and {len(wings) - 5} more</i></li>")
+            for w in wing_rows:
+                if w['runs']:
+                    details.append(f"<li>{escape(w['name'])} <i>({escape(w['category'])})</i></li>")
+                else:
+                    details.append(
+                        f"<li style='color: {STATUS_COLORS['warn']};'>{escape(w['name'])} "
+                        f"<i>({escape(w['category'])})</i> - {escape(w['needs'])}</li>")
             details.append("</ul>")
         
         # Feathers
         feathers = pipeline_data.get('feather_configs', [])
         if feathers:
-            details.append(f"<p><b>Feathers ({len(feathers)}):</b></p>")
+            from .crow_eye_icons import icon_label_html
+            details.append("<p>" + icon_label_html("feather", f"<b>Feathers ({len(feathers)}):</b>", 14) + "</p>")
             details.append("<ul>")
             for feather in feathers[:5]: # Show first 5
                 feather_name = feather.get('feather_name', 'Unknown')
@@ -620,7 +684,7 @@ class PipelineManagementTab(QWidget):
         msg_box.setIcon(QMessageBox.Warning)
         msg_box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
         msg_box.setDefaultButton(QMessageBox.No)
-        apply_site_theme(msg_box)
+        apply_theme(msg_box)
         set_variant(msg_box.button(QMessageBox.Yes), "danger")
         set_variant(msg_box.button(QMessageBox.No), "ghost")
         

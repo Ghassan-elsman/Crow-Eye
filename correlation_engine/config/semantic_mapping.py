@@ -946,6 +946,42 @@ class SemanticCondition:
 
 
 
+ADVANCED_RULE_TYPES = ("absence", "sequence", "threshold")
+
+
+def rule_is_advanced(rule: Any) -> bool:
+    """Whether a rule needs the Identity engine to be evaluated.
+
+    True for an advanced ``rule_type`` (absence / sequence / threshold),
+    nested ``condition_groups``, or any condition using ``negate`` or a
+    cross-feather compare. The Time-Window engine evaluates one row per
+    feather per match, so none of these can be expressed there.
+
+    Accepts a rule dict or a ``SemanticRule``. This is the one definition:
+    the Wing config, the evaluator, the rule editor and the engine registry
+    all ask it, so they cannot disagree about which Wings an engine can run.
+    ATT&CK tags and comparison operators are NOT advanced in this sense.
+    """
+    if rule is None:
+        return False
+    is_dict = isinstance(rule, dict)
+    get = rule.get if is_dict else (lambda k, d=None: getattr(rule, k, d))
+    if str(get('rule_type', 'match') or 'match').lower() != 'match':
+        return True
+    if get('condition_groups'):
+        return True
+    for cond in get('conditions', []) or []:
+        cget = cond.get if isinstance(cond, dict) else (lambda k, d=None, c=cond: getattr(c, k, d))
+        if cget('negate') or cget('compare_to_feather'):
+            return True
+    return False
+
+
+def rules_are_advanced(rules) -> bool:
+    """True if any rule in ``rules`` is advanced (see ``rule_is_advanced``)."""
+    return any(rule_is_advanced(r) for r in (rules or []) if r is not None)
+
+
 @dataclass
 class SemanticRule:
     """
@@ -1124,7 +1160,77 @@ class SemanticRule:
             return True, labels
         group_matched = all(results) if op == 'AND' else any(results)
         return group_matched, labels
-    
+
+    def evaluate_rows(self, rows: Dict[str, List[Dict[str, Any]]]) -> Tuple[bool, List[str]]:
+        """``evaluate`` over several rows per feather.
+
+        A condition holds when ANY row of its feather satisfies it; a negated
+        condition holds when NO row satisfies the underlying comparison. With
+        at most one row per feather this is exactly ``evaluate``. Cross-feather
+        right-hand sides resolve against the first row of the other feather,
+        as they do in ``evaluate``.
+        """
+        if not self.conditions and not self.condition_groups:
+            return True, []
+        first = {fid: (lst[0] if lst else {}) for fid, lst in rows.items()}
+
+        def context(cond: 'SemanticCondition', row):
+            # Comparing two fields of the same feather means two fields of the
+            # SAME row (e.g. one MFT record's $SI vs $FN creation time).
+            if cond.compare_to_feather and cond.compare_to_feather == cond.feather_id:
+                return dict(first, **{cond.feather_id: row})
+            return first
+
+        def holds(cond: 'SemanticCondition') -> bool:
+            candidates = rows.get(cond.feather_id) or [{}]
+            if cond.negate:
+                return not any(cond._evaluate_core(r, context(cond, r)) for r in candidates)
+            return any(cond.matches(r, context(cond, r)) for r in candidates)
+
+        matched_conditions = []
+        term_results = []
+        for condition in self.conditions:
+            ok = holds(condition)
+            term_results.append(ok)
+            if ok:
+                matched_conditions.append(f"{condition.feather_id}.{condition.field_name}")
+
+        for group in (self.condition_groups or []):
+            raw = group.get('conditions', []) if isinstance(group, dict) else []
+            op = str(group.get('logic_operator', 'AND')).upper() if isinstance(group, dict) else 'AND'
+            results, labels = [], []
+            for cd in raw:
+                cond = cd if isinstance(cd, SemanticCondition) else SemanticCondition.from_dict(cd)
+                ok = holds(cond)
+                results.append(ok)
+                if ok:
+                    labels.append(f"{cond.feather_id}.{cond.field_name}")
+            grp_ok = True if not results else (any(results) if op == 'OR' else all(results))
+            term_results.append(grp_ok)
+            if grp_ok:
+                matched_conditions.extend(labels)
+
+        matches = all(term_results) if self.logic_operator == "AND" else any(term_results)
+        # AND between conditions on one feather means one row of it: "share
+        # path AND file written" is one record, not a share on one row and a
+        # write on another. Negated conditions stay per feather (no row).
+        if matches and self.logic_operator == "AND":
+            by_feather: Dict[str, List['SemanticCondition']] = {}
+            for c in self.conditions:
+                if not c.negate and c.feather_id not in ('_identity', '', None):
+                    by_feather.setdefault(c.feather_id, []).append(c)
+            for fid, conds in by_feather.items():
+                if len(conds) < 2:
+                    continue
+                if not any(all(c.matches(r, context(c, r)) for c in conds)
+                           for r in (rows.get(fid) or [])):
+                    matches = False
+                    break
+        if matches and self._requires_multi_indicator:
+            if sum(1 for t in term_results if t) < max(1, int(self._min_indicators)):
+                matches = False
+        return matches, matched_conditions
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
         data = {
@@ -1318,6 +1424,37 @@ class SemanticMappingManager:
         
         # Load rules from JSON files
         self._load_rules_from_json()
+
+        # The rules and mappings edited in Settings (Settings, Semantic Mapping,
+        # saved to ~/.crow_eye/semantic_mappings.json) apply to every run, over
+        # the shipped ones: a rule with the same id replaces the shipped rule.
+        # Before this, only the Settings page read that file and a run never
+        # saw an edit made there.
+        self._snapshot_shipped()
+        self._load_settings_file()
+
+    def _all_mappings(self):
+        tables = (list(self.global_mappings.values()) + list(self.artifact_mappings.values())
+                  + list(self.wing_mappings.values()) + list(self.pipeline_mappings.values()))
+        seen = set()
+        for items in tables:
+            for m in items:
+                if id(m) not in seen:
+                    seen.add(id(m))
+                    yield m
+
+    @staticmethod
+    def _mapping_text(m) -> str:
+        d = asdict(m)
+        d.pop('_compiled_pattern', None)
+        return json.dumps(d, sort_keys=True, default=str)
+
+    def _snapshot_shipped(self):
+        """What the shipped files give, before Settings is read: the Settings
+        save writes only what differs from it."""
+        self._shipped_rules = {r.rule_id: json.dumps(r.to_dict(), sort_keys=True, default=str)
+                               for r in self.global_rules}
+        self._shipped_mappings = {self._mapping_text(m) for m in self._all_mappings()}
     
     def _load_default_rules(self):
         """
@@ -2260,10 +2397,23 @@ class SemanticMappingManager:
     
     def save_to_file(self, file_path: Path, scope: str = "global",
                     wing_id: Optional[str] = None,
-                    pipeline_id: Optional[str] = None):
-        """Save mappings and rules to JSON file."""
+                    pipeline_id: Optional[str] = None,
+                    only_changes: bool = False):
+        """Save mappings and rules to JSON file.
+
+        only_changes (the Settings page): only the rules and mappings that are
+        new or differ from the shipped ones, each such rule marked "edited".
+        Writing everything froze every shipped rule at the version of the
+        day it was saved, so no later fix to a shipped rule ever ran."""
         mappings = self.get_all_mappings(scope, wing_id, pipeline_id)
         rules = self.get_rules(scope, wing_id, pipeline_id)
+        shipped_rules = getattr(self, '_shipped_rules', None)
+        if only_changes and shipped_rules is not None:
+            shipped_mappings = getattr(self, '_shipped_mappings', set())
+            mappings = [m for m in mappings if self._mapping_text(m) not in shipped_mappings]
+            rules = [r for r in rules
+                     if shipped_rules.get(r.rule_id)
+                     != json.dumps(r.to_dict(), sort_keys=True, default=str)]
         
         data = {
             'mappings': [],
@@ -2276,45 +2426,139 @@ class SemanticMappingManager:
             data['mappings'].append(m_dict)
         
         for r in rules:
-            data['rules'].append(r.to_dict())
-        
-        with open(file_path, 'w') as f:
+            d = r.to_dict()
+            if only_changes:
+                d['edited'] = True
+            data['rules'].append(d)
+
+        with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
         
         logger.info(f"Saved {len(mappings)} mappings and {len(rules)} rules to {file_path}")
     
-    def load_from_file(self, file_path: Path):
-        """Load mappings and rules from JSON file."""
+    SETTINGS_FILE = Path.home() / ".crow_eye" / "semantic_mappings.json"
+
+    def _load_settings_file(self):
+        """The Settings page's file over what is loaded, when it exists. A file
+        that does not read is said and skipped: the shipped rules still run."""
+        path = self.SETTINGS_FILE
+        if not path.exists():
+            return
+        try:
+            self.load_from_file(path, settings=True)
+        except Exception as e:
+            logger.warning(f"[Semantic Mapping] Settings rules not applied ({path}): {e}")
+
+    @staticmethod
+    def _mapping_identity(m) -> tuple:
+        return (m.scope, getattr(m, 'wing_id', None), getattr(m, 'pipeline_id', None), m.source,
+                m.field, m.technical_value, getattr(m, 'pattern', ''), getattr(m, 'artifact_type', None))
+
+    def _replace_or_add_mapping(self, mapping: 'SemanticMapping'):
+        """A mapping the same as one held (same scope, source, field, value and
+        pattern) replaces it; any other is added."""
+        ident = self._mapping_identity(mapping)
+        found = False
+        for table in (self.global_mappings, self.artifact_mappings):
+            for items in table.values():
+                for i, held in enumerate(items):
+                    if self._mapping_identity(held) == ident:
+                        items[i] = mapping
+                        found = True
+        for items in list(self.wing_mappings.values()) + list(self.pipeline_mappings.values()):
+            for i, held in enumerate(items):
+                if self._mapping_identity(held) == ident:
+                    items[i] = mapping
+                    found = True
+        if not found:
+            self.add_mapping(mapping)
+
+    def _replace_or_add_rule(self, rule: 'SemanticRule'):
+        """A rule whose id is already held in its scope replaces that rule."""
+        if rule.scope == "global":
+            pool = self.global_rules
+        elif rule.scope == "wing" and rule.wing_id:
+            pool = self.wing_rules.setdefault(rule.wing_id, [])
+        elif rule.scope == "pipeline" and rule.pipeline_id:
+            pool = self.pipeline_rules.setdefault(rule.pipeline_id, [])
+        else:
+            self.add_rule(rule)
+            return
+        for i, held in enumerate(pool):
+            if held.rule_id == rule.rule_id:
+                pool[i] = rule
+                return
+        pool.append(rule)
+
+    def load_from_file(self, file_path: Path, settings: bool = False):
+        """Load mappings and rules from JSON file.
+
+        What the file holds replaces what is loaded under the same rule id, or
+        the same mapping. Within the file the FIRST copy of a rule id wins and
+        the later copies are skipped: the Settings page used to write back
+        everything it had loaded, the shipped rules and every copy the file
+        already held, so each save appended the whole set again. One file on
+        the development machine held 16 copies of each of 58 rules, the first
+        the current ones and the rest older versions, and reading it with the
+        last copy winning would have put the oldest rules back."""
         if not file_path.exists():
             logger.warning(f"Semantic mappings file not found: {file_path}")
             return
-        
-        with open(file_path, 'r') as f:
+
+        with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
         
         # Handle both old format (list) and new format (dict with mappings/rules)
         if isinstance(data, list):
             # Old format - just mappings
+            seen = set()
             for mapping_dict in data:
                 mapping_dict.pop('_compiled_pattern', None)
                 mapping = SemanticMapping(**mapping_dict)
-                self.add_mapping(mapping)
-            logger.info(f"Loaded {len(data)} semantic mappings from {file_path}")
+                if self._mapping_identity(mapping) in seen:
+                    continue
+                seen.add(self._mapping_identity(mapping))
+                self._replace_or_add_mapping(mapping)
+            logger.info(f"Loaded {len(seen)} semantic mappings from {file_path} ({len(data)} entries)")
         else:
             # New format
             mappings_data = data.get('mappings', [])
             rules_data = data.get('rules', [])
             
+            seen_mappings = set()
             for mapping_dict in mappings_data:
                 mapping_dict.pop('_compiled_pattern', None)
                 mapping = SemanticMapping(**mapping_dict)
-                self.add_mapping(mapping)
-            
+                if self._mapping_identity(mapping) in seen_mappings:
+                    continue
+                seen_mappings.add(self._mapping_identity(mapping))
+                self._replace_or_add_mapping(mapping)
+
+            seen_rules = set()
+            # The Settings file: a copy of a shipped rule not marked "edited"
+            # was written by the old save-everything page, so the shipped rule
+            # stands. The ones that differ are named, in case one was an edit.
+            shipped = getattr(self, '_shipped_rules', None) if settings else None
+            stale_copies = []
             for rule_dict in rules_data:
                 rule = SemanticRule.from_dict(rule_dict)
-                self.add_rule(rule)
-            
-            logger.info(f"Loaded {len(mappings_data)} mappings and {len(rules_data)} rules from {file_path}")
+                key = (rule.scope, getattr(rule, 'wing_id', None), getattr(rule, 'pipeline_id', None), rule.rule_id)
+                if key in seen_rules:
+                    continue
+                seen_rules.add(key)
+                if shipped is not None and rule.rule_id in shipped and not rule_dict.get('edited'):
+                    if shipped[rule.rule_id] != json.dumps(rule.to_dict(), sort_keys=True, default=str):
+                        stale_copies.append(rule.rule_id)
+                    continue
+                self._replace_or_add_rule(rule)
+            if stale_copies:
+                logger.warning(
+                    "[Semantic Mapping] %d rule(s) in %s are older copies of shipped rules and were "
+                    "not applied (the shipped version runs); edit one again in Settings to keep a "
+                    "change: %s", len(stale_copies), file_path, ", ".join(sorted(stale_copies)[:20]))
+
+            logger.info(f"Loaded {len(seen_mappings)} mappings and {len(seen_rules)} rules from {file_path} "
+                        f"({len(mappings_data)} and {len(rules_data)} entries)")
     
     # =========================================================================
     # JSON CONFIGURATION METHODS

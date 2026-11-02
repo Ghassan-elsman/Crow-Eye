@@ -408,6 +408,10 @@ class ArtifactDetector:
             # SRUM application timeline: focus, keyboard and mouse seconds.
             'SRUM_AppTimeline',
 
+            # UBA's behaviour events, as a feather a Time or Identity Wing can
+            # take in (Behaviour_Events_CrowEyeFeather).
+            'Behaviour',
+
             # What a tree walk cannot reach - the hive's allocator rather than
             # its tree. "Carved" says where a record was found, not that
             # anybody deleted it: Windows frees cells constantly by itself.
@@ -484,6 +488,11 @@ class ArtifactDetector:
 
             # Jumplist subtypes
             'AutomaticJumplist', 'CustomJumplist',
+
+            # MFT subtypes: what the NTFS integrity checks found while the MFT
+            # was parsed (mft_claw_analysis.db), one row per finding with the
+            # record, sequence and LSN it was judged on.
+            'ntfs_integrity_findings',
 
             # Additional types
             'Registry', 'RecycleBin', 'BrowserHistory'

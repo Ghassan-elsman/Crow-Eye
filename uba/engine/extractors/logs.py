@@ -14,6 +14,7 @@ from collections import defaultdict
 from typing import List
 
 from uba.engine import description
+from uba.engine.attribution import Actor
 from uba.engine.models import (BehaviorEvent, EvidenceRef, CONF_LOG_ONLY,
                                CONF_CORROBORATED, SEV_NOTABLE, SEV_ROUTINE,
                                SEV_SUSPICIOUS)
@@ -74,11 +75,29 @@ def _mk(rule, ts, actor, description_text, evidence, confidence=CONF_LOG_ONLY,
         rule_id=rule["id"], behavior_class=rule["behavior_class"],
         activity=rule["activity"], ts_start=ts, ts_end=ts,
         actor_type=actor_type, actor_name=actor_name, actor_basis=actor_basis,
+        actor_sid=getattr(actor, "sid", ""),
         description=description_text, severity=severity or rule["severity"],
         confidence=confidence, caveat=caveat, app_name=app_name,
         session_context=ctx.session_context(ts) if ctx else "",
         aggregate_count=count, details=details or {}, evidence=evidence)
 
+
+
+def _subject_actor(ctx, keywords, user, label):
+    """Who an event names as its subject: the SID in the record first.
+
+    4616 (system time changed) and 1102 (audit log cleared) carry
+    SubjectUserSid as their first payload field. Reading it resolves the actor
+    to a profile SID - or to LOCAL SERVICE, which is who changes the clock on
+    most machines. The row's `User` column is the fallback: a display name
+    ('Ghass', or a Microsoft-account e-mail), resolved case-insensitively.
+    """
+    first = (str(keywords or "").split(",", 1)[0]).strip()
+    if first.startswith("S-1-"):
+        actor = ctx.resolver.from_sid(first, label)
+        if actor[0]:
+            return actor
+    return ctx.resolver.from_account_name(user, label)
 
 # --------------------------------------------------------------------- #
 def _collapse_duplicates(entries):
@@ -315,7 +334,7 @@ def time_changed(ctx, rules) -> List[BehaviorEvent]:
             ctx=ctx))
     for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [4616]):
         ts = normalize_ts(ts)
-        actor = ctx.resolver.from_account_name(user, "the security log")
+        actor = _subject_actor(ctx, keywords, user, "the security log")
         events.append(_mk(
             rule, ts, actor, "The system clock was changed",
             [EvidenceRef(db="logs", table="SecurityLogs", rowids=[rowid], count=1)],
@@ -328,7 +347,7 @@ def log_cleared(ctx, rules) -> List[BehaviorEvent]:
     events = []
     for rowid, eid, ts, user, keywords, desc in _security_rows(ctx, [1102]):
         ts = normalize_ts(ts)
-        actor = ctx.resolver.from_account_name(user, "the security log")
+        actor = _subject_actor(ctx, keywords, user, "the security log")
         events.append(_mk(
             rule, ts, actor,
             "The Windows security event log was erased — activity records "
@@ -337,9 +356,19 @@ def log_cleared(ctx, rules) -> List[BehaviorEvent]:
             ctx=ctx))
     for rowid, eid, ts, source, user, keywords, desc in _system_rows(ctx, [104]):
         ts = normalize_ts(ts)
+        # 104's payload is SubjectUserName, SubjectDomainName, Channel,
+        # BackupPath (Microsoft-Windows-Eventlog's manifest); the live parser
+        # stores it comma-joined in Keywords. A clear Windows setup made has
+        # none, and stays unattributed - never guessed.
+        fields = [f.strip() for f in str(keywords or "").split(",")]
+        subject = fields[0] if fields and fields[0] not in ("", "N/A", "-") else ""
+        channel = fields[2] if len(fields) > 2 and fields[2] not in ("", "N/A") else ""
+        actor = (ctx.resolver.from_account_name(subject, "the System log")
+                 if subject else ("", "", ""))
         events.append(_mk(
-            rule, ts, ("", "", ""),
-            "A Windows event log was erased",
+            rule, ts, actor,
+            "The Windows event log '{}' was erased".format(channel) if channel
+            else "A Windows event log was erased",
             [EvidenceRef(db="logs", table="SystemLogs", rowids=[rowid], count=1)],
             ctx=ctx))
     return events
@@ -384,7 +413,8 @@ def failed_logon(ctx, rules) -> List[BehaviorEvent]:
     """4625 — an account failed to sign in.
 
     TargetUserSid is S-1-0-0 on a failure (nothing was logged on), so the
-    account is named from the payload and never resolved to a profile SID. A
+    record's SID says nothing; the account is named from the payload, and that
+    name is matched to a profile (and its SID) only when exactly one fits. A
     handful of failures is a typed password; a run of them in one hour is worth
     a look, so the burst escalates instead of reporting each attempt.
     """
@@ -400,10 +430,20 @@ def failed_logon(ctx, rules) -> List[BehaviorEvent]:
             continue
         ts = normalize_ts(ts)
         # The account is named by the log but was NOT signed in; attribute the
-        # attempt to the named account with that as the explicit basis.
-        actor = ("User", account,
-                 "the Windows security log recorded the failed sign-in for "
+        # attempt to the named account with that as the explicit basis. The
+        # name is matched to a profile the way every other log name is
+        # (case-insensitive, DOMAIN\name, the e-mail a Microsoft account
+        # signs in with), so 'alice' and 'Alice' are one person with one SID.
+        # A name that matches no profile keeps the name as typed and no SID.
+        named = ctx.resolver.from_account_name(account, "the failed sign-in")
+        sid = getattr(named, "sid", "") if named[0] == "User" else ""
+        shown = named[1] if sid else account
+        basis = ("the Windows security log recorded the failed sign-in for "
                  "account '{}'".format(account))
+        if sid:
+            basis += " (the user profile '{}', SID {})".format(shown, sid)
+        actor = Actor("User", shown, basis, sid)
+        account = shown
         reasons[account] = info.get("logon_type_label", "sign-in")
         rows.append((rowid, ts, actor))
 

@@ -3,6 +3,8 @@ import type { Message, ContextStats, ThinkingStep, EyeDialogueEntry } from './ty
 import MessageList from './MessageList';
 import InputBar from './InputBar';
 import LoadingDialog from './LoadingDialog';
+import type { LoadingStep } from './LoadingDialog';
+import ConnectPanel from './ConnectPanel';
 import TruncationWarningBanner from './TruncationWarningBanner';
 import TokenBudgetSlider from './TokenBudgetSlider';
 import FullHistoryModal from './FullHistoryModal';
@@ -30,13 +32,14 @@ import {
   openNarrativeMapWindow,
   openEvidenceWindow,
   initializeTriage,
-  getBackendStatus,
+  startBackendCheck,
+  onBackendStatusChanged,
   onTruncationWarning,
   pinMessage,
   unpinMessage,
   updateTokenBudget,
 } from './bridge';
-import type { GroupedBackendResponse } from './bridge';
+import type { GroupedBackendResponse, BackendStatus } from './bridge';
 import { IconTrash, IconClipboardList, IconChartBar, IconSettings, IconLayers, IconBrain, IconDatabase } from './Icons';
 import eyeIcon from './assets/eye_icon.png';
 import './ChatInterface.css';
@@ -56,6 +59,23 @@ const ChatInterface: React.FC = () => {
   // Loading dialog: visible on startup until bridge is ready; also toggled by logo btn
   const [showLoading, setShowLoading]     = useState(true);
   const [loadingStatus, setLoadingStatus] = useState<string | undefined>(undefined);
+  // The real startup steps the loading screen shows (no cycling text).
+  const [initSteps, setInitSteps] = useState<LoadingStep[]>([
+    { label: 'Connect to Crow-Eye', state: 'pending' },
+    { label: 'Load the case context', state: 'pending' },
+    { label: 'Load the conversation history', state: 'pending' },
+  ]);
+  const markStep = useCallback((label: string, state: LoadingStep['state'], note?: string) => {
+    setInitSteps(prev => prev.map(st => (st.label === label ? { ...st, state, note } : st)));
+  }, []);
+  // The model backend's state, checked off the GUI thread (start_backend_check).
+  const [backendStatus, setBackendStatus] = useState<BackendStatus | null>(null);
+  const backendStatusHandlerRef = useRef<(st: BackendStatus) => void>(() => {});
+  const triageStartedRef = useRef(false);
+  const syncMsgIdRef = useRef<string | null>(null);
+  // A slow answer is said, never left as a silent spinner.
+  const lastActivityRef = useRef<number>(Date.now());
+  const [slowSeconds, setSlowSeconds] = useState(0);
   const [loadingPhase, setLoadingPhase]   = useState<'init' | 'processing'>('init');
 
   // Model Menu State
@@ -109,16 +129,33 @@ const ChatInterface: React.FC = () => {
     let unsubSU: (() => void) | undefined;
     let unsubDU: (() => void) | undefined;
     let unsubTW: (() => void) | undefined;
+    let unsubBS: (() => void) | undefined;
 
     const setup = async () => {
       try {
-        setLoadingStatus('Connecting to Python bridge...');
-        await initializeBridge();
-        setLoadingStatus('Loading forensic context...');
+        const secs = (t: number) => `${((performance.now() - t) / 1000).toFixed(1)} s`;
+        const t0 = performance.now();
+        markStep('Connect to Crow-Eye', 'active');
+        try {
+          await initializeBridge();
+        } catch (err) {
+          markStep('Connect to Crow-Eye', 'failed', err instanceof Error ? err.message : String(err));
+          throw err;
+        }
+        markStep('Connect to Crow-Eye', 'done', secs(t0));
         setBridgeReady(true);
-        // Run the two independent init bridge calls in parallel so the
-        // "Loading forensic context..." wait isn't the sum of both.
-        await Promise.all([fetchContextStats(), loadHistory()]);
+        // The two independent loads run side by side; each reports its own time.
+        const t1 = performance.now();
+        markStep('Load the case context', 'active');
+        markStep('Load the conversation history', 'active');
+        await Promise.all([
+          Promise.resolve(fetchContextStats()).then(
+            () => markStep('Load the case context', 'done', secs(t1)),
+            (e) => markStep('Load the case context', 'failed', String(e))),
+          Promise.resolve(loadHistory()).then(
+            () => markStep('Load the conversation history', 'done', secs(t1)),
+            (e) => markStep('Load the conversation history', 'failed', String(e))),
+        ]);
 
         // Set up signal listeners before triggering any queries
         unsubQC = onQueryComplete((json: string) => {
@@ -233,6 +270,7 @@ const ChatInterface: React.FC = () => {
         });
 
         unsubSU = onStatusUpdated((statusJson: string) => {
+          lastActivityRef.current = Date.now();
           try {
             const data = JSON.parse(statusJson);
             
@@ -258,6 +296,7 @@ const ChatInterface: React.FC = () => {
 
         // Stream the Eye<->LLM conversation as it happens.
         unsubDU = onDialogueUpdated((entryJson: string) => {
+          lastActivityRef.current = Date.now();
           try {
             const entry: EyeDialogueEntry = JSON.parse(entryJson);
             setDialogue(prev => {
@@ -281,50 +320,22 @@ const ChatInterface: React.FC = () => {
           }
         });
 
-        // EYE Synchronization: confirm we can actually reach the AI backend
-        // before kicking off the automated triage. If the backend is offline
-        // (missing API key, local server down, etc.) we surface a single clear
-        // disconnect message instead of leaving the user with a spinning sync.
+        // The chat opens now. The model backend is checked on a worker thread in
+        // Python and reports here as it goes (checking N s -> connected / failed),
+        // so a slow or unreachable provider can never hold the loading screen -
+        // or Crow-Eye - again. The triage starts once the backend answers.
+        setTimeout(() => setShowLoading(false), 450);
         const syncMsgId = `sync-${Date.now()}`;
+        syncMsgIdRef.current = syncMsgId;
         setMessages(prev => [...prev, {
           id: syncMsgId,
           role: 'assistant',
-          content: "**EYE Synchronization**: Establishing connection with forensic backend and transmitting case context...",
+          content: "**Eye Synchronization**: Checking the model backend...",
           timestamp: new Date().toISOString()
         }]);
-
-        try {
-          setIsLoading(true);
-
-          const status = await getBackendStatus();
-
-          if (!status.connected) {
-            const backendLabel = status.backend ? `the **${status.backend}** backend` : 'an AI backend';
-            const reason = status.detail ? ` — ${status.detail}` : '';
-            setMessages(prev => prev.map(m =>
-              m.id === syncMsgId
-                ? { ...m, content: `**EYE not connected to the AI backend**: Could not reach ${backendLabel}${reason}. Open Settings to verify your API key, network, or local model service.` }
-                : m
-            ));
-            setIsLoading(false);
-          } else {
-            await initializeTriage();
-            // NOTE: We don't set setIsLoading(false) here.
-            // We wait for the onQueryComplete signal from the background triage process.
-          }
-        } catch (e) {
-          console.error("Failed to trigger initial triage", e);
-          const errMsg = e instanceof Error ? e.message : 'Unknown error';
-          setMessages(prev => prev.map(m =>
-            m.id === syncMsgId
-              ? { ...m, content: `**EYE not connected to the AI backend**: ${errMsg}. Open Settings to verify your API key, network, or local model service.` }
-              : m
-          ));
-          setIsLoading(false);
-        }
-        
-        // Dismiss loading dialog after a brief pause so user sees the final state
-        setTimeout(() => setShowLoading(false), 600);
+        unsubBS = onBackendStatusChanged((st) => backendStatusHandlerRef.current(st));
+        const first = await startBackendCheck();
+        if (first) backendStatusHandlerRef.current(first);
       } catch {
         setBridgeReady(false);
         setLoadingStatus('Bridge connection failed');
@@ -385,7 +396,7 @@ const ChatInterface: React.FC = () => {
     }
 
     return () => {
-      unsubQC?.(); unsubRU?.(); unsubEO?.(); unsubSU?.(); unsubDU?.(); unsubTW?.();
+      unsubQC?.(); unsubRU?.(); unsubEO?.(); unsubSU?.(); unsubDU?.(); unsubTW?.(); unsubBS?.();
       unsubscribeReport();
       unsubscribeError();
       unsubGrouped();
@@ -592,6 +603,50 @@ const ChatInterface: React.FC = () => {
     } catch { /* silent — pin will still work for previously-loaded messages */ }
   }, []);
 
+  /* ── Model backend status ─────────────────── */
+  backendStatusHandlerRef.current = (st: BackendStatus) => {
+    setBackendStatus(st);
+    const id = syncMsgIdRef.current;
+    const label = st.backend ? `**${st.backend}**${st.model ? ` · ${st.model}` : ''}` : 'the model backend';
+    const say = (content: string) => {
+      if (!id) return;
+      setMessages(prev => prev.map(m => (m.id === id ? { ...m, content } : m)));
+    };
+    if (st.state === 'checking') {
+      const waited = st.seconds ?? 0;
+      say(waited >= 1
+        ? `**Eye Synchronization**: Checking ${label}... ${waited.toFixed(0)} s`
+        : `**Eye Synchronization**: Checking ${label}...`);
+      return;
+    }
+    if (st.state === 'connected') {
+      say(`**Eye Synchronization**: Connected to ${label} in ${(st.seconds ?? 0).toFixed(1)} s. Transmitting case context and starting the triage...`);
+      if (!triageStartedRef.current) {
+        triageStartedRef.current = true;
+        lastActivityRef.current = Date.now();
+        setIsLoading(true);
+        initializeTriage().catch((e) => {
+          const msg = e instanceof Error ? e.message : String(e);
+          say(`**Eye Synchronization**: the triage could not start - ${msg}`);
+          setIsLoading(false);
+        });
+      }
+      return;
+    }
+    say(`**Eye not connected**: ${st.detail || 'the model backend did not answer.'}`);
+    setIsLoading(false);
+  };
+
+  useEffect(() => {
+    if (!isLoading) { setSlowSeconds(0); return; }
+    lastActivityRef.current = Date.now();
+    const iv = setInterval(() => {
+      const quiet = (Date.now() - lastActivityRef.current) / 1000;
+      setSlowSeconds(quiet >= 20 ? Math.floor(quiet) : 0);
+    }, 1000);
+    return () => clearInterval(iv);
+  }, [isLoading]);
+
   /* ── Send ──────────────────────────────────── */
   const sendMessage = async (query: string) => {
     if (!query.trim()) return;
@@ -759,7 +814,20 @@ const ChatInterface: React.FC = () => {
         visible={showLoading}
         status={loadingStatus}
         phase={loadingPhase}
+        steps={loadingPhase === 'init' ? initSteps : undefined}
       />
+
+      {/* ── Connect a model: the first view while no backend answers ── */}
+      {!showLoading && backendStatus && (
+        backendStatus.state === 'failed' || backendStatus.state === 'not_configured' ||
+        (backendStatus.state === 'checking' && (backendStatus.seconds ?? 0) >= 5 && !triageStartedRef.current)
+      ) && (
+        <ConnectPanel
+          status={backendStatus}
+          onOpenSetup={() => showSettings()}
+          onRetry={() => { startBackendCheck(); }}
+        />
+      )}
 
       {/* ════════════════════════════════════════
           TOP BAR — single 44px row, all info inline
@@ -771,14 +839,14 @@ const ChatInterface: React.FC = () => {
           <button
             className={`hdr-logo-btn${(isLoading || !bridgeReady) ? ' hdr-logo-btn--active' : ''}`}
             onClick={handleLogoClick}
-            aria-label="EYE status"
-            title={(isLoading || !bridgeReady) ? 'Click to see loading status' : 'EYE Forensic Assistant'}
+            aria-label="Eye status"
+            title={(isLoading || !bridgeReady) ? 'Click to see loading status' : 'Eye Forensic Assistant'}
           >
-            <img src={eyeIcon} alt="EYE" className="hdr-logo-img" />
+            <img src={eyeIcon} alt="Eye" className="hdr-logo-img" />
           </button>
 
           <div className="hdr-brand-text">
-            <span className="hdr-title">EYE</span>
+            <span className="hdr-title">Eye</span>
             <span className="hdr-subtitle">Forensic Assistant</span>
           </div>
 
@@ -788,11 +856,17 @@ const ChatInterface: React.FC = () => {
           {/* Model / connection status */}
           <div className="hdr-model-container">
             <button 
-              className={`hdr-model-pill${bridgeReady ? '' : ' hdr-model-pill--off'}`}
+              className={`hdr-model-pill${bridgeReady ? '' : ' hdr-model-pill--off'}${
+                backendStatus?.state === 'checking' ? ' hdr-model-pill--checking'
+                : (backendStatus?.state === 'failed' || backendStatus?.state === 'not_configured') ? ' hdr-model-pill--failed'
+                : ''}`}
               onClick={handleModelMenuToggle}
               title="Click to switch active model"
             >
-              <span className={`hdr-status-dot${bridgeReady ? ' hdr-status-dot--on' : ''}`} />
+              <span className={`hdr-status-dot${bridgeReady ? ' hdr-status-dot--on' : ''}${
+                backendStatus?.state === 'checking' ? ' hdr-status-dot--checking'
+                : (backendStatus?.state === 'failed' || backendStatus?.state === 'not_configured') ? ' hdr-status-dot--failed'
+                : ''}`} title={backendStatus?.detail || ''} />
               <span className="hdr-model-label">
                 {bridgeReady
                   ? contextStats?.backend
@@ -826,7 +900,11 @@ const ChatInterface: React.FC = () => {
                               className={`model-menu-item ${m.is_active ? 'model-menu-item--active' : ''}`}
                               onClick={() => handleModelSelect(`${m.backend}:${m.model_name}`)}
                             >
-                              <span className="model-item-name">{m.label}</span>
+                              <span className="model-item-name">{m.label}
+                                {m.model_name === 'claude-haiku-5-5' && (
+                                  <span className="model-item-cost" title="The lowest-cost Claude model">lowest cost</span>
+                                )}
+                              </span>
                               <span className="model-item-quota">{m.backend.toUpperCase()}</span>
                             </button>
                           ))}
@@ -835,6 +913,14 @@ const ChatInterface: React.FC = () => {
                     })
                   )}
                 </div>
+                <button
+                  className="model-menu-item model-menu-doctor"
+                  title="Check the provider, model name, key, connection, tool use and effort, and offer fixes"
+                  onClick={() => { setShowModelMenu(false); sendMessage('Check model setup'); }}
+                >
+                  <span className="model-item-name">Check model setup</span>
+                  <span className="model-item-quota">DOCTOR</span>
+                </button>
               </div>
             )}
           </div>
@@ -947,6 +1033,13 @@ const ChatInterface: React.FC = () => {
       )}
 
 
+
+      {slowSeconds > 0 && (
+        <div className="slow-notice" role="status">
+          The model is taking longer than usual to answer ({slowSeconds} s). The Eye is still
+          waiting; nothing has failed. If it stays like this, check the network or the model service.
+        </div>
+      )}
 
       {/* ── Messages ── */}
       <main className="chat-messages">

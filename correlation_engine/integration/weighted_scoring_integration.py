@@ -523,6 +523,10 @@ class WeightedScoringIntegration(IScoringIntegration):
         
         # Apply weight precedence to feathers
         feathers = getattr(wing_config, 'feathers', [])
+        # A feather the wing excludes from scoring keeps its 0.0: precedence
+        # below would read 0.0 as "unset" and give it the global default.
+        wing_scoring = getattr(wing_config, 'scoring', None) or {}
+        excluded = set(wing_scoring.get('score_excluded_feathers') or [])
         
         for feather_spec in feathers:
             if isinstance(feather_spec, dict):
@@ -533,6 +537,9 @@ class WeightedScoringIntegration(IScoringIntegration):
                 artifact_type = getattr(feather_spec, 'artifact_type', '')
                 wing_weight = getattr(feather_spec, 'weight', 0.0)
                 feather_id = getattr(feather_spec, 'feather_id', 'unknown')
+            
+            if feather_id in excluded:
+                continue
             
             # Determine final weight using precedence order
             final_weight = None

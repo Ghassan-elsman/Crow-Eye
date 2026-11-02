@@ -36,7 +36,7 @@ table:
 | `srum_network_data_usage` | Bytes sent and received, per app, per interface; plus `wake_count`, `l2_profile_flags` |
 | `srum_network_connectivity` | Interface connection windows: `connected_time`, `connect_start_time` |
 | `srum_energy_usage` | Battery charge level, state transitions, `event_timestamp`; plus battery health: `designed_capacity`, `full_charged_capacity` (the two together are battery wear), `battery_count`, `configuration_hash`, `battery_charge_limited` |
-| `srum_app_timeline` | Focus, keyboard and mouse seconds, duration, `hosted_services`; plus the full native `*_timeline` and `*_breakdown` packed counters (`cpu_timeline`, `disk_timeline`, `network_timeline`, `cycles_breakdown`, `mbb_*`, etc.) |
+| `srum_app_timeline` | Focus, keyboard and mouse seconds, duration, `hosted_services`, the build that ran (`pe_link_time`, `pe_checksum`); plus the full native `*_timeline` and `*_breakdown` packed counters (`cpu_timeline`, `disk_timeline`, `network_timeline`, `cycles_breakdown`, `mbb_*`, etc.) |
 | `srum_metadata` | One row per parse: `parsed_at`, source path, record counts, and the recovery record (`jfm_collected`, `log_files_collected`, `db_state`, `recovery_notes`) |
 
 Crow-Eye captures **every native column** each provider table defines (not a fixed subset), so nothing
@@ -70,6 +70,16 @@ Two identity forms appear, and which one is used decides how svchost.exe is told
   `app_name` and the package family name as `app_path`. (An earlier build ran `os.path.basename` over
   this and, because the launch timestamp contains `/`, returned a timestamp fragment like
   `28:21:01:46!e276f` as the app name; that is fixed - `app_name` is now the real executable.)
+- Both `!` forms carry the **build** that ran, after the executable: the
+  `YYYY/MM/DD:HH:MM:SS` token is the PE header's link time (TimeDateStamp, UTC) and the hex token is
+  the PE header's CheckSum - not a launch time and not the file size. Crow-Eye stores them as
+  `pe_link_time` and `pe_checksum` (`0x0001642E`). They tell builds of one name apart where
+  `app_path` is empty: `python.exe` from a venv, from the Store and from python.org have different
+  link times. Windows' own binaries are linked reproducibly, so their link time is a hash that reads
+  as a year like 2054 or 1978 - a build identifier, never a date the program was built or run. A
+  checksum of `0x00000000` means the linker wrote none (common for Python and Rust builds), not a
+  failed decode; a link time of `1970-01-01 00:00:00` likewise means the linker wrote 0. The `.exe` token taken as `app_name` is the one the link time follows, so a PRAID
+  ending in `.Exe` (`Py.Manager.Exe`) is never mistaken for the program.
 
 ## Sparse columns are sparse for a reason
 In `srum_app_timeline`, `in_focus_s`, `keyboard_input_s` and `mouse_input_s` are set on only a small
@@ -103,4 +113,12 @@ strong evidence a person was present.
   FROM srum_app_timeline
   WHERE app_name = 'svchost.exe' AND hosted_services != ''
   ORDER BY timestamp DESC LIMIT 20;
+  ```
+- **Which builds of one program ran, and when each was first and last seen:**
+  ```sql
+  SELECT pe_link_time, pe_checksum, MIN(timestamp) AS first_seen, MAX(timestamp) AS last_seen,
+         COUNT(*) AS rows
+  FROM srum_app_timeline
+  WHERE app_name = 'python.exe'
+  GROUP BY pe_link_time, pe_checksum ORDER BY first_seen;
   ```

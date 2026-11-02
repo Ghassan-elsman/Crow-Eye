@@ -105,6 +105,8 @@ from eye.backends.cloud_api.gemini_backend import GeminiBackend
 from eye.backends.local_server.ollama_backend import OllamaBackend
 from eye.backends.local_server.lmstudio_backend import LMStudioBackend
 from eye.backends.local_cli.generic_cli_backend import GenericCLIBackend
+from eye.backends.local_cli.claude_code_backend import ClaudeCodeBackend
+from eye.backends.local_cli.codex_backend import CodexBackend
 from eye.backends.local_cli.cli_profiles import get_profile, list_supported_backends
 
 
@@ -173,6 +175,16 @@ class ModelRouter:
             # --- APPROACH 1: LOCAL CLI BACKENDS ---
             if it == "local_cli" or bt in list_supported_backends():
                 profile = get_profile(bt)
+                if bt == "claude_code":
+                    # Its own backend: Claude Code's tools off, structured tool calls,
+                    # the analyst's sign-in (never an API key from the environment).
+                    return ClaudeCodeBackend(self.config.get("executable_path", ""), model_name=mn,
+                                             effort=self.config.get("effort"),
+                                             timeout_s=self.config.get("cli_timeout_s"))
+                if bt == "codex_cli":
+                    return CodexBackend(self.config.get("executable_path", ""), model_name=mn,
+                                        effort=self.config.get("effort"),
+                                        timeout_s=self.config.get("cli_timeout_s"))
                 if mn in [None, "", "default", "cli-default-model"]:
                     mn = profile.get("display_name", "CLI Agent")
                     self.config["model_name"] = mn
@@ -210,8 +222,8 @@ class ModelRouter:
             if bt == "openai":
                 if not self.credential_manager:
                     raise ValueError("CredentialManager required for OpenAI backend")
-                return OpenAIBackend(mn, self.credential_manager)
-            if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager)
+                return OpenAIBackend(mn, self.credential_manager, effort=self.config.get("effort"))
+            if bt == "anthropic": return AnthropicBackend(mn, self.credential_manager, effort=self.config.get("effort"))
             if bt == "gemini": return GeminiBackend(mn, self.credential_manager)
             # OpenAI-compatible providers reuse OpenAIBackend with a base_url + their
             # own keyring credential. base_url is overridable via config["api_endpoint"]

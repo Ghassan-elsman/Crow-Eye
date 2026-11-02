@@ -1,7 +1,7 @@
 .data-viewer {
   margin-top: 12px;
   background: #1a1c24;
-  border: 1px solid #2e303a;
+  border: 3px solid #2e303a;
   border-radius: 8px;
   overflow: hidden;
 }
@@ -70,7 +70,7 @@
 .filter-input {
   flex: 1;
   background: #2a2d3a;
-  border: 1px solid #3a3d4a;
+  border: 3px solid #3a3d4a;
   border-radius: 6px;
   padding: 8px 12px;
   color: #e5e7eb;
@@ -89,7 +89,7 @@
 
 .export-button {
   background: #374151;
-  border: 1px solid #4b5563;
+  border: 3px solid #4b5563;
   border-radius: 6px;
   padding: 8px 16px;
   color: #e5e7eb;
@@ -178,7 +178,7 @@
 
 .pagination button {
   background: #374151;
-  border: 1px solid #4b5563;
+  border: 3px solid #4b5563;
   border-radius: 6px;
   padding: 6px 12px;
   color: #e5e7eb;
@@ -258,7 +258,7 @@
 
 .bucket-button {
   background: #047857;
-  border: 1px solid #065f46;
+  border: 3px solid #065f46;
   border-radius: 6px;
   padding: 8px 16px;
   color: #ecfdf5;
@@ -286,7 +286,7 @@
 
 .row-bucket-btn {
   background: transparent;
-  border: 1px solid #374151;
+  border: 3px solid #374151;
   border-radius: 4px;
   width: 28px;
   height: 28px;

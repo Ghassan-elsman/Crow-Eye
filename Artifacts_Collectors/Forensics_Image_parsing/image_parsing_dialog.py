@@ -185,8 +185,8 @@ def _ip_cbox(text, name):
 # text box and table inside it, because they are all QFrames).
 # ============================================================================
 
-# The site's look (ui/site_theme.py tokens): the window carries the site sheet
-# (begin_site_theme) and this objectName-keyed sheet on ipRoot shapes the
+# The site's look (ui/app_theme.py tokens): the window carries the theme sheet
+# (begin_theme) and this objectName-keyed sheet on ipRoot shapes the
 # layout's own pieces. Tab text has no colour here on purpose: the Issues tab
 # shows its severity through setTabTextColor, which a QSS colour overrides.
 _QSS_TEMPLATE = """
@@ -197,30 +197,30 @@ QLabel#ipCase { color: #94A3B8; font-size: 13px; }
 QLabel#ipImageSummary { color: #E2E8F0; font-size: 13px; font-weight: 600; }
 
 QScrollArea#ipSetupScroll, QWidget#ipSetupHost { background: transparent; border: none; }
-QFrame#ipCard { background: #0F172A; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; }
+QFrame#ipCard { background: #0F172A; border: 3px solid #1F2532; border-radius: 14px; }
 QLabel#ipStepNum { color: #FFFFFF; border-radius: 11px; font-weight: 800; font-size: 12px;
                    background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #6366F1, stop:1 #22D3EE); }
 QLabel#ipStepTitle { color: #F8FAFC; font-size: 15px; font-weight: 700; }
 QLabel#ipMuted { color: #94A3B8; font-size: 12px; }
-QLabel#ipPath { color: #E2E8F0; background: #0A0C10; border: 1px solid rgba(255,255,255,0.14);
+QLabel#ipPath { color: #E2E8F0; background: #0A0C10; border: 3px solid #2D333F;
                 border-radius: 10px; padding: 7px 10px; font-family: '%(mono)s', Consolas, monospace;
                 font-size: 12px; }
 QLabel#ipBadge { border-radius: 9px; padding: 3px 10px; font-size: 12px; font-weight: 700;
                  background: transparent; }
 
-QListWidget#ipPartitions { background: #0A0C10; color: #E2E8F0; border: 1px solid rgba(255,255,255,0.08);
+QListWidget#ipPartitions { background: #0A0C10; color: #E2E8F0; border: 3px solid #1F2532;
                            border-radius: 12px; padding: 4px; font-size: 13px; }
 QListWidget#ipPartitions::item { padding: 6px 4px; border-radius: 6px; }
 QListWidget#ipPartitions::item:selected { background: rgba(99,102,241,0.28); color: #F8FAFC; }
 
-QComboBox#ipCombo { color: #F8FAFC; background: #0A0C10; border: 1px solid rgba(255,255,255,0.14);
+QComboBox#ipCombo { color: #F8FAFC; background: #0A0C10; border: 3px solid #2D333F;
                     border-radius: 10px; padding: 5px 10px; min-height: 26px; font-size: 13px; }
-QComboBox#ipCombo:hover, QComboBox#ipCombo:focus { border: 1px solid #6366F1; }
+QComboBox#ipCombo:hover, QComboBox#ipCombo:focus { border: 3px solid #6366F1; }
 QComboBox#ipCombo QAbstractItemView { background: #0F172A; color: #E2E8F0;
                                       selection-background-color: rgba(99,102,241,0.30); }
 QCheckBox#ipOption { color: #E2E8F0; font-size: 13px; spacing: 8px; }
 
-QFrame#ipProgress { background: #0F172A; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; }
+QFrame#ipProgress { background: #0F172A; border: 3px solid #1F2532; border-radius: 14px; }
 QLabel#ipOperation { color: #F8FAFC; font-size: 14px; font-weight: 600; }
 QLabel#ipStat { color: #94A3B8; font-size: 13px; }
 QLabel#ipStatValue { color: #F8FAFC; font-size: 15px; font-weight: 800;
@@ -250,15 +250,15 @@ QPushButton#ipPrimary { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 
                         font-size: 13px; font-weight: 800; min-height: 20px; }
 QPushButton#ipPrimary:hover { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, stop:0 #818CF8, stop:1 #22D3EE); }
 QPushButton#ipPrimary:disabled { background: rgba(99,102,241,0.18); color: #64748B; }
-QPushButton#ipSecondary { background: transparent; color: #94A3B8; border: 1px solid rgba(255,255,255,0.14);
+QPushButton#ipSecondary { background: transparent; color: #94A3B8; border: 3px solid #2D333F;
                           border-radius: 16px; padding: 8px 18px; font-size: 13px;
                           font-weight: 700; min-height: 20px; }
 QPushButton#ipSecondary:hover { color: #F8FAFC; background: rgba(255,255,255,0.06);
-                                border-color: rgba(255,255,255,0.28); }
-QPushButton#ipSecondary:disabled { color: #475569; border-color: rgba(255,255,255,0.08); }
-QPushButton#ipSmall { background: transparent; color: #94A3B8; border: 1px solid rgba(255,255,255,0.12);
+                                border-color: #4F545E; }
+QPushButton#ipSecondary:disabled { color: #475569; border-color: #1F2532; }
+QPushButton#ipSmall { background: transparent; color: #94A3B8; border: 3px solid #282E3B;
                       border-radius: 12px; padding: 3px 11px; font-size: 12px; font-weight: 600; }
-QPushButton#ipSmall:hover { color: #F8FAFC; border: 1px solid #6366F1; }
+QPushButton#ipSmall:hover { color: #F8FAFC; border: 3px solid #6366F1; }
 
 QWidget#ipRoot QScrollBar:vertical { background: transparent; width: 10px; margin: 0; border: none; }
 QWidget#ipRoot QScrollBar:horizontal { background: transparent; height: 10px; margin: 0; border: none; }
@@ -278,7 +278,7 @@ QProgressBar#ipBar::chunk { background: qlineargradient(x1:0,y1:0,x2:1,y2:0, sto
 
 def _qss():
     try:
-        from ui.site_theme import families
+        from ui.app_theme import families
         mono = families()[1]
     except Exception:
         mono = "Consolas"
@@ -524,11 +524,11 @@ class ImageParsingDialog(QMainWindow):
             self.setWindowIcon(_ip_icon("search"))
         except Exception:
             pass
-        # The site look underneath ipRoot's own sheet (ui/site_theme.py), set
+        # The site look underneath ipRoot's own sheet (ui/app_theme.py), set
         # before the widgets exist so they are polished under it.
         try:
-            from ui.site_theme import begin_site_theme
-            begin_site_theme(self)
+            from ui.app_theme import begin_theme
+            begin_theme(self)
         except Exception:
             if STYLES_AVAILABLE:
                 self.setStyleSheet(CrowEyeStyles.MAIN_WINDOW)
@@ -538,8 +538,8 @@ class ImageParsingDialog(QMainWindow):
         # Header and tab fonts (capitals through QFont); every sheet is kept -
         # ipRoot's own sheet, the badges and the Issues cards carry meaning.
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self, clear_inline=False)
+            from ui.app_theme import apply_theme
+            apply_theme(self, clear_inline=False)
         except Exception:
             pass
 
@@ -952,7 +952,7 @@ class ImageParsingDialog(QMainWindow):
             state, text = states[key]
             fg, bg = _BADGE.get(state, _BADGE["idle"])
             lbl.setText(text)
-            lbl.setStyleSheet("QLabel#ipBadge { color: %s; border: 1px solid %s; background: %s; }"
+            lbl.setStyleSheet("QLabel#ipBadge { color: %s; border: 3px solid %s; background: %s; }"
                               % (fg, fg, bg))
             lbl.setVisible(True)
 

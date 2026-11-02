@@ -28,7 +28,9 @@ class MFTDataLoader(BaseDataLoader):
             'mft_records',
             'mft_standard_info',
             'mft_file_names',
-            'mft_data_attributes'
+            'mft_data_attributes',
+            # The NTFS integrity checks' findings (ntfs_integrity.py).
+            'ntfs_integrity_findings'
         ]
     
     def load_mft_records(

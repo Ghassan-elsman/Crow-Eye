@@ -17,6 +17,164 @@ from .artifacts import ArtifactType
 if TYPE_CHECKING:
     from .access_result import AccessResult
 
+# A file small enough to live inside its own MFT record has no clusters, and
+# FSCTL_GET_RETRIEVAL_POINTERS answers ERROR_HANDLE_EOF (38) for it: the
+# cluster reader (utils/locked_file_extents) then declines it with "stored
+# inside its MFT record (no clusters to read)". For a small file that is also
+# locked, that left every rung failed (Sentinel VM finding F-Q). Its bytes are
+# the record's resident $DATA value, and FSCTL_GET_NTFS_FILE_RECORD hands the
+# record over by number from the volume handle - no data open of the file.
+ERROR_HANDLE_EOF = 38
+FSCTL_GET_NTFS_FILE_RECORD = 0x00090068
+_ATTR_ATTRIBUTE_LIST = 0x20
+_ATTR_DATA = 0x80
+_ATTR_END = 0xFFFFFFFF
+_ATTR_FLAG_COMPRESSED = 0x0001
+_ATTR_FLAG_ENCRYPTED = 0x4000
+_RECORD_IN_USE = 0x0001
+_RECORD_NUMBER_MASK = 0xFFFFFFFFFFFF
+
+
+class ResidentReadError(OSError):
+    """The file's resident data could not be read; the message says why."""
+
+
+def resident_data(record, sequence=None):
+    """The unnamed $DATA value of one MFT FILE record, when it is resident.
+
+    `record` is the record as FSCTL_GET_NTFS_FILE_RECORD returns it, with the
+    update-sequence fixups already applied (measured: a 612-byte value that
+    crosses the first sector's last two bytes reads back byte for byte).
+    `sequence` is the sequence number the file's reference carries; a record
+    with another one has been reused by a different file since, and its bytes
+    are not this file's. Raises ResidentReadError with the reason otherwise.
+    """
+    import struct
+    if len(record) < 0x18 or record[:4] != b"FILE":
+        raise ResidentReadError(0, "the MFT record is not a FILE record")
+    flags = struct.unpack_from("<H", record, 0x16)[0]
+    if not flags & _RECORD_IN_USE:
+        raise ResidentReadError(0, "the MFT record is not in use")
+    if sequence is not None and struct.unpack_from("<H", record, 0x10)[0] != sequence:
+        raise ResidentReadError(0, "the MFT record was reused by another file (sequence differs)")
+    offset = struct.unpack_from("<H", record, 0x14)[0]
+    listed = False
+    while offset + 16 <= len(record):
+        kind, length = struct.unpack_from("<II", record, offset)
+        if kind == _ATTR_END:
+            break
+        if length < 16 or offset + length > len(record):
+            raise ResidentReadError(0, "the MFT record's attributes are malformed")
+        non_resident, name_length = record[offset + 8], record[offset + 9]
+        attr_flags = struct.unpack_from("<H", record, offset + 0x0C)[0]
+        if kind == _ATTR_ATTRIBUTE_LIST:
+            listed = True
+        if kind == _ATTR_DATA and name_length == 0:
+            if non_resident:
+                raise ResidentReadError(0, "the file's $DATA is not resident")
+            if attr_flags & (_ATTR_FLAG_COMPRESSED | _ATTR_FLAG_ENCRYPTED):
+                raise ResidentReadError(0, "the file's resident $DATA is compressed or encrypted")
+            value_length, value_offset = struct.unpack_from("<IH", record, offset + 0x10)
+            if value_offset + value_length > length:
+                raise ResidentReadError(0, "the resident $DATA runs past its attribute")
+            start = offset + value_offset
+            return bytes(record[start:start + value_length])
+        offset += length
+    if listed:
+        raise ResidentReadError(0, "the file's $DATA is in an extension record ($ATTRIBUTE_LIST), not read")
+    raise ResidentReadError(0, "the MFT record has no unnamed $DATA attribute")
+
+
+def copy_resident_data(path, dest):
+    """Copy a resident file to `dest` from its MFT record. Returns the bytes written.
+
+    Opens the file for its attributes only (not subject to the sharing check
+    a locked file refuses data opens with) to learn its file reference and
+    size, then asks the volume for that record. Needs administrator rights
+    (the volume handle). `dest` is removed on any failure, so a failed copy
+    never looks like evidence.
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+    import struct
+    import sys
+    if sys.platform != "win32":
+        raise ResidentReadError(0, "reading a file from its MFT record is implemented for Windows only")
+    drive = os.path.splitdrive(os.path.abspath(path))[0]
+    if not (len(drive) == 2 and drive[1] == ":"):
+        raise ResidentReadError(0, "%s is not on a local drive letter" % path)
+
+    class _Info(ctypes.Structure):
+        _fields_ = [("attributes", wt.DWORD), ("created", wt.FILETIME),
+                    ("accessed", wt.FILETIME), ("written", wt.FILETIME),
+                    ("serial", wt.DWORD), ("size_high", wt.DWORD),
+                    ("size_low", wt.DWORD), ("links", wt.DWORD),
+                    ("index_high", wt.DWORD), ("index_low", wt.DWORD)]
+
+    k = ctypes.WinDLL("kernel32", use_last_error=True)
+    k.CreateFileW.restype = wt.HANDLE
+    k.CreateFileW.argtypes = [wt.LPCWSTR, wt.DWORD, wt.DWORD, ctypes.c_void_p,
+                              wt.DWORD, wt.DWORD, wt.HANDLE]
+    k.GetFileInformationByHandle.restype = wt.BOOL
+    k.GetFileInformationByHandle.argtypes = [wt.HANDLE, ctypes.POINTER(_Info)]
+    k.DeviceIoControl.restype = wt.BOOL
+    k.DeviceIoControl.argtypes = [wt.HANDLE, wt.DWORD, ctypes.c_void_p, wt.DWORD,
+                                  ctypes.c_void_p, wt.DWORD, ctypes.POINTER(wt.DWORD),
+                                  ctypes.c_void_p]
+    k.CloseHandle.argtypes = [wt.HANDLE]
+    invalid = ctypes.c_void_p(-1).value
+
+    handle = k.CreateFileW(path, 0x80, 0x7, None, 3, 0x02000000, None)    # attributes only
+    if handle is None or handle == invalid:
+        raise ResidentReadError(ctypes.get_last_error(), "cannot open %s for its attributes" % path)
+    try:
+        info = _Info()
+        if not k.GetFileInformationByHandle(handle, ctypes.byref(info)):
+            raise ResidentReadError(ctypes.get_last_error(), "cannot read the file reference of %s" % path)
+    finally:
+        k.CloseHandle(handle)
+    reference = (info.index_high << 32) | info.index_low
+    size = (info.size_high << 32) | info.size_low
+    number = reference & _RECORD_NUMBER_MASK
+
+    volume = k.CreateFileW("\\\\.\\" + drive, 0x80000000, 0x3, None, 3, 0, None)
+    if volume is None or volume == invalid:
+        raise ResidentReadError(ctypes.get_last_error(),
+                                "cannot open volume %s for reading (administrator rights are needed)" % drive)
+    try:
+        out = ctypes.create_string_buffer(12 + 65536)
+        got = wt.DWORD()
+        request = struct.pack("<q", number)
+        if not k.DeviceIoControl(volume, FSCTL_GET_NTFS_FILE_RECORD, request, len(request),
+                                 out, len(out), ctypes.byref(got), None):
+            raise ResidentReadError(ctypes.get_last_error(), "cannot read the MFT record of %s" % path)
+    finally:
+        k.CloseHandle(volume)
+    returned, length = struct.unpack_from("<qI", out.raw, 0)
+    # Asked for a record not in use, NTFS returns the nearest one below it.
+    if returned & _RECORD_NUMBER_MASK != number:
+        raise ResidentReadError(0, "NTFS returned MFT record %d for %d (%s)"
+                                % (returned & _RECORD_NUMBER_MASK, number, path))
+    data = resident_data(out.raw[12:12 + length], sequence=reference >> 48)
+    if len(data) != size:
+        raise ResidentReadError(0, "the resident $DATA of %s is %d bytes, the file %d"
+                                % (path, len(data), size))
+    try:
+        parent = os.path.dirname(dest)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        with open(dest, "wb") as handle_out:
+            handle_out.write(data)
+        if os.path.getsize(dest) != size:
+            raise ResidentReadError(0, "wrote %d of %d bytes of %s" % (os.path.getsize(dest), size, path))
+        return size
+    except BaseException:
+        try:
+            os.remove(dest)
+        except OSError:
+            pass
+        raise
+
 
 class RawDiskAccessStrategy(FileAccessStrategy):
     r"""Raw disk access strategy for MFT and USN Journal.
@@ -102,20 +260,26 @@ class RawDiskAccessStrategy(FileAccessStrategy):
         """
         # DEBUG: Log can_handle call
         self._report_progress(f"[RAW_DISK] can_handle called: file_path={file_path}, artifact_type={artifact_type}")
-        
-        # Check if win32file is available
-        if not self._win32file_available:
-            self._report_progress(f"[RAW_DISK] Cannot handle: win32file not available")
-            return False
-        
-        # Check if admin privileges are present
+
+        # Check if admin privileges are present (the volume read needs them)
         if not self._check_admin_privileges():
             self._report_progress(f"[RAW_DISK] Cannot handle: admin privileges not present")
             return False
-        
-        # Check artifact type
-        artifact_type_lower = artifact_type.lower()
-        can_handle_result = artifact_type_lower in ["mft", "usn", "usn_journal"]
+
+        artifact_type_lower = (artifact_type or "").lower()
+        if artifact_type_lower in ["mft", "usn", "usn_journal"]:
+            # The $MFT and journal readers use win32file.
+            if not self._win32file_available:
+                self._report_progress(f"[RAW_DISK] Cannot handle: win32file not available")
+                return False
+            return True
+        # Any other file on a local drive is read by its clusters
+        # (utils/locked_file_extents): a database a service holds open - SRUM's
+        # SRUDB.dat - refuses every data open, and this was only ever offered
+        # for the MFT and journal, so with no current shadow copy nothing
+        # could read it, even elevated.
+        can_handle_result = os.name == 'nt' and bool(self._extract_drive_letter(file_path)) \
+            and not file_path.startswith("\\\\")
         self._report_progress(f"[RAW_DISK] can_handle result: {can_handle_result} (artifact_type_lower={artifact_type_lower})")
         return can_handle_result
     
@@ -143,9 +307,11 @@ class RawDiskAccessStrategy(FileAccessStrategy):
         
         # DEBUG: Log access_file call
         self._report_progress(f"[RAW_DISK] access_file CALLED: file_path={file_path}, dest_path={dest_path}")
-        
-        # Check prerequisites
-        if not self._win32file_available:
+
+        is_ntfs_metafile = ("$MFT" in file_path or "$UsnJrnl" in file_path
+                            or "UsnJrnl" in file_path)
+        # Check prerequisites (win32file only for the $MFT / journal readers)
+        if is_ntfs_metafile and not self._win32file_available:
             duration = time.time() - start_time
             error_msg = "win32file module not available (pywin32 not installed)"
             self._report_progress(f"[RAW_DISK] access_file ERROR: {error_msg}")
@@ -204,161 +370,64 @@ class RawDiskAccessStrategy(FileAccessStrategy):
             self._report_progress(f"[RAW_DISK] Routing to read_usn_journal for drive {drive_letter}")
             return self.read_usn_journal(drive_letter, dest_path)
         
-        # For other raw disk access (generic)
-        import win32file
-        import pywintypes
-        
-        device_handle = None
-        output_file = None
-        
+        # Any other file: read by its clusters. This used to open the volume
+        # and copy it from sector 0 - the whole disk into the destination,
+        # never the file asked for (unreachable only because can_handle
+        # turned every other file away).
         try:
-            # Construct device path: \\.\C:
-            device_path = f"\\\\.\\{drive_letter}:"
-            
-            # Open device handle with read access and sharing flags
-            # GENERIC_READ = 0x80000000
-            # FILE_SHARE_READ = 0x00000001
-            # FILE_SHARE_WRITE = 0x00000002
-            # OPEN_EXISTING = 3
-            device_handle = win32file.CreateFile(
-                device_path,
-                win32file.GENERIC_READ,
-                win32file.FILE_SHARE_READ | win32file.FILE_SHARE_WRITE,
-                None,
-                win32file.OPEN_EXISTING,
-                0,
-                None
+            from utils.locked_file_extents import copy_by_extents
+        except ImportError as e:
+            return AccessResult(
+                success=False,
+                source_path=file_path,
+                dest_path=dest_path,
+                strategy_used="raw_disk",
+                error=f"Cluster reader unavailable: {e}",
+                duration_seconds=time.time() - start_time,
+                status="failed"
             )
-            
-            # Ensure destination directory exists
-            dest_dir = os.path.dirname(dest_path)
-            if dest_dir and not os.path.exists(dest_dir):
-                os.makedirs(dest_dir, exist_ok=True)
-            
-            # Open output file for writing
-            output_file = open(dest_path, 'wb')
-            
-            # Read and write in chunks
-            # Use 64KB chunks for better performance
-            chunk_size = 64 * 1024  # 64KB
-            total_bytes_read = 0
-            
-            while True:
-                try:
-                    # Read chunk from device
-                    hr, data = win32file.ReadFile(device_handle, chunk_size)
-                    
-                    if not data:
-                        # No more data to read
-                        break
-                    
-                    # Write chunk to output file
-                    output_file.write(data)
-                    total_bytes_read += len(data)
-                    
-                    # If we read less than chunk_size, we've reached the end
-                    if len(data) < chunk_size:
-                        break
-                        
-                except pywintypes.error as e:
-                    # Check if this is an EOF error
-                    if e.winerror == 38:  # ERROR_HANDLE_EOF
-                        break
-                    else:
-                        raise
-            
-            # Close handles
-            output_file.close()
-            output_file = None
-            
-            win32file.CloseHandle(device_handle)
-            device_handle = None
-            
-            duration = time.time() - start_time
-            
+        try:
+            try:
+                size = copy_by_extents(file_path, dest_path)
+                how = "by its clusters"
+            except OSError as e:
+                # ERROR_HANDLE_EOF from the cluster map: the file is stored
+                # inside its MFT record, so its bytes are read from there.
+                if getattr(e, "errno", 0) != ERROR_HANDLE_EOF:
+                    raise
+                size = copy_resident_data(file_path, dest_path)
+                how = "from its MFT record (resident data)"
+            self._report_progress(f"[RAW_DISK] Read {size:,} bytes of {file_path} {how}")
             return AccessResult(
                 success=True,
                 source_path=file_path,
                 dest_path=dest_path,
                 strategy_used="raw_disk",
-                file_size=total_bytes_read,
-                duration_seconds=duration,
+                file_size=size,
+                duration_seconds=time.time() - start_time,
                 status="success"
             )
-            
-        except pywintypes.error as e:
-            # Windows API error
-            duration = time.time() - start_time
-            error_msg = f"Windows API error (code {e.winerror}): {e.strerror}"
-            
-            return AccessResult(
-                success=False,
-                source_path=file_path,
-                dest_path=dest_path,
-                strategy_used="raw_disk",
-                error=error_msg,
-                duration_seconds=duration,
-                status="failed"
-            )
-            
-        except PermissionError as e:
-            # Permission denied
-            duration = time.time() - start_time
-            return AccessResult(
-                success=False,
-                source_path=file_path,
-                dest_path=dest_path,
-                strategy_used="raw_disk",
-                error=f"Permission denied: {str(e)}",
-                duration_seconds=duration,
-                status="failed"
-            )
-            
         except OSError as e:
-            # Other OS errors
-            duration = time.time() - start_time
-            error_msg = f"OS error: {str(e)}"
-            
-            if hasattr(e, 'winerror'):
-                error_msg = f"OS error (code {e.winerror}): {str(e)}"
-            
+            reason = e.strerror or str(e)
+            if getattr(e, "errno", 0):
+                reason = f"{reason} (code {e.errno})"
+            # errno 2 on a destination past MAX_PATH reads as if the SOURCE
+            # were missing; say which path was refused (decision 168).
+            full = os.path.abspath(dest_path)
+            if getattr(e, "errno", 0) == 2 and len(full) >= 260 \
+                    and not full.startswith("\\\\?\\"):
+                reason = (f"destination path too long ({len(full)} characters, "
+                          f"MAX_PATH is 260): {reason}")
+            self._report_progress(f"[RAW_DISK] Cluster read failed: {reason}")
             return AccessResult(
                 success=False,
                 source_path=file_path,
                 dest_path=dest_path,
                 strategy_used="raw_disk",
-                error=error_msg,
-                duration_seconds=duration,
+                error=f"Raw disk read failed: {reason}",
+                duration_seconds=time.time() - start_time,
                 status="failed"
             )
-            
-        except Exception as e:
-            # Catch-all for unexpected errors
-            duration = time.time() - start_time
-            return AccessResult(
-                success=False,
-                source_path=file_path,
-                dest_path=dest_path,
-                strategy_used="raw_disk",
-                error=f"Unexpected error: {str(e)}",
-                duration_seconds=duration,
-                status="failed"
-            )
-            
-        finally:
-            # Ensure handles are closed even if an error occurs
-            if output_file:
-                try:
-                    output_file.close()
-                except Exception:
-                    pass
-            
-            if device_handle:
-                try:
-                    import win32file
-                    win32file.CloseHandle(device_handle)
-                except Exception:
-                    pass
     
     def _extract_drive_letter(self, file_path: str) -> str:
         r"""Extract drive letter from file path.

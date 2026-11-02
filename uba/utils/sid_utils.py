@@ -55,6 +55,12 @@ def normalize_sid(sid) -> str:
     sid = str(sid).strip()
     if sid.startswith(_PYSID_PREFIX):
         sid = sid[len(_PYSID_PREFIX):].strip()
+    # user_identity.apply_identity() rewrites UserAssist.user_sid, BAM.sid and
+    # DAM.sid into "SID (MACHINE\\username)". A SID never contains a space, so
+    # the SID is everything before the first one. Without this every BAM row
+    # of a current case classified as 'unknown' and lost its actor.
+    if sid.startswith("S-") and " " in sid:
+        sid = sid.split(" ", 1)[0]
     if sid in ("-", "N/A"):
         return ""
     return sid

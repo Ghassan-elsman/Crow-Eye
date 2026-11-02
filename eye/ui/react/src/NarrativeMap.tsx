@@ -923,7 +923,7 @@ export default function NarrativeMap() {
                   <div className="nm-card-head">
                     <StateBadge s={n.state} />
                     <div className="nm-card-meta">
-                      <span className={`nm-author ${isEye(n.authoredBy) ? 'eye' : 'inv'}`}>{isEye(n.authoredBy) ? '◆ EYE' : '⬡ INV'}</span>
+                      <span className={`nm-author ${isEye(n.authoredBy) ? 'eye' : 'inv'}`}>{isEye(n.authoredBy) ? '◆ Eye' : '⬡ INV'}</span>
                       <button className="nm-chevron" onClick={(e) => { e.stopPropagation(); toggleCollapse(n.id); }}
                         style={{ transform: n.collapsed ? 'rotate(0deg)' : 'rotate(90deg)' }}><IconChevronRight size={14} /></button>
                     </div>
@@ -958,7 +958,7 @@ export default function NarrativeMap() {
                   <div className="nm-global-kicker"><IconNote size={11} /> {(c.kicker || 'note').toUpperCase()}</div>
                   <div className="nm-global-title">{stripMd(c.title)}</div>
                   {c.body && <div className="nm-global-body">{clip(stripMd(c.body), 160)}</div>}
-                  <span className={`nm-author ${isEye(c.authoredBy) ? 'eye' : 'inv'} nm-global-author`}>{isEye(c.authoredBy) ? '◆ EYE' : '⬡ INV'}</span>
+                  <span className={`nm-author ${isEye(c.authoredBy) ? 'eye' : 'inv'} nm-global-author`}>{isEye(c.authoredBy) ? '◆ Eye' : '⬡ INV'}</span>
                 </div>
               );
             })}

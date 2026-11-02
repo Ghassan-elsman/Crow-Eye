@@ -221,6 +221,81 @@ def case_on_system_drive(case_dir):
     return os.path.splitdrive(os.path.abspath(case_dir))[0].upper() == drive
 
 
+class _HashJob(threading.Thread):
+    """The files of a quick inventory, hashed on a few threads (see hash_pending)."""
+
+    def __init__(self, rec, pending, map_path, shadow_copy_id, created_utc, workers, should_stop):
+        super().__init__(name="custody-source-hasher", daemon=True)
+        self.rec, self.pending = rec, pending
+        self.map_path, self.shadow_copy_id, self.created_utc = map_path, shadow_copy_id, created_utc
+        self.workers = max(1, int(workers or 1))
+        self.should_stop = should_stop
+        self.hashed = self.from_shadow = self.not_hashed = 0
+        self._count_lock = threading.Lock()
+        self.seconds = 0.0
+
+    def _one(self, item):
+        path, times, big, note = item
+        if big:
+            self.rec.add_source(path, method="in-place read", times=times, hash_source=False, note=note)
+            self._add("not_hashed")
+            return
+        if self.should_stop is not None and self.should_stop():
+            self.rec.add_source(path, method="in-place read", times=times, hash_source=False,
+                                note="not hashed: the run was cancelled before it was reached")
+            self._add("not_hashed")
+            return
+        mapped = None
+        if self.map_path is not None:
+            try:
+                mapped = self.map_path(path)
+            except Exception:
+                mapped = None
+        digest, info = (sha256_file(mapped) if mapped else (None, None))
+        if digest:
+            self.rec.add_source(path, method="in-place read", times=times, source_sha256=digest,
+                                read_from=mapped, shadow_copy_id=self.shadow_copy_id,
+                                shadow_copy_created_utc=self.created_utc,
+                                note="hashed from the run's shadow copy while the parse ran")
+            self._add("hashed")
+            self._add("from_shadow")
+            return
+        extra = ("not in the shadow copy (%s); hashed from the live file" % info) if mapped else None
+        entry = self.rec.add_source(path, method="in-place read", times=times, note=extra)
+        self._add("hashed" if entry.get("source_sha256") else "not_hashed")
+
+    def _add(self, name):
+        with self._count_lock:
+            setattr(self, name, getattr(self, name) + 1)
+
+    def run(self):
+        started = time.time()
+        if self.pending:
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=self.workers,
+                                    thread_name_prefix="custody-hash") as pool:
+                for _ in pool.map(self._safe_one, self.pending):
+                    pass
+        self.seconds = time.time() - started
+
+    def _safe_one(self, item):
+        try:
+            self._one(item)
+        except Exception as e:                            # never lose the file from the record
+            try:
+                self.rec.add_source(item[0], method="in-place read", times=item[1],
+                                    hash_source=False, note="not hashed: %s" % e)
+            except Exception:
+                pass
+            self._add("not_hashed")
+
+    def wait(self, timeout=None):
+        """Block until every file is recorded (no-op when it ran inline)."""
+        if self.is_alive():
+            self.join(timeout)
+        return not self.is_alive()
+
+
 class CustodyRecord:
     """One collection run. Thread-safe; closed exactly once."""
 
@@ -333,7 +408,8 @@ class CustodyRecord:
         self._append("sources", entry)
         return entry
 
-    def inventory(self, patterns, hash_limit=256 * 1024 * 1024, max_files=20000, should_stop=None):
+    def inventory(self, patterns, hash_limit=256 * 1024 * 1024, max_files=20000, should_stop=None,
+                  hash_now=True):
         """Record files a parse is about to read in place, before it reads them.
 
         A live parse opens the evidence where it lies instead of copying it, so
@@ -341,9 +417,18 @@ class CustodyRecord:
         readable and not huge) SHA-256 taken before the parse are what tie a
         parsed row back to the bytes it came from. Locked files are listed with
         the reason they could not be hashed: that is a fact about the run too.
+
+        ``hash_now=False`` takes only the size and times now (``os.stat``, no
+        read) and keeps the files for ``hash_pending``. Hashing 4,176 files one
+        by one before the first parser started held a live Parse All for 47 s
+        on a cold disk; the times are what must be taken before the parse, and
+        the bytes can be hashed from the run's shadow copy - the same
+        point-in-time bytes the parsers read - while they run.
         """
         import glob as _glob
         seen, count = set(), 0
+        if not hash_now:
+            self._pending = []
         for pattern in patterns:
             for path in sorted(_glob.glob(pattern)):
                 key = os.path.normcase(path)
@@ -359,9 +444,35 @@ class CustodyRecord:
                     return count - 1
                 times = file_times(path)
                 big = (times.get("size") or 0) > hash_limit
+                note = "not hashed: larger than %d MB" % (hash_limit // 2**20) if big else None
+                if not hash_now:
+                    self._pending.append((path, times, big, note))
+                    continue
                 self.add_source(path, method="in-place read", times=times, hash_source=not big,
-                                note="not hashed: larger than %d MB" % (hash_limit // 2**20) if big else None)
+                                note=note)
         return count
+
+    def hash_pending(self, map_path=None, shadow_copy_id=None, shadow_copy_created_utc=None,
+                     workers=4, should_stop=None, background=True):
+        """Hash the files ``inventory(hash_now=False)`` listed, then record them.
+
+        ``map_path(live_path)`` gives the same file inside the run's shadow
+        copy; it is read there, and the live file only when the copy does not
+        hold it (a file created after the snapshot). Several files at once:
+        reading and hashing release the GIL. ``background=True`` returns at
+        once with a handle whose ``wait()`` blocks until every file is
+        recorded; the run waits on it before deleting the shadow copy.
+        Files left when ``should_stop()`` turns true are still recorded, with
+        their times and the reason they were not hashed.
+        """
+        pending, self._pending = list(getattr(self, "_pending", None) or []), []
+        handle = _HashJob(self, pending, map_path, shadow_copy_id, shadow_copy_created_utc,
+                          workers, should_stop)
+        if background:
+            handle.start()
+        else:
+            handle.run()
+        return handle
 
     def add_failure(self, source, reason, method=None, **extra):
         item = {"source": source, "reason": str(reason)[:2000], "method": method,
@@ -1023,6 +1134,20 @@ def settings_changes(before, after):
     return out
 
 
+def record_config(path, what, case_dir=None, **fields):
+    """An analysis configuration Crow-Eye saved (a Wing, a pipeline): its
+    hash and size, in the ledger of the case that is open. A Wing or pipeline
+    decides what a correlation finds, so the version a result came from has
+    to be provable. Nothing when no case is open."""
+    try:
+        t = file_times(path)
+        digest, _info = sha256_file(path)
+    except Exception:
+        t, digest = {}, None
+    return ledger(case_dir, "analysis configuration saved", what=what,
+                  path=os.path.abspath(path), size=t.get("size"), sha256=digest, **fields)
+
+
 def record_export(path, what, case_dir=None, **fields):
     """A file Crow-Eye wrote for someone to read (CSV, report, JSON): its
     hash, size and what it is, in the case's ledger."""
@@ -1385,9 +1510,14 @@ def install_process_hook():
 
 
 def note_shadow_copy(action, **kw):
+    """A shadow copy created or deleted. Inside a run it goes in the run's
+    record; with no run open (the File Browser, a check made outside a parse)
+    it went nowhere - now it is a line in the case's ledger."""
     rec = active()
     if rec:
         rec.shadow_copy(action, **kw)
+    else:
+        ledger(None, "shadow copy %s" % action, **kw)
 
 
 def warn(message):

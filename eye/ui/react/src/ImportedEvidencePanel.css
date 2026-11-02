@@ -40,7 +40,7 @@
   font-size: 11.5px;
   color: #94A3B8;
   padding: 3px 8px;
-  border: 1px solid rgba(148,163,184,0.25);
+  border: 3px solid rgba(148,163,184,0.25);
   border-radius: 999px;
 }
 .iev-stat--bad { color: #F43F5E; border-color: rgba(244,63,94,0.5); }
@@ -51,7 +51,7 @@
   gap: 6px;
   padding: 6px 12px;
   border-radius: 6px;
-  border: 1px solid rgba(103,232,249,0.4);
+  border: 3px solid rgba(103,232,249,0.4);
   background: rgba(103,232,249,0.08);
   color: #67E8F9;
   font-size: 12px;
@@ -70,7 +70,7 @@
 .iev-error {
   margin: 16px 18px;
   padding: 10px 14px;
-  border: 1px solid rgba(244,63,94,0.5);
+  border: 3px solid rgba(244,63,94,0.5);
   border-radius: 6px;
   background: rgba(244,63,94,0.1);
   color: #FDA4AF;
@@ -131,8 +131,8 @@
   font-size: 10.5px;
   font-weight: 600;
 }
-.iev-kind--database { color: #34D399; background: rgba(52,211,153,0.12); border: 1px solid rgba(52,211,153,0.4); }
-.iev-kind--document { color: #FBBF24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.4); }
+.iev-kind--database { color: #34D399; background: rgba(52,211,153,0.12); border: 3px solid rgba(52,211,153,0.4); }
+.iev-kind--document { color: #FBBF24; background: rgba(251,191,36,0.12); border: 3px solid rgba(251,191,36,0.4); }
 
 .iev-hash {
   display: inline-flex;
@@ -140,7 +140,7 @@
   gap: 5px;
   padding: 3px 8px;
   border-radius: 4px;
-  border: 1px solid rgba(148,163,184,0.3);
+  border: 3px solid rgba(148,163,184,0.3);
   background: rgba(148,163,184,0.08);
   color: #A5B4FC;
   font-family: 'Consolas', monospace;
@@ -158,9 +158,9 @@
   font-size: 11px;
   font-weight: 600;
 }
-.iev-badge--ok   { color: #10B981; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.45); }
-.iev-badge--bad  { color: #F43F5E; background: rgba(244,63,94,0.14);  border: 1px solid rgba(244,63,94,0.5); }
-.iev-badge--wait { color: #94A3B8; background: rgba(148,163,184,0.1); border: 1px solid rgba(148,163,184,0.35); }
+.iev-badge--ok   { color: #10B981; background: rgba(16,185,129,0.12); border: 3px solid rgba(16,185,129,0.45); }
+.iev-badge--bad  { color: #F43F5E; background: rgba(244,63,94,0.14);  border: 3px solid rgba(244,63,94,0.5); }
+.iev-badge--wait { color: #94A3B8; background: rgba(148,163,184,0.1); border: 3px solid rgba(148,163,184,0.35); }
 
 .iev-spin {
   -webkit-animation: iev-rotate 0.9s linear infinite;

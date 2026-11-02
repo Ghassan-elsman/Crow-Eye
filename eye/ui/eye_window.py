@@ -2,7 +2,7 @@
 Eye AI Assistant Window
 =======================
 
-Main standalone window for the EYE AI Forensic Assistant.
+Main standalone window for the Eye AI Forensic Assistant.
 Integrates the React chat interface and report builder panel with a split pane layout.
 """
 
@@ -54,10 +54,10 @@ def _eye_icon(button, name):
         pass
 
 
-def _site_font(sheet):
-    """The site's UI font in a sheet that named Segoe UI (ui/site_theme.py)."""
+def _theme_font(sheet):
+    """The site's UI font in a sheet that named Segoe UI (ui/app_theme.py)."""
     try:
-        from ui.site_theme import families
+        from ui.app_theme import families
         fam = families()[0]
     except Exception:
         return sheet
@@ -591,7 +591,7 @@ class EYEAssistantWindow(QWidget):
             QPushButton { 
                 background-color: #1E293B; 
                 color: #C084FC; 
-                border: 1px solid #334155; 
+                border: 3px solid #334155; 
                 border-radius: 4px;
                 font-weight: bold; 
                 font-size: 14pt;
@@ -618,7 +618,7 @@ class EYEAssistantWindow(QWidget):
 
         layout.addWidget(self.splitter)
         self._pump_splash()
-        self.setStyleSheet(_site_font("""
+        self.setStyleSheet(_theme_font("""
             QWidget { 
                 background-color: #0B1220; 
                 color: #E2E8F0;
@@ -638,7 +638,7 @@ class EYEAssistantWindow(QWidget):
         toolbar = QToolBar("Eye AI Toolbar")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(18, 18))
-        toolbar.setStyleSheet(_site_font("""
+        toolbar.setStyleSheet(_theme_font("""
             QToolBar { 
                 spacing: 8px; 
                 padding: 4px 12px; 
@@ -648,7 +648,7 @@ class EYEAssistantWindow(QWidget):
             QPushButton { 
                 background: transparent; 
                 color: #94A3B8; 
-                border: 1px solid transparent; 
+                border: 3px solid transparent; 
                 border-radius: 4px; 
                 padding: 4px 10px; 
                 font-size: 11px; 
@@ -657,7 +657,7 @@ class EYEAssistantWindow(QWidget):
             QPushButton:hover { 
                 background: rgba(255, 255, 255, 0.05); 
                 color: #E2E8F0;
-                border: 1px solid rgba(255, 255, 255, 0.1); 
+                border: 3px solid #232A36; 
             }
             QPushButton:pressed {
                 background: rgba(255, 255, 255, 0.02);
@@ -768,17 +768,17 @@ class EYEAssistantWindow(QWidget):
         
         if not os.path.exists(react_build_path):
             from PyQt5.QtWidgets import QMessageBox
-            err_msg = "The EYE AI React interface could not be found.\n\nPlease ensure Node.js is installed and the React app is built successfully."
+            err_msg = "The Eye AI React interface could not be found.\n\nPlease ensure Node.js is installed and the React app is built successfully."
             print(f"[Error] {err_msg}")
             
             # Show a warning dialog but don't crash
-            QMessageBox.warning(self, "EYE AI Build Missing", err_msg)
+            QMessageBox.warning(self, "Eye AI Build Missing", err_msg)
             
             # Load fallback HTML instead of raising an exception
             fallback_html = f"""
             <html><body style="background-color: #0B1220; color: #E2E8F0; font-family: 'Segoe UI', sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; text-align: center;">
                 <div>
-                    <h2 style="color: #ff5555;">EYE AI Interface Missing</h2>
+                    <h2 style="color: #ff5555;">Eye AI Interface Missing</h2>
                     <p>The React application build was not found at:</p>
                     <code style="background: #1E293B; padding: 4px 8px; border-radius: 4px; font-size: 12px; margin-top: 10px; display: inline-block;">{react_build_path}</code>
                     <p style="margin-top: 20px; color: #94A3B8;">Please restart Crow-Eye with an active internet connection to automatically download Node.js and build the GUI, or build it manually.</p>
@@ -926,6 +926,11 @@ class EYEAssistantWindow(QWidget):
                 except Exception:
                     pass
                 logger.info("Eye AI services refreshed successfully after configuration update.")
+                # The new backend is checked at once, so the Eye says whether it answers.
+                try:
+                    self.bridge.start_backend_check()
+                except Exception as e:
+                    logger.warning(f"Backend check after setup not started: {e}")
                 
         except Exception as e:
             logger.error(f"Failed to refresh services after configuration: {e}", exc_info=True)

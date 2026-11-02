@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { normalizeForensicName, getForensicName, getForensicTimestamps, getForensicId, cleanForensicDate } from '../utils/formatters';
 import { heuristicFlatten } from '../utils/dataUtils';
+import { laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart } from '../utils/laneSources';
 
 /**
  * Hook to compute cross-lane analytical links between different artifacts.
@@ -29,6 +30,8 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
         id,
         type,
         timestamp: t,
+        rawTimestamp: timestamp,
+        field,
         normalized,
         rawName,
         source: sourceObj,
@@ -51,33 +54,37 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
       heuristicFlatten(data.sessions.events).forEach(r => add(r, 'session', r.timestamp, r.event_name || r.type || 'Session Artifact', 'timestamp'));
     }
 
-    if (activeArtifacts.srum_app && data.srum_app) {
-      heuristicFlatten(data.srum_app).forEach(item => {
+    // A SRUM band's start is a link point too: the lane registers it, from
+    // srumBandStart, at the face time (app) or connected time (network) before the
+    // row. Only that start - the lane registers no background-cycle start, so a
+    // mark there was a link that never drew - and only inside the loaded range:
+    // SRUM's "durations" are not all durations (background_cycle_time is CPU
+    // cycles; connected_time has read 67 years), and a start outside the range
+    // has no mark to attach to. Sentinel's copy threw on one before year 1.
+    const lo = rangeStartIso ? new Date(cleanForensicDate(rangeStartIso)).getTime() : -Infinity;
+    const hi = rangeEndIso ? new Date(cleanForensicDate(rangeEndIso)).getTime() : Infinity;
+    const addBandStart = (item, type, start, name) => {
+      if (Number.isFinite(start) && start >= lo && start <= hi) {
+        add(item, type, new Date(start).toISOString(), name, 'timestamp');
+      }
+    };
+
+    if (activeArtifacts.srum_app && Array.isArray(data.srum_app)) {
+      data.srum_app.forEach((item, idx, arr) => {
         const name = getForensicName(item);
-        const ts = new Date(item.timestamp).getTime();
-        // Link by recording time
         add(item, 'srum_app', item.timestamp, name, 'timestamp');
-        
-        // Link by calculated start times (Face Time / Background Cycle)
-        // Note: We use 'timestamp' as the field here because the visual plotter generates 
-        // the SRUM ID using the primary timestamp even for the start of the band.
-        const bgCycleMs = item.background_cycle_time ? Number(item.background_cycle_time) * 1000 : 0;
-        const fgCycleMs = item.face_time ? Number(item.face_time) * 1000 : 0;
-        if (bgCycleMs > 5000) add(item, 'srum_app', new Date(ts - bgCycleMs).toISOString(), name, 'timestamp');
-        if (fgCycleMs > 5000) add(item, 'srum_app', new Date(ts - fgCycleMs).toISOString(), name, 'timestamp');
+        const faceMs = item.face_time ? Number(item.face_time) * 1000 : 0;
+        addBandStart(item, 'srum_app', srumBandStart(arr, idx, faceMs, r => r.app_name), name);
       });
     }
 
     if (activeArtifacts.srum_net && data.srum_net) {
-      heuristicFlatten(data.srum_net.connectivity).forEach(item => {
+      const connectivity = Array.isArray(data.srum_net.connectivity) ? data.srum_net.connectivity : [];
+      connectivity.forEach((item, idx, arr) => {
         const name = getForensicName(item);
-        const ts = new Date(item.timestamp).getTime();
-        // Link by recording time
         add(item, 'srum_net', item.timestamp, name, 'timestamp');
-        
-        // Link by calculated connection start
         const durMs = (parseFloat(item.connected_time) || 0) * 1000;
-        if (durMs > 5000) add(item, 'srum_net', new Date(ts - durMs).toISOString(), name, 'timestamp');
+        addBandStart(item, 'srum_net', srumBandStart(arr, idx, durMs, r => r.app_name || r.app_id), name);
       });
       processItems(data.srum_net.data_usage, 'srum_usage');
     }
@@ -91,33 +98,24 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
       });
     }
 
-    if (data.imported) processItems(data.imported, 'imported');
-    if (activeArtifacts.prefetch && data.prefetch) processItems(data.prefetch, 'prefetch');
-    if (activeArtifacts.bam && data.bam) processItems(data.bam, 'bam');
-    if (activeArtifacts.bam && data.dam) processItems(data.dam, 'dam');
-    if (activeArtifacts.lnk && data.lnk) processItems(data.lnk, 'lnk');
-    if (activeArtifacts.shimcache && data.shimcache) processItems(data.shimcache, 'shimcache');
-    if (activeArtifacts.recyclebin && data.recyclebin) processItems(data.recyclebin, 'recyclebin');
-
-    if (activeArtifacts.amcache && data.amcache) {
-      const am = data.amcache;
-      processItems(am.application_files, 'amcache');
-      processItems(am.applications, 'amcache');
-      processItems(am.drivers, 'amcache');
-    }
-
-    if (activeArtifacts.registry && data.registry) {
-      Object.keys(data.registry).forEach(table => {
-        processItems(data.registry[table], 'registry');
+    // The artifacts lane, from the lane's own source list (utils/laneSources.js), so
+    // every event here carries the id the lane gave its mark: same types (registry
+    // tables by name, 'event_logs'), the same timestamps (Prefetch last-access included),
+    // same salvaged objects. A pill switched off keeps its events out, as before.
+    const TOGGLE = { dam: 'bam', amcache: 'amcache', event_logs: 'event_logs', key_times: 'key_times' };
+    const toggleOf = (type) => TOGGLE[type] ||
+      (['prefetch', 'lnk', 'bam', 'shimcache', 'recyclebin', 'imported'].includes(type) ? type : 'registry');
+    laneVisibleSources(data, activeArtifacts).forEach(src => {
+      if (src.type !== 'imported' && activeArtifacts[toggleOf(src.type)] === false) return;
+      heuristicFlatten(src.items).forEach(item => {
+        const name = getForensicName(item);
+        getForensicTimestamps(item).forEach(ts => {
+          if (laneSkipsTimestamp(src.type, ts.field)) return;
+          add(item, src.type, ts.time, name, ts.field);
+        });
       });
-    }
-
-    // Process "Salvaged" items for links too
-    Object.keys(data).forEach(key => {
-      if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'browser', 'aggregated'].includes(key)) {
-        processItems(data[key], `salvaged_${key}`);
-      }
     });
+    laneSalvageSources(data).forEach(src => processItems(src.items, src.type));
 
     // ─── Compute Links ───
     const byDayAndName = {};

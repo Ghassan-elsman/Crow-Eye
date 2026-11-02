@@ -61,6 +61,28 @@ _BROWSER_DIR = "Browser"
 _BROWSER_SOURCE_TAG = "live"
 
 
+def _extended_if_long(path, at=240):
+    """`path` in the extended-length form (\\\\?\\) once it is `at`
+    characters or more; shorter, or None, as it is. Windows only.
+
+    A per-user copy is placed below its owner's whole profile path inside the
+    case, so a long shortcut name (Recent holds names past 200 characters)
+    put the destination over 260 characters, and on a machine with
+    LongPathsEnabled = 0 - the Windows default - every copy strategy refused
+    it with "No such file or directory (code 2)": 13 of 4,445 Recent
+    shortcuts in every cycle on a real laptop (Sentinel decision 168). The
+    file keeps its name; only the form of the path it is written to changes.
+    """
+    if not path or os.name != "nt":
+        return path
+    full = os.path.normpath(os.path.abspath(path))
+    if len(full) < at or full.startswith("\\\\?\\"):
+        return path
+    if full.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + full[2:]
+    return "\\\\?\\" + full
+
+
 def _is_link(path: str) -> bool:
     """A symlink or NTFS junction (os.walk follows junctions on Windows)."""
     try:
@@ -769,11 +791,13 @@ class ArtifactCollector:
                                 dest_file_path = placer.destination(
                                     os.path.basename(artifact_dir), source_path,
                                     "live:" + windows_partition)
+                                dest_file_path = _extended_if_long(dest_file_path)
                                 if dest_file_path:
                                     os.makedirs(os.path.dirname(dest_file_path), exist_ok=True)
                                     placer.save()
                             if not dest_file_path:
-                                dest_file_path = self._unique_destination(artifact_dir, filename)
+                                dest_file_path = _extended_if_long(
+                                    self._unique_destination(artifact_dir, filename))
                             self.log(f"[COLLECTOR] Destination file path: {dest_file_path}")
 
                             try:
@@ -1278,7 +1302,7 @@ class ArtifactCollector:
 
             # Log summary
             total_partitions = sum(len(disk.partitions) for disk in disks)
-            self.log(f"✓ Partition Analysis: {len(disks)} disk(s), {total_partitions} partition(s)")
+            self.log(f"[OK] Partition Analysis: {len(disks)} disk(s), {total_partitions} partition(s)")
             self.log(f"  - Database: {db_path}")
             self.log(f"  - JSON: {json_path}")
             self.log(f"  - Summary: {summary_path}")

@@ -1,7 +1,8 @@
 """
 Feather Mappings Configuration
 
-Defines all 41 Feather generation mappings from Crow-Eye parser output.
+Defines the Feather generation mappings from Crow-Eye parser output (42: the
+parsers' 41, and UBA's behaviour events).
 Each carries `fallback_columns`, read from the parser's own CREATE TABLE, so a
 case parsed before a table existed still yields an empty feather rather than
 failing the mapping and taking every wing that references it down with it.
@@ -88,7 +89,7 @@ ENHANCED_ARTIFACT_TYPES = {
     'UserAssist': {
         'parent_type': 'Registry',
         'description': 'User application execution tracking',
-        'forensic_value': 'High - Direct execution evidence'
+        'forensic_value': 'High - GUI program-launch indicator'
     },
     'ShellBags': {
         'parent_type': 'Registry', 
@@ -994,6 +995,38 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('key_path', 'TEXT'), ('last_written', 'TEXT'), ('time_basis', 'TEXT'),
         ('parsed_at', 'TEXT')
         ]
+    },
+    # ========== Behaviour (UBA) ==========
+    # UBA's behaviour events - every sign-in, program run, file copy, upload,
+    # USB connection, log clear... one row per event, each with its person
+    # (actor_sid / actor_name) and the artifact rows it rests on
+    # (evidence_json). As a feather, a Time or Identity Wing can take
+    # behaviour in alongside the raw artifacts. The source is the case's
+    # stored UBA analysis (<case>/UBA/uba_events.db), not a parser output:
+    # the generator builds or refreshes it first (BehaviorEngine.run_or_load).
+    # executable_name / file_path are derived from the event's details, so
+    # the Identity engine has a program and a path to group on.
+    {
+        'name': 'Behaviour_Events_CrowEyeFeather',
+        'source_dir': 'UBA',
+        'source_db': 'uba_events.db',
+        'source_table': 'events',
+        'artifact_type': 'Behaviour',
+        'parent_type': 'Behaviour',
+        'derived_columns': [
+            ('executable_name', 'TEXT', "COALESCE(NULLIF(app_name, ''), NULLIF(json_extract(details_json, '$.executable'), ''), NULLIF(json_extract(details_json, '$.program'), ''), NULLIF(json_extract(details_json, '$.file'), ''), NULLIF(json_extract(details_json, '$.name'), ''), NULLIF(json_extract(details_json, '$.task'), ''), NULLIF(json_extract(details_json, '$.value'), ''))"),
+            ('file_path', 'TEXT', "COALESCE(NULLIF(json_extract(details_json, '$.path'), ''), NULLIF(json_extract(details_json, '$.image_path'), ''), NULLIF(json_extract(details_json, '$.program_path'), ''), NULLIF(json_extract(details_json, '$.document'), ''), NULLIF(json_extract(details_json, '$.library'), ''), NULLIF(json_extract(details_json, '$.original_path'), ''), NULLIF(json_extract(details_json, '$.shortcut_path'), ''), NULLIF(json_extract(details_json, '$.directory'), ''), NULLIF(json_extract(details_json, '$.command'), ''))"),
+        ],
+        'fallback_columns': [
+        ('event_id', 'TEXT'), ('rule_id', 'TEXT'), ('behavior_class', 'TEXT'),
+        ('activity', 'TEXT'), ('ts_start', 'TEXT'), ('ts_end', 'TEXT'),
+        ('actor_type', 'TEXT'), ('actor_name', 'TEXT'), ('actor_basis', 'TEXT'),
+        ('description', 'TEXT'), ('severity', 'TEXT'), ('confidence', 'TEXT'),
+        ('session_context', 'TEXT'), ('caveat', 'TEXT'), ('session_user', 'TEXT'),
+        ('app_name', 'TEXT'), ('actor_sid', 'TEXT'), ('host', 'TEXT'),
+        ('user_rule', 'INTEGER'), ('aggregate_count', 'INTEGER'),
+        ('details_json', 'TEXT'), ('evidence_json', 'TEXT')
+        ]
     }
 ]
 
@@ -1144,7 +1177,10 @@ FEATHERS_BY_SPECIFIC_TYPE = {
     
     # SRUM subtypes
     'SRUM_ApplicationUsage': 1,
-    'SRUM_NetworkDataUsage': 1
+    'SRUM_NetworkDataUsage': 1,
+
+    # UBA behaviour events
+    'Behaviour': 1
 }
 
 # Forensic value categories

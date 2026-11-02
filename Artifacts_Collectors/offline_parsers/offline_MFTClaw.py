@@ -52,7 +52,9 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
     try:
         # Import MFT parser components
         from MFT_Claw import (MFTClawConfig, MFTParser, OutputFormat, LogLevel, DatabaseManager,
-                              merge_extension_records)
+                              merge_extension_records, open_file_integrity_run,
+                              finish_file_integrity_run, mft_parse_workers,
+                              parse_chunks_parallel)
         
         # Determine MFT file path
         if not mft_file_path:
@@ -106,9 +108,12 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
         # whole-volume skip hid everything a later capture of the disk added.
         print(f"[Offline MFT] Parsing the MFT file")
         
-        # Get file size to estimate record count
+        # The record size from record 0's own header (0x1C): 1024 on most
+        # volumes, 4096 on 4Kn drives - a $MFT copy has no boot sector to say.
         file_size = os.path.getsize(mft_file_path)
-        record_size = 1024  # Standard MFT record size
+        from utils.ntfs_runs import record_size_from_header
+        with open(mft_file_path, 'rb') as _fh:
+            record_size = record_size_from_header(_fh.read(4096), 1024)
         estimated_records = file_size // record_size
         
         print(f"[Offline MFT] MFT file size: {file_size:,} bytes ({file_size / (1024*1024):.1f} MB)")
@@ -147,21 +152,73 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
         if estimated_records >= 50000 and estimated_records * 2 >= existing:
             suspended = db.suspend_secondary_indexes()
 
-        def _records(handle, chunk_records=4096):
-            """1024-byte records, read 4 MB at a time (one read per record before)."""
+        def _chunks(handle, chunk_records=4096):
+            """(first record, bytes, count): 4096 records read at a time (one
+            read per record before)."""
+            first = 0
             while True:
                 chunk = handle.read(record_size * chunk_records)
-                if not chunk:
+                n = len(chunk) // record_size
+                if not n:
                     return
-                for i in range(0, len(chunk) - record_size + 1, record_size):
-                    yield chunk[i:i + record_size]
+                yield first, chunk, n
+                first += n
                 if len(chunk) % record_size:
                     return                     # a short tail: no whole record left
 
+        # NTFS integrity checks + delta parse: every record is digested; a
+        # re-parse of the same $MFT in this case parses only what changed.
+        integrity = open_file_integrity_run(volume_label, mft_file_path, record_size,
+                                            estimated_records, case_path, db.connection)
+        if integrity is not None:
+            print(f"[Offline MFT] {integrity.mode} parse"
+                  + (f" ({integrity.reason})" if integrity.reason else
+                     " - only records changed since the last parse are parsed"))
+        unchanged = 0
+
+        def _records(handle):
+            nonlocal integrity, unchanged
+            for first, chunk, n in _chunks(handle):
+                want = None
+                if integrity is not None:
+                    try:
+                        want = integrity.scan_chunk(first, chunk, n)
+                    except Exception as e:
+                        print(f"[Offline MFT] Integrity scan stopped at record {first}: {e}; "
+                              f"parsing every record")
+                        integrity, want = None, None
+                for k in range(n):
+                    if want is not None and first + k not in want:
+                        unchanged += 1
+                        continue
+                    yield first + k, chunk[k * record_size:(k + 1) * record_size]
+
+        workers = mft_parse_workers(estimated_records)
+        parallel_done = False
+        if workers:
+            seen = [0]
+
+            def _on_chunk(first, n, parsed, counts):
+                nonlocal records_parsed, unchanged
+                records_parsed += parsed
+                unchanged += (counts or {}).get('unchanged_records', 0)
+                seen[0] += n
+                if seen[0] // 100000 != (seen[0] - n) // 100000:
+                    progress = (seen[0] / estimated_records * 100) if estimated_records > 0 else 0
+                    print(f"\r[Offline MFT] Parsed {seen[0]:,} / {estimated_records:,} records "
+                          f"({progress:.1f}%)", end='', flush=True)
+
+            print(f"[Offline MFT] Parsing on {workers} worker processes")
+
         try:
             with open(mft_file_path, 'rb') as mft_file:
-                record_num = 0
-                for raw_record in _records(mft_file):
+                if workers:
+                    _done, integrity = parse_chunks_parallel(
+                        ((first, chunk) for first, chunk, _n in _chunks(mft_file)),
+                        volume_label, record_size, parser.db_manager, config.batch_size,
+                        workers, on_chunk=_on_chunk, integrity=integrity)
+                    parallel_done = True
+                for record_num, raw_record in (() if parallel_done else _records(mft_file)):
                     try:
                         # Parse the record using parser's internal method
                         mft_record = parser._parse_mft_record(record_num, volume_label, raw_record)
@@ -182,8 +239,6 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
 
                     except Exception as e:
                         logger.debug(f"Error parsing record {record_num}: {e}")
-
-                    record_num += 1
 
             # Process remaining batch
             if batch_records:
@@ -206,6 +261,22 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
                                          parser.db_manager.tally)
         if merged:
             print(f"[Offline MFT] Merged {merged:,} extension record(s) into their base records")
+        integrity_summary = None
+        if integrity is not None:
+            try:
+                manifest = finish_file_integrity_run(integrity, parser.db_manager)
+                found = manifest.get('findings') or {}
+                integrity_summary = {'mode': integrity.mode, 'reason': integrity.reason,
+                                     'unchanged_records': unchanged,
+                                     'findings': sum(found.values()),
+                                     'manifest_id': manifest.get('manifest_id')}
+                if integrity.mode == 'delta':
+                    print(f"[Offline MFT] Delta parse: {unchanged:,} of {estimated_records:,} "
+                          f"records unchanged since the last parse")
+                print(f"[Offline MFT] NTFS integrity: {integrity_summary['findings']:,} finding(s) "
+                      f"({', '.join('%s %d' % kv for kv in sorted(found.items())) or 'none'})")
+            except Exception as e:
+                print(f"[Offline MFT] NTFS integrity checks did not finish: {e}")
         # What this run added vs what the database already held (a re-parse of
         # the same $MFT adds nothing).
         # Counted in MFT records (mft_records), not summed over the four
@@ -251,6 +322,9 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
             "inserted": counts["inserted"],
             "duplicates": counts["duplicates"],
             "tables": counts["tables"],
+            "records_read": estimated_records,
+            "unchanged_records": unchanged,
+            "integrity": integrity_summary,
             "volume": volume_label,
             "output_path": output_db  # Return the actual database path created
         }

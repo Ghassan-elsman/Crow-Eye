@@ -1,9 +1,22 @@
 /**
  * Icons — Shared SVG icon components.
- * No emojis. All icons are inline SVG for crisp rendering at any size.
+ * No emojis. All icons are inline SVG for crisp rendering at any size, but
+ * the Wing and the Feather, which are the brand's art (below).
  */
 
 import React from 'react';
+/*
+ * The Wing and the Feather exactly as the User Guide draws them (Ghassan,
+ * 2026-10-30): the indigo layered wing and the cyan quill, Crow-Eye's
+ * correlation_engine/gui/icons/wing.png / feather.png (128 px) and their @2x
+ * (256 px), byte for byte (redrawn 2026-10-30; the SVG masters are in
+ * correlation_engine/gui/icons/brand/). Vite inlines them into the
+ * single-file bundle as data: URIs, as it does eye_icon.png.
+ */
+import wingArt from './assets/wing.png';
+import wingArt2x from './assets/wing@2x.png';
+import featherArt from './assets/feather.png';
+import featherArt2x from './assets/feather@2x.png';
 
 interface IconProps {
   size?: number;
@@ -309,11 +322,105 @@ export const IconWrench: React.FC<IconProps> = ({ size = defaultProps.size, clas
   </svg>
 );
 
+/*
+ * Correlation Engine icons: the three engines, a Wing and a Feather. The
+ * engines are the same drawings as Crow-Eye's correlation_engine/gui/icons
+ * (engine_*.svg): one 1.8 stroke, round caps and joins, no fill but the record
+ * dots, each in its one colour. The Wing and the Feather are the brand's art
+ * (wing.png / feather.png), coloured as drawn, so they take no colour.
+ */
+export const ENGINE_COLORS = {
+  time: '#34D399',      // Time-Window engine
+  identity: '#2196F3',  // Identity engine
+  behaviour: '#A78BFA', // Behavioural engine
+} as const;
+
+const EngineSvg: React.FC<{ size: number; className?: string; color: string; label: string; children: React.ReactNode }> =
+  ({ size, className, color, label, children }) => (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="1.8"
+      strokeLinecap="round" strokeLinejoin="round" className={className} role="img" aria-label={label}>
+      {children}
+    </svg>
+  );
+
+export const IconEngineTime: React.FC<IconProps> = ({ size = defaultProps.size, className, color = ENGINE_COLORS.time }) => (
+  <EngineSvg size={size} className={className} color={color} label="Time-Window engine">
+    <path d="M6.5 4H5a1.5 1.5 0 0 0 -1.5 1.5V18.5A1.5 1.5 0 0 0 5 20H6.5M17.5 4H19a1.5 1.5 0 0 1 1.5 1.5V18.5A1.5 1.5 0 0 1 19 20H17.5" />
+    <circle cx="12" cy="10.5" r="4.2" />
+    <path d="M12 8.3V10.5L13.6 11.6" />
+    <circle cx="8.6" cy="17.2" r="1.2" fill={color} stroke="none" />
+    <circle cx="12" cy="17.2" r="1.2" fill={color} stroke="none" />
+    <circle cx="15.4" cy="17.2" r="1.2" fill={color} stroke="none" />
+  </EngineSvg>
+);
+
+export const IconEngineIdentity: React.FC<IconProps> = ({ size = defaultProps.size, className, color = ENGINE_COLORS.identity }) => (
+  <EngineSvg size={size} className={className} color={color} label="Identity engine">
+    <circle cx="16" cy="12" r="4.5" />
+    <circle cx="16" cy="12" r="1.6" fill={color} stroke="none" />
+    <path d="M6.6 6.7L10.8 9.05M7 12H10M6.6 17.3L10.8 14.95" />
+    <circle cx="4.4" cy="5.6" r="1.6" fill={color} stroke="none" />
+    <rect x="3" y="10.6" width="2.8" height="2.8" rx=".6" fill={color} stroke="none" />
+    <path d="M4.4 16.6L5.9 18.4 4.4 20.2 2.9 18.4Z" fill={color} stroke="none" />
+  </EngineSvg>
+);
+
+export const IconEngineBehaviour: React.FC<IconProps> = ({ size = defaultProps.size, className, color = ENGINE_COLORS.behaviour }) => (
+  <EngineSvg size={size} className={className} color={color} label="Behavioural engine">
+    <circle cx="12" cy="6" r="2.5" />
+    <path d="M7.5 13C7.5 10.5 9.5 9 12 9S16.5 10.5 16.5 13" />
+    <circle cx="4.5" cy="18.5" r="1.5" fill={color} stroke="none" />
+    <circle cx="12" cy="18.5" r="1.5" fill={color} stroke="none" />
+    <circle cx="19.5" cy="18.5" r="1.5" fill={color} stroke="none" />
+    <path d="M6.8 18.5H9.4M8.2 17.2L9.5 18.5 8.2 19.8M14.3 18.5H16.9M15.7 17.2L17 18.5 15.7 19.8" />
+  </EngineSvg>
+);
+
+/* The brand art as an <img>: the 128 px file, and the 256 px one on a
+   high-density screen. */
+const BrandArt: React.FC<{ size: number; className?: string; src: string; src2x: string; label: string }> =
+  ({ size, className, src, src2x, label }) => (
+    <img src={src} srcSet={`${src} 1x, ${src2x} 2x`} width={size} height={size} alt={label}
+      className={className} draggable={false} style={{ display: 'block', objectFit: 'contain' }} />
+  );
+
+export const IconWing: React.FC<IconProps> = ({ size = defaultProps.size, className }) => (
+  <BrandArt size={size} className={className} src={wingArt} src2x={wingArt2x} label="Wing" />
+);
+
+export const IconFeather: React.FC<IconProps> = ({ size = defaultProps.size, className }) => (
+  <BrandArt size={size} className={className} src={featherArt} src2x={featherArt2x} label="Feather" />
+);
+
+/**
+ * The Correlation Engine icon for an Eye tool call, or null when the tool does
+ * not touch a Wing, a Feather or an engine. Writing a Wing shows the Wing;
+ * reading correlation results shows the engine that produced them.
+ */
+export const correlationToolIcon = (tool: string | undefined, params: Record<string, any> | undefined, size: number): React.ReactElement | null => {
+  switch (tool) {
+    case 'correlation_create_wing':
+    case 'correlation_edit_wing':
+      return <IconWing size={size} />;
+    case 'query_correlation_results': {
+      const qtype = String(params?.query_type ?? '').toLowerCase();
+      if (qtype === 'time') return <IconEngineTime size={size} />;
+      if (qtype === 'identity') return <IconEngineIdentity size={size} />;
+      return null;
+    }
+    default:
+      return null;
+  }
+};
+
 /** Returns the correct icon component for a ThinkingStep type */
-export const StepIcon: React.FC<{ type: string; status: string; size?: number }> = ({ type, status, size = 14 }) => {
+export const StepIcon: React.FC<{ type: string; status: string; size?: number; tool?: string; params?: Record<string, any> }> =
+  ({ type, status, size = 14, tool, params }) => {
   if (status === 'error') return <IconX size={size} color="var(--color-error)" />;
   if (status === 'active') return <IconLoader size={size} color="var(--color-accent)" />;
-  // done states
+  // done states: a Correlation Engine tool shows its Wing / engine icon
+  const correlation = correlationToolIcon(tool, params, size);
+  if (correlation) return correlation;
   switch (type) {
     case 'rag':       return <IconSearch size={size} color="var(--color-cyan)" />;
     case 'tool_call': return <IconDatabase size={size} color="var(--color-accent)" />;

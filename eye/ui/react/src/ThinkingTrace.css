@@ -1,7 +1,7 @@
 .thinking-trace {
   margin-top: 10px;
   background: rgba(13,14,20,0.7);
-  border: 1px solid var(--color-border-accent);
+  border: 3px solid var(--color-border-accent);
   border-radius: var(--radius-md);
   overflow: hidden;
   -webkit-animation: fade-in-up 0.2s ease;
@@ -64,7 +64,7 @@
 .trace-step-params {
   margin-top: 4px;
   background: var(--color-bg-base);
-  border: 1px solid var(--color-border-subtle);
+  border: 3px solid var(--color-border-subtle);
   border-radius: var(--radius-sm);
   padding: 6px 10px;
 }

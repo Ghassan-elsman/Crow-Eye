@@ -2,6 +2,7 @@
   "config_name": "brute_force_spray_correlation",
   "wing_name": "Brute Force & Password Spray Correlation",
   "wing_id": "default_wing_bruteforce_001",
+  "wing_category": "identity",
   "description": "Detects credential brute-forcing and password spraying. Uses Crow-Eye's advanced rule types: a THRESHOLD rule fires on a burst of failed logons (Security 4625) within a short window (grouped by target account), and a SEQUENCE rule fires when a burst of failures is followed by a success (4625… → 4624) — the classic 'guessed it' signature. Identity-Based engine only.",
   "proves": "An account was subjected to brute-force / password-spray authentication attempts",
   "author": "Crow-Eye Team",

@@ -1,6 +1,6 @@
 """One-shot generator for the Crow-Eye-styled SVG icon set.
 
-Run once to produce the 30 .svg files in this directory. Idempotent — safe
+Run once to produce the .svg files in this directory. Idempotent — safe
 to re-run if you tweak the shapes; it overwrites in place. Not imported by
 the loader (which just reads the .svg files directly).
 
@@ -428,6 +428,123 @@ ICONS["package"] = svg(
     f'  <line x1="12" y1="12" x2="12" y2="21" stroke="{CYAN}" stroke-width="2"/>',
     rounded=True,
 )
+
+
+# --------------------------------------------------------------------- #
+# Behaviour Results view (correlation_engine/gui/behaviour_results_view.py,
+# Phase 4 of the Behavioural Engine). Shapes from the chosen designs in the
+# 2026-10 behaviour-icons sheet: the tab icon is "Activity pulse" (a head over
+# a pulse line); the tree goes person -> Behaviour Wing -> hit. A hit's icon is
+# the Wing's time range as a bracket over its steps: joined by an arrow when
+# the steps happen in order, loose dots when any order counts. Person and Wing
+# keep fixed colours, as the Identity view's levels do; the two hit icons are
+# drawn in the UBA "routine" grey and tinted to the hit's severity at run time.
+# --------------------------------------------------------------------- #
+PULSE_SKY = "#38BDF8"     # the Behaviour Results tab and its Wing rows
+PERSON_BLUE = "#60A5FA"   # a person (by SID)
+HIT_DIM = "#8C95AB"       # UBA "routine"; re-tinted per severity in the view
+
+ICONS["behaviour"] = svg(
+    f'  <circle cx="12" cy="5" r="3" stroke="{PULSE_SKY}" stroke-width="2" fill="none"/>\n'
+    f'  <polyline points="2 16 7 16 9.5 11 13 20 15.5 14 22 14" stroke="{PULSE_SKY}" '
+    f'stroke-width="2" fill="none"/>',
+    rounded=True,
+)
+
+ICONS["person"] = svg(
+    f'  <circle cx="12" cy="8" r="4" stroke="{PERSON_BLUE}" stroke-width="2" fill="none"/>\n'
+    f'  <path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" stroke="{PERSON_BLUE}" '
+    f'stroke-width="2" fill="none"/>',
+    rounded=True,
+)
+
+ICONS["behaviour_wing"] = svg(
+    f'  <path d="M3 20C5 11 11 5 21 4c-1 4-3.5 6.5-7 7.5 2 .3 3 1.3 3 2.5-3 2.5-7.5 3.5-11 3" '
+    f'stroke="{PULSE_SKY}" stroke-width="2" fill="none"/>\n'
+    f'  <path d="M8 15l5-4" stroke="{PULSE_SKY}" stroke-width="2" fill="none"/>',
+    rounded=True,
+)
+
+ICONS["hit_ordered"] = svg(
+    f'  <path d="M3 7V5h18v2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="5" cy="13" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="12" cy="13" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="19" cy="13" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <path d="M7 13h3M14 13h3" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <path d="M15.5 11.4l1.6 1.6-1.6 1.6" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>',
+    rounded=True,
+)
+
+ICONS["hit_any"] = svg(
+    f'  <path d="M3 7V5h18v2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="5" cy="13" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="12" cy="17" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>\n'
+    f'  <circle cx="19" cy="12" r="2" stroke="{HIT_DIM}" stroke-width="2" fill="none"/>',
+    rounded=True,
+)
+
+
+# --------------------------------------------------------------------- #
+# The three correlation engines. Each draws how its engine groups evidence,
+# in the style of the artifact icons on the parser buttons (one 1.8 stroke,
+# round ends, no fill but the record dots). A Wing is shown as the brand's
+# Wing art (wing.png, not generated here) beside its engine's icon
+# (crow_eye_icons.wing_icon); the engine icon carries the engine's colour.
+#   Time-Window: a clock between range brackets - one fixed window of time -
+#                with the records from different feathers it caught.
+#   Identity:    records of different kinds (one shape per feather) drawn into
+#                one identity node; no time axis, time does not decide it.
+#   Behavioural: one person, and under them the steps, in order.
+# --------------------------------------------------------------------- #
+TIME_GREEN = "#34D399"
+IDENTITY_BLUE_ENGINE = IDENTITY_BLUE
+BEHAVIOUR_VIOLET = "#A78BFA"
+
+
+def _engine(colour: str, body: str) -> str:
+    return svg(f'  <g stroke="{colour}" stroke-width="1.8" fill="none">\n{body}\n  </g>', rounded=True)
+
+
+def _dot(x, y, r, colour):
+    return f'    <circle cx="{x}" cy="{y}" r="{r}" fill="{colour}" stroke="none"/>'
+
+
+ICONS["engine_time"] = _engine(TIME_GREEN, "\n".join([
+    '    <path d="M6.5 4H5a1.5 1.5 0 0 0 -1.5 1.5V18.5A1.5 1.5 0 0 0 5 20H6.5'
+    'M17.5 4H19a1.5 1.5 0 0 1 1.5 1.5V18.5A1.5 1.5 0 0 1 19 20H17.5"/>',
+    '    <circle cx="12" cy="10.5" r="4.2"/>',
+    '    <path d="M12 8.3V10.5L13.6 11.6"/>',
+    _dot(8.6, 17.2, 1.2, TIME_GREEN), _dot(12, 17.2, 1.2, TIME_GREEN), _dot(15.4, 17.2, 1.2, TIME_GREEN),
+]))
+
+ICONS["engine_identity"] = _engine(IDENTITY_BLUE_ENGINE, "\n".join([
+    '    <circle cx="16" cy="12" r="4.5"/>',
+    _dot(16, 12, 1.6, IDENTITY_BLUE_ENGINE),
+    '    <path d="M6.6 6.7L10.8 9.05M7 12H10M6.6 17.3L10.8 14.95"/>',
+    _dot(4.4, 5.6, 1.6, IDENTITY_BLUE_ENGINE),
+    f'    <rect x="3" y="10.6" width="2.8" height="2.8" rx=".6" fill="{IDENTITY_BLUE_ENGINE}" stroke="none"/>',
+    f'    <path d="M4.4 16.6L5.9 18.4 4.4 20.2 2.9 18.4Z" fill="{IDENTITY_BLUE_ENGINE}" stroke="none"/>',
+]))
+
+ICONS["engine_behaviour"] = _engine(BEHAVIOUR_VIOLET, "\n".join([
+    '    <circle cx="12" cy="6" r="2.5"/>',
+    '    <path d="M7.5 13C7.5 10.5 9.5 9 12 9S16.5 10.5 16.5 13"/>',
+    _dot(4.5, 18.5, 1.5, BEHAVIOUR_VIOLET), _dot(12, 18.5, 1.5, BEHAVIOUR_VIOLET), _dot(19.5, 18.5, 1.5, BEHAVIOUR_VIOLET),
+    '    <path d="M6.8 18.5H9.4M8.2 17.2L9.5 18.5 8.2 19.8M14.3 18.5H16.9M15.7 17.2L17 18.5 15.7 19.8"/>',
+]))
+
+
+
+# --------------------------------------------------------------------- #
+# The Wing and the Feather are not generated: since 2026-10-30 (Ghassan) they
+# are the brand's art exactly as the User Guide draws them - the indigo
+# layered wing and the cyan quill, wing.png / feather.png (128 px) and their
+# @2x (256 px), the site's icon-wing / icon-feather files byte for byte, plus
+# the rich-text sizes _scale_brand_art.py renders from the SVG masters in
+# brand/ (<name>.svg, and <name>-small.svg for 256 px and below). Redrawn
+# 2026-10-30; the masters stay out of this folder's top level, whose SVGs
+# are the generated set ICON_NAMES is tested against.
+# --------------------------------------------------------------------- #
 
 
 def main() -> None:

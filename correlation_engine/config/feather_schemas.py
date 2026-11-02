@@ -16,6 +16,9 @@ The JSON file lists, per SQLite table name:
 
 * ``artifact_type`` Category (matches artifact_types.json)
 * ``primary_timestamp_column`` Column to index and to filter window queries on
+* ``primary_timestamp_fallbacks`` Columns used in its place, in order, when a
+  database predates it (AmCache's *_utc normalisations: an older case has only
+  the raw text date)
 * ``secondary_timestamp_columns`` Additional timestamps for analysis
 * ``multi_timestamp_json_columns`` JSON list-of-timestamps columns (Prefetch run_times shape)
 * ``identity_columns_preferred`` Identity-extraction priority for raw name
@@ -73,19 +76,29 @@ def get_schema(table_name: str) -> Optional[Dict[str, Any]]:
     return _load().get(table_name)
 
 
-def primary_timestamp_column(table_name: str) -> Optional[str]:
-    """Return the declared primary timestamp column for ``table_name``."""
+def primary_timestamp_column(table_name: str, existing=None) -> Optional[str]:
+    """Return the declared primary timestamp column for ``table_name``.
+
+    With ``existing`` (the table's column names), a primary the table does not
+    have gives way to the first of ``primary_timestamp_fallbacks`` it does."""
     schema = get_schema(table_name)
-    return schema.get("primary_timestamp_column") if schema else None
+    if not schema:
+        return None
+    primary = schema.get("primary_timestamp_column")
+    if existing is not None and primary not in existing:
+        return next((c for c in schema.get("primary_timestamp_fallbacks", []) or []
+                     if c in existing), None)
+    return primary
 
 
-def all_timestamp_columns(table_name: str) -> List[str]:
-    """Return primary + secondary timestamp columns (declared order)."""
+def all_timestamp_columns(table_name: str, existing=None) -> List[str]:
+    """Return primary + secondary timestamp columns (declared order). With
+    ``existing``, the primary resolves through its fallbacks."""
     schema = get_schema(table_name)
     if not schema:
         return []
     out: List[str] = []
-    primary = schema.get("primary_timestamp_column")
+    primary = primary_timestamp_column(table_name, existing)
     if primary:
         out.append(primary)
     for col in schema.get("secondary_timestamp_columns", []) or []:

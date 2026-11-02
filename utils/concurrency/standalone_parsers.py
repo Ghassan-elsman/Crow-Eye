@@ -285,12 +285,9 @@ def _begin_live_custody(case_paths, windows_partition, message_queue, run_id=Non
                             run_id=run_id, journal=True)
         for warning in rec.data["warnings"]:
             _post_line(message_queue, "[WARNING] " + warning)
-        if os.name == "nt":
-            _post_line(message_queue, "[Custody] Recording the evidence files before they are read...")
-            n = rec.inventory(custody.live_source_patterns(windows_partition or "C:"),
-                              should_stop=lambda: is_cancelled(cancel_event))
-            _post_line(message_queue, "[Custody] %d source file(s) recorded (size, times, SHA-256 "
-                                      "where readable)." % n)
+        # The source inventory is taken in _collect_live_artifacts, once the
+        # run's shadow copy exists (_inventory_and_hash): hashing every file
+        # here, before the snapshot, held the first parser back by 47 s.
         return rec
     except Exception as e:
         _post_line(message_queue, "[WARNING] Chain-of-custody record not started: %s" % e)
@@ -332,9 +329,94 @@ def _custody_outcome(outcome):
         pass
 
 
+_SOURCE_HASHER = None      # this run's background source hasher (custody.hash_pending)
+
+
+def _shadow_path_mapper(snapshot_id):
+    """``live path -> the same path inside the run's shadow copy``, or None.
+
+    Through the VSS strategy's own listing and path mapping, the ones the
+    parsers read the snapshot with, so the hash is of the bytes they read.
+    """
+    if not snapshot_id:
+        return None, None
+    try:
+        from Artifacts_Collectors.crow_claw.core.vss_access_strategy import (VSSAccessStrategy,
+                                                                             _created_utc)
+        strategy = VSSAccessStrategy()
+        want = snapshot_id.strip("{}").lower()
+        for sc in strategy.enumerate_shadow_copies() or []:
+            if str(getattr(sc, "shadow_copy_id", "")).strip("{}").lower() == want:
+                created = _created_utc(sc)
+                return (lambda path, _sc=sc: strategy.get_vss_path(path, _sc)), created
+    except Exception:
+        pass
+    return None, None
+
+
+def _inventory_and_hash(windows_partition, snapshots, message_queue, cancel_event):
+    """The source inventory of a live parse, and its hashing.
+
+    Size and times are taken now, before any parser opens a file (a stat, no
+    read). With a run snapshot the files are then hashed from it on four
+    threads while the parsers work - the same point-in-time bytes they read -
+    and the run waits for that only before it deletes the snapshot. Without
+    one the live files are hashed now, before parsing, as the record has
+    always said.
+    """
+    global _SOURCE_HASHER
+    if os.name != "nt":
+        return
+    try:
+        from utils import custody
+        rec = custody.active()
+        if rec is None:
+            return
+        started = time.time()
+        _post_line(message_queue, "[Custody] Recording the evidence files before they are read...")
+        n = rec.inventory(custody.live_source_patterns(windows_partition or "C:"),
+                          should_stop=lambda: is_cancelled(cancel_event), hash_now=False)
+        _post_line(message_queue, "[Start] Custody inventory: %d file(s), size and times, %.1f s"
+                                  % (n, time.time() - started))
+        mapper, created = _shadow_path_mapper(snapshots[0] if snapshots else None)
+        stop = lambda: is_cancelled(cancel_event)
+        if mapper is not None:
+            _SOURCE_HASHER = rec.hash_pending(map_path=mapper, shadow_copy_id=snapshots[0],
+                                              shadow_copy_created_utc=created, should_stop=stop,
+                                              background=True)
+            _post_line(message_queue, "[Custody] Hashing the %d source file(s) from shadow copy %s "
+                                      "while the parsers run." % (n, snapshots[0]))
+        else:
+            hashed_at = time.time()
+            job = rec.hash_pending(should_stop=stop, background=False)
+            _post_line(message_queue, "[Custody] %d source file(s) recorded (size, times, SHA-256 "
+                                      "where readable): %d hashed in %.1f s." % (n, job.hashed,
+                                                                                time.time() - hashed_at))
+    except Exception as e:
+        _post_line(message_queue, "[WARNING] Source inventory not taken: %s" % e)
+
+
+def _finish_source_hashing(message_queue):
+    """Wait for the background source hasher (before the snapshot it reads goes)."""
+    global _SOURCE_HASHER
+    job, _SOURCE_HASHER = _SOURCE_HASHER, None
+    if job is None:
+        return
+    if job.is_alive():
+        _post_line(message_queue, "[Custody] Finishing the source hashes from the shadow copy...")
+    job.wait()
+    _post_line(message_queue, "[Custody] %d source file(s) recorded: %d hashed (%d from the shadow copy), "
+                              "%d not hashed, in %.1f s." % (len(job.pending), job.hashed, job.from_shadow,
+                                                             job.not_hashed, job.seconds))
+
+
 def _end_live_custody(rec, status, message_queue):
     """Delete the shadow copies this parse created, hash what it wrote, then
     close the record."""
+    try:
+        _finish_source_hashing(message_queue)
+    except Exception as e:
+        _post_line(message_queue, "[WARNING] Source hashing did not finish: %s" % e)
     try:
         from Artifacts_Collectors.crow_claw.core.shadow_copy_manager import delete_created_shadow_copies
     except Exception:
@@ -683,7 +765,11 @@ def _collect_live_artifacts(case_paths, windows_partition, message_queue, cancel
         except Exception as e:
             log_callback("[WARNING] Row counts before the parse not taken: %s" % e)
 
+        snap_started = time.time()
         shared = _make_run_snapshot(parallel_tasks_info, windows_partition, message_queue)
+        log_callback("[Start] Shadow copy: %s, %.1f s" % ("made" if shared else "none",
+                                                          time.time() - snap_started))
+        _inventory_and_hash(windows_partition, shared, message_queue, cancel_event)
         tmp_dir = os.path.join(case_root, "tmp") if case_root else None
         worker_ctx = {"root_dir": root_dir, "tmp_dir": tmp_dir, "case_root": case_root,
                       "run_id": run_id, "shared_snapshots": shared}

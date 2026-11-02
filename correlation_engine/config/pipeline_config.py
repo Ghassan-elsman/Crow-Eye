@@ -6,6 +6,7 @@ Complete end-to-end configuration for the entire correlation process.
 import json
 from dataclasses import dataclass, field, asdict
 from datetime import datetime
+from pathlib import Path
 from typing import List, Dict, Optional, Any
 from .feather_config import FeatherConfig
 from .wing_config import WingConfig
@@ -49,8 +50,10 @@ class PipelineConfig:
     # PipelineExecutor per run; deliberately NOT serialized in to_dict —
     # a saved pipeline must not pin a stale run id.
     run_group_id: Optional[str] = None
-    time_period_start: Optional[str] = field(default_factory=lambda: (datetime.now() - __import__('datetime').timedelta(days=365)).isoformat()) # ISO format datetime string
-    time_period_end: Optional[str] = field(default_factory=lambda: datetime.now().isoformat()) # ISO format datetime string
+    # None = the whole case. Both used to default to "the 365 days up to now",
+    # so a run's evidence depended on the day it was started.
+    time_period_start: Optional[str] = None # ISO format datetime string
+    time_period_end: Optional[str] = None # ISO format datetime string
     identity_filters: Optional[List[str]] = None # List of identity patterns (for identity engine)
     identity_filter_case_sensitive: bool = False # Case-sensitive identity matching
     
@@ -134,6 +137,11 @@ class PipelineConfig:
         """Save configuration to JSON file"""
         with open(file_path, 'w') as f:
             f.write(self.to_json())
+        try:
+            from utils import custody
+            custody.record_config(file_path, 'pipeline')
+        except Exception:
+            pass
     
     @classmethod
     def from_dict(cls, data: dict) -> 'PipelineConfig':
@@ -165,10 +173,13 @@ class PipelineConfig:
         # alone - the disagreement is deliberate.
         if 'engine_type' not in data:
             data['engine_type'] = 'time_window_scanning'
+        # No period saved means the whole case. It meant "the 365 days up to
+        # whenever the pipeline is opened", so an old pipeline lost evidence
+        # older than a year from today, and a different set each day.
         if 'time_period_start' not in data:
-            data['time_period_start'] = (datetime.now() - __import__('datetime').timedelta(days=365)).isoformat()
+            data['time_period_start'] = None
         if 'time_period_end' not in data:
-            data['time_period_end'] = datetime.now().isoformat()
+            data['time_period_end'] = None
         if 'identity_filters' not in data:
             data['identity_filters'] = None
         if 'identity_filter_case_sensitive' not in data:
@@ -203,9 +214,37 @@ class PipelineConfig:
     
     @classmethod
     def load_from_file(cls, file_path: str) -> 'PipelineConfig':
-        """Load configuration from JSON file"""
+        """Load configuration from JSON file, its feather paths rebased to the
+        case it sits in (see rebase_to_case)."""
         with open(file_path, 'r') as f:
-            return cls.from_json(f.read())
+            config = cls.from_json(f.read())
+        config.rebase_to_case(Path(file_path).resolve().parent.parent)
+        return config
+
+    def rebase_to_case(self, correlation_dir) -> int:
+        """Point feather paths that no longer exist at this case's own copies.
+
+        A pipeline stores absolute paths. A case folder that was moved, copied
+        or synced (the 16-2-2026 pipeline points at a OneDrive folder that no
+        longer holds it) kept the old ones, every feather then failed to
+        resolve, and every Wing reported "this case has no ...". A path that
+        still exists is never touched; one that does not is replaced only by a
+        file of the same name in <case>/Correlation/feathers (the feather) or
+        <case>/Target_Artifacts (its source). Returns how many were rebased."""
+        correlation_dir = Path(correlation_dir)
+        feathers = correlation_dir / "feathers"
+        artifacts = correlation_dir.parent / "Target_Artifacts"
+        moved = 0
+        for fc in self.feather_configs or []:
+            for attr, folder in (('output_database', feathers), ('source_database', artifacts)):
+                value = getattr(fc, attr, None)
+                if not value or Path(value).exists():
+                    continue
+                candidate = folder / value.replace(chr(92), '/').rsplit('/', 1)[-1]
+                if candidate.exists():
+                    setattr(fc, attr, str(candidate))
+                    moved += 1
+        return moved
     
     def add_feather_config(self, feather_config: FeatherConfig):
         """Add a feather configuration to the pipeline"""

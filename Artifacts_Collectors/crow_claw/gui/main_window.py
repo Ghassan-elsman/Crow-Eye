@@ -39,11 +39,11 @@ if str(crow_eye_root) not in sys.path:
 # Import from crow_claw package
 from crow_claw.core import Artifact, get_all_artifacts, ArtifactType
 try:
-    # The site look (ui/site_theme.py); absent when Crow-Claw runs on its own.
-    from ui.site_theme import (apply_site_theme, begin_site_theme, set_variant, keep_style,
+    # The site look (ui/app_theme.py); absent when Crow-Claw runs on its own.
+    from ui.app_theme import (apply_theme, begin_theme, set_variant, keep_style,
                                restyle, log_view_sheet)
 except Exception:                                        # pragma: no cover
-    apply_site_theme = begin_site_theme = set_variant = keep_style = restyle = log_view_sheet = None
+    apply_theme = begin_theme = set_variant = keep_style = restyle = log_view_sheet = None
 from crow_claw.core.validator import PathValidator
 
 try:
@@ -489,12 +489,12 @@ class CrowClawMainWindow(QMainWindow):
         # Check admin status
         self.check_admin_status()
 
-        self._apply_site_look()
+        self._apply_theme()
 
-    def _apply_site_look(self):
-        """One sheet for the window (ui/site_theme.py). The status labels keep
+    def _apply_theme(self):
+        """One sheet for the window (ui/app_theme.py). The status labels keep
         their own colours - green / red / blue carry meaning there."""
-        if apply_site_theme is None:
+        if apply_theme is None:
             return
         h = self.header
         for name in ("admin_status_indicator", "partition_info", "case_path",
@@ -510,17 +510,17 @@ class CrowClawMainWindow(QMainWindow):
             if w is not None:
                 w.setStyleSheet(log_view_sheet())
                 keep_style(w)
-        apply_site_theme(self)
-        from ui.site_theme import set_role
+        apply_theme(self)
+        from ui.app_theme import set_role
         for lab in h.findChildren(QLabel):
             if lab.text() == "CROW-CLAW":
                 set_role(lab, "title")
 
     def apply_crow_eye_styles(self):
         """Apply Crow-Eye styling to the main window."""
-        if begin_site_theme is not None:
-            # The site look, set before the widgets exist (ui/site_theme.py).
-            begin_site_theme(self)
+        if begin_theme is not None:
+            # The site look, set before the widgets exist (ui/app_theme.py).
+            begin_theme(self)
             return
         try:
             # Use PathUtils for robust root resolution (Requirement 11.2)
@@ -550,7 +550,7 @@ class CrowClawMainWindow(QMainWindow):
             QPushButton {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 4px;
                 padding: 5px;
                 font-weight: bold;
@@ -565,14 +565,14 @@ class CrowClawMainWindow(QMainWindow):
             QLineEdit, QTextEdit {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 4px;
                 padding: 5px;
             }
             QComboBox {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 4px;
                 padding: 5px;
             }
@@ -581,7 +581,7 @@ class CrowClawMainWindow(QMainWindow):
             }
             QProgressBar {
                 background-color: #1E293B;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 4px;
                 text-align: center;
             }
@@ -604,7 +604,7 @@ class CrowClawMainWindow(QMainWindow):
             QListWidget {
                 background-color: #1E293B;
                 color: #FFFFFF;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 4px;
             }
             QListWidget::item:selected {
@@ -846,7 +846,7 @@ class CrowClawMainWindow(QMainWindow):
         self.artifact_list = QListWidget()
         self.artifact_list.setStyleSheet(
             f"QListWidget {{ background-color: {Colors.BG_PANELS}; color: {Colors.TEXT_PRIMARY}; "
-            f"border: 1px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px; "
+            f"border: 3px solid {Colors.BORDER_SUBTLE}; border-radius: 6px; padding: 5px; "
             f"font-weight: 600; }} "
             f"QListWidget::item {{ border-bottom: 1px solid {Colors.BG_TABLES}; padding: 6px; }} "
             f"QListWidget::item:selected {{ background-color: {Colors.SUCCESS}; "
@@ -1412,7 +1412,7 @@ class CrowClawMainWindow(QMainWindow):
             f"QPushButton {{ "
             f"background-color: {Colors.BG_PANELS}; "
             f"color: {color}; "
-            f"border: 1px solid {color}; "
+            f"border: 3px solid {color}; "
             f"border-radius: 4px; "
             f"padding: 8px 20px; "
             f"font-weight: 700; "
@@ -1429,10 +1429,10 @@ class CrowClawMainWindow(QMainWindow):
         layout.addWidget(ok_button)
 
         dialog.setLayout(layout)
-        if apply_site_theme is not None:
+        if apply_theme is not None:
             # Fonts and background only: the title, separator and icon box
             # carry the outcome's colour (success / error / warning).
-            apply_site_theme(dialog, clear_inline=False)
+            apply_theme(dialog, clear_inline=False)
         dialog.exec_()
 
     def select_file_or_directory(self) -> tuple:
@@ -2027,7 +2027,7 @@ class CrowClawMainWindow(QMainWindow):
         summary_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
         summary_frame.setStyleSheet(
             f"QFrame {{ background-color: {Colors.BG_PANELS}; "
-            f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+            f"border: 3px solid {Colors.BORDER_SUBTLE}; "
             f"border-radius: 6px; padding: 14px; }}"
         )
         summary_layout = QVBoxLayout(summary_frame)
@@ -2075,7 +2075,7 @@ class CrowClawMainWindow(QMainWindow):
             access_frame.setFrameStyle(QFrame.StyledPanel | QFrame.Raised)
             access_frame.setStyleSheet(
                 f"QFrame {{ background-color: {Colors.BG_PANELS}; "
-                f"border: 1px solid {Colors.ACCENT_BLUE}; "
+                f"border: 3px solid {Colors.ACCENT_BLUE}; "
                 f"border-radius: 6px; padding: 12px; }}"
             )
             access_layout = QVBoxLayout(access_frame)
@@ -2180,10 +2180,10 @@ class CrowClawMainWindow(QMainWindow):
         layout.addLayout(button_layout)
 
         dialog.setLayout(layout)
-        if apply_site_theme is not None:
+        if apply_theme is not None:
             # Fonts and background only: the title, separator and icon box
             # carry the outcome's colour (success / error / warning).
-            apply_site_theme(dialog, clear_inline=False)
+            apply_theme(dialog, clear_inline=False)
         dialog.exec_()
 
     def _update_access_method_display(self, finished: bool = False):
@@ -2264,9 +2264,9 @@ class CrowClawMainWindow(QMainWindow):
             if platform.system() == "Windows":
                 os.startfile(self.full_output_path)
             elif platform.system() == "Darwin":  # macOS
-                subprocess.Popen(["open", self.full_output_path])
+                subprocess.Popen(["open", self.full_output_path], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             else:  # Linux
-                subprocess.Popen(["xdg-open", self.full_output_path])
+                subprocess.Popen(["xdg-open", self.full_output_path], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not open folder: {e}")
 

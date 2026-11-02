@@ -118,7 +118,7 @@ def run_powershell_hidden(command: str, timeout: int = 30) -> subprocess.Complet
             capture_output=True,
             text=True,
             timeout=timeout
-        )
+        , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 @dataclass
 class RecycleBinEntry:
@@ -383,7 +383,7 @@ class RecycleBinParser:
                     capture_output=True,
                     text=True,
                     timeout=5
-                )
+                , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 
                 if result.returncode == 0:
                     owner = result.stdout.strip()

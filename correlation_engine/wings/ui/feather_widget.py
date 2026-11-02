@@ -16,24 +16,24 @@ from correlation_engine.wings.core.wing_model import FeatherSpec
 from correlation_engine.wings.core.artifact_detector import ArtifactDetector
 from ...gui.crow_eye_icons import apply_status_to_label
 
-# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+# The site look (ui/app_theme.py); standalone it keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 def _look(widget, role=None, status=None, variant=None):
     """A role / meaning colour / button variant through the window sheet."""
-    if _site is None:
+    if _theme is None:
         return widget
     widget.setStyleSheet("")
     if role:
-        _site.set_role(widget, role)
+        _theme.set_role(widget, role)
     if status:
-        _site.set_status(widget, status)
+        _theme.set_status(widget, status)
     if variant:
-        _site.set_variant(widget, variant)
+        _theme.set_variant(widget, variant)
     return widget
 
 
@@ -186,12 +186,16 @@ class FeatherWidget(QWidget):
     def init_ui(self):
         """Initialize the user interface"""
         # Main group box
-        self.group_box = QGroupBox(f"Feather {self.feather_number}")
+        # QGroupBox has no icon: the title is a label with the Feather art.
+        from ...gui.crow_eye_icons import group_title_label
+        self.group_box = QGroupBox()
         layout = QVBoxLayout(self)
         layout.addWidget(self.group_box)
         
         # Group box layout
         group_layout = QVBoxLayout(self.group_box)
+        self.title_label = group_title_label("feather", f"Feather {self.feather_number}")
+        group_layout.addWidget(self.title_label)
         
         # Database selection section
         db_section = self.create_database_section()
@@ -426,5 +430,6 @@ class FeatherWidget(QWidget):
     def set_feather_number(self, number: int):
         """Update feather number"""
         self.feather_number = number
-        self.group_box.setTitle(f"Feather {number}")
+        from ...gui.crow_eye_icons import icon_label_html
+        self.title_label.setText(icon_label_html("feather", f"<b>Feather {number}</b>"))
         self.feather_spec.feather_id = f"feather_{number}"

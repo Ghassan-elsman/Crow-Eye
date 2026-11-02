@@ -25,8 +25,50 @@ from .execution_control import ExecutionControlWidget
 from .results_viewer import DynamicResultsTabWidget
 from ..integration.auto_feather_generator import AutoFeatherGenerator
 from ..integration.default_wings_loader import DefaultWingsLoader
-from .crow_eye_icons import apply_status_to_label
-from ui.site_theme import set_status, set_role, font as site_font
+from .crow_eye_icons import apply_status_to_label, engine_icon, CrowEyeIcons
+from ui.app_theme import set_status, set_role, font as theme_font
+
+
+from PyQt5.QtCore import QThread
+
+
+class FeatherBuildWorker(QThread):
+    """Builds the feathers off the GUI thread (AutoFeatherGenerator.generate_all_feathers).
+
+    Every callback the generator makes - from its pool threads or this one - becomes a
+    signal, so the tab is updated on the GUI thread. The registry is left to the GUI
+    thread too (register=False): ConfigurationManager is a QObject."""
+    started_one = pyqtSignal(str)
+    finished_one = pyqtSignal(str, str, int, int, str)     # name, status, finished, total, detail
+    uba_progress = pyqtSignal(int, str)
+    done = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, case_directory, only=None, parent=None):
+        super().__init__(parent)
+        self.case_directory = case_directory
+        self.only = only
+        self.cancelled = False
+
+    def run(self):
+        try:
+            generator = AutoFeatherGenerator(self.case_directory)
+            last = {}
+
+            def finished(current, total, name, status):
+                self.finished_one.emit(name, status, int(current), int(total), str(last.get(name, "")))
+
+            results = generator.generate_all_feathers(
+                progress_callback=finished,
+                should_cancel=lambda: self.cancelled,
+                started_callback=lambda name: self.started_one.emit(name),
+                only=self.only, register=False,
+                uba_progress=lambda pct, label: self.uba_progress.emit(int(pct), str(label)))
+            self.done.emit(results)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.failed.emit("%s: %s" % (type(e).__name__, e))
 
 
 class PipelineManagerTab(QWidget):
@@ -50,24 +92,26 @@ class PipelineManagerTab(QWidget):
         info_label = QLabel("Tip: Feathers are auto-generated from Crow-Eye artifacts on first case load. This may take a few moments.")
         set_role(info_label, "muted")
         info_label.setWordWrap(True)
-        info_layout.addWidget(info_label)
+        # Stretch 1: the tip takes the free width. With a bare addStretch()
+        # beside it, it wrapped into a three-line column at the left edge.
+        info_layout.addWidget(info_label, 1)
         
         # Add status indicator
         self.feather_status_label = QLabel("Checking feathers...")
-        self.feather_status_label.setFont(site_font("ui", 12, 63))     # DemiBold
+        self.feather_status_label.setFont(theme_font("ui", 12, 63))     # DemiBold
         set_status(self.feather_status_label, "warn")
         info_layout.addWidget(self.feather_status_label)
         self.feather_status_label.hide() # Hidden by default
         
-        info_layout.addStretch()
-        
         self.regenerate_btn = QPushButton("Regenerate Feathers")
+        self.regenerate_btn.setIcon(CrowEyeIcons.feather())
         self.regenerate_btn.setToolTip("Manually regenerate all feathers from Crow-Eye artifacts")
         self.regenerate_btn.clicked.connect(self._manual_generate_feathers)
         self.regenerate_btn.setEnabled(False)
         info_layout.addWidget(self.regenerate_btn)
         
         self.update_wings_btn = QPushButton("Update Default Wings")
+        self.update_wings_btn.setIcon(CrowEyeIcons.wing())
         self.update_wings_btn.setToolTip("Update default Wings with latest feather configurations (includes MFT_USN)")
         self.update_wings_btn.clicked.connect(self._update_default_wings)
         self.update_wings_btn.setEnabled(False)
@@ -229,7 +273,18 @@ class PipelineManagerTab(QWidget):
                     apply_status_to_label(self.feather_status_label, "WARN", f"Generating databases... ({len(missing_dbs)} remaining)")
                     set_status(self.feather_status_label, "warn")
                 return (True, f"Missing database files for: {', '.join(missing_dbs[:3])}")
-            
+
+            # A feather built from an older parse: counting files said "ready"
+            # after a re-parse, and the engines read the old rows.
+            from ..integration.auto_feather_generator import stale_feathers
+            stale = stale_feathers(feathers_dir)
+            if stale:
+                if hasattr(self, 'feather_status_label'):
+                    apply_status_to_label(self.feather_status_label, "WARN",
+                                          f"Updating feathers ({len(stale)} out of date)")
+                    set_status(self.feather_status_label, "warn")
+                return (True, f"{len(stale)} feather(s) older than their source: {', '.join(stale[:3])}")
+
             # All checks passed
             if hasattr(self, 'feather_status_label'):
                 apply_status_to_label(self.feather_status_label, "OK", "Feathers ready")
@@ -244,310 +299,247 @@ class PipelineManagerTab(QWidget):
             # If we can't check, assume we need to generate
             return (True, f"Error checking status: {e}")
     
+    # ------------------------------------------------------------------ feather building
+    # Feathers are built on FeatherBuildWorker, a QThread: Crow-Eye stays usable while they
+    # build. Until 2026-11-01 the build ran inside showEvent, the GUI thread waiting in a loop
+    # that pumped processEvents, then SHA-256-hashed ~330 MB of feathers with no pump at all.
     def _auto_generate_feathers(self):
-        """Automatically generate Feathers from Crow-Eye output"""
+        """Build what is missing or stale, in the background (the tab opened)."""
+        from pathlib import Path
+        from ..integration.auto_feather_generator import feathers_to_build
+        target_artifacts = Path(self.case_directory) / "Target_Artifacts"
+        live_acquisition = Path(self.case_directory) / "live_acquisition"
+        if not target_artifacts.exists() and not live_acquisition.exists():
+            print("[Auto-Generation] Neither Target_Artifacts nor live_acquisition found")
+            apply_status_to_label(self.feather_status_label, "WARN", "No artifact directories found")
+            set_status(self.feather_status_label, "bad")
+            return
         try:
-            from PyQt5.QtWidgets import QApplication, QProgressDialog, QMessageBox
-            from PyQt5.QtCore import Qt
-            
-            # Update status label
-            if hasattr(self, 'feather_status_label'):
-                self.feather_status_label.show()
-                self.feather_status_label.setText("Generating feathers...")
-                set_status(self.feather_status_label, "info")
-                QApplication.processEvents()
-            
-            # Check if Target_Artifacts or live_acquisition directory exists
-            from pathlib import Path
-            target_artifacts = Path(self.case_directory) / "Target_Artifacts"
-            live_acquisition = Path(self.case_directory) / "live_acquisition"
-            
-            # Check if at least one artifact directory exists
-            if not target_artifacts.exists() and not live_acquisition.exists():
-                print(f"[Auto-Generation] Neither Target_Artifacts nor live_acquisition found")
-                if hasattr(self, 'feather_status_label'):
-                    apply_status_to_label(self.feather_status_label, "WARN", "No artifact directories found")
-                    set_status(self.feather_status_label, "bad")
-                return
-            
-            # Create progress dialog
-            progress = QProgressDialog(
-                "Initializing Feather generation...",
-                "Cancel",
-                0, 100,
-                self
-            )
-            progress.setWindowTitle("Generating Feathers")
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0) # Show immediately
-            progress.setValue(0)
-            
-            # Apply Crow Eye styling
-            from .ui_styling import CorrelationEngineStyles
-            CorrelationEngineStyles.apply_progress_dialog_style(progress)
-            progress.show()
-            
-            # Create generator
-            generator = AutoFeatherGenerator(self.case_directory)
-            
-            # Progress callback
-            def update_progress(current, total, feather_name, status):
-                if progress.wasCanceled():
-                    return
-                
-                # Update progress bar
-                percentage = int((current / total) * 100)
-                progress.setValue(percentage)
-                
-                # Update label based on status
-                if status == 'processing':
-                    progress.setLabelText(f"Generating {feather_name}...\n({current}/{total})")
-                elif status == 'success':
-                    progress.setLabelText(f"[OK] Generated {feather_name}\n({current}/{total})")
-                elif status == 'skipped':
-                    progress.setLabelText(f"⊘ Skipped {feather_name} (source not found)\n({current}/{total})")
-                elif status == 'failed':
-                    progress.setLabelText(f"[FAIL] Failed {feather_name}\n({current}/{total})")
-                
-                # Process events to keep UI responsive
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
-            
-            # Generate all feathers with progress tracking
-            results = generator.generate_all_feathers(progress_callback=update_progress)
-            
-            # Mark as generated
-            self.feathers_generated = True
-            progress.setValue(100)
-            
-            # Show summary message
-            success_count = results['success_count']
-            failure_count = results['failure_count']
-            total = results['total']
-            
-            if failure_count == 0:
-                QMessageBox.information(
-                    self,
-                    "Feathers Generated",
-                    f"Successfully generated all {success_count} Feathers from Crow-Eye output.\n\n"
-                    f"Feathers are now available in the Pipeline Builder."
-                )
-            else:
-                # Build detailed message
-                message = f"Generated {success_count} out of {total} Feathers.\n\n"
-                
-                if results['failed']:
-                    message += f"{failure_count} Feathers were skipped or failed:\n\n"
-                    for name, error in results['failed'][:5]: # Show first 5
-                        message += f"• {name}\n {error}\n\n"
-                    
-                    if len(results['failed']) > 5:
-                        message += f"... and {len(results['failed']) - 5} more.\n\n"
-                
-                message += "Check the console for detailed information."
-                
-                QMessageBox.warning(
-                    self,
-                    "Feather Generation Complete",
-                    message
-                )
-            
-            # Refresh pipeline builder to show new feathers
-            if self.pipeline_builder:
-                self.pipeline_builder.load_existing_configs()
-            
-            print(f"[Auto-Generation] Complete: {success_count}/{total} successful")
-            
+            needed = feathers_to_build(Path(self.case_directory) / "Correlation" / "feathers")
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Feather Generation Error",
-                f"Failed to generate Feathers:\n\n{str(e)}\n\n"
-                f"Check the console for detailed error information."
-            )
-            import traceback
-            traceback.print_exc()
-        finally:
-            if 'progress' in locals():
-                progress.close()
-    
+            print(f"[Auto-Generation] Could not list the feathers to build ({e}); building all")
+            needed = None
+        self._start_feather_build(needed, auto=True)
+
     def _manual_generate_feathers(self):
-        """Manually regenerate all feathers from Crow-Eye artifacts with validation"""
-        try:
-            from pathlib import Path
-            from PyQt5.QtWidgets import QMessageBox, QProgressDialog, QApplication
-            from PyQt5.QtCore import Qt
-            
-            # Validate case directory is set
-            if not self.case_directory:
-                QMessageBox.warning(
-                    self,
-                    "No Case Directory",
-                    "Case directory is not set. Please load a case first."
-                )
-                return
-            
-            # Check if Target_Artifacts or live_acquisition directory exists
-            target_artifacts = Path(self.case_directory) / "Target_Artifacts"
-            live_acquisition = Path(self.case_directory) / "live_acquisition"
-            
-            # Check if at least one artifact directory exists
-            if not target_artifacts.exists() and not live_acquisition.exists():
-                QMessageBox.warning(
-                    self,
-                    "No Artifact Directories",
-                    f"Neither Target_Artifacts nor live_acquisition directory found in:\n{self.case_directory}\n\n"
-                    "Please ensure Crow-Eye has parsed artifacts or run offline parsers for this case."
-                )
-                return
-            
-            # Check if any database files exist in either directory
-            db_files = []
-            if target_artifacts.exists():
-                db_files.extend(list(target_artifacts.glob("*.db")))
-            if live_acquisition.exists():
-                db_files.extend(list(live_acquisition.glob("*.db")))
-            
-            if not db_files:
-                QMessageBox.warning(
-                    self,
-                    "No Database Files",
-                    f"No database files found in:\n"
-                    f" - {target_artifacts}\n"
-                    f" - {live_acquisition}\n\n"
-                    "Please run Crow-Eye parsers or offline parsers first to generate artifact databases."
-                )
-                return
-            
-            # Check/create Correlation directory structure
-            correlation_dir = Path(self.case_directory) / "Correlation"
-            feathers_dir = correlation_dir / "feathers"
-            
-            # Create directories if they don't exist
-            feathers_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[Generate Feathers] Feathers directory ready: {feathers_dir}")
-            
-            # Confirm with user before regenerating
-            artifact_sources = []
-            if target_artifacts.exists():
-                artifact_sources.append(f"Target_Artifacts ({len(list(target_artifacts.glob('*.db')))} databases)")
-            if live_acquisition.exists():
-                artifact_sources.append(f"live_acquisition ({len(list(live_acquisition.glob('*.db')))} databases)")
-            
-            reply = QMessageBox.question(
-                self,
-                "Generate Feathers",
-                f"This will generate Feathers from databases in:\n"
-                + "\n".join(f" • {src}" for src in artifact_sources) + "\n\n"
-                f"Output directory:\n{feathers_dir}\n\n"
-                "Continue?",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.Yes
-            )
-            
-            if reply != QMessageBox.Yes:
-                return
-            
-            # Create progress dialog
-            progress = QProgressDialog(
-                "Initializing Feather generation...",
-                "Cancel",
-                0, 100,
-                self
-            )
-            progress.setWindowTitle("Generating Feathers")
-            progress.setWindowModality(Qt.WindowModal)
-            progress.setMinimumDuration(0) # Show immediately
-            progress.setValue(0)
-            
-            # Apply Crow Eye styling
-            from .ui_styling import CorrelationEngineStyles
-            CorrelationEngineStyles.apply_progress_dialog_style(progress)
-            progress.show()
-            
-            # Create generator
-            generator = AutoFeatherGenerator(self.case_directory)
-            
-            # Progress callback
-            def update_progress(current, total, feather_name, status):
-                if progress.wasCanceled():
-                    return
-                
-                # Update progress bar
-                percentage = int((current / total) * 100)
-                progress.setValue(percentage)
-                
-                # Update label based on status
-                if status == 'processing':
-                    progress.setLabelText(f"Generating {feather_name}...\n({current}/{total})")
-                elif status == 'success':
-                    progress.setLabelText(f"[OK] Generated {feather_name}\n({current}/{total})")
-                elif status == 'skipped':
-                    progress.setLabelText(f"⊘ Skipped {feather_name} (source not found)\n({current}/{total})")
-                elif status == 'failed':
-                    progress.setLabelText(f"[FAIL] Failed {feather_name}\n({current}/{total})")
-                
-                # Process events to keep UI responsive
-                from PyQt5.QtWidgets import QApplication
-                QApplication.processEvents()
-            
-            # Generate all feathers with progress tracking
-            results = generator.generate_all_feathers(progress_callback=update_progress)
-            
-            # Mark as generated
+        """Regenerate every feather (the button), after a confirmation."""
+        from pathlib import Path
+        from PyQt5.QtWidgets import QMessageBox
+        if not self.case_directory:
+            QMessageBox.warning(self, "No Case Directory", "Case directory is not set. Please load a case first.")
+            return
+        target_artifacts = Path(self.case_directory) / "Target_Artifacts"
+        live_acquisition = Path(self.case_directory) / "live_acquisition"
+        db_files = []
+        for d in (target_artifacts, live_acquisition):
+            if d.exists():
+                db_files.extend(d.glob("*.db"))
+        if not db_files:
+            QMessageBox.warning(
+                self, "No Database Files",
+                "No parsed artifact databases were found in:\n - %s\n - %s\n\n"
+                "Parse the case first (Parse all Artifacts, or the offline parsers)." % (target_artifacts, live_acquisition))
+            return
+        feathers_dir = Path(self.case_directory) / "Correlation" / "feathers"
+        feathers_dir.mkdir(parents=True, exist_ok=True)
+        reply = QMessageBox.question(
+            self, "Regenerate Feathers",
+            "Rebuild every Feather from the %d parsed databases?\n\nOutput: %s\n\n"
+            "It runs in the background; Crow-Eye stays usable." % (len(db_files), feathers_dir),
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+        if reply == QMessageBox.Yes:
+            self._start_feather_build(None, auto=False)
+
+    def _start_feather_build(self, only, auto):
+        """Start the worker for `only` (feather names) or every feather; returns at once."""
+        from ..integration.feather_mappings import get_feather_mappings
+        if getattr(self, "_feather_worker", None) is not None and self._feather_worker.isRunning():
+            return
+        names = [m['name'] for m in get_feather_mappings()]
+        if only is not None:
+            names = [n for n in names if n in set(only)]
+        if not names:
             self.feathers_generated = True
-            progress.setValue(100)
-            
-            # Show summary message
-            success_count = results['success_count']
-            failure_count = results['failure_count']
-            total = results['total']
-            
-            if failure_count == 0:
-                QMessageBox.information(
-                    self,
-                    "Feathers Generated",
-                    f"Successfully generated all {success_count} Feathers from Crow-Eye output.\n\n"
-                    f"Feathers are now available in the Pipeline Builder."
-                )
-            else:
-                # Build detailed message
-                message = f"Generated {success_count} out of {total} Feathers.\n\n"
-                
-                if results['failed']:
-                    message += f"{failure_count} Feathers were skipped or failed:\n\n"
-                    for name, error in results['failed'][:5]: # Show first 5
-                        message += f"• {name}\n {error}\n\n"
-                    
-                    if len(results['failed']) > 5:
-                        message += f"... and {len(results['failed']) - 5} more.\n\n"
-                
-                message += "Check the console for detailed information."
-                
-                QMessageBox.warning(
-                    self,
-                    "Feather Generation Complete",
-                    message
-                )
-            
-            # Refresh pipeline builder to show new feathers
+            apply_status_to_label(self.feather_status_label, "OK", "Feathers ready")
+            set_status(self.feather_status_label, "ok")
             if self.pipeline_builder:
                 self.pipeline_builder.load_existing_configs()
-            
-            print(f"[Generate Feathers] Complete: {success_count}/{total} successful")
-            
+            return
+        self._ensure_feather_panel()
+        # The explanation is the panel's tooltip, not a subtitle line: in the
+        # short panel that line cost a Feather row.
+        self._fb_panel.restart("Building %d Feather%s" % (len(names), "" if len(names) == 1 else "s"),
+                               "", [self._fb_label(n) for n in names])
+        self._fb_panel.setToolTip("Built from the case's parsed databases, four at a time. "
+                                  "Crow-Eye stays usable while they build.")
+        self._fb_panel.bar.setRange(0, len(names))
+        self._fb_panel.bar.setValue(0)
+        self._fb_result.setText("")
+        self._fb_stop.setText("Stop")
+        self._fb_stop.setEnabled(True)
+        self._fb_box.show()
+        self.regenerate_btn.setEnabled(False)
+        self.feather_status_label.show()
+        apply_status_to_label(self.feather_status_label, "INFO", "Building feathers...")
+        set_status(self.feather_status_label, "info")
+
+        worker = FeatherBuildWorker(self.case_directory, only, self)
+        worker.started_one.connect(self._on_feather_started)
+        worker.finished_one.connect(self._on_feather_finished)
+        worker.uba_progress.connect(self._on_uba_progress)
+        worker.done.connect(lambda results: self._on_feathers_done(results, auto))
+        worker.failed.connect(self._on_feathers_failed)
+        self._feather_worker = worker
+        worker.start()
+
+    @staticmethod
+    def _fb_label(name):
+        return name.replace("_CrowEyeFeather", "").replace("_", " ")
+
+    def _ensure_feather_panel(self):
+        if getattr(self, "_fb_box", None) is not None:
+            return
+        from PyQt5.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QHBoxLayout, QPushButton
+        from ui.loading_panel import LoadingPanel
+        box = QFrame()
+        box.setObjectName("featherBuildBox")
+        # The list on the left, Stop and the outcome on its right: a row of its
+        # own under the list made the panel one button taller.
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(0, 0, 0, 8)
+        self._fb_panel = LoadingPanel("Building Feathers", "", [], compact=True)
+        # Tight margins here only (the shared panel keeps its own elsewhere):
+        # the space goes to the Feather rows, not to padding.
+        self._fb_panel.layout().setContentsMargins(8, 4, 8, 4)
+        scroll = QScrollArea()
+        scroll.setWidget(self._fb_panel)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        # About three rows under the title and bar (Ghassan, 2026-11-02: the
+        # panel was too tall above the pipeline; it took 220-320 px). The row
+        # being built is kept in view (_on_feather_started), so the list scrolls
+        # by itself.
+        scroll.setMinimumHeight(120)
+        scroll.setMaximumHeight(150)
+        lay.addWidget(scroll, 1)
+        self._fb_scroll = scroll
+        side = QVBoxLayout()
+        self._fb_stop = QPushButton("Stop")
+        self._fb_stop.setToolTip("Stop: the feathers already building finish, the rest are left as they were")
+        self._fb_stop.clicked.connect(self._feather_stop_or_hide)
+        side.addWidget(self._fb_stop, 0, Qt.AlignRight)
+        self._fb_result = QLabel("")
+        self._fb_result.setWordWrap(True)
+        self._fb_result.setFixedWidth(280)
+        self._fb_result.setAlignment(Qt.AlignRight | Qt.AlignTop)
+        side.addWidget(self._fb_result)
+        side.addStretch(1)
+        lay.addLayout(side)
+        try:
+            from ui.app_theme import set_variant
+            set_variant(self._fb_stop, "ghost")
+        except Exception:
+            pass
+        self.layout().insertWidget(1, box)
+        self._fb_box = box
+
+    def _fb_row(self, name):
+        label = self._fb_label(name)
+        return next((r for r in self._fb_panel._rows if r.name == label), None)
+
+    def _feather_stop_or_hide(self):
+        worker = getattr(self, "_feather_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancelled = True
+            self._fb_stop.setEnabled(False)
+            self._fb_stop.setText("Stopping...")
+        else:
+            self._fb_box.hide()
+
+    def _on_feather_started(self, name):
+        row = self._fb_row(name)
+        if row is not None:
+            row.set_state("running", "%s - building" % self._fb_label(name))
+            scroll = getattr(self, "_fb_scroll", None)
+            if scroll is not None:
+                scroll.ensureWidgetVisible(row, 0, 8)
+
+    def _on_uba_progress(self, percent, label):
+        row = next((r for r in self._fb_panel._rows if r.state == "running" and "Behaviour" in r.name), None)
+        if row is not None:
+            row.text.setText("%s - user behaviour analysis %d%%: %s" % (row.name, percent, label))
+
+    def _on_feather_finished(self, name, status, current, total, detail):
+        row = self._fb_row(name)
+        if row is not None:
+            if row.state == "waiting":
+                row.set_state("running")
+            if status == "success":
+                row.set_state("done")
+            elif status == "skipped":
+                row.set_state("done", "no source in this case")
+            else:
+                row.set_state("failed", detail[:160])
+        self._fb_panel.bar.setRange(0, max(1, total))
+        self._fb_panel.bar.setValue(current)
+
+    def _on_feathers_done(self, results, auto):
+        self._feather_worker = None
+        self.regenerate_btn.setEnabled(True)
+        # The registry on the GUI thread (ConfigurationManager is a QObject).
+        try:
+            from config.configuration_manager import ConfigurationManager
+            if results.get('registrations'):
+                ConfigurationManager.get_instance().add_feathers(results['registrations'])
         except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Feather Generation Error",
-                f"Failed to generate Feathers:\n\n{str(e)}\n\n"
-                f"Check the console for detailed error information."
-            )
-            import traceback
-            traceback.print_exc()
-        finally:
-            if 'progress' in locals():
-                progress.close()
+            print(f"[Feathers] Registry not updated: {e}")
+        self.feathers_generated = True
+        ok, total = results['success_count'], results['total']
+        failed = [(n, e) for n, e in results['failed'] if not str(e).startswith("Source database not found")]
+        skipped = len(results['failed']) - len(failed)
+        for name, err in failed:
+            row = self._fb_row(name)
+            if row is not None:
+                row.set_state("failed", str(err)[:160])
+        self._fb_panel.bar.setRange(0, max(1, total))
+        self._fb_panel.bar.setValue(total)
+        took = sum((results.get('seconds') or {}).values())
+        parts = ["%d of %d Feather%s built" % (ok, total, "" if total == 1 else "s")]
+        if skipped:
+            parts.append("%d with no source in this case" % skipped)
+        if failed:
+            parts.append("%d failed: %s" % (len(failed), ", ".join(self._fb_label(n) for n, _e in failed[:4])))
+        if results.get('cancelled'):
+            parts.append("stopped before the end")
+        self._fb_result.setText("; ".join(parts) + ".")
+        good = not failed and not results.get('cancelled')
+        set_status(self._fb_result, "ok" if good else "warn")
+        apply_status_to_label(self.feather_status_label, "OK" if good else "WARN",
+                              "Feathers ready" if good else "Feathers built with problems")
+        set_status(self.feather_status_label, "ok" if good else "warn")
+        self._fb_stop.setEnabled(True)
+        self._fb_stop.setText("Hide")
+        if self.pipeline_builder:
+            self.pipeline_builder.load_existing_configs()
+        print(f"[Feathers] {'; '.join(parts)} ({took:.0f} s of build time)")
+
+    def _on_feathers_failed(self, message):
+        self._feather_worker = None
+        self.regenerate_btn.setEnabled(True)
+        self._fb_panel.fail(message)
+        self._fb_result.setText("The feather build stopped: %s" % message)
+        set_status(self._fb_result, "warn")
+        apply_status_to_label(self.feather_status_label, "ERROR", "Feather build failed")
+        set_status(self.feather_status_label, "bad")
+        self._fb_stop.setEnabled(True)
+        self._fb_stop.setText("Hide")
+
+
+def _engine_sheet_extra(engine_extra):
+    """The engine's own rules plus 3 px outlines on cards, fields, buttons,
+    tables, tabs and outlined labels (ui/app_theme.thick_outlines)."""
+    from ui.app_theme import thick_outlines
+    return engine_extra() + chr(10) + thick_outlines("QMainWindow#CorrelationEngine")
 
 
 class MainWindow(QMainWindow):
@@ -599,6 +591,9 @@ class MainWindow(QMainWindow):
         # Set case directory in Pipeline Builder for case-based naming
         self.pipeline_builder.set_case_directory(case_directory)
         print(f"[Main Window] Case directory set in Pipeline Builder: {case_directory}")
+
+        # The Execution tab hands it to engines that read the case itself.
+        self.execution_control.case_directory = case_directory
         
         # Set default output directory to case's results directory
         results_dir = str(Path(directory) / "results")
@@ -644,10 +639,21 @@ class MainWindow(QMainWindow):
         # Auto-load session if available
         self._load_session_state()
         
+    @staticmethod
+    def _scrolling(page):
+        from PyQt5.QtWidgets import QFrame, QScrollArea
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        area.setWidget(page)
+        return area
+
     def _init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("Correlation Engine")
-        self.setMinimumSize(1280, 720)
+        # What a 1280 x 720 screen leaves after the taskbar; the tabs scroll.
+        self.setMinimumSize(1100, 640)
         
         # This used to be setWindowIcon(QIcon()) - deliberately blank, "to match
         # clean Crow-Eye aesthetic". That predated this window having a taskbar
@@ -666,8 +672,11 @@ class MainWindow(QMainWindow):
         
         # Create central widget with tab widget
         central_widget = QWidget()
+        # The theme paints a window's ground only on QDialog or #siteWindow:
+        # without it the tab bar sat on Qt's light grey.
+        central_widget.setObjectName("siteWindow")
         self.setCentralWidget(central_widget)
-        
+
         layout = QVBoxLayout(central_widget)
         layout.setContentsMargins(0, 0, 0, 0)
         
@@ -682,9 +691,22 @@ class MainWindow(QMainWindow):
         self.execution_tab = QWidget()
         self.results_tab = QWidget()
         
-        self.tab_widget.addTab(self.pipeline_manager_tab, "Pipeline Manager")
-        self.tab_widget.addTab(self.execution_tab, "Execution")
-        self.tab_widget.addTab(self.results_tab, "Results")
+        # The two form tabs need about 1050 px of height. In a window smaller
+        # than that their layouts squeezed every list and form row to nothing
+        # (the Wings list, Wing selection, the pipeline metadata); in a scroll
+        # area they keep their size and the page scrolls instead. Results
+        # fills the window with its own tables and scrolls itself.
+        # Numbered in the order an investigator works through them: build the
+        # pipeline, run it, read what it found (Ghassan, 2026-11-02). The User
+        # Guide's Correlation Engine section uses the same numbers.
+        self.tab_widget.addTab(self._scrolling(self.pipeline_manager_tab), "1  Pipeline Manager")
+        self.tab_widget.addTab(self._scrolling(self.execution_tab), "2  Execution")
+        self.tab_widget.addTab(self.results_tab, "3  Results")
+        for _i, _tip in enumerate((
+                "Step 1: choose the engine, the Feathers and the Wings, and save the pipeline",
+                "Step 2: pick the Wings to run, add filters, and run the pipeline",
+                "Step 3: every run's Summary and matches, down to the original rows")):
+            self.tab_widget.setTabToolTip(_i, _tip)
         
         # Initialize Pipeline Manager tab with builder
         pipeline_manager_layout = self.pipeline_manager_tab.layout()
@@ -692,7 +714,7 @@ class MainWindow(QMainWindow):
         # Add pipeline builder widget
         self.pipeline_builder = PipelineBuilderWidget()
         self.pipeline_builder.pipeline_modified.connect(self._on_pipeline_modified)
-        pipeline_manager_layout.addWidget(self.pipeline_builder)
+        pipeline_manager_layout.addWidget(self.pipeline_builder, 1)
         
         # Set pipeline builder reference in tab
         self.pipeline_manager_tab.pipeline_builder = self.pipeline_builder
@@ -706,6 +728,8 @@ class MainWindow(QMainWindow):
         self.execution_control.execution_completed.connect(self._on_execution_completed)
         self.execution_control.wing_completed.connect(self._on_wing_completed) # NEW: Connect wing_completed signal
         self.execution_control.load_results_requested.connect(self._on_load_results_requested)
+        self.execution_control.open_wing_in_creator_requested.connect(self._open_wing_in_creator)
+        self.execution_control.augment_wings_for_engine = self._augment_wings_for_engine
         execution_layout.addWidget(self.execution_control)
         
         # Initialize Results tab with results viewer
@@ -722,31 +746,32 @@ class MainWindow(QMainWindow):
         # Create status bar
         self._create_status_bar()
 
-        # The site look (ui/site_theme.py): the per-widget sheets the tabs set
+        # The site look (ui/app_theme.py): the per-widget sheets the tabs set
         # while they were built become roles; the window keeps ONE sheet.
-        self._apply_site_look()
+        self._apply_theme()
 
-    def _apply_site_look(self, root=None):
+    def _apply_theme(self, root=None):
         """One sheet for the engine window, or re-theme a page built later
         (results tabs are rebuilt on every run and load)."""
         try:
-            from ui.site_theme import apply_site_theme
+            from ui.app_theme import apply_theme
             from correlation_engine.gui.ui_styling import engine_extra
-            apply_site_theme(self, root=root, extra=engine_extra())
+            apply_theme(self, root=root, extra=_engine_sheet_extra(engine_extra))
         except Exception as e:
             print(f"[Correlation Engine] site look not applied: {e}")
 
     def _load_styles(self):
-        """The site look, set BEFORE the children exist (ui/site_theme.py).
+        """The site look, set BEFORE the children exist (ui/app_theme.py).
 
         It used to load crow_eye_styles.qss here, and the integration set it a
         second time after the window was built - a replaced sheet leaves the
-        children in the old fonts. One source now: the site sheet plus the
+        children in the old fonts. One source now: the theme sheet plus the
         engine's own rules (ui_styling.engine_extra)."""
         try:
-            from ui.site_theme import begin_site_theme
+            from ui.app_theme import begin_theme
             from correlation_engine.gui.ui_styling import engine_extra
-            begin_site_theme(self, extra=engine_extra())
+            self.setObjectName("CorrelationEngine")     # scopes the 3 px outlines
+            begin_theme(self, extra=_engine_sheet_extra(engine_extra))
         except Exception as e:
             print(f"[Correlation Engine] Error loading styles: {e}")
 
@@ -814,8 +839,12 @@ class MainWindow(QMainWindow):
     def _create_status_bar(self):
         """Create the status bar"""
         self.status_bar = QStatusBar()
+        # Outside #siteWindow, so it keeps its own ground (the theme has none for it).
+        self.status_bar.setProperty("keepStyle", True)
+        self.status_bar.setStyleSheet("QStatusBar { background: #0B0F1A; color: #94A3B8; "
+                                      "border-top: 1px solid #1E293B; }")
         self.setStatusBar(self.status_bar)
-        
+
         # Add permanent widgets
         self.status_label = QLabel("Ready")
         self.status_bar.addWidget(self.status_label)
@@ -1483,6 +1512,85 @@ class MainWindow(QMainWindow):
             out.extend(detected or [ws])
         return out
 
+    def _augment_wings_for_engine(self, pipeline_config, engine_type):
+        """Offer the case Wings the newly selected engine runs (Execution tab)."""
+        if self.default_directory:
+            sync_and_augment_pipeline_wings(
+                pipeline_config, Path(self.default_directory), engine_type=engine_type)
+
+    def _case_wing_file(self, wing_config):
+        """The case's own file for a Wing (Correlation/wings), if it has one."""
+        if not self.default_directory:
+            return None
+        wings_dir = Path(self.default_directory) / "wings"
+        if not wings_dir.is_dir():
+            return None
+        import json as _json
+        for path in sorted(wings_dir.glob("*.json")):
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    if _json.load(handle).get("wing_id") == getattr(wing_config, "wing_id", None):
+                        return path
+            except Exception:
+                continue
+        return None
+
+    def _open_wing_in_creator(self, wing_config):
+        """Open a Wing in the Wing Creator, which asks for its category first.
+
+        Saved, the Wing replaces its old copy in the loaded pipeline and the
+        Execution tab's list is drawn again, so a Wing that had no category
+        moves out of "Needs a category" without reloading the pipeline.
+        """
+        try:
+            from ..gui.execution_control import _crow_eye_busy
+            busy = _crow_eye_busy()
+        except Exception:
+            busy = None
+        if busy:
+            QMessageBox.information(
+                self, "Crow-Eye is still working",
+                "Crow-Eye is still working: %s.\n\nOpen the Wing once it has finished." % busy)
+            return
+        try:
+            from ..wings.ui.main_window import WingsCreatorWindow
+            from ..wings.core.wing_model import Wing
+            window = WingsCreatorWindow()
+            if self.default_directory:
+                window.set_case_directory(str(Path(self.default_directory).parent))
+            source = self._case_wing_file(wing_config)
+            window.source_path = str(source) if source else None
+            window.wing = Wing.from_dict(wing_config.to_dict())
+            window.wing_saved.connect(self._on_creator_wing_saved)
+            window.show()
+            window.load_wing_to_ui()
+            self._wing_creator_windows = [w for w in getattr(self, '_wing_creator_windows', [])
+                                          if w is not None]
+            self._wing_creator_windows.append(window)
+            window.destroyed.connect(lambda *_a, w=window: self._wing_creator_windows.remove(w)
+                                     if w in self._wing_creator_windows else None)
+        except Exception as e:
+            QMessageBox.critical(self, "Wing Creator", f"Could not open the Wing:\n{e}")
+
+    def _on_creator_wing_saved(self, path):
+        """Put a Wing saved in the Wing Creator back into the loaded pipeline."""
+        if not self.current_pipeline or not path:
+            return
+        try:
+            from ..config import WingConfig
+            saved = WingConfig.load_from_file(str(path))
+        except Exception as e:
+            self.show_notification(f"Saved Wing could not be read back: {e}", "error")
+            return
+        wings = self.current_pipeline.wing_configs
+        for index, existing in enumerate(wings):
+            if getattr(existing, 'wing_id', None) == saved.wing_id:
+                wings[index] = saved
+                break
+        else:
+            wings.append(saved)
+        self.execution_control._populate_wing_list(keep_checked=True)
+
     def _on_load_results_requested(self, request_data: dict):
         """
         Handle request to load results from database with loading dialog.
@@ -1612,9 +1720,23 @@ class MainWindow(QMainWindow):
                 
                 # Identity wings share ONE unified sub-tab (with per-identity
                 # wing attribution); time-window wings keep one sub-tab per wing
-                identity_wings = [w for w in wing_summaries if w.get('engine_type') == 'identity_based']
-                time_wings = [w for w in wing_summaries if w.get('engine_type') != 'identity_based']
+                from ..engine import engine_registry
+                identity_wings = [w for w in wing_summaries
+                                  if engine_registry.results_view_or_none(w.get('engine_type')) == 'identity']
+                time_wings = [w for w in wing_summaries
+                              if engine_registry.results_view_or_none(w.get('engine_type')) == 'timebased']
+                behaviour_wings = [w for w in wing_summaries
+                                   if engine_registry.results_view_or_none(w.get('engine_type')) == 'behaviour']
                 wing_count = len(time_wings) + (1 if identity_wings else 0)
+
+                if behaviour_wings:
+                    viewer = self.results_viewer._create_behaviour_viewer(
+                        behaviour_wings[0].get('database_path', db_path), [execution_id])
+                    index = combined_viewer.addTab(
+                        viewer, self.results_viewer.behaviour_tab_title(len(behaviour_wings)))
+                    icon = self.results_viewer._behaviour_tab_icon()
+                    if icon is not None:
+                        combined_viewer.setTabIcon(index, icon)
 
                 if identity_wings:
                     n_wings = len(identity_wings)
@@ -1628,7 +1750,8 @@ class MainWindow(QMainWindow):
                         show_progress=False, wing_count=n_wings
                     )
                     if viewer:
-                        combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                        index = combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                        combined_viewer.setTabIcon(index, engine_icon("identity_based"))
                         print(f"[MainWindow] [OK] Added unified identity view ({n_wings} wings)")
                     QApplication.processEvents()
 
@@ -1649,11 +1772,12 @@ class MainWindow(QMainWindow):
 
                     # Create appropriate viewer based on engine type
                     viewer = None
-                    if wing_engine_type in ['time_window_scanning', 'time_based']:
+                    if engine_registry.results_view_or_none(wing_engine_type) == 'timebased':
                         viewer = self.results_viewer._create_timebased_viewer(wing_db_path, execution_id, show_progress=False)
 
                     if viewer:
-                        combined_viewer.addTab(viewer, wing_name)
+                        index = combined_viewer.addTab(viewer, wing_name)
+                        combined_viewer.setTabIcon(index, engine_icon(wing_engine_type))
                         print(f"[MainWindow] [OK] Added {wing_name} to combined viewer")
 
                     # Update progress after wing is loaded
@@ -1661,7 +1785,7 @@ class MainWindow(QMainWindow):
                 
                 # Add the combined viewer as a single Results tab for this execution
                 tab_widget.addTab(combined_viewer, f"Results - Exec {exec_id_display}")
-                self._apply_site_look(root=combined_viewer)
+                self._apply_theme(root=combined_viewer)
                 print(f"[MainWindow] [OK] Results tab created for execution {exec_id_display} with {len(wing_summaries)} wings")
             
             # Update Summary tab with aggregate statistics

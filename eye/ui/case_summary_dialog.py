@@ -1,5 +1,5 @@
 """
-Case Summary Dialog for EYE AI Forensic Assistant
+Case Summary Dialog for Eye AI Forensic Assistant
 
 This module provides a dialog for displaying the investigation timeline from the
 investigation log. It shows a chronological list of queries, findings, and suggestions
@@ -22,7 +22,9 @@ from PyQt5.QtWidgets import (
     QTabWidget, QWidget, QTextBrowser, QFileDialog, QSplitter,
     QDateEdit, QMenu, QFrame
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QDate
+from PyQt5.QtCore import Qt, pyqtSignal, QDate, QPoint
+import html as _html
+import re
 from PyQt5.QtGui import QPalette, QColor, QFont
 import csv
 
@@ -35,31 +37,31 @@ from styles import CrowEyeStyles, Colors
 # Crow-Eye design tokens — sourced from the shared Colors palette (styles.py) so
 # this dialog stays in lock-step with the rest of the app.
 try:
-    from ui.site_theme import families as _families
+    from ui.app_theme import families as _families
     CROW_EYE_FONT_FAMILY = "'%s'" % _families()[0]
 except Exception:
     CROW_EYE_FONT_FAMILY = "'Segoe UI', 'Inter', system-ui, sans-serif"
-CROW_EYE_BG = "#0A0C10"   # site token (ui/site_theme.py)          # outer window  (#0F172A)
-CROW_EYE_PANEL = "#0A0C10"   # site token (ui/site_theme.py)        # deep surfaces (#0B1220)
-CROW_EYE_PANEL_RAISED = "#0F172A"   # site token (ui/site_theme.py) # cards / group boxes (#1E293B)
-CROW_EYE_BORDER = "#1E293B"   # site token (ui/site_theme.py)   # (#334155)
+CROW_EYE_BG = "#0A0C10"   # site token (ui/app_theme.py)          # outer window  (#0F172A)
+CROW_EYE_PANEL = "#0A0C10"   # site token (ui/app_theme.py)        # deep surfaces (#0B1220)
+CROW_EYE_PANEL_RAISED = "#0F172A"   # site token (ui/app_theme.py) # cards / group boxes (#1E293B)
+CROW_EYE_BORDER = "#1E293B"   # site token (ui/app_theme.py)   # (#334155)
 CROW_EYE_TEXT = Colors.TEXT_PRIMARY      # (#E2E8F0)
-CROW_EYE_TEXT_DIM = "#94A3B8"   # site token (ui/site_theme.py) # (#94A3B8)
-CROW_EYE_ACCENT = "#A5B4FC"   # site token (ui/site_theme.py)     # (#00FFFF)
+CROW_EYE_TEXT_DIM = "#94A3B8"   # site token (ui/app_theme.py) # (#94A3B8)
+CROW_EYE_ACCENT = "#A5B4FC"   # site token (ui/app_theme.py)     # (#00FFFF)
 
 # Shared combo-box style (styles.py has no dedicated QComboBox constant) — built
 # from the Colors palette so the filter dropdowns match the app's inputs.
 CROW_EYE_COMBO_STYLE = f"""
     QComboBox {{
         background: {CROW_EYE_PANEL_RAISED};
-        border: 1px solid {CROW_EYE_BORDER};
+        border: 3px solid {CROW_EYE_BORDER};
         padding: 6px 12px;
         color: {CROW_EYE_TEXT};
         font-size: 10pt;
         border-radius: 4px;
         font-family: {CROW_EYE_FONT_FAMILY};
     }}
-    QComboBox:hover {{ border: 1px solid {CROW_EYE_ACCENT}; }}
+    QComboBox:hover {{ border: 3px solid {CROW_EYE_ACCENT}; }}
     QComboBox::drop-down {{ border: none; padding-right: 8px; }}
     QComboBox::down-arrow {{
         image: none;
@@ -79,6 +81,86 @@ CROW_EYE_COMBO_STYLE = f"""
 
 
 logger = logging.getLogger(__name__)
+
+# Site palette for the HTML the detail panes render (ui/app_theme.py tokens).
+_SITE = {"text": "#E2E8F0", "muted": "#94A3B8", "lavender": "#A5B4FC", "line": "#1E293B",
+         "raised": "#0F172A", "zebra": "#111827"}
+
+
+def _chart_palette():
+    try:
+        from ui.app_theme import CHART_PALETTE
+        return list(CHART_PALETTE) or ["#818CF8"]
+    except Exception:
+        return ["#818CF8", "#22D3EE", "#4ADE80", "#FBBF24", "#C084FC", "#F472B6"]
+
+
+def _markdown_to_card_html(text: str, limit: int = 600) -> str:
+    """A short, readable rendering of a markdown answer for the Conclusion card:
+    headings and **bold** in bold, list items with a bullet, the rest as text."""
+    out, used = [], 0
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if used >= limit:
+            out.append("<span style='color:%s'>…</span>" % _SITE["muted"])
+            break
+        line = line[: max(0, limit - used)]
+        used += len(line)
+        heading = line.startswith("#")
+        line = line.lstrip("#").strip()
+        bullet = line[:2] in ("- ", "* ")
+        if bullet:
+            line = line[2:]
+        esc = _html.escape(line).replace("`", "")
+        esc = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", esc)
+        if heading:
+            esc = "<b style='color:%s'>%s</b>" % (_SITE["lavender"], esc)
+        out.append(("&#8226;&nbsp;" + esc) if bullet else esc)
+    return "<br>".join(out)
+
+
+def _chart_html(block) -> str:
+    """A chart block drawn as horizontal bars (QTextBrowser has no canvas):
+    one row per label, one bar per dataset, the value at the end."""
+    labels = list(getattr(block, "labels", None) or [])
+    datasets = list(getattr(block, "datasets", None) or [])
+    colours = list(getattr(block, "custom_colors", None) or []) or _chart_palette()
+    values = [v for ds in datasets for v in (ds.get("data") or []) if isinstance(v, (int, float))]
+    peak = max(values) if values else 0
+    legend = "".join(
+        "<span style='color:%s'>&#9632;</span>&nbsp;%s&nbsp;&nbsp;&nbsp;"
+        % (colours[i % len(colours)], _html.escape(str(ds.get("label") or "Series %d" % (i + 1))))
+        for i, ds in enumerate(datasets))
+    rows = []
+    for li, label in enumerate(labels):
+        for di, ds in enumerate(datasets):
+            data = ds.get("data") or []
+            v = data[li] if li < len(data) else None
+            num = v if isinstance(v, (int, float)) else 0
+            pct = int(round(num / peak * 100)) if peak > 0 else 0
+            # Two cells, coloured and empty: Qt's rich text ignores a
+            # percentage width on a nested table, so one cell drew every bar full.
+            bar = ("<table cellspacing='0' cellpadding='0' width='100%%'><tr>"
+                   "<td width='%d%%' bgcolor='%s' height='12'></td><td width='%d%%'></td>"
+                   "</tr></table>" % (max(pct, 1), colours[di % len(colours)], 100 - max(pct, 1))) if pct else ""
+            rows.append(
+                "<tr><td width='120' style='color:%s;padding:3px 10px 3px 0'>%s</td>"
+                "<td width='100%%' style='padding:3px 0'>%s</td>"
+                "<td style='color:%s;padding:3px 0 3px 10px' align='right' nowrap>%s</td></tr>"
+                % (_SITE["muted"], _html.escape(str(label)) if di == 0 else "", bar,
+                   _SITE["text"], _html.escape("%g" % num if isinstance(v, (int, float)) else "—")))
+    kind = _html.escape(str(getattr(block, "chart_type", "") or "chart"))
+    return (
+        "<h3 style='color:%s;margin:0 0 4px 0'>%s</h3>"
+        "<div style='color:%s;margin-bottom:8px'>%s chart · %d label(s) · %d series</div>"
+        "<div style='color:%s;margin-bottom:8px'>%s</div>"
+        "<table cellspacing='0' width='100%%'>%s</table>"
+        % (_SITE["lavender"], _html.escape(getattr(block, "title", "") or "Chart"),
+           _SITE["muted"], kind.capitalize(), len(labels), len(datasets),
+           _SITE["text"], legend, "".join(rows) or
+           "<tr><td style='color:%s'>No data in this chart.</td></tr>" % _SITE["muted"]))
 
 
 class CaseSummaryDialog(QDialog):
@@ -185,15 +267,16 @@ class CaseSummaryDialog(QDialog):
         subtitle.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(subtitle)
 
-        main_layout.addSpacing(6)
+        main_layout.addSpacing(4)
 
-        # Case Overview band — case identification + key counts at a glance.
-        main_layout.addWidget(self._build_overview_band())
+        # Case Overview (identification + counts) beside the Conclusion: stacked,
+        # the two took ~250 px and left the tables three rows on a 900 px window.
+        header_row = QHBoxLayout()
+        header_row.setSpacing(12)
+        header_row.addWidget(self._build_overview_band(), 2)
+        header_row.addWidget(self._build_conclusion_panel(), 3)
+        main_layout.addLayout(header_row)
         main_layout.addSpacing(6)
-
-        # Conclusion / Key Findings — the latest answer narrative at a glance.
-        main_layout.addWidget(self._build_conclusion_panel())
-        main_layout.addSpacing(8)
 
         # Create tab widget — wider tabs that fill the bar (setExpanding) so they
         # read as primary navigation, matching the Crow-Eye toolbar style.
@@ -248,7 +331,7 @@ class CaseSummaryDialog(QDialog):
         band.setStyleSheet(f"""
             QFrame {{
                 background: {CROW_EYE_PANEL_RAISED};
-                border: 1px solid {CROW_EYE_BORDER};
+                border: 3px solid {CROW_EYE_BORDER};
                 border-radius: 8px;
             }}
         """)
@@ -328,6 +411,7 @@ class CaseSummaryDialog(QDialog):
         metrics_row.addWidget(self._build_metric_pill("Report Blocks", str(total_blocks)))
         metrics_row.addStretch()
         outer.addLayout(metrics_row)
+        outer.addStretch()
 
         return band
 
@@ -357,45 +441,48 @@ class CaseSummaryDialog(QDialog):
 
     def _build_conclusion_panel(self) -> QWidget:
         """Compact card surfacing the latest findings/conclusion at a glance."""
+        # A theme card (apply_theme cleared the old inline QFrame sheet, so the
+        # panel lost its frame); its labels keep their own sheets.
         card = QFrame()
-        card.setStyleSheet(f"""
-            QFrame {{
-                background: {CROW_EYE_PANEL};
-                border: 1px solid {CROW_EYE_BORDER};
-                border-left: 3px solid {CROW_EYE_ACCENT};
-                border-radius: 8px;
-            }}
-        """)
+        try:
+            from ui.app_theme import set_card
+            set_card(card)
+        except Exception:
+            pass
         v = QVBoxLayout(card)
-        v.setContentsMargins(16, 10, 16, 12)
-        v.setSpacing(4)
+        v.setContentsMargins(18, 12, 18, 14)
+        v.setSpacing(6)
 
         heading = QLabel("CONCLUSION · KEY FINDINGS")
+        heading.setProperty("keepStyle", True)
         heading.setStyleSheet(
-            f"color: {CROW_EYE_ACCENT}; font-size: 9pt; font-weight: 700;"
-            f" letter-spacing: 0.8px; background: transparent; font-family: {CROW_EYE_FONT_FAMILY};"
+            f"color: {CROW_EYE_ACCENT}; font-size: 12px; font-weight: 700;"
+            f" letter-spacing: 1px; background: transparent; font-family: {CROW_EYE_FONT_FAMILY};"
         )
         v.addWidget(heading)
 
         text = self._latest_findings_text()
         if text:
             # Strip the heaviest markdown so the card reads cleanly; keep it short.
-            clean = text.replace("**", "").replace("##", "").replace("`", "").strip()
-            shown = clean[:600] + ("…" if len(clean) > 600 else "")
-            body = QLabel(shown)
+            body = QLabel(_markdown_to_card_html(text))
+            body.setTextFormat(Qt.RichText)
             body.setWordWrap(True)
+            body.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            body.setProperty("keepStyle", True)
             body.setStyleSheet(
-                f"color: {CROW_EYE_TEXT}; font-size: 10.5pt; background: transparent;"
+                f"color: {CROW_EYE_TEXT}; font-size: 14px; background: transparent;"
                 f" font-family: {CROW_EYE_FONT_FAMILY};"
             )
             v.addWidget(body)
-            if len(clean) > 600:
+            if len(text) > 600:
                 hint = QLabel("Full text in the Report Findings tab below.")
+                hint.setProperty("keepStyle", True)
                 hint.setStyleSheet(
-                    f"color: {CROW_EYE_TEXT_DIM}; font-size: 9pt; background: transparent;"
+                    f"color: {CROW_EYE_TEXT_DIM}; font-size: 12px; background: transparent;"
                     f" font-family: {CROW_EYE_FONT_FAMILY};"
                 )
                 v.addWidget(hint)
+            v.addStretch()
         else:
             empty = QLabel("No findings yet — the Eye documents its conclusions here as it investigates.")
             empty.setWordWrap(True)
@@ -412,7 +499,7 @@ class CaseSummaryDialog(QDialog):
         pill.setStyleSheet(f"""
             QFrame {{
                 background: {CROW_EYE_PANEL};
-                border: 1px solid {CROW_EYE_BORDER};
+                border: 3px solid {CROW_EYE_BORDER};
                 border-radius: 14px;
             }}
         """)
@@ -575,27 +662,21 @@ class CaseSummaryDialog(QDialog):
         layout.setSpacing(12)
         layout.setContentsMargins(10, 10, 10, 10)
         
-        # Statistics panel — shared group-box style.
-        stats_group = QGroupBox("Report Statistics")
-        stats_group.setStyleSheet(CrowEyeStyles.GROUP_BOX)
+        # Block counts as the same pills as the overview band.
         stats_layout = QHBoxLayout()
-        stats_layout.setSpacing(20)
-        
+        stats_layout.setSpacing(10)
+                
         # Count blocks by type
         text_count = len([b for b in self.report_blocks if b.block_type == "text"])
         table_count = len([b for b in self.report_blocks if b.block_type == "table"])
         image_count = len([b for b in self.report_blocks if b.block_type == "image"])
         chart_count = len([b for b in self.report_blocks if b.block_type == "chart"])
         
-        stats_layout.addWidget(self._create_stat_label("Total", len(self.report_blocks)))
-        stats_layout.addWidget(self._create_stat_label("Text", text_count))
-        stats_layout.addWidget(self._create_stat_label("Tables", table_count))
-        stats_layout.addWidget(self._create_stat_label("Images", image_count))
-        stats_layout.addWidget(self._create_stat_label("Charts", chart_count))
+        for name, count in (("Blocks", len(self.report_blocks)), ("Text", text_count),
+                            ("Tables", table_count), ("Images", image_count), ("Charts", chart_count)):
+            stats_layout.addWidget(self._build_metric_pill(name, str(count)))
         stats_layout.addStretch()
-        
-        stats_group.setLayout(stats_layout)
-        layout.addWidget(stats_group)
+        layout.addLayout(stats_layout)
         
         # Filter dropdown
         filter_layout = QHBoxLayout()
@@ -648,42 +729,18 @@ class CaseSummaryDialog(QDialog):
         header.setSectionResizeMode(3, QHeaderView.Stretch)  # Source Report
         
         self.findings_table.itemSelectionChanged.connect(self._on_finding_selected)
-        layout.addWidget(self.findings_table, 1)
-        
-        # Detail pane
-        detail_label = QLabel("Detail View:")
-        detail_label.setStyleSheet(
-            "font-size: 11pt; font-weight: bold; color: #E5E7EB; background: transparent; margin-top: 10px;"
-        )
-        layout.addWidget(detail_label)
-        
-        self.detail_pane = QTextBrowser()
-        self.detail_pane.setMinimumHeight(200)
-        self.detail_pane.setMaximumHeight(300)
-        self.detail_pane.setStyleSheet("""
-            QTextBrowser {
-                background: #0F172A;
-                border: 2px solid #334155;
-                border-radius: 6px;
-                color: #E5E7EB;
-                padding: 10px;
-                font-size: 10pt;
-            }
-            QScrollBar:vertical {
-                background: #1E293B;
-                width: 12px;
-                border-radius: 6px;
-            }
-            QScrollBar::handle:vertical {
-                background: #334155;
-                border-radius: 6px;
-                min-height: 20px;
-            }
-            QScrollBar::handle:vertical:hover {
-                background: #475569;
-            }
-        """)
-        layout.addWidget(self.detail_pane)
+
+        # Table on top, the selected block below - the same splitter as the
+        # other two tabs (the fixed 200-300 px pane left the table one row).
+        splitter = QSplitter(Qt.Vertical)
+        splitter.addWidget(self.findings_table)
+        self.detail_pane = self._make_detail_pane(
+            "Select a block to view its text, table rows or chart.")
+        splitter.addWidget(self.detail_pane)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([420, 320])
+        layout.addWidget(splitter, 1)
         
         # Populate findings table
         self._populate_findings_table()
@@ -869,11 +926,11 @@ class CaseSummaryDialog(QDialog):
             self.queries_count_label.setText(f"Showing {shown} of {total} queries")
     
     def _apply_styling(self):
-        """The site look (ui/site_theme.py): one sheet, the inline sheets read
+        """The site look (ui/app_theme.py): one sheet, the inline sheets read
         back into roles, the buttons into the role family."""
         try:
-            from ui.site_theme import apply_site_theme, set_role
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme, set_role
+            apply_theme(self)
             set_role(self._title_label, "title")
         except Exception:
             pass
@@ -1184,6 +1241,7 @@ class CaseSummaryDialog(QDialog):
         for w in (from_edit, to_edit):
             w.setCalendarPopup(True)
             w.setDisplayFormat("yyyy-MM-dd")
+            w.setMinimumWidth(150)   # the date was clipped to "2026-11-("
             # Shared date/time + calendar styling (QDateEdit derives from
             # QDateTimeEdit so DATETIME_STYLE applies).
             w.setStyleSheet(CrowEyeStyles.DATETIME_STYLE)
@@ -1216,7 +1274,7 @@ class CaseSummaryDialog(QDialog):
             QPushButton {{
                 background: {CROW_EYE_PANEL_RAISED};
                 color: {CROW_EYE_TEXT};
-                border: 1px solid {CROW_EYE_BORDER};
+                border: 3px solid {CROW_EYE_BORDER};
                 border-radius: 4px;
                 padding: 6px 14px;
                 font-family: {CROW_EYE_FONT_FAMILY};
@@ -1230,7 +1288,11 @@ class CaseSummaryDialog(QDialog):
         # The window's site menu rules style it (parented to the button)
         menu.addAction("CSV (.csv)", lambda: on_export("csv"))
         menu.addAction("Markdown (.md)", lambda: on_export("markdown"))
-        btn.setMenu(menu)
+        # Opened on click rather than setMenu(): the theme clears this sheet,
+        # and with it the rule hiding Qt's menu arrow, which then hung below
+        # the button's corner.
+        btn.clicked.connect(lambda: menu.exec_(btn.mapToGlobal(QPoint(0, btn.height()))))
+        btn._export_menu = menu
         return btn
 
     def _make_detail_pane(self, placeholder: str) -> QTextBrowser:
@@ -1244,7 +1306,7 @@ class CaseSummaryDialog(QDialog):
         pane.setStyleSheet(f"""
             QTextBrowser {{
                 background: {CROW_EYE_PANEL};
-                border: 1px solid {CROW_EYE_BORDER};
+                border: 3px solid {CROW_EYE_BORDER};
                 border-radius: 6px;
                 color: {CROW_EYE_TEXT};
                 padding: 6px;
@@ -1288,9 +1350,9 @@ class CaseSummaryDialog(QDialog):
             f"h3{{color:{CROW_EYE_ACCENT};margin:0 0 8px 0;font-size:12pt;}}"
             f"h4{{color:{CROW_EYE_TEXT};margin:14px 0 4px 0;font-size:10pt;letter-spacing:0.4px;}}"
             f".meta{{color:{CROW_EYE_TEXT_DIM};font-size:9pt;margin-bottom:6px;}}"
-            f".chip{{display:inline-block;padding:2px 8px;border:1px solid {CROW_EYE_BORDER};"
+            f".chip{{display:inline-block;padding:2px 8px;border:3px solid {CROW_EYE_BORDER};"
             f"border-radius:10px;margin:2px 4px 2px 0;font-size:9pt;color:{CROW_EYE_TEXT};}}"
-            f"pre{{background:{CROW_EYE_PANEL_RAISED};border:1px solid {CROW_EYE_BORDER};"
+            f"pre{{background:{CROW_EYE_PANEL_RAISED};border:3px solid {CROW_EYE_BORDER};"
             f"padding:8px;border-radius:4px;white-space:pre-wrap;font-family:Consolas,monospace;}}"
             f"</style>",
             f"<h3>{self._html_escape(query)}</h3>",
@@ -1335,7 +1397,7 @@ class CaseSummaryDialog(QDialog):
             f"h3{{color:{CROW_EYE_ACCENT};margin:0 0 6px 0;font-size:12pt;}}"
             f"h4{{color:{CROW_EYE_TEXT};margin:14px 0 4px 0;font-size:10pt;}}"
             f".meta{{color:{CROW_EYE_TEXT_DIM};font-size:9pt;margin-bottom:8px;}}"
-            f"pre{{background:{CROW_EYE_PANEL_RAISED};border:1px solid {CROW_EYE_BORDER};"
+            f"pre{{background:{CROW_EYE_PANEL_RAISED};border:3px solid {CROW_EYE_BORDER};"
             f"padding:8px;border-radius:4px;white-space:pre-wrap;font-family:Consolas,monospace;}}"
             f"</style>",
             f"<h3>Investigator Query</h3>",
@@ -1540,110 +1602,53 @@ class CaseSummaryDialog(QDialog):
         self._render_block_detail(block)
     
     def _render_block_detail(self, block: ReportBlock):
-        """
-        Render block content in the detail pane.
-        
-        Args:
-            block: ReportBlock to render
-            
-        """
+        """Render a block in the detail pane in the site palette: text as
+        markdown, a table's first rows, a chart as bars, an image with caption."""
+        pane = self.detail_pane
+        pane.document().setDefaultStyleSheet(
+            "h1, h2, h3, h4 { color: %(lavender)s; } a { color: %(lavender)s; }"
+            " code { color: %(lavender)s; }" % _SITE)
+        esc = _html.escape
         if isinstance(block, TextBlock):
-            # Render markdown content as HTML
-            html = f"""
-            <html>
-            <head>
-                <style>
-                    body {{ background: #0F172A; color: #E5E7EB; font-family: sans-serif; padding: 10px; }}
-                    h1, h2, h3 {{ color: #00FFFF; }}
-                    p {{ line-height: 1.6; }}
-                </style>
-            </head>
-            <body>
-                <h2>{block.title}</h2>
-                <div>{block.markdown_content}</div>
-            </body>
-            </html>
-            """
-            self.detail_pane.setHtml(html)
-        
-        elif isinstance(block, TableBlock):
-            # Render table with styling
-            rows_html = ""
-            for row in block.rows[:10]:  # Limit to first 10 rows for detail pane
-                row_html = "<tr>"
-                for col in block.columns:
-                    value = row.get(col, "")
-                    row_html += f"<td>{value}</td>"
-                row_html += "</tr>"
-                rows_html += row_html
-            
-            html = f"""
-            <html>
-            <head>
-                <style>
-                    body {{ background: #0F172A; color: #E5E7EB; font-family: sans-serif; padding: 10px; }}
-                    h3 {{ color: #00FFFF; margin-bottom: 10px; }}
-                    table {{ border-collapse: collapse; width: 100%; margin-top: 10px; }}
-                    th, td {{ border: 1px solid #334155; padding: 8px; text-align: left; }}
-                    th {{ background: #1E293B; color: #00FFFF; font-weight: bold; }}
-                    tr:nth-child(even) {{ background: #1E293B; }}
-                    .caption {{ color: #9CA3AF; font-style: italic; margin-bottom: 10px; }}
-                </style>
-            </head>
-            <body>
-                <h3>Table: {block.caption}</h3>
-                <div class="caption">Showing first 10 rows of {len(block.rows)} total</div>
-                <table>
-                    <thead>
-                        <tr>{''.join(f'<th>{col}</th>' for col in block.columns)}</tr>
-                    </thead>
-                    <tbody>
-                        {rows_html}
-                    </tbody>
-                </table>
-            </body>
-            </html>
-            """
-            self.detail_pane.setHtml(html)
-        
-        elif isinstance(block, ImageBlock):
-            # Display image with caption
-            html = f"""
-            <html>
-            <head>
-                <style>
-                    body {{ background: #0F172A; color: #E5E7EB; font-family: sans-serif; padding: 10px; text-align: center; }}
-                    img {{ max-width: 100%; height: auto; border: 2px solid #334155; border-radius: 6px; }}
-                    .caption {{ color: #9CA3AF; font-style: italic; margin-top: 10px; }}
-                </style>
-            </head>
-            <body>
-                <img src="file:///{block.image_path}" alt="{block.caption}">
-                <div class="caption">{block.caption}</div>
-            </body>
-            </html>
-            """
-            self.detail_pane.setHtml(html)
-        
-        else:
-            # Generic block display
-            html = f"""
-            <html>
-            <head>
-                <style>
-                    body {{ background: #0F172A; color: #E5E7EB; font-family: sans-serif; padding: 10px; }}
-                    h3 {{ color: #00FFFF; }}
-                </style>
-            </head>
-            <body>
-                <h3>{block.block_type.capitalize()} Block</h3>
-                <p>Block ID: {block.block_id}</p>
-                <p>Timestamp: {block.metadata.get('timestamp', 'Unknown')}</p>
-            </body>
-            </html>
-            """
-            self.detail_pane.setHtml(html)
-    
+            title = (block.title or "").strip()
+            body = block.markdown_content or ""
+            pane.setMarkdown(("## %s\n\n" % title if title else "") + body)
+            return
+        if isinstance(block, TableBlock):
+            cols = list(block.columns or [])
+            head = "".join("<th align='left' style='color:%s;padding:6px 10px;"
+                           "border-bottom:1px solid %s'>%s</th>" % (_SITE["lavender"], _SITE["line"], esc(str(c)))
+                           for c in cols)
+            body_rows = []
+            for i, row in enumerate(block.rows[:50]):
+                bg = _SITE["zebra"] if i % 2 else _SITE["raised"]
+                body_rows.append("<tr>" + "".join(
+                    "<td bgcolor='%s' style='padding:5px 10px;color:%s'>%s</td>"
+                    % (bg, _SITE["text"], esc(str(row.get(c, "")))) for c in cols) + "</tr>")
+            shown = min(len(block.rows), 50)
+            pane.setHtml(
+                "<h3 style='color:%s;margin:0 0 4px 0'>%s</h3>"
+                "<div style='color:%s;margin-bottom:8px'>%s row(s)%s</div>"
+                "<table cellspacing='0' width='100%%'><tr>%s</tr>%s</table>"
+                % (_SITE["lavender"], esc(block.caption or "Table"), _SITE["muted"],
+                   "{:,}".format(len(block.rows)),
+                   " · first %d shown" % shown if len(block.rows) > shown else "",
+                   head, "".join(body_rows)))
+            return
+        if isinstance(block, ChartBlock):
+            pane.setHtml(_chart_html(block))
+            return
+        if isinstance(block, ImageBlock):
+            pane.setHtml(
+                "<div align='center'><img src='file:///%s' width='600'></div>"
+                "<div align='center' style='color:%s;margin-top:8px'>%s</div>"
+                % (esc(block.image_path or ""), _SITE["muted"], esc(block.caption or "")))
+            return
+        pane.setHtml(
+            "<h3 style='color:%s'>%s block</h3><p style='color:%s'>Block %s · %s</p>"
+            % (_SITE["lavender"], esc(block.block_type.capitalize()), _SITE["muted"],
+               esc(block.block_id), esc(str((block.metadata or {}).get("timestamp", "time unknown")))))
+
     def get_chart_data(self, chart_type: str) -> Dict[str, Any]:
         """
         Get data for a specific chart type.
@@ -1998,7 +2003,7 @@ class CaseSummaryDialog(QDialog):
         
         .toc {{
             background: #1E293B;
-            border: 2px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
             padding: 20px;
             margin-bottom: 40px;
@@ -2077,7 +2082,7 @@ class CaseSummaryDialog(QDialog):
         
         .chart-container {{
             background: #1E293B;
-            border: 2px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
             padding: 20px;
             margin-bottom: 30px;
@@ -2088,7 +2093,7 @@ class CaseSummaryDialog(QDialog):
             display: flex;
             justify-content: space-around;
             background: #1E293B;
-            border: 2px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
             padding: 20px;
             margin-bottom: 20px;
@@ -2219,7 +2224,7 @@ class CaseSummaryDialog(QDialog):
         </div>
         
         <div class="footer">
-            EYE AI Forensic Assistant - Case Summary Report
+            Eye AI Forensic Assistant - Case Summary Report
         </div>
     </div>
 </body>

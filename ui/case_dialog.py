@@ -23,8 +23,8 @@ from styles import CrowEyeStyles, Colors
 # The option cards are plain QWidgets: their card look and hover edge live in
 # the window sheet (WA_StyledBackground on each card makes the rule paint).
 _CARD_RULES = """
-QWidget#option_card { background: #0F172A; border: 1px solid #1E293B; border-radius: 16px; }
-QWidget#option_card:hover { border-color: rgba(99, 102, 241, 0.55); background: #111A33; }
+QWidget#option_card { background: #0F172A; border: 3px solid #1E293B; border-radius: 16px; }
+QWidget#option_card:hover { border-color: #3B4093; background: #111A33; }
 QWidget#option_card QWidget, QWidget#option_card QLabel { background: transparent; border: none; }
 """
 
@@ -43,8 +43,8 @@ class CaseDialog(QtWidgets.QDialog):
         self.parent = parent
         self.choice = None  # Will store user choice: 'create' or 'open'
 
-        from ui.site_theme import begin_site_theme
-        begin_site_theme(self, extra=_CARD_RULES)   # before the widgets exist
+        from ui.app_theme import begin_theme
+        begin_theme(self, extra=_CARD_RULES)   # before the widgets exist
         self.setup_ui()
         self.apply_styles()
         
@@ -323,7 +323,7 @@ class CaseDialog(QtWidgets.QDialog):
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                     stop:0 #DC2626, stop:1 #B91C1C);
                 color: #FFFFFF;
-                border: 2px solid #EF4444;
+                border: 3px solid #EF4444;
                 border-radius: 8px;
                 font-size: 14px;
                 font-weight: 600;
@@ -331,7 +331,7 @@ class CaseDialog(QtWidgets.QDialog):
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                     stop:0 #EF4444, stop:1 #DC2626);
-                border: 2px solid #F87171;
+                border: 3px solid #F87171;
             }
             QPushButton:pressed {
                 background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
@@ -345,10 +345,10 @@ class CaseDialog(QtWidgets.QDialog):
         return button_widget
         
     def apply_styles(self):
-        """The site look (ui/site_theme.py): one sheet, roles for the labels,
+        """The site look (ui/app_theme.py): one sheet, roles for the labels,
         the option cards as site cards, EXIT as the stop button."""
-        from ui.site_theme import apply_site_theme, set_role, set_variant, set_status
-        apply_site_theme(self, extra=_CARD_RULES)
+        from ui.app_theme import apply_theme, set_role, set_variant, set_status
+        apply_theme(self, extra=_CARD_RULES)
         title_widget = self.findChild(QtWidgets.QLabel, "dialog_title")
         if title_widget:
             set_role(title_widget, "title")

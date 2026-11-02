@@ -74,6 +74,7 @@
     "SecurityLogs": "Reading the Security log requires Administrator rights; also empty if the log was cleared or auditing is off.",
     "Custom_JumpLists": "Custom Jump Lists are written only by applications that pin or publish tasks/destinations.",
     "deleted_entries": "Empty when the journal recorded no deletions in its retained window.",
+    "ntfs_integrity_findings": "Empty when the NTFS integrity checks found nothing on the volumes parsed, or when they are turned off in Settings -> Parsing; the case's custody ledger records which checks were off at each parse.",
     "browser_credentials": "Empty when the user never saved passwords in the browser.",
     "browser_payments": "Empty when the user never saved payment methods in the browser.",
     "browser_addresses": "Empty when the user never saved addresses in the browser.",

@@ -111,7 +111,7 @@ class ParserInvoker:
         try:
             from utils.parse_status import (ARTIFACT_ORDER, NOT_A_FAILURE, ArtifactOutcome,
                                             ParseStatus, ParserResultLike, artifact_db_records,
-                                            artifact_db_rowcount,
+                                            artifact_db_rowcount, artifact_last_activity,
                                             artifact_label, canonical_artifact, classify_error_text,
                                             classify_result, make_issue, prefetch_failed_files,
                                             probe_sources, record_outcomes, version_problems)
@@ -175,7 +175,10 @@ class ParserInvoker:
                 outcome = classify_result(
                     artifact, folded, probe=probe, mode=self.mode,
                     db_records=db_count, details=details, rows_before=rows_before,
-                    rows_after=artifact_db_rowcount(case_root, artifact) if rows_before is not None else None)
+                    rows_after=artifact_db_rowcount(case_root, artifact) if rows_before is not None else None,
+                    # SRUM / Prefetch switched off on the image: where the kept data ends.
+                    last_activity=(artifact_last_activity(case_root, artifact)
+                                   if probe.get("switched_off") else None))
                 if outcome.status == ParseStatus.PARTIAL and not outcome.message:
                     outcome.message = errors[0] if errors else "Some input files failed."
                 outcomes.append(outcome)
@@ -750,40 +753,40 @@ class ParserInvoker:
             kwargs['offline_mode'] = True
             
             if artifact_type == 'Registry':
-                logger.info(f"[PARSER ROUTING] → Invoking Registry parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking Registry parser")
                 return self._invoke_registry_parser(start_time, **kwargs)
             elif artifact_type == 'Prefetch':
-                logger.info(f"[PARSER ROUTING] → Invoking Prefetch parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking Prefetch parser")
                 return self._invoke_prefetch_parser(start_time, **kwargs)
             elif artifact_type == 'AmCache':
-                logger.info(f"[PARSER ROUTING] → Invoking AmCache parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking AmCache parser")
                 return self._invoke_amcache_parser(start_time, **kwargs)
             elif artifact_type == 'link_jumplist':
-                logger.info(f"[PARSER ROUTING] → Invoking JumpLists parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking JumpLists parser")
                 return self._invoke_jumplists_parser(start_time, **kwargs)
             elif artifact_type == 'RecycleBin':
-                logger.info(f"[PARSER ROUTING] → Invoking RecycleBin parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking RecycleBin parser")
                 return self._invoke_recyclebin_parser(start_time, **kwargs)
             elif artifact_type == 'ShimCache':
-                logger.info(f"[PARSER ROUTING] → Invoking ShimCache parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking ShimCache parser")
                 return self._invoke_shimcache_parser(start_time, **kwargs)
             elif artifact_type == 'MFT':
-                logger.info(f"[PARSER ROUTING] → Invoking MFT parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking MFT parser")
                 return self._invoke_mft_parser(start_time, **kwargs)
             elif artifact_type == 'USN':
-                logger.info(f"[PARSER ROUTING] → Invoking USN parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking USN parser")
                 return self._invoke_usn_parser(start_time, **kwargs)
             elif artifact_type == 'EVTX':
-                logger.info(f"[PARSER ROUTING] → Invoking EVTX parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking EVTX parser")
                 return self._invoke_evtx_parser(start_time, **kwargs)
             elif artifact_type == 'SRUM':
-                logger.info(f"[PARSER ROUTING] → Invoking SRUM parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking SRUM parser")
                 return self._invoke_srum_parser(start_time, **kwargs)
             elif artifact_type == 'Browser':
-                logger.info(f"[PARSER ROUTING] → Invoking Browser parser")
+                logger.info(f"[PARSER ROUTING] -> Invoking Browser parser")
                 return self._invoke_browser_parser(start_time, **kwargs)
             else:
-                logger.error(f"[PARSER ROUTING] → Unknown artifact type: {artifact_type}")
+                logger.error(f"[PARSER ROUTING] -> Unknown artifact type: {artifact_type}")
                 return ParserResult(
                     success=False,
                     artifact_type=artifact_type,
@@ -1310,7 +1313,9 @@ class ParserInvoker:
                 logger.warning(f"EVTX parser returned invalid format: {type(result).__name__} instead of dict")
                 result = {'success': False, 'records': 0, 'error': f'Parser returned invalid format: {type(result).__name__}'}
             
-            output_path = os.path.join(self.target_artifacts_dir, 'event_logs', 'event_logs.db')
+            # Where the parser wrote (Target_Artifacts\Log_Claw.db); the
+            # event_logs\event_logs.db named here before does not exist.
+            output_path = result.get('output_path') or os.path.join(self.target_artifacts_dir, 'Log_Claw.db')
             
             # Create initial ParserResult
             parser_result = ParserResult(
@@ -1384,7 +1389,9 @@ class ParserInvoker:
                 logger.warning(f"SRUM parser returned invalid format: {type(result).__name__} instead of dict")
                 result = {'success': False, 'records': 0, 'error': f'Parser returned invalid format: {type(result).__name__}'}
             
-            output_path = os.path.join(self.target_artifacts_dir, 'srum_database', 'srum_data.db')
+            # Where the parser wrote (Target_Artifacts\srum_data.db); the
+            # srum_database\srum_data.db named here before does not exist.
+            output_path = result.get('output_path') or os.path.join(self.target_artifacts_dir, 'srum_data.db')
             
             return ParserResult(
                 success=result.get('success', True),

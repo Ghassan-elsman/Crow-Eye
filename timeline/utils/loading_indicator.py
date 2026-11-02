@@ -182,7 +182,7 @@ class LoadingOverlay(QWidget):
                              else QProgressBar())
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 2px solid #475569;
+                border: 3px solid #475569;
                 border-radius: 5px;
                 background-color: #1E293B;
                 text-align: center;
@@ -376,7 +376,7 @@ class ProgressIndicator(QWidget):
                              else QProgressBar())
         self.progress_bar.setStyleSheet("""
             QProgressBar {
-                border: 2px solid #475569;
+                border: 3px solid #475569;
                 border-radius: 5px;
                 background-color: #1E293B;
                 text-align: center;

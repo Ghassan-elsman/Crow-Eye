@@ -2,7 +2,8 @@
   "config_name": "ransomware_mass_encryption_correlation",
   "wing_name": "Ransomware Mass-Encryption Correlation",
   "wing_id": "default_wing_ransomware_001",
-  "description": "Detects ransomware-style mass file modification and recovery inhibition. Uses a THRESHOLD rule on a burst of USN file writes/renames within minutes (mass encryption) plus match rules for shadow-copy / backup deletion (vssadmin, wbadmin, bcdedit) and known recovery-inhibition tooling. Identity-Based engine only.",
+  "wing_category": "identity",
+  "description": "Recovery-inhibition tooling (vssadmin, wbadmin, bcdedit, wmic, diskshadow) run on this host, with the file and service context around it. The mass-write burst thresholds moved to Behaviour Wings (see moved_rules): a burst spans many files, each its own identity, so the Identity engine could not count it.",
   "proves": "Files were mass-modified and recovery was inhibited, consistent with ransomware",
   "author": "Crow-Eye Team",
   "created_date": "2026-07-12T00:00:00Z",
@@ -60,23 +61,6 @@
 
   "semantic_rules": [
     {
-      "rule_id": "rw_mass_write_burst",
-      "name": "Mass File-Write Burst (Threshold)",
-      "semantic_value": "Mass File Encryption",
-      "description": "100+ USN DATA_OVERWRITE / RENAME entries within 5 minutes — characteristic of ransomware encrypting files in bulk.",
-      "rule_type": "threshold",
-      "threshold": {
-        "condition": { "feather_id": "mft_usn", "field_name": "usn_reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME|DATA_TRUNCATION" },
-        "min_count": 100,
-        "within_minutes": 5
-      },
-      "scope": "wing",
-      "category": "impact",
-      "severity": "critical",
-      "technique_id": ["T1486"],
-      "tactic": ["impact"]
-    },
-    {
       "rule_id": "rw_recovery_inhibition",
       "name": "Recovery Inhibition Tool",
       "semantic_value": "Inhibit System Recovery",
@@ -91,26 +75,24 @@
       "severity": "high",
       "technique_id": ["T1490"],
       "tactic": ["impact"]
-    },
-    {
-      "rule_id": "rw_encrypt_then_inhibit",
-      "name": "Mass Encryption With Recovery Inhibition",
-      "semantic_value": "Confirmed Ransomware Pattern",
-      "description": "A mass file-write burst together with recovery-inhibition tooling — a high-confidence ransomware pattern.",
-      "rule_type": "threshold",
-      "threshold": {
-        "condition": { "feather_id": "mft_usn", "field_name": "usn_reason", "operator": "regex", "value": "DATA_OVERWRITE|RENAME_NEW_NAME" },
-        "min_count": 50,
-        "within_minutes": 10
-      },
-      "scope": "wing",
-      "category": "impact",
-      "severity": "critical",
-      "technique_id": ["T1486", "T1490"],
-      "tactic": ["impact"]
     }
   ],
 
-  "tags": ["impact", "ransomware", "mass_encryption", "threshold", "default", "weighted", "apt"],
+  "moved_rules": [
+    {
+      "rule_id": "rw_mass_write_burst",
+      "moved_to": "Ransomware_Mass_Encryption_Behaviour.json",
+      "moved_to_wing": "Ransomware Mass-Encryption Burst (Behaviour)",
+      "why": "A burst spans many files, and each file is its own identity, so a per-identity threshold only saw one file's journal rows. The Behavioural engine counts UBA's file_edited / file_renamed bursts per person."
+    },
+    {
+      "rule_id": "rw_encrypt_then_inhibit",
+      "moved_to": "Ransomware_Encrypt_Then_Inhibit_Behaviour.json",
+      "moved_to_wing": "Mass Encryption With Recovery Inhibition (Behaviour)",
+      "why": "Its name required recovery-inhibition tooling but the rule checked only a write burst. The Behaviour Wing requires both, within 10 minutes, for one person."
+    }
+  ],
+
+  "tags": ["impact", "ransomware", "default", "weighted", "apt"],
   "case_types": ["intrusion", "ransomware", "apt"]
 }

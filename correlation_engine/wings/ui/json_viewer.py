@@ -13,11 +13,11 @@ from PyQt5.QtGui import QFont, QClipboard
 
 from correlation_engine.wings.core.wing_model import Wing
 
-# The site look (ui/site_theme.py); standalone it keeps Qt's own style.
+# The site look (ui/app_theme.py); standalone it keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 class JsonViewerDialog(QDialog):
@@ -26,8 +26,8 @@ class JsonViewerDialog(QDialog):
     def __init__(self, wing: Wing, parent=None):
         super().__init__(parent)
         self.wing = wing
-        if _site is not None:
-            _site.begin_site_theme(self)        # before the children exist
+        if _theme is not None:
+            _theme.begin_theme(self)        # before the children exist
         self.init_ui()
     
     def init_ui(self):
@@ -39,8 +39,8 @@ class JsonViewerDialog(QDialog):
         
         # Header
         header_label = QLabel("Generated Wing JSON")
-        if _site is not None:
-            _site.set_role(header_label, "section")
+        if _theme is not None:
+            _theme.set_role(header_label, "section")
         layout.addWidget(header_label)
         
         info_label = QLabel(
@@ -49,16 +49,16 @@ class JsonViewerDialog(QDialog):
         )
         info_label.setWordWrap(True)
         info_label.setContentsMargins(0, 0, 0, 10)
-        if _site is not None:
-            _site.set_role(info_label, "muted")
+        if _theme is not None:
+            _theme.set_role(info_label, "muted")
         layout.addWidget(info_label)
         
         # JSON text area
         self.json_text = QTextEdit()
-        if _site is not None:
+        if _theme is not None:
             # A mono well, as the loading dialog's log view.
-            self.json_text.setStyleSheet(_site.log_view_sheet())
-            _site.keep_style(self.json_text)
+            self.json_text.setStyleSheet(_theme.log_view_sheet())
+            _theme.keep_style(self.json_text)
         else:
             self.json_text.setFont(QFont("Consolas", 10))
         self.json_text.setReadOnly(True)
@@ -90,17 +90,17 @@ class JsonViewerDialog(QDialog):
         # Close button
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.accept)
-        if _site is not None:
-            _site.set_variant(copy_btn, "ghost")
-            _site.set_variant(save_btn, "primary")
-            _site.set_variant(close_btn, "ghost")
+        if _theme is not None:
+            _theme.set_variant(copy_btn, "ghost")
+            _theme.set_variant(save_btn, "primary")
+            _theme.set_variant(close_btn, "ghost")
         button_layout.addWidget(close_btn)
         
         layout.addLayout(button_layout)
         
         # The site look (the sheet was set before the children)
-        if _site is not None:
-            _site.apply_site_theme(self)
+        if _theme is not None:
+            _theme.apply_theme(self)
     
     def copy_to_clipboard(self):
         """Copy JSON to clipboard"""

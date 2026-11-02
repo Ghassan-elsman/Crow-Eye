@@ -1,0 +1,95 @@
+{
+  "config_name": "ransomware_mass_encryption_behaviour",
+  "wing_name": "Ransomware Mass-Encryption Burst (Behaviour)",
+  "wing_id": "default_behaviour_ransomware_burst_001",
+  "wing_category": "behaviour",
+  "description": "Rebuilt from the Identity Wing's rw_mass_write_burst threshold, which counted USN rows of ONE file identity and so could not see a burst across many files. Here: at least 100 files changed or renamed within 5 minutes - UBA's file_edited and file_renamed events, each counting its files (aggregate_count). A burst lasting longer than 5 minutes is counted at its average rate, and the hit says so. A second rule, rw_renamed_to_encrypted_extension, fires on 10 or more files renamed into an archive or encrypted-looking extension (.zip .7z .enc .locked .crypt ...) within 10 minutes. Only the user's document folders count (Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive), as UBA labels each burst's folder: application caches, Program Files, ProgramData and Windows churn constantly and are left out.",
+  "proves": "Files were changed or renamed in bulk within minutes, consistent with encryption",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Files changed or renamed in bulk",
+      "rule_id": [
+        "file_edited",
+        "file_renamed"
+      ],
+      "actor": "any",
+      "min_count": 100,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 5,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "critical",
+    "technique_id": [
+      "T1486"
+    ],
+    "tactic": [
+      "impact"
+    ]
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "rw_renamed_to_encrypted_extension",
+      "name": "Renamed Into Encrypted-Looking Extensions (Threshold)",
+      "semantic_value": "Files Renamed to Encrypted Extensions",
+      "description": "10 or more file renames whose final name has an archive or encrypted-looking extension within 10 minutes (UBA file_renamed events that keep each file's rename chain).",
+      "rule_type": "threshold",
+      "threshold": {
+        "conditions": [
+          {
+            "feather_id": "any",
+            "field_name": "details.rename_chain",
+            "operator": "regex",
+            "value": "\\.(?:zip|rar|7z|gz|tar|cab|iso|enc|locked|crypt|crypted|encrypted)\"\\]$"
+          },
+          {
+            "field_name": "details.folder",
+            "operator": "regex",
+            "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$",
+            "feather_id": "any"
+          }
+        ],
+        "logic_operator": "AND",
+        "min_count": 10,
+        "within_minutes": 10
+      },
+      "scope": "wing",
+      "category": "impact",
+      "severity": "critical",
+      "technique_id": [
+        "T1486"
+      ],
+      "tactic": [
+        "impact"
+      ]
+    }
+  ],
+  "tags": [
+    "behaviour",
+    "impact",
+    "ransomware",
+    "threshold",
+    "default",
+    "apt"
+  ],
+  "case_types": [
+    "intrusion",
+    "ransomware"
+  ]
+}

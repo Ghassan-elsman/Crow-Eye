@@ -1,15 +1,17 @@
-"""The website's look for whole windows: one stylesheet, set once.
+"""The app theme for whole windows: one stylesheet, set once.
+
+The palette and fonts follow the website, crow-eye.com (its style.css tokens).
 
 The loading / parse dialog (ui/Loading_dialog.py) was the first surface in the
 site's look - Barlow Semi Condensed and JetBrains Mono, the slate card, the
 indigo -> cyan strip, pill buttons, quiet tables. Its pieces lived privately in
 that module; they live here now, and Settings, Eye AI's Advanced settings,
 Database Search and Saved Searches take the same look through
-``apply_site_theme(dialog)``.
+``apply_theme(dialog)``.
 
 Why one sheet: those windows set a separate ``setStyleSheet`` on almost every
 widget (title, label, input, button, table...). Qt polishes each of those on
-its own, and every one hard-coded the old neon palette. ``apply_site_theme``
+its own, and every one hard-coded the old neon palette. ``apply_theme``
 sets ONE sheet on the window, clears the per-widget ones (keeping the few
 marked ``keepStyle``), and turns what they said into a role - a title, a muted
 hint, a primary / ghost / danger button, a card - that the sheet styles.
@@ -26,7 +28,7 @@ import re
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 
-# The site's tokens (crow-eye.com style.css), as in styles.Colors.SITE_*.
+# The site's tokens (crow-eye.com style.css), as in styles.Colors.BRAND_*.
 BG = "#0A0C10"          # window well
 CARD = "#0F172A"        # cards, rails
 CARD_2 = "#131C31"      # a card inside a card, hover rows
@@ -202,7 +204,7 @@ def glyph(name, colour):
         return _glyph_paths[key]
     import os
     import tempfile
-    folder = os.path.join(tempfile.gettempdir(), "crow_eye_site_theme_1")
+    folder = os.path.join(tempfile.gettempdir(), "crow_eye_app_theme_1")
     path = os.path.join(folder, "%s_%s.svg" % (name, colour.strip("#")))
     want = _GLYPHS[name] % colour
     try:
@@ -235,11 +237,16 @@ def _img(name, colour):
 _QSS_CACHE = {}
 
 
-def site_qss():
+def theme_qss():
     ui, mono = families()
     if (ui, mono) in _QSS_CACHE:
         return _QSS_CACHE[(ui, mono)]
-    _QSS_CACHE[(ui, mono)] = _build_qss(ui, mono)
+    # every themed window takes the 3 px outlines (thick_outlines, unscoped);
+    # Settings and the Correlation Engine also scope them by ID, which outranks
+    # a window's own [role] rules
+    _base = _build_qss(ui, mono)
+    _QSS_CACHE[(ui, mono)] = (_base + chr(10) + thick_outlines("") + chr(10)
+                              + _solid_borders(_base))
     return _QSS_CACHE[(ui, mono)]
 
 
@@ -354,6 +361,15 @@ QLabel[status="bad"] { color: #FDA4AF; }
 QLabel[status="info"] { color: #22D3EE; }
 QLabel[status="accent"] { color: #A5B4FC; }
 QLabel[status="neutral"] { color: %(MUTED)s; }
+QLabel[severity] { border-radius: 6px; padding: 2px 8px; font-weight: 600; }
+QLabel[severity="routine"], QFrame[card="true"] QLabel[severity="routine"],
+QGroupBox QLabel[severity="routine"] { color: #8C95AB; background: rgba(154, 163, 184, 0.12); }
+QLabel[severity="notable"], QFrame[card="true"] QLabel[severity="notable"],
+QGroupBox QLabel[severity="notable"] { color: #F0A93B; background: rgba(240, 169, 59, 0.13); }
+QLabel[severity="suspicious"], QFrame[card="true"] QLabel[severity="suspicious"],
+QGroupBox QLabel[severity="suspicious"] { color: #FF3B56; background: rgba(255, 59, 86, 0.13); }
+QLabel[severity="critical"], QFrame[card="true"] QLabel[severity="critical"],
+QGroupBox QLabel[severity="critical"] { color: #FFFFFF; background: #FF3B56; }
 QLabel[status="ok"][role="note"] { color: #4ADE80; background: rgba(74, 222, 128, 0.07);
     border: 1px solid rgba(74, 222, 128, 0.25); }
 QLabel[status="warn"][role="note"] { color: #FBBF24; background: rgba(251, 191, 36, 0.07);
@@ -410,6 +426,12 @@ QTableView::item, QTreeView::item, QListView::item { padding: 4px 6px; border: n
 QTableView::item:hover, QTreeView::item:hover, QListView::item:hover { background: rgba(99, 102, 241, 0.08); }
 QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {
     background: rgba(99, 102, 241, 0.28); color: %(TEXT)s; }
+QTableView::indicator, QTreeView::indicator, QListView::indicator { width: 16px; height: 16px;
+    border: 1px solid %(LINE_2)s; border-radius: 5px; background: %(BG)s; }
+QTableView::indicator:hover, QTreeView::indicator:hover, QListView::indicator:hover {
+    border-color: %(INDIGO_HOVER)s; }
+QTableView::indicator:checked, QTreeView::indicator:checked, QListView::indicator:checked {
+    background: %(INDIGO)s; border-color: %(INDIGO)s; %(IMG_CHECK)s }
 QHeaderView { background: transparent; border: none; }
 QHeaderView::section { background: transparent; color: %(MUTED)s; border: none;
     border-bottom: 1px solid %(LINE)s; padding: 8px 8px 6px 8px; }
@@ -538,6 +560,48 @@ def set_card(frame, on=True):
     return frame
 
 
+def how_it_works(html, button_text="How it works"):
+    """(button, panel): a ghost button that shows or hides a card explaining a window - what each
+    part shows, where its facts come from, and what to do first. The panel starts hidden, so the
+    window keeps its room for the work; the explanation is one click away and never a dialog."""
+    button = set_variant(QtWidgets.QPushButton(button_text), "ghost")
+    button.setCheckable(True)
+    panel = set_card(Card())
+    lay = QtWidgets.QVBoxLayout(panel)
+    lay.setContentsMargins(18, 14, 18, 14)
+    text = QtWidgets.QLabel(html)
+    text.setWordWrap(True)
+    text.setTextFormat(QtCore.Qt.RichText)
+    text.setOpenExternalLinks(True)
+    set_role(text, "note")
+    lay.addWidget(text)
+    panel.hide()
+    button.toggled.connect(panel.setVisible)
+    button.toggled.connect(lambda on: button.setText("Hide the explanation" if on else button_text))
+    return button, panel
+
+
+def section_card(caption, hint=None, margins=(16, 14, 16, 14)):
+    """(card, body layout, header layout): a Card with a caption and an optional muted hint
+    on its first row, so a window's sections read as sections rather than as loose widgets
+    on the window well. Add a section's own controls to the header's right end."""
+    card = set_card(Card())
+    body = QtWidgets.QVBoxLayout(card)
+    body.setContentsMargins(*margins)
+    body.setSpacing(10)
+    head = QtWidgets.QHBoxLayout()
+    head.setSpacing(12)
+    cap = set_role(QtWidgets.QLabel(caption), "caption")
+    head.addWidget(cap)
+    if hint:
+        note = set_role(QtWidgets.QLabel(hint), "muted")
+        head.addWidget(note, 1)
+    else:
+        head.addStretch(1)
+    body.addLayout(head)
+    return card, body, head
+
+
 def keep_style(widget, tree=False):
     """Leave this widget's own stylesheet alone (log views, warning banners,
     status pills). ``tree``: its children too - a container whose one
@@ -566,6 +630,17 @@ def set_status(widget, kind):
     accent, neutral) through the window sheet: no per-widget sheet, so a
     later theme pass never undoes it. Use it again to change the state."""
     widget.setProperty("status", kind or None)
+    if widget.styleSheet() and not widget.property("keepStyle"):
+        widget.setStyleSheet("")
+    _repolish(widget)
+    return widget
+
+
+def set_severity(widget, severity):
+    """A behaviour severity chip (routine, notable, suspicious, critical) in
+    the User Behavior window's palette (react-uba src/styles/tokens.js
+    SEVERITY_STYLE), so one severity looks the same on every screen."""
+    widget.setProperty("severity", severity or None)
     if widget.styleSheet() and not widget.property("keepStyle"):
         widget.setStyleSheet("")
     _repolish(widget)
@@ -710,7 +785,7 @@ def _infer_frame(sheet):
     return ("background" in s and "border-radius" in s) or ("border:" in s and "background" in s)
 
 
-def apply_site_theme(window, *, clear_inline=True, root=None, extra=""):
+def apply_theme(window, *, clear_inline=True, root=None, extra=""):
     """The site look on ``window``: one sheet, the site fonts, roles for what
     the cleared per-widget sheets said. Idempotent; cheap to call again after
     a page is rebuilt (pass that page as ``root`` to only walk it)."""
@@ -721,7 +796,7 @@ def apply_site_theme(window, *, clear_inline=True, root=None, extra=""):
         # A window that already carries a sheet (Crow-Claw's MAIN_WINDOW):
         # drop it first. Children cleared under the old sheet otherwise keep
         # a style object tied to it and never take the new one.
-        if window.styleSheet() and not _has_site_sheet(window, extra):
+        if window.styleSheet() and not _has_theme_sheet(window, extra):
             window.setStyleSheet("")
         # The font BEFORE the sheet: polishing under a sheet fixes each
         # child's font, and a window font set afterwards never reaches them.
@@ -771,8 +846,8 @@ def apply_site_theme(window, *, clear_inline=True, root=None, extra=""):
         elif type(w) is QtWidgets.QFrame and w.property("card") is None and _infer_frame(sheet):
             set_card(w)
         w.setStyleSheet("")
-    if root is None and not _has_site_sheet(window, extra):
-        _set_site_sheet(window, extra)
+    if root is None and not _has_theme_sheet(window, extra):
+        _set_theme_sheet(window, extra)
         # Setting the sheet re-polished every child and reset the fonts given
         # before it: a header was then MEASURED in the sheet's font and PAINTED
         # (on its viewport) in the uppercase one, so ResizeToContents columns
@@ -785,8 +860,29 @@ def apply_site_theme(window, *, clear_inline=True, root=None, extra=""):
             else:
                 w.setFont(tab_font)
         _refont_roles(window)
+    _repolish_headers(root or window, header_font)
     _one_button_family(root or window)
     return window
+
+
+def _repolish_headers(root, header_font):
+    """Headers polished before the theme sheet keep the style they were built
+    under. A window opened over the main window builds its tables under the
+    PARENT's style, and setting the sheet on the window does not re-polish a
+    header, so it paints as a plain white Qt header (Database Search, the
+    after-parse Parse Status report). Standalone it looked right. Re-polish
+    every header and the table's corner button, then give the font back:
+    polishing resets it."""
+    for w in root.findChildren(QtWidgets.QHeaderView):
+        _repolish(w)
+        _repolish(w.viewport())
+        w.setFont(header_font)
+        w.viewport().setFont(header_font)
+        w.viewport().update()
+    for table in root.findChildren(QtWidgets.QTableView):
+        for corner in table.findChildren(QtWidgets.QAbstractButton):
+            if corner.parent() is table:
+                _repolish(corner)
 
 
 def _one_button_family(root):
@@ -823,21 +919,22 @@ def _refont_roles(root):
 
 
 def _full_sheet(extra=""):
-    """The site sheet plus a window's own rules (one sheet, set once)."""
-    return site_qss() + ("\n" + extra if extra else "")
+    """The theme sheet plus a window's own rules (one sheet, set once)."""
+    # a window's own rules get the same solid outline colours as the theme
+    return theme_qss() + ("\n" + extra + "\n" + _solid_borders(extra) if extra else "")
 
 
-def _set_site_sheet(window, extra=""):
+def _set_theme_sheet(window, extra=""):
     window.setStyleSheet(_full_sheet(extra))
-    window._site_sheet_set = _full_sheet(extra)
+    window._theme_sheet_set = _full_sheet(extra)
 
 
-def _has_site_sheet(window, extra=""):
-    """Whether this exact site sheet is on ``window`` - remembered, not read
+def _has_theme_sheet(window, extra=""):
+    """Whether this exact theme sheet is on ``window`` - remembered, not read
     back: styles.install_scrollbar_policy rewrites every sheet's scroll-bar
     rules on the way in, so styleSheet() never equals what was set, and the
     window was cleared and re-polished (0.37 s on a 400-field row)."""
-    return getattr(window, "_site_sheet_set", None) == _full_sheet(extra) and bool(window.styleSheet())
+    return getattr(window, "_theme_sheet_set", None) == _full_sheet(extra) and bool(window.styleSheet())
 
 
 def scrollable_tabs(tabs):
@@ -860,24 +957,115 @@ def scrollable_tabs(tabs):
     return tabs
 
 
-def begin_site_theme(window, extra=""):
+def begin_theme(window, extra=""):
     """Put the site font and sheet on ``window`` BEFORE its children exist.
 
     For windows that set a sheet at the top of their constructor (Crow-Claw,
     the Offline Importer and Forensic Images set MAIN_WINDOW): replacing a
     window's sheet after its children were polished under the old one left
     them in the old fonts and colours (Qt does not re-resolve them). Call
-    this instead of that first setStyleSheet, then apply_site_theme() at
+    this instead of that first setStyleSheet, then apply_theme() at
     the end of the constructor for the roles."""
     window.setFont(font("ui", 13))
     window.setProperty("siteTheme", True)
-    _set_site_sheet(window, extra)
+    _set_theme_sheet(window, extra)
     return window
 
 
 def themed_message_box(parent, icon, title, text, buttons=QtWidgets.QMessageBox.Ok):
     """A QMessageBox in the site look (the static helpers take the old one)."""
     box = QtWidgets.QMessageBox(icon, title, text, buttons, parent)
-    box.setStyleSheet(site_qss())
+    box.setStyleSheet(theme_qss())
     box.setFont(font("ui", 13))
     return box.exec_()
+
+# 3 px outlines for a window that asks for them (Settings, the Correlation Engine).
+# The theme's outline colours are translucent; Qt paints a corner and its sides
+# separately, so a translucent 3 px edge shows brighter seams where they overlap
+# and reads as dashed. These are the theme's own colours blended once onto the
+# window ground (BG), so the shade is the same and the edge is solid. A rule the
+# theme gives a width of its own ([variant], :focus, [status]) restates the full
+# border, or the theme's 1 px wins on specificity when unscoped. ``scope`` is
+# the window's selector with an ID (e.g. 'QDialog#CrowEyeSettings'), which outranks
+# the theme's [variant] and [role] rules. The nav rail keeps its own left accent,
+# filled primary buttons stay borderless, and a plain QLabel stays borderless: only
+# the labels the theme outlines (notes, readouts, status frames) get 3 px.
+_THICK = """
+S QFrame[card="true"], S QGroupBox, S QTabWidget::pane,
+S QTableView, S QTreeView, S QListView, S QTableWidget, S QTreeWidget, S QListWidget,
+S QTextBrowser { border: 3px solid #1E1F23; }
+S QLabel[role="readout"], S QLabel[role="readout"][status] { border: 3px solid #1E1F23; }
+S QLabel[role="note"] { border: 3px solid #0E3038; }
+S QFrame[status="ok"] { border: 3px solid #276A42; }
+S QFrame[status="warn"] { border: 3px solid #765D19; }
+S QFrame[status="bad"] { border: 3px solid #732333; }
+S QLineEdit, S QComboBox, S QSpinBox, S QDoubleSpinBox, S QDateTimeEdit, S QDateEdit,
+S QTimeEdit, S QTextEdit, S QPlainTextEdit { border: 3px solid #2C2D31; }
+S QLineEdit:hover, S QComboBox:hover, S QSpinBox:hover, S QDoubleSpinBox:hover,
+S QDateTimeEdit:hover { border-color: #404678; }
+S QLineEdit:focus, S QComboBox:focus, S QSpinBox:focus, S QDoubleSpinBox:focus,
+S QDateTimeEdit:focus, S QTextEdit:focus, S QPlainTextEdit:focus { border: 3px solid #6366F1; }
+S QLineEdit:disabled, S QComboBox:disabled, S QSpinBox:disabled, S QDoubleSpinBox:disabled,
+S QDateTimeEdit:disabled, S QTextEdit:disabled { border-color: #1E1F23; }
+S QLineEdit[status="ok"] { border: 3px solid #2D804E; }
+S QLineEdit[status="warn"] { border: 3px solid #8F6F1B; }
+S QPushButton { border: 3px solid #323475; }
+S QPushButton:hover { border-color: #818CF8; }
+S QPushButton:checked { border-color: #6366F1; }
+S QPushButton:disabled { border-color: #1E1F23; }
+S QPushButton[variant="ghost"], S QPushButton[variant="danger"] { border: 3px solid #2C2D31; }
+S QPushButton[variant="ghost"]:hover { border-color: #4F5053; }
+S QPushButton[variant="danger"]:hover { border-color: #F43F5E; }
+S QPushButton[variant="pill"], S QCheckBox[variant="pill"] { border: 3px solid #232428; }
+S QPushButton[variant="pill"]:hover, S QPushButton[variant="pill"]:checked,
+S QCheckBox[variant="pill"]:hover, S QCheckBox[variant="pill"]:checked { border-color: #6366F1; }
+S QPushButton[variant="primary"] { border: none; }
+S QPushButton[variant="nav"] { border: none; border-left: 3px solid transparent; }
+S QPushButton[variant="nav"][active="true"] { border-left-color: #22D3EE; }
+S QTabBar::tab { border: 3px solid transparent; }
+S QTabBar::tab:hover { border-color: #27292D; }
+S QTabBar::tab:selected { border-color: #6366F1; }
+"""
+
+
+def thick_outlines(scope):
+    """The 3 px outline rules for one window, scoped by its ID selector; pass the
+    result as the ``extra`` of begin_theme / apply_theme (the same string both times)."""
+    lines = []
+    for line in _THICK.strip().splitlines():
+        if line.startswith("S "):
+            line = scope + line[1:]
+        lines.append(line.replace(", S ", ", " + scope + " "))
+    return chr(10).join(lines)
+
+_RGBA = re.compile(r"rgba\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)")
+
+
+def _solid(colour, ground=(10, 12, 16)):
+    """A translucent rgba() blended once onto the window ground (BG) - the shade
+    a 1 px hairline showed - as a solid #hex; anything else unchanged."""
+    m = _RGBA.fullmatch(colour.strip())
+    if not m:
+        return colour
+    r, g, b, a = int(m[1]), int(m[2]), int(m[3]), float(m[4])
+    if a <= 0:
+        return colour
+    return "#%02X%02X%02X" % tuple(round(c * a + gc * (1 - a)) for c, gc in zip((r, g, b), ground))
+
+
+def _solid_borders(qss):
+    """Solid copies of the sheet's translucent outline colours, for every whole-widget
+    rule: at 3 px, a translucent edge shows brighter seams where Qt's corner arcs
+    overlap the sides. Appended after the sheet with the same selectors, so they win."""
+    out = []
+    for m in re.finditer(r"([^{}]+)\{([^{}]*)\}", qss):
+        selector = " ".join(m.group(1).split())
+        if "::" in selector or not selector or selector.startswith("/*"):
+            continue
+        body = m.group(2)
+        bc = re.search(r"(?<![-\w])border-color\s*:\s*(rgba\([^)]*\))", body)
+        bs = re.search(r"(?<![-\w])border\s*:\s*\d+px\s+solid\s+(rgba\([^)]*\))", body)
+        colour = (bc or bs).group(1) if (bc or bs) else None
+        if colour and _solid(colour) != colour:
+            out.append("%s { border-color: %s; }" % (selector, _solid(colour)))
+    return chr(10).join(out)

@@ -771,7 +771,7 @@ class FileSignatureDetector:
                 capture_output=True,
                 text=False,
                 timeout=10
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if result.returncode == 0 and result.stdout:
                 # Convert PowerShell output to bytes

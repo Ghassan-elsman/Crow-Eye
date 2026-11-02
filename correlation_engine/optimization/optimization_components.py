@@ -259,8 +259,12 @@ class EmptyWindowDetector:
         """
         self.statistics.total_windows_checked += 1
         
-        # Verify indexes exist before quick check (Requirements 1.3, 7.1, 7.4)
-        if not self._verify_indexes():
+        # Verify indexes exist before quick check (Requirements 1.3, 7.1, 7.4).
+        # Once found they stay for the run: the check read sqlite_master once
+        # per feather for every window, thousands of reads that always agreed.
+        if not getattr(self, '_indexes_verified', False):
+            self._indexes_verified = self._verify_indexes()
+        if not self._indexes_verified:
             self.statistics.index_verification_failures += 1 # Requirement 1.5, 10.5
             if self.debug_mode:
                 logger.info(f"[EmptyWindowDetector] Indexes missing, skipping quick check for window {window.window_id}")

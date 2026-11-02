@@ -2,8 +2,9 @@
   "config_name": "execution_without_trace_correlation",
   "wing_name": "Execution Without Trace Correlation",
   "wing_id": "default_wing_exec_no_trace_001",
-  "description": "Detects stealthy program execution that deliberately left no Prefetch trace, and evidence-timestamp tampering. Uses Crow-Eye's advanced rule types: an ABSENCE rule fires when execution is proven by AmCache/ShimCache but the matching Prefetch entry is missing (Prefetch disabled or scrubbed), and a cross-feather timestomp rule flags $STANDARD_INFORMATION times that predate $FILE_NAME times. Complements Execution Proof (which proves execution happened) by proving traces were removed.",
-  "proves": "A program executed but its expected execution trace was suppressed or tampered",
+  "wing_category": "identity",
+  "description": "Flags programs with execution-related artifacts (AmCache/ShimCache) that lack a matching Prefetch entry, and $SI-before-$FN timestamp anomalies. Uses Crow-Eye's advanced rule types: an ABSENCE rule fires when AmCache/ShimCache record a program but no matching Prefetch entry exists, and a cross-feather timestomp rule flags $STANDARD_INFORMATION times that predate $FILE_NAME times. Absence of Prefetch is consistent with, but does not prove, trace suppression (Prefetch may be disabled, e.g. on servers or SSDs, aged out, or the binary never ran). Prefetch is loaded only for the absence check and never adds to the score; when a matching Prefetch entry is present the match is capped at the Weak band, because the program's execution trace exists. Complements Execution Proof Correlation.",
+  "proves": "Indicators consistent with a missing or altered execution trace (requires analyst verification)",
   "author": "Crow-Eye Team",
   "created_date": "2026-07-12T00:00:00Z",
   "last_modified": "2026-07-12T00:00:00Z",
@@ -15,43 +16,43 @@
       "feather_database_path": "feathers/InventoryApplicationFile_CrowEyeFeather.db",
       "artifact_type": "AmCache",
       "feather_id": "amcache",
-      "weight": 0.30,
+      "weight": 0.33,
       "tier": 1,
-      "tier_name": "Execution evidence (AmCache)"
+      "tier_name": "Program presence/execution indicator (AmCache)"
     },
     {
       "feather_config_name": "ShimCache_CrowEyeFeather",
       "feather_database_path": "feathers/ShimCache_CrowEyeFeather.db",
       "artifact_type": "ShimCache",
       "feather_id": "shimcache",
-      "weight": 0.20,
+      "weight": 0.32,
       "tier": 1,
-      "tier_name": "Execution evidence (ShimCache)"
+      "tier_name": "Program presence/execution indicator (ShimCache)"
     },
     {
       "feather_config_name": "Prefetch_CrowEyeFeather",
       "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
       "artifact_type": "Prefetch",
       "feather_id": "prefetch",
-      "weight": 0.20,
+      "weight": 0.0,
       "tier": 1,
-      "tier_name": "Expected execution trace"
+      "tier_name": "Expected execution trace (absence check only, not scored)"
     },
     {
       "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
       "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
       "artifact_type": "MFT",
       "feather_id": "mft_usn",
-      "weight": 0.20,
+      "weight": 0.32,
       "tier": 2,
-      "tier_name": "Timestamp tampering evidence"
+      "tier_name": "Timestamp anomaly indicator"
     },
     {
       "feather_config_name": "SecurityLogs_CrowEyeFeather",
       "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
       "artifact_type": "SecurityLogs",
       "feather_id": "security_logs",
-      "weight": 0.10,
+      "weight": 0.03,
       "tier": 3,
       "tier_name": "Audit-log context"
     }
@@ -68,24 +69,27 @@
 
   "scoring": {
     "enabled": true,
+    "score_excluded_feathers": ["prefetch"],
+    "cap_when_present": { "prefetch": "weak" },
     "score_interpretation": {
-      "confirmed":  { "min": 0.70, "label": "Confirmed Trace Suppression" },
-      "probable":   { "min": 0.40, "label": "Probable Trace Suppression" },
+      "confirmed":  { "min": 0.70, "label": "Strong Indicators of Trace Gap" },
+      "probable":   { "min": 0.40, "label": "Possible Trace Gap" },
       "weak":       { "min": 0.20, "label": "Weak / Partial Evidence" },
-      "not_proven": { "min": 0.00, "label": "Not Proven" }
+      "not_proven": { "min": 0.00, "label": "Insufficient Evidence" }
     }
   },
 
   "semantic_rules": [
     {
       "rule_id": "ewt_exec_no_prefetch",
-      "name": "Execution With No Prefetch Trace (Absence)",
-      "semantic_value": "Prefetch Trace Suppressed",
-      "description": "AmCache proves a program executed, but no matching Prefetch entry exists — consistent with Prefetch being disabled or the .pf files scrubbed.",
+      "name": "Execution Indicator With No Prefetch Trace (Absence)",
+      "semantic_value": "Prefetch Trace Missing",
+      "description": "AmCache records the program at a path outside the operating system's own trees (Windows other than Windows\\Temp, Program Files, Program Files (x86), ProgramData\\Microsoft, ProgramData\\Packages), and no matching Prefetch entry exists — consistent with Prefetch being disabled, aged out, or scrubbed. AmCache's file inventory lists every installed binary, run or not, so in the OS and Program Files trees a missing Prefetch entry mostly means 'installed, never run'; a binary in a user profile, ProgramData, Windows\\Temp, another drive or a removable volume is where a dropped tool lives.",
       "rule_type": "absence",
       "absence": {
         "expect_present": [
-          { "feather_id": "amcache", "field_name": "name", "operator": "wildcard", "value": "*" }
+          { "feather_id": "amcache", "field_name": "lower_case_long_path", "operator": "regex",
+            "value": "^(?![a-z]:[\\\\/](windows[\\\\/](?!temp[\\\\/])|program files( \\(x86\\))?[\\\\/]|programdata[\\\\/](microsoft|packages)[\\\\/]))." }
         ],
         "require_absent": [
           { "feather_id": "prefetch", "field_name": "executable_name", "operator": "wildcard", "value": "*" }
@@ -99,9 +103,9 @@
     },
     {
       "rule_id": "ewt_timestomp",
-      "name": "Timestomp: $SI Older Than $FN (Cross-Feather)",
-      "semantic_value": "File Timestamp Tampering",
-      "description": "A file's $STANDARD_INFORMATION creation time predates its $FILE_NAME creation time — a classic timestomping signature (fields compared within the same MFT record).",
+      "name": "$SI Created Before $FN (Possible Timestomp)",
+      "semantic_value": "File Timestamp Anomaly",
+      "description": "A file's $STANDARD_INFORMATION creation time predates its $FILE_NAME creation time — a pattern consistent with timestomping that warrants review (fields compared within the same MFT record). Only outside the operating system's own trees: Windows (other than Windows\\Temp), Program Files, ProgramData\\Microsoft and \\Packages and the Default profile are laid down by setup and servicing with the image's original $SI times, so nearly every file there carries an older $SI. A file in a user profile, Users\\Public, ProgramData, Windows\\Temp or an orphaned record is reported; an anchor holding any MFT row in an OS tree is not.",
       "rule_type": "match",
       "conditions": [
         {
@@ -111,6 +115,13 @@
           "value": "",
           "compare_to_feather": "mft_usn",
           "compare_to_field": "fn_creation_time"
+        },
+        {
+          "feather_id": "mft_usn",
+          "field_name": "reconstructed_path",
+          "operator": "regex",
+          "value": "^(\\.|[a-z]:)?[\\\\/]?(windows([\\\\/](?!temp[\\\\/])|$)|program files( \\(x86\\))?([\\\\/]|$)|progra~[12]([\\\\/]|$)|(programdata|progra~3)[\\\\/](microsoft|micros~\\d|packages)([\\\\/]|$)|users[\\\\/]default([\\\\/]|$)|\\$extend([\\\\/]|$))",
+          "negate": true
         }
       ],
       "logic_operator": "AND",
@@ -122,14 +133,16 @@
     },
     {
       "rule_id": "ewt_confirmed_stealth_exec",
-      "name": "Confirmed Stealth Execution (Absence + Corroboration)",
-      "semantic_value": "Confirmed Stealth Execution",
-      "description": "Execution proven by both AmCache and ShimCache but with no Prefetch trace — strong corroborated evidence that the execution trace was suppressed.",
+      "name": "Corroborated Missing-Prefetch Indicator (Absence + Corroboration)",
+      "semantic_value": "Execution Indicators Without Prefetch",
+      "description": "AmCache and ShimCache both record the program at a path outside the operating system's own trees (the same exclusion as ewt_exec_no_prefetch), but no Prefetch trace exists — warrants review for trace suppression. Without the path condition this critical rule fired on Windows and Program Files binaries such as spoolsv.exe and Defender, which are inventoried but not necessarily run.",
       "rule_type": "absence",
       "absence": {
         "expect_present": [
-          { "feather_id": "amcache",   "field_name": "name", "operator": "wildcard", "value": "*" },
-          { "feather_id": "shimcache", "field_name": "path",            "operator": "wildcard", "value": "*" }
+          { "feather_id": "amcache", "field_name": "lower_case_long_path", "operator": "regex",
+            "value": "^(?![a-z]:[\\\\/](windows[\\\\/](?!temp[\\\\/])|program files( \\(x86\\))?[\\\\/]|programdata[\\\\/](microsoft|packages)[\\\\/]))." },
+          { "feather_id": "shimcache", "field_name": "path", "operator": "regex",
+            "value": "^(?![a-z]:[\\\\/](windows[\\\\/](?!temp[\\\\/])|program files( \\(x86\\))?[\\\\/]|programdata[\\\\/](microsoft|packages)[\\\\/]))." }
         ],
         "require_absent": [
           { "feather_id": "prefetch", "field_name": "executable_name", "operator": "wildcard", "value": "*" }

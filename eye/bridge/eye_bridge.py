@@ -22,7 +22,7 @@ import re
 import hashlib
 from typing import Optional
 
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread, QEventLoop, Qt
+from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread, QEventLoop, Qt, QMetaObject
 import base64
 from datetime import datetime, date
 import inspect
@@ -222,7 +222,12 @@ class QueryWorker(QThread):
         except Exception as e:
             logger.error(f"CRITICAL: QueryWorker execution failed: {e}", exc_info=True)
             self.error = e
-            self.result = {"success": False, "data": None, "error": str(e)}
+            try:
+                from eye.backends.base import describe_backend_error
+                message = describe_backend_error(e)
+            except Exception:
+                message = str(e)
+            self.result = {"success": False, "data": None, "error": message}
         finally:
             try:
                 if hasattr(self.context_manager, 'hitl_callback'):
@@ -310,6 +315,80 @@ class ModelSwitchValidator(QThread):
             self.finished_validation.emit(False, str(e))
 
 
+class BackendStatusWorker(QThread):
+    """The Eye's "is the model there?" check, off the GUI thread.
+
+    It ran on the GUI thread inside get_backend_status: a local CLI backend's
+    probes took up to 30 s and a cloud SDK with its default limits up to ten
+    minutes, and the whole of Crow-Eye froze on "Loading forensic context"
+    meanwhile. Emits ``done(connected, detail)``; detail is the backend's own
+    explanation (``last_error``) when it has one.
+    """
+    done = pyqtSignal(bool, str, str)      # connected, detail, the doctor's report (JSON)
+
+    def __init__(self, model_router):
+        super().__init__()
+        self._router = model_router
+
+    def run(self):
+        import time as _time
+        report = None
+        try:
+            from eye.services import backend_doctor as bd
+        except Exception:
+            bd = None
+        try:
+            # The offline checks first (provider, model name, key, CLI installed): a
+            # typo or a missing key is said at once instead of after a timeout.
+            if bd is not None:
+                report = bd.diagnose(self._router, getattr(self._router, "credential_manager", None),
+                                     connect=False)
+                if not report["ok"]:
+                    self.done.emit(False, report["summary"], json.dumps(report, default=str))
+                    return
+            t = _time.perf_counter()
+            ok = bool(self._router.validate_connectivity())
+            took = _time.perf_counter() - t
+            detail = ""
+            if not ok:
+                backend = getattr(self._router, "backend", None)
+                detail = getattr(backend, "last_error", "") or (
+                    "The backend did not answer the connection check - check the API key, the "
+                    "network, or that the local model service is running.")
+            if report is not None:
+                check = (bd._check("connect", "Connects", bd.OK, "Answered in %.1f s." % took) if ok
+                         else bd.connect_failure(self._router, detail, took))
+                report["checks"].append(check)
+                report["ok"] = ok
+                report["summary"] = "Everything checks out." if ok else check["detail"]
+                detail = detail if ok else check["detail"]
+            self.done.emit(ok, detail, json.dumps(report, default=str) if report else "")
+        except Exception as e:
+            try:
+                from eye.backends.base import describe_backend_error
+                self.done.emit(False, describe_backend_error(e), "")
+            except Exception:
+                self.done.emit(False, str(e), "")
+
+
+class BackendDoctorWorker(QThread):
+    """The full doctor (every check, network ones included), off the GUI thread."""
+    done = pyqtSignal(str)
+
+    def __init__(self, model_router):
+        super().__init__()
+        self._router = model_router
+
+    def run(self):
+        try:
+            from eye.services import backend_doctor as bd
+            rep = bd.diagnose(self._router, getattr(self._router, "credential_manager", None), answer=True)
+        except Exception as e:
+            rep = {"ok": False, "summary": "The check itself failed: %s: %s" % (type(e).__name__, e),
+                   "checks": []}
+        self.done.emit(json.dumps(rep, default=str))
+
+
 class EYEBridge(QObject):
     """
     QWebChannel bridge exposing EYE AI assistant functionality to React frontend.
@@ -337,6 +416,10 @@ class EYEBridge(QObject):
     narrative_map_updated = pyqtSignal(str)  # Narrative Map changed (Eye or investigator)
     narrativeInvestigationComplete = pyqtSignal(str)  # a double-click "investigate" run finished (narrative id)
     error_occurred = pyqtSignal(str)  # Error message when backend error occurs
+    # The model backend's state while it is checked and after: JSON
+    # {state: checking|connected|failed|not_configured, backend, model, detail, seconds}.
+    backend_status_changed = pyqtSignal(str)
+    backend_doctor_result = pyqtSignal(str)   # the full doctor's report (JSON)
     layout_requested = pyqtSignal(str) # Request UI layout changes (JSON)
     status_updated = pyqtSignal(str)  # Status update message (thinking/searching)
     dialogue_updated = pyqtSignal(str)  # Eye<->LLM conversation entry (live transcript)
@@ -1109,61 +1192,156 @@ class EYEBridge(QObject):
                       f"Reverted to {prev_label}."),
         }))
 
+    def _backend_snapshot(self, state, detail="", seconds=0.0):
+        cm = self.context_manager
+        router = getattr(cm, "model_router", None) if cm else None
+        cfg = (getattr(router, "config", {}) or {}) if router else {}
+        return {
+            "state": state,
+            "connected": state == "connected",
+            "backend": cfg.get("backend"),
+            "model": cfg.get("model_name"),
+            "integration_type": cfg.get("integration_type"),
+            "detail": detail,
+            "seconds": round(float(seconds), 1),
+        }
+
+    def _emit_backend_status(self, snap):
+        self._backend_status = snap
+        try:
+            self.backend_status_changed.emit(safe_json_dumps(snap))
+        except Exception as e:
+            logger.error(f"Backend status not sent: {e}")
+
+    @pyqtSlot(result=str)
+    def start_backend_check(self) -> str:
+        """Check the model backend on a worker thread; returns at once.
+
+        Progress and the outcome arrive on ``backend_status_changed``: a
+        'checking' status every second with the seconds waited, then
+        'connected' or 'failed' with the reason in plain words. A second call
+        while a check runs returns the running check's state.
+        """
+        import time as _time
+        cm = self.context_manager
+        router = getattr(cm, "model_router", None) if cm else None
+        if router is None:
+            snap = self._backend_snapshot("not_configured", "No model backend is set up yet.")
+            self._emit_backend_status(snap)
+            return safe_json_dumps({"success": True, "data": snap, "error": None})
+        worker = getattr(self, "_backend_worker", None)
+        if worker is not None and worker.isRunning():
+            return safe_json_dumps({"success": True, "data": getattr(self, "_backend_status", None)
+                                    or self._backend_snapshot("checking"), "error": None})
+        started = _time.monotonic()
+        self._backend_check_started = started
+        worker = BackendStatusWorker(router)
+        self._backend_worker = worker
+
+        from PyQt5.QtCore import QTimer
+        ticker = QTimer(self)
+        ticker.setInterval(1000)
+
+        def _tick():
+            if self._backend_worker is worker and worker.isRunning():
+                self._emit_backend_status(self._backend_snapshot(
+                    "checking", "Waiting for the model backend to answer...",
+                    _time.monotonic() - started))
+        ticker.timeout.connect(_tick)
+
+        def _done(ok, detail, report=""):
+            ticker.stop()
+            ticker.deleteLater()
+            if self._backend_worker is not worker:
+                return                                       # a newer check replaced this one
+            secs = _time.monotonic() - started
+            snap = self._backend_snapshot(
+                "connected" if ok else "failed",
+                "Connected" if ok else (detail or "The connection check failed."), secs)
+            if report:
+                try:
+                    snap["doctor"] = json.loads(report)
+                    if not ok:
+                        from eye.services import backend_doctor as _bd
+                        _bd.record(getattr(cm, "case_directory", None), snap["doctor"])
+                except Exception:
+                    pass
+            self._emit_backend_status(snap)
+        worker.done.connect(_done)
+        worker.finished.connect(worker.deleteLater)
+        snap = self._backend_snapshot("checking", "Checking the model backend...", 0)
+        self._emit_backend_status(snap)
+        worker.start()
+        ticker.start()
+        return safe_json_dumps({"success": True, "data": snap, "error": None})
+
+    @pyqtSlot(result=str)
+    def run_backend_doctor(self) -> str:
+        """Every setup check for the configured model, on a worker; the report
+        arrives on ``backend_doctor_result``. Returns at once."""
+        cm = self.context_manager
+        router = getattr(cm, "model_router", None) if cm else None
+        if router is None:
+            rep = {"ok": False, "summary": "No model backend is set up yet.", "checks": [{
+                "id": "backend", "title": "Model provider chosen", "status": "fail",
+                "detail": "No model provider is set up yet.",
+                "fix": {"action": "open_setup", "label": "Set up a model"}}]}
+            self.backend_doctor_result.emit(json.dumps(rep))
+            return safe_json_dumps({"success": True, "data": rep, "error": None})
+        worker = getattr(self, "_doctor_worker", None)
+        if worker is not None and worker.isRunning():
+            return safe_json_dumps({"success": True, "data": {"running": True}, "error": None})
+        worker = BackendDoctorWorker(router)
+        self._doctor_worker = worker
+
+        def _done(rep_json):
+            try:
+                from eye.services import backend_doctor as _bd
+                _bd.record(getattr(cm, "case_directory", None), json.loads(rep_json))
+            except Exception:
+                pass
+            self.backend_doctor_result.emit(rep_json)
+        worker.done.connect(_done)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+        return safe_json_dumps({"success": True, "data": {"running": True}, "error": None})
+
+    @pyqtSlot(str, result=str)
+    def apply_backend_fix(self, fix_json: str) -> str:
+        """Apply one of the doctor's safe fixes (set_model, set_effort) - the
+        investigator chose it - then check the backend again."""
+        try:
+            fix = json.loads(fix_json or "{}")
+            cm = self.context_manager
+            router = getattr(cm, "model_router", None) if cm else None
+            if router is None:
+                return safe_json_dumps({"success": False, "data": None, "error": "No model backend."})
+            from eye.services import backend_doctor as _bd
+            res = _bd.apply_fix(router, fix)
+            if res.get("applied"):
+                try:
+                    cm._connectivity_cache = None          # the pre-flight must re-check
+                except Exception:
+                    pass
+                self.start_backend_check()
+            return safe_json_dumps({"success": bool(res.get("applied")), "data": res,
+                                    "error": None if res.get("applied") else res.get("detail")})
+        except Exception as e:
+            logger.error(f"Error applying backend fix: {e}", exc_info=True)
+            return safe_json_dumps({"success": False, "data": None, "error": str(e)})
+
     @pyqtSlot(result=str)
     def get_backend_status(self) -> str:
-        """
-        Report whether the EYE is currently connected to its configured AI backend.
+        """The model backend's last known state - never checks on this thread.
 
-        Used by the React "EYE Synchronization" step to decide whether to proceed
-        with the automated triage handshake or surface a clear disconnect message.
-
-        Returns JSON envelope with data:
-            {
-                "connected": bool,
-                "backend": str | None,        # e.g. "openai", "anthropic", "ollama"
-                "model": str | None,          # active model_name
-                "integration_type": str | None,  # "cloud_api" | "local_server" | "local_cli"
-                "detail": str                 # human-readable status
-            }
+        A check that has never run is started (start_backend_check) and
+        reported as 'checking'; the answer arrives on backend_status_changed.
         """
         try:
-            cm = self.context_manager
-            if not cm or not getattr(cm, "model_router", None):
-                return safe_json_dumps({
-                    "success": True,
-                    "data": {
-                        "connected": False,
-                        "backend": None,
-                        "model": None,
-                        "integration_type": None,
-                        "detail": "AI backend not initialized"
-                    },
-                    "error": None
-                })
-
-            cfg = getattr(cm.model_router, "config", {}) or {}
-            backend = cfg.get("backend")
-            model = cfg.get("model_name")
-            integration_type = cfg.get("integration_type")
-
-            try:
-                connected = bool(cm.model_router.validate_connectivity())
-                detail = "Active backend reachable" if connected else "Backend did not respond to connectivity check"
-            except Exception as e:
-                connected = False
-                detail = f"Connectivity check failed: {e}"
-
-            return safe_json_dumps({
-                "success": True,
-                "data": {
-                    "connected": connected,
-                    "backend": backend,
-                    "model": model,
-                    "integration_type": integration_type,
-                    "detail": detail,
-                },
-                "error": None
-            })
+            snap = getattr(self, "_backend_status", None)
+            if snap is None:
+                return self.start_backend_check()
+            return safe_json_dumps({"success": True, "data": snap, "error": None})
         except Exception as e:
             logger.error(f"Error checking backend status: {e}", exc_info=True)
             return safe_json_dumps({"success": False, "data": None, "error": str(e)})
@@ -1857,10 +2035,23 @@ class EYEBridge(QObject):
                 },
                 "error": null
             }
-        
+
         """
+        return self._export_report(format_type, source="ui")
+
+    def _export_report(self, format_type: str, source: str = "ui") -> str:
+        """The one place an Eye report is written: approval dialog, write, custody.
+
+        Runs on the main thread - from the UI's Export button (``source="ui"``)
+        or from ``_show_hitl_dialog`` when the model asked (``source="model"``).
+        With a case set on the ReportEngine the report goes into the case's
+        ``Reports`` folder (and its index); otherwise into ``<cwd>/reports``.
+        The path shown in the dialog is the path written, and every written
+        file gets an ``export written`` line in the custody ledger.
+        """
+        reserved_path = None
         try:
-            logger.info(f"Exporting report as {format_type}")
+            logger.info(f"Exporting report as {format_type} (requested by {source})")
             
             # Validate report_engine is available
             if not self.report_engine:
@@ -1871,7 +2062,9 @@ class EYEBridge(QObject):
                 })
             
             # Validate format_type
-            format_type_lower = format_type.lower()
+            format_type_lower = (format_type or "").strip().lower()
+            if format_type_lower == "md":
+                format_type_lower = "markdown"
             if format_type_lower not in ["html", "pdf", "markdown"]:
                 return safe_json_dumps({
                     "success": False,
@@ -1900,11 +2093,34 @@ class EYEBridge(QObject):
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"forensic_report_{timestamp}{file_extension}"
             
-            # Use current working directory or a reports directory
-            reports_dir = os.path.join(os.getcwd(), "reports")
-            os.makedirs(reports_dir, exist_ok=True)
-            destination_path = os.path.join(reports_dir, filename)
-            
+            # The case's Reports folder when a case is set, else <cwd>/reports
+            case_dir = getattr(self.report_engine, "case_directory", None)
+            if case_dir:
+                from eye.services.case_directory_manager import CaseDirectoryManager
+                case_manager = CaseDirectoryManager(case_dir)
+                case_manager.ensure_reports_directory()
+                cover = getattr(self.report_engine, "_cover_page_metadata", None) or {}
+                case_number = cover.get("case_number", "UNKNOWN")
+                destination_path = case_manager.get_report_path(
+                    case_number, "Forensic_Report", file_extension.lstrip("."))
+            else:
+                reports_dir = os.path.join(os.getcwd(), "reports")
+                os.makedirs(reports_dir, exist_ok=True)
+                destination_path = os.path.join(reports_dir, filename)
+
+            # Names are stamped to the second, and the write below replaces
+            # whatever is at the approved path. A second export in the same
+            # second - or one asked for while another's dialog is still open -
+            # takes the next free _2, _3, ... instead of overwriting.
+            in_use = self.__dict__.setdefault("_export_paths_in_use", set())
+            base, ext = os.path.splitext(destination_path)
+            n = 2
+            while os.path.exists(destination_path) or destination_path in in_use:
+                destination_path = f"{base}_{n}{ext}"
+                n += 1
+            in_use.add(destination_path)
+            reserved_path = destination_path
+
             # Import the HitL dialog
             from eye.ui.hitl_dialogs import ReportExportApprovalDialog
             
@@ -1924,27 +2140,35 @@ class EYEBridge(QObject):
                 # User approved - proceed with export
                 logger.info(f"Export approved by user. Writing to {destination_path}")
                 
-                # Write the file based on format
+                # Write the file at exactly the approved path (the engine also
+                # indexes it when a case is set) and use the path it reports.
                 if format_type_lower == "html":
-                    with open(destination_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    logger.info(f"HTML report exported to {destination_path}")
-                    
+                    final_path = self.report_engine.export_html(
+                        destination_path, exact_path=True, report_type="Forensic_Report")
                 elif format_type_lower == "pdf":
-                    # Use ReportEngine's export_pdf method
-                    self.report_engine.export_pdf(destination_path)
-                    logger.info(f"PDF report exported to {destination_path}")
-                    
+                    final_path = self.report_engine.export_pdf(
+                        destination_path, exact_path=True, report_type="Forensic_Report")
                 else:  # markdown
-                    with open(destination_path, 'w', encoding='utf-8') as f:
-                        f.write(content)
-                    logger.info(f"Markdown report exported to {destination_path}")
-                
+                    final_path = self.report_engine.export_markdown_file(
+                        destination_path, exact_path=True, report_type="Forensic_Report")
+                final_path = final_path or destination_path
+                logger.info(f"{format_type_lower.upper()} report exported to {final_path}")
+
+                # Chain of custody: hash, size and origin of the file written,
+                # in the ledger of the case the report was written into (None
+                # - no case on the engine - falls back to the case custody has).
+                try:
+                    from utils import custody
+                    custody.record_export(final_path, f"Eye report ({format_type_lower})",
+                                          case_dir=case_dir or None, source=source)
+                except Exception as ce:
+                    logger.warning(f"Custody record for report export failed: {ce}")
+
                 # Return success response
                 return safe_json_dumps({
                     "success": True,
                     "data": {
-                        "file_path": destination_path,
+                        "file_path": final_path,
                         "format": format_type_lower,
                         "approved": True
                     },
@@ -1983,7 +2207,10 @@ class EYEBridge(QObject):
                 "data": None,
                 "error": error_msg
             })
-    
+        finally:
+            if reserved_path:
+                self.__dict__.get("_export_paths_in_use", set()).discard(reserved_path)
+
     @pyqtSlot(str, result=str)
     def import_reports(self, file_paths_json: str) -> str:
         """
@@ -2138,20 +2365,25 @@ class EYEBridge(QObject):
             
             # Map key/operation to appropriate dialog
             if key == "export_report":
-                # data is the format_type (html, pdf, markdown)
-                # We reuse the existing export_report slot logic
-                export_json = self.export_report(data)
+                # data is the format_type (html, pdf, markdown). The shared
+                # export path shows its own approval dialog, writes the file on
+                # this (main) thread and records it in the custody ledger.
+                export_json = self._export_report(data, source="model")
                 export_result = json.loads(export_json)
-                
-                if export_result.get("success"):
-                    loop.approved = True
-                    loop.approved_data = export_result.get("data", {}).get("file_path")
+                d = export_result.get("data") or {}
+                approved = bool(export_result.get("success")) and bool(d.get("approved"))
+
+                # A cancel is success=True, approved=False: it must not read as approval.
+                loop.approved = approved
+                if approved:
+                    loop.approved_data = d.get("file_path")
+                elif not export_result.get("success"):
+                    # Approved or not, the write failed: tell the model why.
+                    loop.approved_data = {"error": export_result.get("error") or "export failed"}
                 else:
-                    loop.approved = False
-                    loop.approved_data = None
-                
-                # We return here because export_report already handled its own dialog
-                loop.quit()
+                    loop.approved_data = False
+
+                self._resume_worker(loop)
                 return
 
             elif key in ["propose_semantic_mapping", "edit_semantic_mapping"]:
@@ -2187,11 +2419,28 @@ class EYEBridge(QObject):
                 loop.approved_data = False
                 
             # Resume the worker thread
-            loop.quit()
+            self._resume_worker(loop)
         except Exception as e:
             logger.error(f"Error showing HitL dialog: {e}")
             loop.approved = False
-            loop.approved_data = False
+            # An export may already be written and ledgered by the time
+            # something here raises: report an error, never "declined".
+            loop.approved_data = {"error": str(e)} if key == "export_report" else False
+            self._resume_worker(loop)
+
+    @staticmethod
+    def _resume_worker(loop):
+        """Quit the worker's wait loop, even if it has not started waiting yet.
+
+        The worker emits ``request_hitl`` and only then enters ``loop.exec_()``.
+        A direct ``loop.quit()`` that lands before ``exec_()`` starts is lost
+        and the worker waits forever (an export that fails fast can get there).
+        A queued call is posted to the loop's own (worker) thread and runs once
+        the loop is spinning, so it cannot be missed.
+        """
+        if isinstance(loop, QObject):
+            QMetaObject.invokeMethod(loop, "quit", Qt.QueuedConnection)
+        else:
             loop.quit()
 
     # ──────────────────────────────────────────────

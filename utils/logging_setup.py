@@ -49,8 +49,13 @@ PARSER_MODULES = (
     "registry_extra_keys", "registry_hive_cache", "registry_hive_walk", "registry_transaction_log",
     "security_hive", "shimcash_claw", "user_artifact_paths", "user_identity",
     "windows_partition_detector", "offline_parsers",
+    # The shadow-copy reader, listing and compare, and the volume layout the
+    # File Browser, Shadow Copies and recovery read through (imported bare too).
+    "vss_reader", "shadow_copies", "shadow_compare", "volume_layout", "related_artifacts",
     # Artifacts_Collectors/MFT and USN journal - not importable as a package.
     "MFT_Claw", "USN_Claw", "mft_usn_correlator",
+    # ...and the NTFS integrity checks the MFT parse runs.
+    "ntfs_digest_map", "ntfs_integrity", "logfile_restart",
 )
 
 _COMPONENT_FILES = [
@@ -66,6 +71,8 @@ _COMPONENT_FILES = [
     ("crow_claw.log", ("crow_claw", "Artifacts_Collectors.crow_claw")),
     ("image_parsing.log", ("image_parsing", "Forensics_Image_parsing",
                            "Artifacts_Collectors.Forensics_Image_parsing")),
+    ("app_acquisition.log", ("Artifacts_Collectors.app_acquisition", "ui.app_acquisition_dialog",
+                             "ui.file_browser_dialog")),
     # crow_eye.parsing: the lines the parsing dialog showed (ui/Loading_dialog).
     ("parsers.log", ("Artifacts_Collectors", "crow_claw", "crow_eye.parsing") + PARSER_MODULES),
     ("timeline.log", ("timeline",)),

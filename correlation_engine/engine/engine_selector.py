@@ -9,12 +9,14 @@ with semantic mapping, weighted scoring, and progress tracking integration.
 
 from typing import Optional, List, Tuple, Dict, Any
 from .base_engine import BaseCorrelationEngine, FilterConfig
+from . import engine_registry
 
 
 class EngineType:
-    """Engine type constants"""
-    TIME_WINDOW_SCANNING = "time_window_scanning" # O(N log N) time-window scanning engine
-    IDENTITY_BASED = "identity_based"
+    """Engine type constants (the ids engine_registry registers)."""
+    TIME_WINDOW_SCANNING = engine_registry.TIME_WINDOW_SCANNING # O(N log N) time-window scanning engine
+    IDENTITY_BASED = engine_registry.IDENTITY_BASED
+    BEHAVIOURAL = engine_registry.BEHAVIOURAL
 
 
 class EngineSelector:
@@ -92,21 +94,10 @@ class EngineSelector:
             ValueError: If engine type is unknown
             ImportError: If engine module cannot be imported
         """
-        # Import engines here to avoid circular dependencies
+        # Unknown types raise UnknownEngineError (a ValueError) here.
+        spec = engine_registry.get_spec(engine_type)
         try:
-            if engine_type == EngineType.TIME_WINDOW_SCANNING:
-                from .time_based_engine import TimeWindowScanningEngine
-                engine = TimeWindowScanningEngine(config, filters)
-            
-            elif engine_type == EngineType.IDENTITY_BASED:
-                from .identity_based_engine_adapter import IdentityBasedEngineAdapter
-                engine = IdentityBasedEngineAdapter(config, filters)
-            
-            else:
-                raise ValueError(
-                    f"Unknown engine type: '{engine_type}'. "
-                    f"Valid types: {EngineType.TIME_WINDOW_SCANNING}, {EngineType.IDENTITY_BASED}"
-                )
+            engine = spec.create(config, filters)
             
             # Apply integrations if configurations are provided
             EngineSelector._apply_integrations(
@@ -219,6 +210,25 @@ class EngineSelector:
         }
         
         # Engine-specific capabilities
+        engine_type = engine_registry.normalize_engine_type(engine_type)
+        if engine_type == EngineType.BEHAVIOURAL:
+            # Behaviour Wings read UBA's behaviour events, not feathers: no
+            # feather mapping or artifact weights apply.
+            return {
+                'progress_tracking': capabilities['progress_tracking'],
+                'behaviour_steps': {
+                    'supported': True,
+                    'description': 'Behaviour steps one person performs, in order or in any order, within a time range',
+                    'features': ['Built-in and analyst-created UBA rules', 'Per-step minimum count',
+                                 'Absence and threshold rules']
+                },
+                'person_key': {
+                    'supported': True,
+                    'description': "Evaluated per person (SID) over the case's stored UBA analysis",
+                    'features': ['Machine events for machine steps', 'Hits point to UBA events and artifact rows',
+                                 'Rules turned off in Settings reported not evaluable']
+                },
+            }
         if engine_type == EngineType.TIME_WINDOW_SCANNING:
             capabilities['time_window_analysis'] = {
                 'supported': True,
@@ -298,6 +308,23 @@ class EngineSelector:
             ],
             True, # Supports identity filtering
             identity_features
+        ))
+
+        # Behavioural Engine (Behaviour Wings over UBA's behaviour events)
+        engines.append((
+            EngineType.BEHAVIOURAL,
+            "Behavioural",
+            "Runs Behaviour Wings - behaviour steps in order or in any order within a "
+            "time range - over the case's User Behavior analysis, one person (SID) "
+            "at a time. Reads no feathers.",
+            "O(E log E)",
+            [
+                "Per-person behaviour sequences",
+                "Bursts (mass delete, mass encryption)",
+                "Absence of expected behaviour"
+            ],
+            False, # Subject is set per Wing, not by the identity filter
+            EngineSelector.get_integration_capabilities(EngineType.BEHAVIOURAL)
         ))
         
         return engines
@@ -383,5 +410,5 @@ class EngineSelector:
         Returns:
             True if engine type is valid, False otherwise
         """
-        valid_types = [EngineType.TIME_WINDOW_SCANNING, EngineType.IDENTITY_BASED]
-        return engine_type in valid_types
+        return (engine_registry.is_known_engine_type(engine_type)
+                and engine_registry.get_spec(engine_type).available)

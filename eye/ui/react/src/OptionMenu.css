@@ -1,6 +1,6 @@
 .option-menu {
   margin-top: 12px;
-  border: 1px solid var(--color-border-accent);
+  border: 3px solid var(--color-border-accent);
   border-radius: var(--radius-lg);
   overflow: hidden;
   -webkit-animation: fade-in-up 0.25s ease;
@@ -55,7 +55,7 @@
   height: 22px;
   border-radius: var(--radius-full);
   background: var(--color-accent-dim);
-  border: 1px solid var(--color-border-accent);
+  border: 3px solid var(--color-border-accent);
   color: var(--color-accent-bright);
   font-family: var(--font-mono);
   font-size: 11px;
@@ -99,7 +99,7 @@
   gap: 7px;
   padding: 6px 12px;
   background: rgba(16,185,129,0.08);
-  border: 1px solid rgba(16,185,129,0.25);
+  border: 3px solid rgba(16,185,129,0.25);
   border-radius: var(--radius-full);
   font-size: 12px;
   color: var(--color-success);

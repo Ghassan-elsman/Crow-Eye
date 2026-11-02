@@ -163,6 +163,20 @@ class HiveWalk(object):
                    len(self.class_names), len(self.security)))
 
 
+def _hive_bytes(reg, hive_path):
+    """The hive's bytes: the buffer python-registry already read, or the file.
+
+    `Registry.Registry(path)` reads the whole file into `_buf`; reading it a
+    second time for the cell offsets held two copies of every hive at once
+    (a SOFTWARE hive is over 100 MB).
+    """
+    raw = getattr(reg, "_buf", None)
+    if isinstance(raw, (bytes, bytearray)):
+        return raw
+    with open(hive_path, "rb") as handle:
+        return handle.read()
+
+
 def walk_hive(hive_path, want_paths=True):
     """One pass over every cell in `hive_path`.
 
@@ -182,8 +196,7 @@ def walk_hive(hive_path, want_paths=True):
 
     try:
         reg = Registry.Registry(hive_path)
-        with open(hive_path, "rb") as handle:
-            raw = handle.read()
+        raw = _hive_bytes(reg, hive_path)
     except Exception as exc:
         result.error = "cannot read hive: %s" % exc
         logger.debug("hive walk could not open %s: %s", hive_path, exc)
@@ -559,7 +572,44 @@ def reset_index_cache():
     _INDEX_CACHE.clear()
 
 
-def value_index(hive_path):
+def forget_index(hive_path):
+    """Forget one hive's memoised index once nothing will ask for it again.
+
+    The index holds every value of the hive with its data, and the live
+    registry parse builds one per acquired hive copy - a copy deleted when
+    its acquisition ends, so its index can never be asked for again. Kept
+    for the whole parse, the indexes of every hive were alive at once: the
+    live registry parse reached 1.4 GB private on a desk machine, the
+    largest of the Sentinel agent's parser children.
+    """
+    _INDEX_CACHE.pop(hive_path, None)
+
+
+class _IndexedValue(object):
+    """One value of the index: read like the dict `_read_value` returns.
+
+    A dict per value was 360 bytes and the index of a 138 MB SOFTWARE hive
+    holds 1.13 million values; with slots the same fields are a quarter of
+    that. Readers use `.get()` and `[]`, which both still work.
+    """
+
+    __slots__ = ("cell_offset", "value_name", "value_type", "data_size",
+                 "inline", "data", "key_path", "key_offset")
+
+    def __init__(self, fields):
+        for name in self.__slots__:
+            setattr(self, name, fields.get(name))
+
+    def get(self, name, default=None):
+        return getattr(self, name) if name in self.__slots__ else default
+
+    def __getitem__(self, name):
+        if name not in self.__slots__:
+            raise KeyError(name)
+        return getattr(self, name)
+
+
+def value_index(hive_path, with_values=True):
     """Every allocated value by cell offset, with the key that owns it.
 
     Memoised per path. Both value_changes() and key_times() need this, and a
@@ -569,6 +619,11 @@ def value_index(hive_path):
     Returns (index, keys) where index maps an absolute hive offset to a dict of
     key_path, name, type and data, and `keys` maps a key's cell offset to its
     path and last-written time.
+
+    `with_values=False` builds `keys` alone and memoises nothing. key_times()
+    needs only the keys, and the value half is the heavy one: on a 138 MB
+    SOFTWARE hive it held 1.13 million value records with their data, 714 MB,
+    to answer a question about 402,535 keys.
 
     Never raises. An index that cannot be built comes back empty, and the
     caller reports offsets without names rather than nothing at all.
@@ -583,8 +638,7 @@ def value_index(hive_path):
 
     try:
         reg = Registry.Registry(hive_path)
-        with open(hive_path, "rb") as handle:
-            raw = handle.read()
+        raw = _hive_bytes(reg, hive_path)
     except Exception as exc:
         logger.debug("value_index could not open %s: %s", hive_path, exc)
         return index, keys
@@ -609,7 +663,7 @@ def value_index(hive_path):
                 pass
 
         try:
-            values = list(key.values())
+            values = list(key.values()) if with_values else []
         except Exception:
             values = []
         for value in values:
@@ -620,8 +674,18 @@ def value_index(hive_path):
             record = _read_value(raw, vk_offset)
             if not record:
                 continue
+            # The index is read for names and for `value_before`, which is a
+            # _preview() of the data - its first _PREVIEW_BYTES, plus whether
+            # there was more. One byte past the preview keeps both answers
+            # exact; keeping every value's whole data held a copy of most of
+            # the hive in small objects, and the hive is already in memory.
+            data = record.get("data")
+            if data is not None and len(data) > _PREVIEW_BYTES + 1:
+                record["data"] = bytes(data[:_PREVIEW_BYTES + 1])
             record["key_path"] = path
             record["key_offset"] = offset
+            # Slots, not a dict: 1.13 million of them on a SOFTWARE hive.
+            record = _IndexedValue(record)
             index[vk_offset] = record
             # The data cell too. Changing a value's contents usually rewrites
             # only the cell the record points at and leaves the record itself
@@ -655,7 +719,8 @@ def value_index(hive_path):
     except Exception as exc:
         logger.debug("value_index walk failed on %s: %s", hive_path, exc)
 
-    _INDEX_CACHE[hive_path] = (index, keys)
+    if with_values:
+        _INDEX_CACHE[hive_path] = (index, keys)
     return index, keys
 
 
@@ -932,12 +997,26 @@ def key_times(hive_path):
     than its key, and at most one value matches it. Here the same number is
     unambiguous, because the row IS the key.
     """
-    _, keys = value_index(hive_path)
-    out = []
-    for offset, meta in keys.items():
-        out.append({
-            "cell_offset": offset,
-            "key_path": meta.get("key_path") or "",
-            "timestamp_raw": meta.get("timestamp_raw"),
-        })
-    return out
+    return list(iter_key_times(hive_path))
+
+
+def iter_key_times(hive_path):
+    """key_times() one key at a time, for a caller that folds as it reads.
+
+    A keys-only index nobody else holds is handed out entry by entry and
+    emptied as it goes, so the index and what the caller builds from it are
+    never both whole - on a SOFTWARE hive the list alone was 170 MB.
+    """
+    if hive_path in _INDEX_CACHE:
+        # value_changes() still owns this index: copied, never consumed.
+        for offset, meta in _INDEX_CACHE[hive_path][1].items():
+            yield {"cell_offset": offset,
+                   "key_path": meta.get("key_path") or "",
+                   "timestamp_raw": meta.get("timestamp_raw")}
+        return
+    _, keys = value_index(hive_path, with_values=False)
+    for offset in list(keys):
+        meta = keys.pop(offset)
+        yield {"cell_offset": offset,
+               "key_path": meta.get("key_path") or "",
+               "timestamp_raw": meta.get("timestamp_raw")}

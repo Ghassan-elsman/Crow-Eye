@@ -123,7 +123,33 @@ class ConfigurationManager(QObject):
             logger.error(f"[ConfigManager] Error creating directory structure: {e}")
             return False
     
-    def add_feather(self, feather_id: str, db_path: str, 
+    def add_feathers(self, entries) -> int:
+        """Add many feathers and save the registry once (add_feather saved the
+        whole JSON file for each of the 41 a case generates). `entries` are
+        dicts with feather_id, db_path, artifact_type and metadata. Returns
+        how many were added."""
+        added = []
+        for entry in entries:
+            try:
+                feather_metadata = {
+                    'feather_id': entry['feather_id'],
+                    'feather_name': entry['feather_id'],
+                    'artifact_type': entry['artifact_type'],
+                    'database_path': str(entry['db_path']),
+                    'created_date': datetime.now().isoformat(),
+                    'metadata': entry.get('metadata') or {}
+                }
+                self.feathers_registry[entry['feather_id']] = feather_metadata
+                added.append(feather_metadata)
+            except Exception as e:
+                logger.error(f"[ConfigManager] Error adding feather {entry!r}: {e}")
+        if added and not self.save_feather_registry():
+            logger.warning(f"[ConfigManager] Failed to save registry after adding {len(added)} feathers")
+        for feather_metadata in added:
+            self.feather_added.emit(feather_metadata)
+        return len(added)
+
+    def add_feather(self, feather_id: str, db_path: str,
                    artifact_type: str, metadata: dict = None) -> bool:
         """
         Add feather to registry and emit signal.

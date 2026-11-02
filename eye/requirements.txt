@@ -27,9 +27,9 @@ pytest>=7.4.0
 pytest-qt>=4.2.0
 
 # LLM Backend Support
-openai>=1.0.0
-anthropic>=0.3.0
-google-genai>=0.1.0
+openai>=2.41
+anthropic>=0.109
+google-genai>=2.8
 
 # JSON Schema Validation
 jsonschema>=4.19.0

@@ -92,7 +92,7 @@ class CorrelationIntegration:
         - Requires PyQt5 for GUI components
         - Configuration Manager is optional but recommended
         - Automatically creates directory structure in case folder
-        - The engine window styles itself (ui/site_theme.py, the site look)
+        - The engine window styles itself (ui/app_theme.py, the site look)
 
     See Also:
         - case_initializer.py: Case initialization logic
@@ -333,8 +333,12 @@ class CorrelationIntegration:
                 print(f" - Pipelines: {pipelines_dir}")
                 print(f" - Results: {results_dir}")
             
-            # Show the window
-            self.correlation_window.show()
+            # Show the window: maximised when nothing was saved or the screen
+            # is small, else where it was left, kept inside the screen.
+            if self.correlation_window.isVisible():
+                self.correlation_window.show()
+            else:
+                self._show_fitted(self.correlation_window)
             self.correlation_window.raise_()
             self.correlation_window.activateWindow()
             
@@ -370,6 +374,24 @@ class CorrelationIntegration:
             import traceback
             traceback.print_exc()
     
+    @staticmethod
+    def _show_fitted(window):
+        from PyQt5.QtWidgets import QApplication
+        screen = window.screen() if hasattr(window, 'screen') else QApplication.primaryScreen()
+        area = screen.availableGeometry() if screen is not None else None
+        saved = getattr(window, 'settings', None) and window.settings.value("geometry")
+        if area is None or not saved or area.width() < 1366 or area.height() < 800 \
+                or window.isMaximized():
+            window.showMaximized()
+            return
+        frame = window.geometry()
+        w = min(frame.width(), area.width())
+        h = min(frame.height(), area.height() - 32)   # the title bar
+        x = min(max(frame.x(), area.x()), area.right() - w + 1)
+        y = min(max(frame.y(), area.y() + 32), area.bottom() - h + 1)
+        window.setGeometry(x, y, w, h)
+        window.show()
+
     def _reusable_window(self, case_root):
         """The engine window already open for this case, or None to build one.
 

@@ -1,0 +1,54 @@
+{
+  "config_name": "failed_signins_then_success_behaviour",
+  "wing_name": "Failed Sign-ins, Then a Successful One (Behaviour)",
+  "wing_id": "default_behaviour_failed_then_success_001",
+  "wing_category": "behaviour",
+  "description": "At least five failed sign-ins for one account, then a successful interactive sign-in or unlock by the same account within 30 minutes. UBA rules: failed_logon (Security 4625) then interactive_logon / workstation_unlock. A failed sign-in names the account it tried; only accounts with a profile on this computer have a SID, so guesses at names that do not exist here are counted as not evaluated, not dropped. A person who forgot a changed password produces the same sequence.",
+  "proves": "An account signed in successfully after a run of failed attempts",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Failed sign-ins",
+      "rule_id": "failed_logon",
+      "min_count": 5
+    },
+    {
+      "label": "Successful sign-in or unlock",
+      "rule_id": [
+        "interactive_logon",
+        "workstation_unlock"
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 30,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1110.001"
+    ],
+    "tactic": [
+      "credential_access"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "credential_access",
+    "brute_force",
+    "logon",
+    "default"
+  ],
+  "case_types": [
+    "intrusion",
+    "insider"
+  ]
+}

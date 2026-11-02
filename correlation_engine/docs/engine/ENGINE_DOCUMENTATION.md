@@ -12,6 +12,7 @@
 - [Time-Window Scanning Engine (TWSE)](#time-window-scanning-engine-twse)
 - [TWSE Internal Workflow (Two-Phase Correlation)](#twse-internal-workflow-two-phase-correlation)
 - [Identity-Based Correlation Engine (IBCE)](#identity-based-correlation-engine-ibce)
+- [Behavioural Engine](#behavioural-engine)
 - [Core Components](#core-components)
   - [Abstract Interfaces (`base_engine.py`, `integration/interfaces.py`)](#abstract-interfaces-base_enginepy-integrationinterfacespy)
   - [Engine Orchestration (`engine_selector.py`, `pipeline/pipeline_executor.py`, `pipeline/pipeline_loader.py`, `config/pipeline_config.py`)](#engine-orchestration-engine_selectorpy-pipelinepipeline_executorpy-pipelinepipeline_loaderpy-configpipeline_configpy)
@@ -101,7 +102,7 @@ The `engine/` directory is crucial for translating high-level analysis goals (de
 
 ## High-Level Architecture & Dual-Engine System
 
-The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimized system designed for in-depth forensic analysis. It leverages a **dual-engine architecture**—the **Time-Window Scanning Engine (TWSE)** and the **Identity-Based Correlation Engine (IBCE)**—each tailored for different use cases and dataset characteristics. Both engines deliver `O(N log N)` performance with different optimization strategies.
+The Crow-Eye Correlation Engine is a highly sophisticated, modular, and optimized system designed for in-depth forensic analysis. It leverages a **dual-engine architecture** for Feather correlation - the **Time-Window Scanning Engine (TWSE)** and the **Identity-Based Correlation Engine (IBCE)** - each tailored for different use cases and dataset characteristics; both deliver `O(N log N)` performance with different optimization strategies. A third engine, the **[Behavioural Engine](#behavioural-engine)**, reads no Feathers: it chains the behaviours User Behavior found, one person at a time.
 
 ### Dual-Engine Architecture Benefits
 
@@ -473,6 +474,26 @@ The IBCE is ideal for:
 -   **Integrated Semantic Enrichment**: Enhances results with context and meaning directly, streamlining the analysis workflow.
 
 ---
+
+## Behavioural Engine
+
+`behavioural_engine.py` runs **Behaviour Wings** over the behaviour events User Behavior Analytics produces for a case, one person (SID) at a time. A Behaviour Wing names no Feathers: it is a set of steps - each a UBA rule (built-in or analyst-created) or an activity, with optional extra conditions and a minimum count - that must all happen for one person, in order or in any order, inside a time range (`config/wing_config.py`, `BEHAVIOUR_FIELDS`).
+
+### How a run works
+
+1. Open the case's stored UBA analysis (`<case>/UBA/uba_events.db`) through `BehaviorEngine.run_or_load()`: reused while fresh, rebuilt otherwise, so the User Behavior window, the Eye and this engine read one answer.
+2. Per Wing, select the events its steps (and its own advanced rules) name.
+3. Split them by person key. Events attributed to a profile carry its SID; events no person is recorded for (a service installed, a program known from Prefetch, a USB device) are "machine" events, usable only by steps that say `"actor": "machine"` or `"any"`.
+4. Hand each person's rows to `SemanticRuleEvaluator.evaluate_identity`: the steps compile into its `sequence` rule (ordered or not, `within_minutes`, per-step `min_count`); a Wing's own absence / threshold / sequence rules run as they are.
+5. Store what fired in `correlation_results.db` (`behaviour_hits`, `behaviour_actors`, `behaviour_runs`).
+
+### Honesty
+
+- Every event the steps name is either evaluated or counted as not evaluated, with the reason (no time recorded, no matching profile, outside the time filter). Nothing is dropped silently.
+- A step whose UBA rule is turned off, or has no data in the case, is reported not evaluable; the Wing's other rules still run.
+- An absence rule needs its source to be complete: when the rule it expects to be absent is unavailable, degraded or off, the absence is "not evaluable", never a hit.
+- A hit is a pointer to UBA events, which point at artifact rows; it is never cited until those rows are re-read. Shown beside Time and Identity matches as `behaviour_context`, it never adds to their score.
+- Headless: no Qt imports, so the Sentinel server runs it as it is (`tests/test_behavioural_engine_is_headless.py`).
 
 ## Core Components
 

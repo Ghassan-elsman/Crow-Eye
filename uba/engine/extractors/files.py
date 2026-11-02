@@ -25,6 +25,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional
 
 from uba.engine import aggregation, description
+from uba.engine.attribution import Actor
 from uba.engine.models import (BehaviorEvent, EvidenceRef, CONF_ARTIFACT_ONLY,
                                CONF_INFERENCE, SEV_SUSPICIOUS, SEV_NOTABLE)
 from uba.utils.timeparse import normalize_ts
@@ -47,6 +48,20 @@ _USER_DIR_RE = re.compile(r"[\\/]users[\\/]([^\\/]+)[\\/]", re.I)
 # here with slash-agnostic markers rather than attribution.from_path.
 _SYSTEM_AREA_RE = re.compile(
     r"[\\/](windows|program files|program files \(x86\)|programdata)[\\/]", re.I)
+# Files Windows and applications write and delete on their own while working:
+# folder settings, thumbnail caches, lock files, and the temporary copies
+# Chromium-based apps (name~RF<hex>.TMP) and Office (~$name) write while
+# saving. They are never a person's file activity - one launcher's cache in
+# OneDrive\Documents read as "146 files permanently deleted" - so they are
+# counted (usn_rows_skipped_bookkeeping) and kept out of every file event.
+_BOOKKEEPING_NAMES = {"desktop.ini", "thumbs.db", "ehthumbs.db", "ehthumbs_vista.db",
+                      ".ds_store"}
+_BOOKKEEPING_RE = re.compile(r"~RF[0-9a-f]+\.tmp$|\.lock$|^~\$", re.I)
+
+
+def _is_bookkeeping(filename) -> bool:
+    name = (filename or "").strip()
+    return name.lower() in _BOOKKEEPING_NAMES or bool(_BOOKKEEPING_RE.search(name))
 
 
 def _mft_record(frn) -> Optional[int]:
@@ -84,6 +99,28 @@ def _corr_cols(conn) -> set:
 
 def _col(cols, name):
     return name if name in cols else "NULL"
+
+
+def _corr_key_mode(cols) -> str:
+    """How precisely a journal reference can be matched to a correlated path.
+
+    The sequence number is what tells one occupant of an MFT record from the
+    next, so it is used whenever the table has it, with or without a volume
+    column. Keying by record alone gave a reused record's CURRENT file to
+    events of its earlier occupants: on one case 88,281 of 160,530 journal
+    events (Brave temp files reported as Epic Games files under Program Files).
+    Record-only remains for tables that carry no sequence at all."""
+    if "mft_sequence_number" in cols:
+        return "vol_seq" if "volume_letter" in cols else "seq"
+    return "rec"
+
+
+def _path_key(mode, volume, record, sequence):
+    if mode == "vol_seq":
+        return (volume, record, sequence)
+    if mode == "seq":
+        return (record, sequence)
+    return record
 
 
 def _usable_path(path):
@@ -124,7 +161,7 @@ def _build_path_map(ctx) -> Dict[tuple, str]:
         return path_map
     try:
         cols = _corr_cols(conn)
-        ctx.corr_keyed = "volume_letter" in cols and "mft_sequence_number" in cols
+        ctx.corr_key_mode = _corr_key_mode(cols)
         # Only the files the journal mentions: the path map exists to name
         # journal events. A whole $MFT is millions of files (3.3 million on one
         # drive) - loading them all hit MAX_PATH_MAP_ENTRIES and silently left
@@ -137,7 +174,7 @@ def _build_path_map(ctx) -> Dict[tuple, str]:
         for vol, rec, seq, path in cursor:
             if rec is None:
                 continue
-            path_map.setdefault((vol, rec, seq) if ctx.corr_keyed else rec, path)
+            path_map.setdefault(_path_key(ctx.corr_key_mode, vol, rec, seq), path)
             if len(path_map) >= MAX_PATH_MAP_ENTRIES:
                 logger.warning("UBA: path map capped at %d entries", MAX_PATH_MAP_ENTRIES)
                 break
@@ -154,10 +191,11 @@ def _actor_for_path(ctx, path: Optional[str]):
     match = _USER_DIR_RE.search(str(path))
     if match:
         dirname = match.group(1)
-        for username in ctx.resolver.known_users.values():
+        for sid, username in ctx.resolver.known_users.items():
             if dirname.lower() == username.lower():
-                return ("User", username,
-                        "the files are inside {}'s own user folder".format(username))
+                return Actor("User", username,
+                             "the files are inside {}'s own user folder".format(username),
+                             sid)
         return ("", "", "")
     if _SYSTEM_AREA_RE.search(str(path)):
         return ("System", "Windows",
@@ -188,6 +226,7 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
     op_rows = defaultdict(list)
     rename_rows: List[aggregation.UsnRow] = []
     skipped = 0
+    bookkeeping = 0
 
     try:
         cursor = conn.execute(
@@ -202,6 +241,9 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
         if op is None:
             skipped += 1
             continue
+        if _is_bookkeeping(filename):
+            bookkeeping += 1
+            continue
         ts_norm = normalize_ts(ts)
         if not ts_norm:
             skipped += 1
@@ -211,10 +253,10 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
         # file in ITS parent - one level too high).
         own = _mft_ref(frn)
         parent = _mft_ref(parent_frn)
-        keyed = getattr(ctx, "corr_keyed", True)
-        path = _usable_path(path_map.get((volume,) + own if keyed else own[0])) if own else None
+        mode = getattr(ctx, "corr_key_mode", "vol_seq")
+        path = _usable_path(path_map.get(_path_key(mode, volume, *own))) if own else None
         if path is None and parent:
-            folder = _usable_path(path_map.get((volume,) + parent if keyed else parent[0]))
+            folder = _usable_path(path_map.get(_path_key(mode, volume, *parent)))
             if folder:
                 path = folder.rstrip("/") + "/" + (filename or "")
         row = aggregation.usn_row_from_db(rowid, volume, filename, usn, frn,
@@ -227,6 +269,7 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
         else:
             op_rows[op].append(row)
     ctx.bump("usn_rows_skipped_noise", skipped)
+    ctx.bump("usn_rows_skipped_bookkeeping", bookkeeping)
 
     events: List[BehaviorEvent] = []
     aggregator = aggregation.BurstAggregator()
@@ -260,6 +303,7 @@ def usn_file_activity(ctx, rules) -> List[BehaviorEvent]:
             activity=soft_delete_rule["activity"],
             ts_start=anchor.ts, ts_end=anchor.ts,
             actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+            actor_sid=getattr(actor, "sid", ""),
             description="{} deleted {} to the Recycle Bin".format(
                 actor[1] or "Someone", name_part),
             severity=soft_delete_rule["severity"],
@@ -339,6 +383,7 @@ def _burst_event(ctx, rules_by_key, burst: aggregation.Burst):
         rule_id=rule["id"], behavior_class=rule["behavior_class"],
         activity=rule["activity"], ts_start=burst.ts_start, ts_end=burst.ts_end,
         actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+        actor_sid=getattr(actor, "sid", ""),
         description=text, severity=severity, confidence=CONF_ARTIFACT_ONLY,
         session_context=ctx.session_context(burst.ts_start),
         aggregate_count=n,
@@ -376,6 +421,7 @@ def _rename_chain_event(ctx, rule, chain, actor, bucket):
         rule_id=rule["id"], behavior_class=rule["behavior_class"],
         activity=rule["activity"], ts_start=chain.ts_start, ts_end=chain.ts_end,
         actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+        actor_sid=getattr(actor, "sid", ""),
         description=text, severity=severity, confidence=CONF_ARTIFACT_ONLY,
         session_context=ctx.session_context(chain.ts_start),
         aggregate_count=times,
@@ -408,6 +454,7 @@ def _rename_burst_event(ctx, rule, items, bucket):
         rule_id=rule["id"], behavior_class=rule["behavior_class"],
         activity=rule["activity"], ts_start=ts_start, ts_end=ts_end,
         actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+        actor_sid=getattr(actor, "sid", ""),
         description=text, severity=severity, confidence=CONF_ARTIFACT_ONLY,
         session_context=ctx.session_context(ts_start), aggregate_count=n,
         details={"folder": bucket, "operation": "renamed",
@@ -457,6 +504,7 @@ def _recyclebin_db_events(ctx, rules_by_key) -> List[BehaviorEvent]:
             rule_id=rule["id"], behavior_class=rule["behavior_class"],
             activity=rule["activity"], ts_start=ts, ts_end=ts,
             actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+            actor_sid=getattr(actor, "sid", ""),
             description="{} deleted '{}' to the Recycle Bin".format(
                 actor[1] or "Someone", name),
             severity=rule["severity"], confidence=CONF_ARTIFACT_ONLY,
@@ -543,6 +591,7 @@ def file_copy_inferred(ctx, rules) -> List[BehaviorEvent]:
             rule_id=rule["id"], behavior_class=rule["behavior_class"],
             activity=rule["activity"], ts_start=b["first_ts"], ts_end=b["first_ts"],
             actor_type=actor[0], actor_name=actor[1], actor_basis=actor[2],
+            actor_sid=getattr(actor, "sid", ""),
             description=text, severity=rule["severity"],
             confidence=CONF_INFERENCE, caveat=_COPY_CAVEAT,
             session_context=ctx.session_context(b["first_ts"]),

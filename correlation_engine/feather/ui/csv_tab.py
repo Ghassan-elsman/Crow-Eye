@@ -80,8 +80,10 @@ class CSVTab(QWidget):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         self.import_btn = QPushButton("Import to Feather")
-        from ...gui.crow_eye_icons import CrowEyeIcons
-        self.import_btn.setIcon(CrowEyeIcons.feather())
+        # No icon: the Feather Builder makes this a primary button, whose
+        # hover runs indigo -> cyan, the Feather art's own cyan (about 1.6:1
+        # on hover). Brand art never sits on a primary button; the window
+        # icon and the File menu carry the Feather.
         self.import_btn.setEnabled(False)
         self.import_btn.clicked.connect(self.import_data)
         button_layout.addWidget(self.import_btn)

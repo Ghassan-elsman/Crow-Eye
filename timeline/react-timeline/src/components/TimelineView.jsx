@@ -2,7 +2,8 @@
  * TimelineView — Main 24H detail view rendering individual events as SVG.
  */
 import { memo, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
-import { normalizeForensicName, formatBytes, formatTime, formatCycleTime, formatDuration, getForensicName, getForensicTimestamps, getForensicId, getPrimaryTimestamp, cleanForensicDate, getArtifactSources } from '../utils/formatters';
+import { normalizeForensicName, formatBytes, formatTime, formatCycleTime, formatDuration, getForensicName, getForensicTimestamps, getForensicId, getPrimaryTimestamp, cleanForensicDate } from '../utils/formatters';
+import { laneArtifactSources, laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart } from '../utils/laneSources';
 import LaneDataModal from './LaneDataModal';
 import { heuristicFlatten } from '../utils/dataUtils';
 
@@ -291,32 +292,8 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     const pOnBands = [];
 
     // --- Master Forensic Discovery System ---
-    // Task 19.3: Centralized Source Discovery
-    // Ensures visibility checks and plotting always see the exact same data
-    const getArtifactSources = (data) => {
-      const registry = data.registry || {};
-      return [
-        { items: data.prefetch || data.prefetch_data, type: 'prefetch' },
-        { items: data.lnk, type: 'lnk' },
-        { items: data.bam, type: 'bam' },
-        { items: data.dam, type: 'dam' },
-        { items: data.shimcache, type: 'shimcache' },
-        { items: data.recyclebin, type: 'recyclebin' },
-        { items: (data.amcache || data.amcache_applications)?.application_files, type: 'amcache' },
-        { items: (data.amcache || data.amcache_applications)?.applications, type: 'amcache' },
-        { items: (data.amcache || data.amcache_applications)?.drivers, type: 'amcache' },
-        { items: (data.amcache || data.amcache_applications)?.devices, type: 'amcache' },
-        { items: (data.amcache || data.amcache_applications)?.driver_packages, type: 'amcache' },
-        { items: data.imported, type: 'imported' },
-        // Windows Event Log. This list is hand-written - the registry spreads
-        // itself out below, everything else is named - so a payload key
-        // missing from it is fetched, counted in the pill, and drawn nowhere.
-        // That is exactly what happened here: 553 rows on the day this was
-        // written, all of them absent from the lane.
-        { items: data.event_logs, type: 'event_logs' },
-        ...Object.keys(registry).map(table => ({ items: registry[table], type: table.toLowerCase() }))
-      ];
-    };
+    // The lane's sources live in utils/laneSources.js, shared with useLinks:
+    // a link only draws when both ends carry the id the lane gave its mark.
 
     const inBounds = (ts) => {
       if (!ts) return false;
@@ -349,7 +326,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         if (k === 'browser') return hasAnyInBounds(data.browser);
 
         if (k === 'artifacts') {
-          const sources = getArtifactSources(data);
+          const sources = laneArtifactSources(data);
           const hasManifestData = sources.some(src => hasAnyInBounds(src.items));
             
           const hasSalvaged = Object.keys(data).some(key => {
@@ -405,19 +382,8 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         const { match } = searchMatch(a);
         const bgCycleMs = a.background_cycle_time ? Number(a.background_cycle_time) * 1000 : 0;
         const faceMs = a.face_time ? Number(a.face_time) * 1000 : 0;
-        let bgStart = ts - Math.max(20000, bgCycleMs);
-        let fgStart = ts - Math.max(20000, faceMs);
-        if (idx > 0) {
-          for (let i = idx - 1; i >= 0; i--) {
-            const prev = arr[i];
-            if (prev.app_name === a.app_name) {
-              const prevEnd = new Date(prev.timestamp).getTime();
-              if (bgStart < prevEnd) bgStart = prevEnd;
-              if (fgStart < prevEnd) fgStart = prevEnd;
-              break;
-            }
-          }
-        }
+        const bgStart = srumBandStart(arr, idx, bgCycleMs, r => r.app_name);
+        const fgStart = srumBandStart(arr, idx, faceMs, r => r.app_name);
         return { ...a, start: fgStart, end: ts, bgStart, type: 'srum_app', isSearchMatch: match };
       });
       const tracked = allocateTracks(apps, 10000);
@@ -431,19 +397,9 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       const nets = connData.map((c, idx, arr) => {
         const cleaned = cleanForensicDate(c.timestamp);
         const ts = new Date(cleaned).getTime();
-        const durMs = Math.max(20000, (parseFloat(c.connected_time) || 0) * 1000);
         const { match } = searchMatch(c);
-        let start = ts - durMs;
-        if (idx > 0) {
-          for (let i = idx - 1; i >= 0; i--) {
-            const prev = arr[i];
-            if ((prev.app_name || prev.app_id) === (c.app_name || c.app_id)) {
-              const prevEnd = new Date(prev.timestamp).getTime();
-              if (start < prevEnd) start = prevEnd;
-              break;
-            }
-          }
-        }
+        const start = srumBandStart(arr, idx, (parseFloat(c.connected_time) || 0) * 1000,
+                                    r => r.app_name || r.app_id);
         return { ...c, start, end: ts, type: 'srum_net', isSearchMatch: match };
       });
       
@@ -577,10 +533,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       // the key, and there are ~2,200 of them on an ordinary machine -
       // most written once at install. They are drawn only when the
       // analyst turns them on, and hollow when they are.
-      const artifactSources = getArtifactSources(data).filter(
-        src => (src.type !== 'key_times' || activeArtifacts.key_times)
-            && (src.type !== 'event_logs' || activeArtifacts.event_logs)
-      );
+      const artifactSources = laneVisibleSources(data, activeArtifacts);
       console.log('[DEBUG] Lane 5 Sources:', artifactSources.map(s => `${s.type}(${s.items?.length || 0})`));
       
       const processedSignatures = new Set();
@@ -592,7 +545,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           const times = getForensicTimestamps(p);
           times.forEach(tsInfo => {
             // Exclusion Rule
-            if (src.type === 'prefetch' && tsInfo.field === 'accessed_on') return;
+            if (laneSkipsTimestamp(src.type, tsInfo.field)) return;
 
             if (inBounds(tsInfo.time)) {
               const sig = `${src.type}-${tsInfo.time}-${tsInfo.field}-${normalizeForensicName(getName(p))}`.toLowerCase();
@@ -624,11 +577,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         }
       };
 
-      checkAndSalvage(data.sessions?.events, 'salvaged_sessions_events');
-      checkAndSalvage(data.srum_app, 'salvaged_srum_app');
-      checkAndSalvage(data.srum_net?.connectivity, 'salvaged_srum_net_conn');
-      checkAndSalvage(data.srum_net?.data_usage, 'salvaged_srum_net_usage');
-      checkAndSalvage(data.mft_usn, 'salvaged_mft_usn');
+      laneSalvageSources(data).forEach(src => checkAndSalvage(src.items, src.type));
 
       const tracked = allocateTracks(pts, 25000);
       const nTracks = Math.max(1, tracked.reduce((m, p) => Math.max(m, p.track), 0) + 1);

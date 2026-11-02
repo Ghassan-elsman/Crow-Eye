@@ -2,13 +2,20 @@ import React, { useEffect, useState } from 'react';
 import eyeIcon from './assets/eye_icon.png';
 import './LoadingDialog.css';
 
+export interface LoadingStep {
+  label: string;
+  state: 'pending' | 'active' | 'done' | 'failed';
+  note?: string;      // "1.2 s", or the error when it failed
+}
+
 interface LoadingDialogProps {
   visible: boolean;
   status?: string;    // Current status line (e.g. "Connecting to bridge...")
   phase?: 'init' | 'processing'; // init = startup, processing = query in-flight
+  steps?: LoadingStep[];         // the real steps, when known (no cycling text then)
 }
 
-/* Real EYE icon with rotating ring. Memoized (no props) so it is never
+/* Real Eye icon with rotating ring. Memoized (no props) so it is never
    reconciled while the parent chat tree re-renders during streaming. */
 const EyeSpinner: React.FC = React.memo(() => (
   <div className="ld-spinner-wrap" aria-hidden="true">
@@ -18,7 +25,7 @@ const EyeSpinner: React.FC = React.memo(() => (
 ));
 
 const INIT_STEPS = [
-  'Initializing EYE engine...',
+  'Initializing Eye engine...',
   'Connecting to Python bridge...',
   'Loading forensic context...',
   'Ready',
@@ -28,6 +35,7 @@ const LoadingDialog: React.FC<LoadingDialogProps> = ({
   visible,
   status,
   phase = 'init',
+  steps,
 }) => {
   const [show, setShow] = useState(visible);
   const [exiting, setExiting] = useState(false);
@@ -35,7 +43,7 @@ const LoadingDialog: React.FC<LoadingDialogProps> = ({
 
   // Cycle through init steps when in init phase
   useEffect(() => {
-    if (!visible || phase !== 'init') return;
+    if (!visible || phase !== 'init' || (steps && steps.length)) return;
     const iv = setInterval(() => {
       setStepIndex(i => (i + 1) % (INIT_STEPS.length - 1));
     }, 900);
@@ -70,16 +78,29 @@ const LoadingDialog: React.FC<LoadingDialogProps> = ({
         <div className="ld-header">
           <EyeSpinner />
           <div className="ld-header-text">
-            <span className="ld-title">EYE</span>
+            <span className="ld-title">Eye</span>
             <span className="ld-subtitle">Forensic Assistant</span>
           </div>
         </div>
 
-        {/* Status line */}
-        <div className="ld-status">
+        {/* Status line (the real steps below replace it when known) */}
+        {!(steps && steps.length) && <div className="ld-status">
           <span className="ld-status-dot" />
           <span className="ld-status-text">{displayStatus}</span>
-        </div>
+        </div>}
+
+        {/* The real steps, each done / under way / failed, with its time */}
+        {steps && steps.length > 0 && (
+          <ol className="ld-steps">
+            {steps.map((st) => (
+              <li key={st.label} className={`ld-step ld-step--${st.state}`}>
+                <span className="ld-step-mark" aria-hidden="true" />
+                <span className="ld-step-label">{st.label}</span>
+                {st.note && <span className="ld-step-note">{st.note}</span>}
+              </li>
+            ))}
+          </ol>
+        )}
 
         {/* Progress bar */}
         <div className="ld-progress-track">

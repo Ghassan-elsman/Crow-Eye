@@ -18,16 +18,26 @@ class WingValidator:
         Returns:
             Tuple of (is_valid, list_of_errors)
         """
+        from ...config.wing_config import (
+            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of)
         errors = []
-        
+
         # Validate basic fields
         errors.extend(WingValidator._validate_basic_fields(wing))
-        
-        # Validate feathers
-        errors.extend(WingValidator._validate_feathers(wing))
-        
-        # Validate correlation rules
-        errors.extend(WingValidator._validate_correlation_rules(wing))
+
+        # The category decides which engine runs the Wing; the same reasons
+        # are given by the executor and Eye's tools (category_problems). A
+        # Behaviour Wing's steps, time range, subject and alert are checked
+        # there too.
+        category = getattr(wing, 'wing_category', None)
+        errors.extend(category_problems(category, wing.semantic_rules, wing.feathers,
+                                        behaviour=behaviour_fields_of(wing)))
+
+        # A Behaviour Wing names no Feathers and has no correlation window
+        # over them, so the Feather and correlation checks do not apply.
+        if category != WING_CATEGORY_BEHAVIOUR:
+            errors.extend(WingValidator._validate_feathers(wing))
+            errors.extend(WingValidator._validate_correlation_rules(wing))
         
         return (len(errors) == 0, errors)
     
@@ -95,8 +105,15 @@ class WingValidator:
         if rules.minimum_matches < 1:
             errors.append("Minimum matches must be at least 1")
         
-        if rules.minimum_matches > len(wing.feathers):
-            errors.append(f"Minimum matches ({rules.minimum_matches}) cannot exceed number of feathers ({len(wing.feathers)})")
+        # minimum_matches counts the CORROBORATING feathers; a match also needs
+        # the one it is anchored on (CorrelationRules.required_feather_count).
+        # Allowing minimum_matches == feathers let a Wing save that the
+        # executor then refused to run, with no message.
+        if rules.required_feather_count() > len(wing.feathers):
+            errors.append(
+                f"Minimum matches ({rules.minimum_matches}) needs {rules.required_feather_count()} "
+                f"feathers (the anchor plus {rules.minimum_matches} corroborating), but the Wing has "
+                f"{len(wing.feathers)}")
         
         # Validate anchor priority
         if not rules.anchor_priority or len(rules.anchor_priority) == 0:

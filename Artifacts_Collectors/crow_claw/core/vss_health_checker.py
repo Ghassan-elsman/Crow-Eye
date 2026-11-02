@@ -1479,7 +1479,7 @@ class VSSHealthChecker:
                     capture_output=True,
                     text=True,
                     timeout=30
-                )
+                , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 
                 if result.returncode == 0:
                     logger.info("[VSSHealthChecker] VSS service started successfully")
@@ -1530,14 +1530,14 @@ class VSSHealthChecker:
                             capture_output=True,
                             text=True,
                             timeout=30
-                        )
+                        , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                         # Start service
                         result = subprocess.run(
                             ["net", "start", "vss"],
                             capture_output=True,
                             text=True,
                             timeout=30
-                        )
+                        , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                         
                         if result.returncode == 0:
                             logger.info("[VSSHealthChecker] VSS service restarted successfully")

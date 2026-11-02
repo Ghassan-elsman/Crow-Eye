@@ -140,6 +140,12 @@ def registry_lookup(backend: str, model_name: str, arch: str = "") -> Optional[D
     arch = (arch or "").strip().lower()
     haystack = f"{name} {arch}".strip()
 
+    if (backend or "").strip().lower() in ("claude_code", "codex_cli"):
+        # ClaudeCodeBackend returns tool calls through --json-schema structured output.
+        return _verdict(NATIVE, KNOWN, SRC_REGISTRY,
+                        "Claude Code returns Eye's tool calls as structured JSON",
+                        backend, model_name)
+
     if any(tag in haystack for tag in _EMBEDDING_MARKERS):
         return _verdict(NONE, KNOWN, SRC_REGISTRY,
                         f"'{name}' looks like an embedding model (no chat, no tools)",

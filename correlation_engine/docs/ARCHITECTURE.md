@@ -22,20 +22,24 @@ This document describes the architecture of the Crow-Eye Correlation Engine, exp
 
 ## Overview
 
-The Correlation Engine is a modular system for correlating forensic artifacts across multiple data sources (feathers). It implements a **dual-engine architecture** that provides two distinct correlation strategies optimized for different use cases and dataset sizes:
+The Correlation Engine is a modular system for correlating forensic artifacts across multiple data sources (feathers). It runs **three engines**, each answering a different question:
 
 - **Time-Window Scanning Engine (TWSE)**: Scans the timeline in fixed windows, using indexed timestamp queries to gather records within each window. Suitable for any dataset size; recommended for time-bucketed temporal analysis. **Complexity: O(N log N)**
 
 - **Identity-Based Correlation Engine (IBCE)**: Groups records by identity (application/file) first, then creates temporal anchors within each identity bucket. Suitable for any dataset size; recommended for identity tracking and filtering. **Complexity: O(N log N)**
 
-Both engines share the **same asymptotic complexity** — neither performs the pairwise O(N²) comparison that an older naive approach would. Choose by question (time-bucketed vs identity-bucketed), not by dataset size.
+- **Behavioural Engine** (`engine/behavioural_engine.py`): Reads no Feathers. It runs **Behaviour Wings** over the behaviours User Behavior Analytics found in the case (`<case>/UBA/uba_events.db`, through `BehaviorEngine.run_or_load()`), one person (SID) at a time: each Wing is a set of steps (a UBA rule, built-in or analyst-made, or an activity, with optional conditions and a minimum count) that must all happen for one person, in order or in any order, within a set number of minutes. Hits are stored as pointers to the behaviours (`behaviour_hits`, `behaviour_actors`, `behaviour_runs` in `correlation_results.db`). A behaviour hit is context for Time and Identity matches (`behaviour_context`) and never adds to their score.
 
-Both engines implement the `BaseCorrelationEngine` interface, allowing seamless switching between strategies based on dataset characteristics and analysis requirements. The `EngineSelector` factory provides a unified interface for engine creation and metadata retrieval.
+Every Wing has a **category** (Time, Identity or Behaviour) and `engine/engine_registry.py` sends it to the engine that category names; a Wing given to the wrong engine is skipped with the reason. 35 Wings ship in `integration/default_wings/`: 11 Identity, 6 Time and 18 Behaviour.
 
-**Key Benefits of Dual-Engine Architecture**:
+The Time-Window and Identity engines share the **same asymptotic complexity** - neither performs the pairwise O(N²) comparison that an older naive approach would. The choice between them is about *what question you're asking* (time-bucketed vs. identity-bucketed), not about dataset size. The Behavioural engine answers a third question - what one person did, in what order - from behaviours rather than Feathers.
+
+The Time-Window and Identity engines implement the `BaseCorrelationEngine` interface, allowing seamless switching between strategies based on dataset characteristics and analysis requirements. The `EngineSelector` factory provides a unified interface for engine creation and metadata retrieval.
+
+**Key Benefits of Separate Engines**:
 - **Flexibility**: Choose the right engine for your dataset size and analysis goals
 - **Performance**: Identity-Based engine scales to millions of records with streaming mode
-- **Compatibility**: Both engines produce compatible result formats
+- **Compatibility**: The Time-Window and Identity engines produce compatible result formats; Behaviour results have their own tab and point back to User Behavior
 - **Extensibility**: Common interface allows adding new correlation strategies
 
 For detailed engine documentation, see [ENGINE_DOCUMENTATION.md](docs/engine/ENGINE_DOCUMENTATION.md).

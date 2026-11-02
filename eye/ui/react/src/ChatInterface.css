@@ -64,7 +64,7 @@
   height: 60px;
   flex-shrink: 0;
   border-radius: 12px;
-  border: 1px solid rgba(168,85,247,0.3);
+  border: 3px solid rgba(168,85,247,0.3);
   background: linear-gradient(135deg, rgba(79,70,229,0.2), rgba(168,85,247,0.2));
   display: flex;
   align-items: center;
@@ -100,7 +100,7 @@
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.15em;
-  text-transform: uppercase;
+  text-transform: none;   /* the brand is "Eye", never capitals */
   color: #e2e8f0;
 }
 
@@ -128,7 +128,7 @@
   padding: 4px 10px;
   border-radius: 999px;
   background: rgba(16,185,129,0.07);
-  border: 1px solid rgba(16,185,129,0.18);
+  border: 3px solid rgba(16,185,129,0.18);
   cursor: pointer;
   -webkit-transition: all 0.2s ease;
   transition: all 0.2s ease;
@@ -181,7 +181,7 @@
   left: 0;
   width: 280px;
   background: #0b0c12;
-  border: 1px solid rgba(148, 163, 184, 0.15);
+  border: 3px solid rgba(148, 163, 184, 0.15);
   border-radius: 12px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
   z-index: 1000;
@@ -315,7 +315,7 @@
   gap: 4px;
   padding: 4px 10px;
   border-radius: 6px;
-  border: 1px solid rgba(255,255,255,0.07);
+  border: 3px solid rgba(255,255,255,0.07);
   background: rgba(255,255,255,0.03);
   color: #64748b;
   font-family: var(--font-sans);
@@ -377,7 +377,7 @@
   padding: 10px 20px;
   border-radius: 12px;
   background: #1e293b;
-  border: 1px solid rgba(255,255,255,0.1);
+  border: 3px solid rgba(255,255,255,0.1);
   color: #f8fafc;
   display: flex;
   align-items: center;

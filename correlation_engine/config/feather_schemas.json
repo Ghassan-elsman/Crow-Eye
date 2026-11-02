@@ -25,13 +25,16 @@
   },
   "InventoryApplicationFile": {
     "artifact_type": "AmCache",
-    "primary_timestamp_column": "link_date",
+    "_comment": "link_date is the hive's own text, and Windows itself writes the ProductVersion there for some files (AppInstaller.exe: '1.28.240.0'); link_date_utc is the normalised time, empty for those. The raw column is the fallback only for a case parsed before link_date_utc existed.",
+    "primary_timestamp_column": "link_date_utc",
+    "primary_timestamp_fallbacks": ["link_date"],
     "identity_columns_preferred": ["name", "original_file_name", "lower_case_long_path"],
     "table_kind": "execution_evidence"
   },
   "InventoryApplication": {
     "artifact_type": "AmCache",
-    "primary_timestamp_column": "install_date",
+    "primary_timestamp_column": "install_date_utc",
+    "primary_timestamp_fallbacks": ["install_date"],
     "identity_columns_preferred": ["name", "publisher"],
     "table_kind": "installation_evidence"
   },
@@ -289,5 +292,36 @@
     "primary_timestamp_column": "last_written",
     "identity_columns_preferred": ["channel", "source"],
     "table_kind": "system_state"
+  },
+  "InventoryApplicationShortcut": {
+    "artifact_type": "AmCache",
+    "identity_columns_preferred": ["ShortcutTargetPath", "ShortcutPath", "ShortcutAumid"],
+    "table_kind": "installation_evidence"
+  },
+  "LastSaveMRU": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "access_date",
+    "identity_columns_preferred": ["application", "folder_path"],
+    "table_kind": "user_activity"
+  },
+  "WordWheelQuery": {
+    "artifact_type": "Registry",
+    "primary_timestamp_column": "access_date",
+    "identity_columns_preferred": ["search_term"],
+    "table_kind": "user_activity"
+  },
+  "srum_network_data_usage": {
+    "artifact_type": "SRUM",
+    "primary_timestamp_column": "timestamp",
+    "identity_columns_preferred": ["app_name", "app_path"],
+    "table_kind": "resource_usage"
+  },
+  "events": {
+    "artifact_type": "Behaviour",
+    "_comment": "UBA's behaviour events (<case>/UBA/uba_events.db). ts_start is naive UTC, the time the behaviour began; ts_end where it lasted (a burst). executable_name and file_path are derived from details_json by the feather mapping.",
+    "primary_timestamp_column": "ts_start",
+    "secondary_timestamp_columns": ["ts_end"],
+    "identity_columns_preferred": ["executable_name", "file_path"],
+    "table_kind": "behaviour_events"
   }
 }

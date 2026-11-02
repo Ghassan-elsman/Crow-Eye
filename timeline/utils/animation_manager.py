@@ -299,7 +299,7 @@ class HoverEffectManager:
             # Add glow effect on hover
             button.setStyleSheet(original_style + """
                 QPushButton {
-                    border: 1px solid #00FFFF;
+                    border: 3px solid #00FFFF;
                     box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
                 }
             """)

@@ -257,6 +257,7 @@ list is profile-driven.
 | `account_type` | `local`, `built-in`, `service`, `synthetic` (DWM/UMFD sessions), `unresolved` |
 | `account_enabled`, `account_flags` | from the SAM ACB bits: `DISABLED`, `PWD_NOT_REQUIRED`, `PWD_NEVER_EXPIRES`, `AUTO_LOCKED` |
 | `last_logon`, `password_last_set`, `login_count`, `bad_password_count` | from the SAM F record; empty means never |
+| `account_created` | last-write time of `SAM\...\Users\Names\<username>`: when the account was created. A rename, or an in-place Windows upgrade (built-in accounts), rewrites it - so on built-ins it is often the upgrade time |
 | `profile_path`, `profile_loaded` | from ProfileList |
 | `source` | `SAM`, `ProfileList`, `SAM+ProfileList`, or `Artifact` |
 
@@ -269,8 +270,22 @@ is kept because accounts get renamed and names reused, while the name makes the 
 are `MACHINE\username`, or `NT AUTHORITY\SYSTEM` for service accounts, and are derived from the
 evidence itself, never from the analyst's machine.
 
-**Caveat.** Without a collected SAM hive only ProfileList is available, so flags, logon counts and
-never-logged-on accounts are missing. `source` records which inputs were present.
+**Caveat.** Without a collected SAM hive only ProfileList is available, so flags, logon counts,
+creation times and never-logged-on accounts are missing. `source` records which inputs were present.
+
+**Profiles.** `UserProfiles` is ProfileList itself, one row per profile. `profile_load_time` and
+`profile_unload_time` combine `LocalProfileLoadTimeHigh/Low` and `LocalProfileUnloadTimeHigh/Low`:
+the last time the User Profile Service loaded the profile's hive (an interactive logon, RunAs, a
+scheduled task set to run whether the user is logged on or not, or a service running as the user -
+not by itself proof of an interactive logon) and unloaded it (logoff, shutdown, the end of that
+use). A load later than the unload means the profile was loaded when the hive was captured, or
+was not cleanly unloaded (a crash or power loss). To list every account with when it was made and last used:
+
+```sql
+SELECT a.username, a.account_created, a.last_logon, p.profile_load_time, p.profile_unload_time
+FROM UserAccounts a LEFT JOIN UserProfiles p ON p.user_sid = a.user_sid
+ORDER BY a.account_created;
+```
 
 ## Security posture, exposure and device coverage
 

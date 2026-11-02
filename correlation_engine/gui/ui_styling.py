@@ -1,17 +1,17 @@
 """
-Styling for the Correlation Engine - the website's look (ui/site_theme.py).
+Styling for the Correlation Engine - the website's look (ui/app_theme.py).
 
 The engine used to carry its own palette three times over (this module's
 sheets, crow_eye_styles.qss, and per-widget strings in every view), with three
 greens, two cyans and nine different tab bars. Now every engine window takes
-the ONE site sheet (begin_site_theme / apply_site_theme) plus the few rules of
+the ONE theme sheet (begin_theme / apply_theme) plus the few rules of
 its own below (ENGINE_EXTRA), and colour that carries meaning - scores,
 severities, statuses - comes from the site's meaning colours.
 
 Kept here: the colour names other modules read (SCORE_*, MATCHED_*, TEXT_*),
 the icon painters, and the two helpers other windows call
 (apply_progress_dialog_style, apply_evidence_detail_styling), now thin
-wrappers over the site theme.
+wrappers over the app theme.
 """
 
 from PyQt5.QtWidgets import QPushButton
@@ -19,19 +19,19 @@ from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
 
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:                                         # pragma: no cover
-    _site = None
+    _theme = None
 
-_S = getattr(_site, "SCORE_COLORS", {"high": "#4ADE80", "medium": "#FBBF24",
+_S = getattr(_theme, "SCORE_COLORS", {"high": "#4ADE80", "medium": "#FBBF24",
                                      "low": "#FDA4AF", "none": "#64748B"})
-_M = getattr(_site, "STATUS_COLORS", {"ok": "#4ADE80", "warn": "#FBBF24", "bad": "#FDA4AF",
+_M = getattr(_theme, "STATUS_COLORS", {"ok": "#4ADE80", "warn": "#FBBF24", "bad": "#FDA4AF",
                                       "info": "#22D3EE", "accent": "#A5B4FC",
                                       "neutral": "#94A3B8"})
 
 
 def engine_extra():
-    """The engine's own rules, added to the site sheet once per window.
+    """The engine's own rules, added to the theme sheet once per window.
 
     * Result trees: the branch guide-lines and chevrons (CrowEyeIcons SVGs),
       once here instead of one sheet per tree.
@@ -242,11 +242,11 @@ class CorrelationEngineStyles:
         dialog.setMinimumHeight(150)
         dialog.setWindowFlags(Qt.Dialog | Qt.CustomizeWindowHint | Qt.WindowTitleHint
                               | Qt.WindowCloseButtonHint)
-        if _site is None:
+        if _theme is None:
             return
-        _site.apply_site_theme(dialog)
+        _theme.apply_theme(dialog)
         for b in dialog.findChildren(QPushButton):
-            _site.set_variant(b, "ghost")
+            _theme.set_variant(b, "ghost")
 
     @staticmethod
     def apply_evidence_detail_styling(dialog, clear_inline=False):
@@ -254,14 +254,14 @@ class CorrelationEngineStyles:
         engine's own dialogs). By default the dialog's own sheets are kept
         (theirs carry status colours); the engine's dialogs pass
         clear_inline=True and get roles instead."""
-        if _site is None:
+        if _theme is None:
             return
-        _site.apply_site_theme(dialog, clear_inline=clear_inline, extra=engine_extra())
+        _theme.apply_theme(dialog, clear_inline=clear_inline, extra=engine_extra())
         for b in dialog.findChildren(QPushButton):
             if b.property("variant") is None:
                 label = (b.text() or "").lower()
                 if any(k in label for k in ("close", "cancel", "dismiss")):
-                    _site.set_variant(b, "ghost")
+                    _theme.set_variant(b, "ghost")
 
 
 # Crow Eye.py's Anatomy offline dialog imports this name from the module

@@ -8,7 +8,8 @@ live, offline or image, one neutral outcome per artifact:
     PARSED              records were written
     NO_RECORDS          the source was read and held nothing
     SOURCE_NOT_FOUND    the path / hive / file does not exist on this evidence
-    FEATURE_DISABLED    a known OS or setting reason (Prefetch turned off, ...)
+    FEATURE_DISABLED    a known OS or setting reason (Prefetch turned off, SRUM's
+                        Diagnostic Policy Service disabled or stopped, ...)
     UNSUPPORTED_FORMAT  a version or signature the parser does not support
     ACCESS_DENIED       locked or permission problem
     DEPENDENCY_MISSING  a library the parser needs is not installed
@@ -93,8 +94,11 @@ STATUS_INFO = {
                                    "The artifact does not exist on this system or image. "
                                    "Not a failure."),
     ParseStatus.FEATURE_DISABLED: ("Feature disabled", "neutral", "#38BDF8",
-                                   "The OS version or a system setting does not produce "
-                                   "this artifact. Not a failure."),
+                                   "The OS version or a system setting means this artifact "
+                                   "is not being recorded (Prefetch turned off, or the "
+                                   "Diagnostic Policy Service that records SRUM disabled or "
+                                   "stopped). Whatever it recorded before is still parsed "
+                                   "and kept. Neither a success nor a failure."),
     ParseStatus.UNSUPPORTED_FORMAT: ("Unsupported format", "warning", "#F59E0B",
                                      "The artifact exists but its version or format is not "
                                      "supported by the parser, or the file is corrupt."),
@@ -215,6 +219,10 @@ class ArtifactOutcome:
     # Identity indexes this run added to the case database (the re-parse
     # check needs them): a change to the case, so the custody record lists it.
     indexes_created: List[str] = field(default_factory=list)
+    # SRUM / Prefetch switched off: the newest record time in the case's
+    # data (SRUM's TimeStamp, Prefetch's last run), UTC 'YYYY-MM-DD HH:MM:SS'
+    # - where the evidence ends. None when not switched off or nothing dated.
+    last_activity_utc: Optional[str] = None
 
     def __post_init__(self):
         if not self.parsed_at:
@@ -627,6 +635,102 @@ def artifact_db_records(case_root: str, artifact: str,
     return total if seen else None
 
 
+# The record-time column of the two artifacts that can be switched off while
+# their old store stays on disk: SRUM's TimeStamp (`timestamp` in every SRUM
+# table but srum_metadata) and Prefetch's newest run (`last_executed`). Both
+# parsers write them through time_utils.format_forensic_timestamp - UTC,
+# 'YYYY-MM-DD HH:MM:SS' - so the newest is a string MAX, no conversion.
+LAST_ACTIVITY_COLUMNS = {"srum": "timestamp", "prefetch": "last_executed"}
+
+
+def artifact_last_activity(case_root: str, artifact: str) -> Optional[str]:
+    """The newest record time across an artifact's databases, or None.
+
+    SRUM: the max TimeStamp across every SRUM table. Prefetch: the newest last
+    run. UTC 'YYYY-MM-DD HH:MM:SS'. None for any other artifact, no database,
+    or no dated row. Never raises.
+    """
+    column = LAST_ACTIVITY_COLUMNS.get(artifact)
+    if not column or not case_root:
+        return None
+    newest = None
+    for path in artifact_db_paths(case_root, artifact):
+        if not os.path.isfile(path):
+            continue
+        conn = None
+        try:
+            uri = "file:%s?mode=ro" % path.replace("\\", "/")
+            conn = sqlite3.connect(uri, uri=True, timeout=5)
+            names = [r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%'")]
+            for name in names:
+                quoted = name.replace('"', '""')
+                cols = [r[1] for r in conn.execute('PRAGMA table_info("%s")' % quoted)]
+                if column not in cols:
+                    continue
+                value = conn.execute(
+                    "SELECT MAX(substr(replace(\"%s\", 'T', ' '), 1, 19)) FROM \"%s\" "
+                    "WHERE \"%s\" GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]*'"
+                    % (column, quoted, column)).fetchone()[0]
+                if value and (newest is None or value > newest):
+                    newest = value
+        except sqlite3.Error:
+            continue
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    return newest
+
+
+# What a switched-off SRUM / Prefetch run says first: the switch, and where
+# the data it kept ends.
+_SWITCHED_OFF_LEAD = {
+    "srum": ("SRUM recording is disabled (Diagnostic Policy Service off)", "SRUM"),
+    "prefetch": ("Prefetch is disabled (EnablePrefetcher = 0)", "Prefetch"),
+}
+
+
+def switched_off_headline(artifact: str, last_activity: Optional[str]) -> str:
+    """'SRUM recording is disabled (Diagnostic Policy Service off) - data ends
+    at <time> UTC.' / '... - no SRUM data is present.'"""
+    lead, name = _SWITCHED_OFF_LEAD.get(artifact, ("%s is disabled" % artifact, artifact))
+    if last_activity:
+        return "%s - data ends at %s UTC." % (lead, last_activity)
+    return "%s - no %s data is present." % (lead, name)
+
+
+# The verdict beside the status chip. A switched-off source says what it is -
+# disabled on the host - rather than the generic "Not a failure" an empty or
+# missing source gets: the owner's wording, and the one an analyst acts on.
+DISABLED_ON_HOST = "Disabled on host"
+
+
+def status_verdict(status: str) -> str:
+    """'Disabled on host' / 'Not a failure' / 'Not parsed yet' / 'Needs attention'."""
+    if status == ParseStatus.FEATURE_DISABLED:
+        return DISABLED_ON_HOST
+    if status in NOT_A_FAILURE:
+        return "Not a failure"
+    if status == ParseStatus.NOT_RUN:
+        return "Not parsed yet"
+    return "Needs attention"
+
+
+def disabled_on_host_tooltip(artifact: str, last_activity: Optional[str]) -> str:
+    """'SRUM is turned off on this machine. Existing data was kept; last
+    activity <date> UTC.' - the tooltip of a 'Disabled on host' verdict."""
+    name = _SWITCHED_OFF_LEAD.get(artifact, (None, artifact_label(artifact)))[1]
+    if last_activity:
+        when = "last activity %s UTC" % last_activity
+    else:
+        when = "no dated activity was found"
+    return "%s is turned off on this machine. Existing data was kept; %s." % (name, when)
+
+
 # --------------------------------------------------------------------------
 # Source probes
 # --------------------------------------------------------------------------
@@ -689,6 +793,204 @@ def _prefetch_enabled() -> Optional[int]:
         return None
 
 
+# SRUM is collected by the Diagnostic Policy Service. Its svchost
+# (LocalServiceNoNetwork group) loads the SRUM engine - srumon.dll on Windows
+# 8/10, srumsvc.dll + SrumAPI.dll on current Windows 11 builds - and every
+# provider registered under HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion
+# \SRUM\Extensions (appsruprov, nduprov, ncuprov, energyprov, eeprov, ...).
+# No other service hosts a SRUM module. Checked on Windows 11 build 26300,
+# 2026-10-18: DPS's process held all of them.
+#
+# Stopping or disabling DPS stops collection but leaves SRUDB.dat behind, so
+# an existence check alone reads "present" and the run looks complete or
+# empty. The service's own state is the reason.
+SRUM_SERVICE = "DPS"
+SERVICE_DISABLED = 4          # Services\<name>\Start
+_SERVICE_STOPPED = 1          # SERVICE_STATUS.dwCurrentState
+
+
+def _service_start(name: str) -> Optional[int]:
+    """Services\\<name>\\Start on this machine, or None when it cannot be read."""
+    try:
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                             r"SYSTEM\CurrentControlSet\Services" "\\" + name)
+        try:
+            value, _ = winreg.QueryValueEx(key, "Start")
+        finally:
+            winreg.CloseKey(key)
+        return int(value)
+    except Exception:
+        return None
+
+
+def _service_running(name: str) -> Optional[bool]:
+    """Whether the SCM says the service is running; None when it cannot say.
+
+    Only SERVICE_STOPPED counts as not running - a start or stop in progress
+    is not a reason to call the feature off. Querying status needs no
+    elevation (SC_MANAGER_CONNECT + SERVICE_QUERY_STATUS)."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        advapi = ctypes.WinDLL("advapi32", use_last_error=True)
+        advapi.OpenSCManagerW.restype = wintypes.HANDLE
+        advapi.OpenSCManagerW.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+        advapi.OpenServiceW.restype = wintypes.HANDLE
+        advapi.OpenServiceW.argtypes = (wintypes.HANDLE, wintypes.LPCWSTR, wintypes.DWORD)
+        advapi.CloseServiceHandle.argtypes = (wintypes.HANDLE,)
+
+        class _Status(ctypes.Structure):
+            _fields_ = [(n, wintypes.DWORD) for n in (
+                "dwServiceType", "dwCurrentState", "dwControlsAccepted",
+                "dwWin32ExitCode", "dwServiceSpecificExitCode", "dwCheckPoint",
+                "dwWaitHint")]
+        advapi.QueryServiceStatus.argtypes = (wintypes.HANDLE, ctypes.POINTER(_Status))
+
+        scm = advapi.OpenSCManagerW(None, None, 0x0001)
+        if not scm:
+            return None
+        try:
+            svc = advapi.OpenServiceW(scm, name, 0x0004)
+            if not svc:
+                return None
+            try:
+                st = _Status()
+                if not advapi.QueryServiceStatus(svc, ctypes.byref(st)):
+                    return None
+                return st.dwCurrentState != _SERVICE_STOPPED
+            finally:
+                advapi.CloseServiceHandle(svc)
+        finally:
+            advapi.CloseServiceHandle(scm)
+    except Exception:
+        return None
+
+
+def _srum_service_live() -> Dict[str, Any]:
+    """{"start": int|None, "running": bool|None} for the SRUM service."""
+    return {"start": _service_start(SRUM_SERVICE),
+            "running": _service_running(SRUM_SERVICE)}
+
+
+def _srum_off_reason(state: Optional[Dict[str, Any]]) -> str:
+    """Why SRUM is not being collected, or "" when nothing says it is off."""
+    state = state or {}
+    if state.get("start") == SERVICE_DISABLED:
+        return ("SRUM collection is off: the Diagnostic Policy Service (DPS), which "
+                "records SRUM, is disabled (Start = 4).")
+    if state.get("running") is False:
+        return ("SRUM collection is off: the Diagnostic Policy Service (DPS), which "
+                "records SRUM, is not running.")
+    return ""
+
+
+# The case folders a collected SYSTEM hive lands in: the Offline Importer and
+# image extraction write Registry_Hives, a Crow-Claw collection writes Registry
+# (the same list as offline_BrowserClaw._HIVE_DIR_NAMES).
+_HIVE_DIR_NAMES = ("Registry_Hives", "Registry Hives", "RegistryHives", "Registry")
+# SYSTEM, or SYSTEM_1 / SYSTEM_2 for a second install's hive (the collector's
+# name-clash suffix) - never SYSTEM.LOG1, SYSTEM.OLD or a .regtrans-ms.
+_SYSTEM_HIVE_RE = re.compile(r"^system(_\d+)?$", re.I)
+
+
+def _offline_system_hives(case_root: Optional[str],
+                          scanned_paths: Iterable[str] = ()) -> List[str]:
+    """The evidence's SYSTEM hive(s) that may describe the scanned source.
+
+    A mounted image keeps it beside the artifact (<...>\\Windows\\System32
+    \\config\\SYSTEM above a scanned SRUDB.dat or .pf): that one belongs to
+    the source, so it is the only answer. A collected case keeps its hives
+    flat in a hive folder, and a second install's lands beside the first as
+    SYSTEM_1 - with nothing that ties it to SRUDB_1.dat or to a .pf, because
+    each type's clash suffix is counted on its own. So every SYSTEM hive in
+    the case is returned, and the caller trusts a setting only when all of
+    them agree on it."""
+    seen = set()
+    for p in scanned_paths or ():
+        parts = os.path.normpath(str(p)).split(os.sep)
+        low = [x.lower() for x in parts]
+        if "windows" in low:
+            i = len(low) - 1 - low[::-1].index("windows")
+            cand = os.sep.join(parts[:i + 1] + ["System32", "config", "SYSTEM"])
+            if cand not in seen:
+                seen.add(cand)
+                if os.path.isfile(cand):
+                    return [cand]
+    found: List[str] = []
+    if case_root:
+        acq = os.path.join(case_root, "live_acquisition")
+        for name in _HIVE_DIR_NAMES:
+            base = os.path.join(acq, name)
+            if not os.path.isdir(base):
+                continue
+            for cand in sorted(glob.glob(os.path.join(base, "*"))) + sorted(
+                    glob.glob(os.path.join(base, "*", "*"))):
+                if _SYSTEM_HIVE_RE.match(os.path.basename(cand)) \
+                        and os.path.isfile(cand):
+                    key = os.path.normcase(os.path.abspath(cand))
+                    if key not in seen:
+                        seen.add(key)
+                        found.append(cand)
+    return found
+
+
+def _offline_system_hive(case_root: Optional[str],
+                         scanned_paths: Iterable[str] = ()) -> Optional[str]:
+    """The one SYSTEM hive for the source, or None when there is none or the
+    case holds several that nothing ties to it."""
+    hives = _offline_system_hives(case_root, scanned_paths)
+    return hives[0] if len(hives) == 1 else None
+
+
+def _offline_agreed_values(hives: List[str]) -> Dict[str, Optional[int]]:
+    """_offline_system_values over every candidate hive, keeping a value only
+    when every hive gives the same one (an unreadable hive is a disagreement,
+    not an abstention). One image with Prefetch off and one
+    with it on, both in a case with nothing to say which a .pf came from,
+    is unknown - not whichever hive sorted first."""
+    out: Dict[str, Optional[int]] = {"enable_prefetcher": None, "srum_start": None}
+    readings = [_offline_system_values(h) for h in hives]
+    for key in out:
+        seen = {r.get(key) for r in readings}
+        if len(seen) == 1:
+            out[key] = seen.pop()
+    return out
+
+
+def _offline_system_values(hive_path: Optional[str]) -> Dict[str, Optional[int]]:
+    """EnablePrefetcher and the SRUM service's Start, read from a SYSTEM hive.
+
+    {"enable_prefetcher": int|None, "srum_start": int|None}; every value is
+    None when the hive or the key cannot be read. The hive library is
+    imported here, not at module level: this module stays stdlib-only for
+    the headless agent."""
+    out: Dict[str, Optional[int]] = {"enable_prefetcher": None, "srum_start": None}
+    if not hive_path:
+        return out
+    try:
+        from Registry import Registry  # python-registry
+        reg = Registry.Registry(hive_path)
+        try:
+            current = int(reg.open("Select").value("Current").value())
+        except Exception:
+            current = 1
+        cs = "ControlSet%03d" % current
+
+        def value(path, name):
+            try:
+                return int(reg.open(cs + "\\" + path).value(name).value())
+            except Exception:
+                return None
+        out["enable_prefetcher"] = value(
+            r"Control\Session Manager\Memory Management\PrefetchParameters",
+            "EnablePrefetcher")
+        out["srum_start"] = value("Services\\" + SRUM_SERVICE, "Start")
+    except Exception:
+        pass
+    return out
+
+
 def _filesystem_name(root: str) -> str:
     try:
         import ctypes
@@ -717,9 +1019,16 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
     """Pre-flight check of where an artifact lives.
 
     Returns {"sources": [...], "status": <hint or None>, "message": str}.
-    The hint is a neutral one (SOURCE_NOT_FOUND / FEATURE_DISABLED) or
-    ACCESS_DENIED (it is there, and Windows will not let it be read): a probe
-    can say why nothing could be read, never "the parser broke".
+    The hint is a neutral one (SOURCE_NOT_FOUND / FEATURE_DISABLED /
+    NO_RECORDS) or ACCESS_DENIED (it is there, and Windows will not let it be
+    read): a probe can say why nothing could be read, never "the parser broke".
+
+    Prefetch: folder missing -> SOURCE_NOT_FOUND; EnablePrefetcher = 0 ->
+    FEATURE_DISABLED; folder present, Prefetch on, no .pf -> NO_RECORDS.
+    SRUM: the Diagnostic Policy Service disabled (Start = 4) or, live, not
+    running -> FEATURE_DISABLED, even with an old SRUDB.dat still on disk.
+    Offline, both switches are read from the evidence's SYSTEM hive when one
+    is found (a hive has no running state, so only Start = 4 counts there).
 
     Offline/image: `scanned_paths` are the paths ArtifactTypeDetector found
     for this type; an empty list means the evidence does not contain it.
@@ -733,6 +1042,31 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
                 paths = [os.path.join(r, d) for r, ds, _f in os.walk(bdir)
                          if r.count(os.sep) - bdir.count(os.sep) < 3
                          for d in ds if os.path.basename(r).lower() == "users"]
+        # Prefetch and SRUM can be switched off; the evidence's own SYSTEM
+        # hive says so, the way EnablePrefetcher and DPS's Start say it live.
+        # A running state cannot be read from a hive - only Start = 4.
+        if artifact in ("prefetch", "srum"):
+            hives = _offline_system_hives(case_root, paths)
+            values = _offline_agreed_values(hives)
+            hive = "; ".join(hives)
+            if artifact == "prefetch" and values["enable_prefetcher"] == 0:
+                return {"sources": [_src(p) for p in paths[:5]]
+                        + [_src(hive, True, "EnablePrefetcher = 0 (disabled)")],
+                        "status": ParseStatus.FEATURE_DISABLED,
+                        "switched_off": True,
+                        "message": "Prefetch was disabled on this system "
+                                   "(EnablePrefetcher = 0 in its SYSTEM hive)."}
+            off = _srum_off_reason({"start": values["srum_start"]}) \
+                if artifact == "srum" else ""
+            if off:
+                if paths:
+                    off += (" The SRUDB.dat in the evidence holds only what was "
+                            "recorded before collection stopped.")
+                return {"sources": [_src(p) for p in paths[:5]]
+                        + [_src(hive, True, "Services\\DPS\\Start = 4 (disabled)")],
+                        "status": ParseStatus.FEATURE_DISABLED,
+                        "switched_off": True,
+                        "message": off.replace("is disabled", "was disabled")}
         if not paths:
             return {"sources": [], "status": ParseStatus.SOURCE_NOT_FOUND,
                     "message": "No %s artifacts were found in the collected evidence."
@@ -746,6 +1080,9 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
     users = glob.glob(os.path.join(root, "Users", "*"))
     sources: List[Dict[str, Any]] = []
     status, message = None, ""
+    # Prefetch off / SRUM's DPS off - not "too old a Windows", which is
+    # FEATURE_DISABLED too but has no old store and nothing that stopped.
+    switched_off = False
 
     if artifact in ("registry", "shimcache"):
         sources = [_src(os.path.join(win, "System32", "config", "SYSTEM")),
@@ -761,16 +1098,21 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
             sources.append(_src("HKLM\\...\\PrefetchParameters\\EnablePrefetcher", True,
                                 "value 0 (disabled)"))
             status = ParseStatus.FEATURE_DISABLED
+            switched_off = True
             message = ("Prefetch is disabled on this system (EnablePrefetcher = 0). "
                        "This is the default on Windows Server and on some SSD/VM "
                        "configurations.")
         elif not sources[0]["exists"]:
             status, message = ParseStatus.SOURCE_NOT_FOUND, "%s does not exist." % pf
         else:
+            # The folder is there and Prefetch is on: an empty folder is a
+            # source that was read and held nothing (freshly cleared, or a
+            # new install), not a missing one.
             try:
                 if not any(n.lower().endswith(".pf") for n in os.listdir(pf)):
-                    status = ParseStatus.SOURCE_NOT_FOUND
-                    message = "The Prefetch folder exists but contains no .pf files."
+                    status = ParseStatus.NO_RECORDS
+                    message = ("The Prefetch folder exists and Prefetch is enabled, "
+                               "but the folder holds no .pf files.")
             except PermissionError:
                 pass
             except OSError:
@@ -792,15 +1134,29 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
         db = os.path.join(win, "System32", "sru", "SRUDB.dat")
         sources = [_src(db)]
         status, message = _denied_hint(sources, db)
-        if not sources[0]["exists"]:
-            build = _windows_build()
-            if build and build < 9200:
+        build = _windows_build()
+        if build and build < 9200 and not sources[0]["exists"]:
+            status = ParseStatus.FEATURE_DISABLED
+            message = "SRUM exists only on Windows 8 and later."
+        elif status is None:
+            # A refusal wins: an old SRUDB.dat still holds evidence, and
+            # running as Administrator is what reads it.
+            state = _srum_service_live()
+            off = _srum_off_reason(state)
+            if off:
+                note = ("Start = 4 (disabled)" if state.get("start") == SERVICE_DISABLED
+                        else "not running")
+                sources.append(_src("HKLM\\SYSTEM\\CurrentControlSet\\Services\\DPS",
+                                    True, note))
                 status = ParseStatus.FEATURE_DISABLED
-                message = "SRUM exists only on Windows 8 and later."
-            else:
+                switched_off = True
+                message = off
+                if sources[0]["exists"]:
+                    message += (" SRUDB.dat is still on disk and holds only what was "
+                                "recorded before collection stopped.")
+            elif not sources[0]["exists"]:
                 status = ParseStatus.SOURCE_NOT_FOUND
-                message = ("SRUDB.dat does not exist - the Diagnostic Policy Service may "
-                           "be disabled.")
+                message = "%s does not exist." % db
 
     elif artifact == "evtx":
         logs = os.path.join(win, "System32", "winevt", "Logs")
@@ -849,7 +1205,10 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
             status = ParseStatus.SOURCE_NOT_FOUND
             message = "%s is %s, not NTFS - there is no $MFT / $UsnJrnl." % (root, fs)
 
-    return {"sources": sources, "status": status, "message": message}
+    out = {"sources": sources, "status": status, "message": message}
+    if switched_off:
+        out["switched_off"] = True
+    return out
 
 
 # --------------------------------------------------------------------------
@@ -892,7 +1251,8 @@ def classify_result(artifact: str, raw_result: Any = None, exc: Optional[BaseExc
                     db_records: Optional[int] = None, details: Optional[List[str]] = None,
                     cancelled: bool = False, rows_before: Optional[int] = None,
                     rows_after: Optional[int] = None,
-                    log_excerpt: Optional[List[str]] = None) -> ArtifactOutcome:
+                    log_excerpt: Optional[List[str]] = None,
+                    last_activity: Optional[str] = None) -> ArtifactOutcome:
     """Turn whatever a parser handed back into one ArtifactOutcome.
 
     Understands: dicts with success/error/errors/warnings/records/statistics,
@@ -901,6 +1261,10 @@ def classify_result(artifact: str, raw_result: Any = None, exc: Optional[BaseExc
 
     Order: explicit status -> cancelled -> exception/error text -> neutral
     probe hint when nothing was produced -> record count.
+
+    ``last_activity``: for SRUM / Prefetch, the newest record time in the
+    case's data (artifact_last_activity) - what a switched-off run says the
+    data ends at. The probe's own ``last_activity_utc`` is used when not given.
     """
     probe = probe or {}
     sources = list(probe.get("sources") or [])
@@ -987,6 +1351,10 @@ def classify_result(artifact: str, raw_result: Any = None, exc: Optional[BaseExc
         records = db_records or 0
     probe_hint = probe.get("status")
     probe_msg = probe.get("message", "")
+    switched_off = bool(probe.get("switched_off")) and \
+        probe_hint == ParseStatus.FEATURE_DISABLED
+    if last_activity is None:
+        last_activity = probe.get("last_activity_utc")
     excerpt = list(log_excerpt or [])
     if traceback_text and not any("Traceback" in ln for ln in excerpt):
         excerpt += traceback_text.strip().splitlines()[-25:]
@@ -1000,7 +1368,10 @@ def classify_result(artifact: str, raw_result: Any = None, exc: Optional[BaseExc
                                inserted=inserted, duplicates=duplicates,
                                rows_before=rows_before, rows_after=rows_after,
                                error=(errors[0] if errors else ""),
-                               log_excerpt=excerpt[-60:], indexes_created=indexes)
+                               log_excerpt=excerpt[-60:], indexes_created=indexes,
+                               last_activity_utc=(last_activity if switched_off
+                                                  and status == ParseStatus.FEATURE_DISABLED
+                                                  else None))
 
     def counted(text):
         """'1,024 record(s) read: 0 new, 1,024 already in the case.'"""
@@ -1020,12 +1391,46 @@ def classify_result(artifact: str, raw_result: Any = None, exc: Optional[BaseExc
     if probe_hint == ParseStatus.NOT_RUN and records == 0:
         return out(ParseStatus.NOT_RUN, probe_msg)
 
+    # Switched off: SRUM's Diagnostic Policy Service disabled or stopped
+    # (Start = 4 on an image), or EnablePrefetcher = 0. The owner's rule: the
+    # run is neither a success nor a failure, WHATEVER it read. The parse
+    # still ran in full and every row it found - old ones, and any newer than
+    # the last parse - is kept in the case; the status is FEATURE_DISABLED and
+    # the message leads with the switch and where the data ends. A parser
+    # that broke on the old store is still a failure, below.
+    if switched_off and (records == 0 or (not errors and success is not False)):
+        msg = switched_off_headline(artifact, last_activity)
+        if records:
+            msg += " " + counted("{:,} record(s) read and kept.".format(records))
+        if probe_msg:
+            msg += " " + probe_msg
+        return out(ParseStatus.FEATURE_DISABLED, msg)
+
     # Nothing produced and the probe already knows why: that is the answer,
-    # whatever error text the parser threw on its way out.
+    # whatever error text the parser threw on its way out. NO_RECORDS is a
+    # probe's answer too: the Prefetch folder is there, Prefetch is on, and
+    # the folder holds no .pf files (Prefetch_claw then writes no database).
     if records == 0 and probe_hint in (ParseStatus.SOURCE_NOT_FOUND,
                                        ParseStatus.FEATURE_DISABLED,
-                                       ParseStatus.ACCESS_DENIED):
+                                       ParseStatus.ACCESS_DENIED,
+                                       ParseStatus.NO_RECORDS):
         return out(probe_hint, probe_msg)
+
+    # FEATURE_DISABLED from a probe that did not mark it as a switch (an
+    # older caller's probe dict), with rows. The rows are real, but they are
+    # history that will not grow. A run that added nothing new is the
+    # switch's answer, and a run that did add rows keeps PARSED with the
+    # reason leading the message, so "collection is off" is never hidden
+    # behind a record count.
+    if (probe_hint == ParseStatus.FEATURE_DISABLED and records > 0
+            and not errors and success is not False):
+        if inserted == 0:
+            return out(ParseStatus.FEATURE_DISABLED,
+                       "%s %s" % (probe_msg, counted(
+                           "{:,} record(s) read, none new.".format(records))))
+        return out(ParseStatus.PARSED,
+                   "%s %s" % (probe_msg, counted(
+                       "{:,} record(s) extracted.".format(records))))
 
     if errors or success is False:
         text = errors[0] if errors else "The parser reported failure without a message."
@@ -1120,10 +1525,12 @@ def collect_live_outcome(artifact: str, case_root: str, windows_partition: str,
                       "errors": ["%d prefetch file(s) use a version or format the parser does "
                                  "not support, or are corrupt" % len(details)]}
     rows_after = artifact_db_rowcount(case_root, artifact) if rows_before is not None else None
+    last_activity = (artifact_last_activity(case_root, artifact)
+                     if probe.get("switched_off") else None)
     return classify_result(artifact, raw_result, exc=exc, probe=probe, mode="live",
                            db_records=db_records, details=details, cancelled=cancelled,
                            rows_before=rows_before, rows_after=rows_after,
-                           log_excerpt=log_excerpt)
+                           log_excerpt=log_excerpt, last_activity=last_activity)
 
 
 # --------------------------------------------------------------------------

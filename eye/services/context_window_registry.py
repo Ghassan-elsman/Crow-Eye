@@ -39,11 +39,16 @@ _RUNTIME_PROBED_BACKENDS = {"ollama", "lm_studio", "vllm", "llama", "gemini_cli"
 # most-specific entries first so e.g. "gpt-4o" wins over "gpt-4".
 _MODEL_WINDOWS = [
     # --- Anthropic Claude ---------------------------------------------------
-    # Claude 4.x family, Fable, and Claude 3.x family all default to 200K.
+    # Claude 5.x (Opus 5 / 5.5, Sonnet 5 / 5.5, Haiku 5.5), Fable 5 / 5.1 and
+    # Mythos: 1M. Claude 4.x and 3.x default to 200K.
+    ("claude-opus-5", 1_000_000),
+    ("claude-sonnet-5", 1_000_000),
+    ("claude-haiku-5", 1_000_000),
+    ("claude-fable", 1_000_000),
+    ("claude-mythos", 1_000_000),
     ("claude-opus-4", 200_000),
     ("claude-sonnet-4", 200_000),
     ("claude-haiku-4", 200_000),
-    ("claude-fable", 200_000),
     ("claude-3-7", 200_000),
     ("claude-3-5", 200_000),
     ("claude-3", 200_000),
@@ -147,6 +152,18 @@ def resolve_context_window(backend: Optional[str], model_name: Optional[str]) ->
     if not name:
         return None
 
+    # Claude Code takes aliases ("sonnet", "opus") that name the current Claude 5 models.
+    if bk == "codex_cli":
+        from eye.backends.local_cli.codex_backend import CODEX_CONTEXT_WINDOW
+        return CODEX_CONTEXT_WINDOW
+
+    if bk == "claude_code":
+        # Aliases name the current Claude 5 models (1M). Eye plans for less, leaving
+        # room for Claude Code's own prompt and its session (claude_code_backend).
+        from eye.backends.local_cli.claude_code_backend import EYE_CONTEXT_WINDOW
+        if name in ("sonnet", "opus", "fable", "haiku", "opusplan", "default") or name.startswith("claude-"):
+            return EYE_CONTEXT_WINDOW
+
     for prefix, window in _MODEL_WINDOWS:
         if name.startswith(prefix) or prefix in name:
             return window
@@ -176,7 +193,21 @@ def resolve_context_window(backend: Optional[str], model_name: Optional[str]) ->
 # are keyed by their backend id.
 # ---------------------------------------------------------------------------
 CURATED_MODELS: dict = {
+    "claude_code": [
+        "sonnet",
+        "opus",
+        "fable",
+        "haiku",
+        "claude-sonnet-5-5",
+        "claude-opus-5-5",
+        "claude-fable-5-1",
+        "claude-haiku-5-5",
+    ],
     "anthropic": [
+        "claude-opus-5-5",
+        "claude-sonnet-5-5",
+        "claude-haiku-5-5",
+        "claude-fable-5-1",
         "claude-opus-4-8",
         "claude-opus-4-7",
         "claude-opus-4-6",
@@ -259,10 +290,15 @@ CURATED_MODELS: dict = {
 # that cannot call tools (e.g. DeepSeek-Reasoner/R1) are deliberately excluded
 # from recommendations even when they are otherwise strong.
 RECOMMENDED_MODELS: dict = {
+    "claude_code": [
+        "sonnet",             # balanced default (Claude Sonnet 5.5)
+        "opus",               # deepest analysis (Claude Opus 5.5)
+        "haiku",              # fast triage
+    ],
     "anthropic": [
-        "claude-opus-4-8",    # deep / complex threat analysis
-        "claude-sonnet-4-6",  # balanced default
-        "claude-haiku-4-5",   # fast triage
+        "claude-opus-5-5",    # deep / complex threat analysis
+        "claude-sonnet-5-5",  # balanced default
+        "claude-haiku-5-5",   # fast triage, and the lowest cost ($0.10 / $0.50 per 1M tokens)
     ],
     "openai": [
         "gpt-4.1",            # most powerful general tool-caller

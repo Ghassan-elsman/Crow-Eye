@@ -20,9 +20,9 @@ class SearchFilterDialog(QtWidgets.QDialog):
         self.setMinimumHeight(600)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         
-        # The site look, set before the widgets exist (ui/site_theme.py)
-        from ui.site_theme import begin_site_theme
-        begin_site_theme(self)
+        # The site look, set before the widgets exist (ui/app_theme.py)
+        from ui.app_theme import begin_theme
+        begin_theme(self)
         
         # Store saved filter settings
         self.saved_tables = saved_tables
@@ -50,8 +50,8 @@ class SearchFilterDialog(QtWidgets.QDialog):
         self.load_saved_filter()
 
         # Roles for what the inline sheets said; Apply is the main action
-        from ui.site_theme import apply_site_theme, set_variant
-        apply_site_theme(self)
+        from ui.app_theme import apply_theme, set_variant
+        apply_theme(self)
         set_variant(self.apply_button, "primary")
         set_variant(self.cancel_button, "ghost")
     
@@ -61,7 +61,7 @@ class SearchFilterDialog(QtWidgets.QDialog):
         self.table_group.setStyleSheet(CrowEyeStyles.GROUP_BOX + """
             QGroupBox {
                 background-color: #1a1a2e;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 8px;
                 margin-top: 15px;
                 padding: 5px;
@@ -308,7 +308,7 @@ class SearchFilterDialog(QtWidgets.QDialog):
         self.time_group.setStyleSheet(CrowEyeStyles.GROUP_BOX + """
             QGroupBox {
                 background-color: #1a1a2e;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 8px;
                 margin-top: 15px;
                 padding: 5px;
@@ -388,7 +388,7 @@ class SearchFilterDialog(QtWidgets.QDialog):
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00FFFF, stop:1 #00BFFF);
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
             }
             QPushButton:pressed {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0080FF, stop:1 #00FFFF);
@@ -410,7 +410,7 @@ class SearchFilterDialog(QtWidgets.QDialog):
             }
             QPushButton:hover {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF0080, stop:1 #FF40FF);
-                border: 1px solid #FF00FF;
+                border: 3px solid #FF00FF;
             }
             QPushButton:pressed {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #FF00FF, stop:1 #FF0080);

@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from .base_engine import BaseCorrelationEngine, EngineMetadata, FilterConfig
 from .identity_correlation_engine import IdentityCorrelationEngine
 from .identity_grouping import sub_identity_key
+from .anchor_choice import choose_anchor
 from .correlation_result import CorrelationResult, CorrelationMatch
 from .weighted_scoring import WeightedScoringEngine
 from .progress_tracking import ProgressTracker, ProgressListener, ProgressEvent, ProgressEventType, CorrelationProgressReporter, CorrelationStallMonitor, CorrelationStallException, OperationCancelledException
@@ -121,6 +122,61 @@ class _RowFetcher:
         self._conns.clear()
 
 
+# Slash dates the feathers carry besides ISO text: AmCache's link_date is
+# month first ("12/31/2025 12:13:05"), its install_date can be day first
+# ("20/12/2026 00:00:00"). Month first is tried first, as dateutil does.
+_ANCHOR_TIME_FORMATS = (
+    "%m/%d/%Y %H:%M:%S", "%m/%d/%Y %H:%M", "%m/%d/%Y",
+    "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%d/%m/%Y",
+    "%Y/%m/%d %H:%M:%S", "%Y/%m/%d",
+)
+
+
+def parse_anchor_time(value):
+    """A record's time for anchor clustering, or None when it is not a time.
+
+    Standard library only, so a run gives the same anchors with or without
+    dateutil installed. dateutil gated the clustering until 2026-11-02 (E8):
+    without it (the Sentinel server on Linux) every record of an identity fell
+    into one anchor, and with it the slash dates above parsed where nothing
+    else did."""
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text[:-1] + "+00:00" if text.endswith("Z") else text)
+    except ValueError:
+        pass
+    for fmt in _ANCHOR_TIME_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def wing_time_window_minutes(wing_config: Any, default: int = 180) -> int:
+    """The Wing's time window in minutes: WingConfig keeps it at the top level,
+    the Wing model under correlation_rules. `default` when neither is a
+    positive number."""
+    rules = getattr(wing_config, 'correlation_rules', None)
+    if isinstance(wing_config, dict):
+        candidates = (wing_config.get('time_window_minutes'),
+                      (wing_config.get('correlation_rules') or {}).get('time_window_minutes'))
+    else:
+        candidates = (getattr(wing_config, 'time_window_minutes', None),
+                      rules.get('time_window_minutes') if isinstance(rules, dict)
+                      else getattr(rules, 'time_window_minutes', None))
+    for value in candidates:
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return value
+    return default
+
+
 class IdentityBasedEngineAdapter(BaseCorrelationEngine):
     """
     Adapter for Identity-Based Correlation Engine with integrated semantic mapping,
@@ -133,6 +189,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
     - Progress tracking integration
     - Enhanced result formatting
     """
+
+    ENGINE_TYPE = "identity_based"
+    SUPPORTS_STREAMING = True
     
     def __init__(self, config: Any, filters: Optional[FilterConfig] = None,
                  mapping_integration: Optional[Any] = None,
@@ -155,6 +214,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # `results` rows this engine streamed into during the current execute().
         # Reset per call; read afterwards to stamp CorrelationResult._result_id.
         self._streamed_result_ids: List[int] = []
+        self._wing_rule_passes: List[Any] = []
 
         # Run-scoped feather cache, shared across the wings of one run when the
         # caller provides one (see set_feather_cache). None = load every time,
@@ -258,7 +318,32 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Streaming support
         self._output_dir = None
         self._execution_id = None
+
+        # The corroboration floor, as the Time engine has it (its
+        # scanning_config carries the same two knobs): None takes the Wing's
+        # own (CorrelationRules.required_feather_count: the anchor plus
+        # minimum_matches, never below 2); 0 emits every anchor; review mode
+        # keeps the anchors below the floor, labelled "Low - single feather".
+        self.min_feathers_override: Optional[int] = None
+        self.low_confidence_review_mode: bool = False
     
+    def _feather_floor(self, wing_config: Any) -> int:
+        """Distinct feathers an anchor must span to be emitted: the override
+        when set (0 = every anchor), else the anchor plus the Wing's
+        minimum_matches, never below 2 (CorrelationRules.required_feather_count)."""
+        if self.min_feathers_override is not None:
+            return int(self.min_feathers_override)
+        rules = getattr(wing_config, 'correlation_rules', None)
+        if rules is not None and hasattr(rules, 'required_feather_count'):
+            return rules.required_feather_count()
+        mm = getattr(wing_config, 'minimum_matches', None)
+        if mm is None and isinstance(wing_config, dict):
+            mm = wing_config.get('minimum_matches')
+        try:
+            return max(2, int(mm) + 1)
+        except (TypeError, ValueError):
+            return 2
+
     def set_output_directory(self, output_dir: str, execution_id: int = None):
         """
         Set output directory for streaming results to database.
@@ -344,6 +429,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             all_feather_stats = {} # Collect feather stats from all wings
             # Result rows this call streamed into, filled by _process_wing.
             self._streamed_result_ids = []
+            # One WingRulePass per wing processed by this call.
+            self._wing_rule_passes = []
             
             for wing_idx, wing_config in enumerate(wing_configs, 1):
                 wing_name = getattr(wing_config, 'wing_name', 'Unknown')
@@ -651,6 +738,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             )
             logger.info(f"[Identity Engine] DEBUG: _execute_identity_semantic_phase returned")
             logger.info(f"[Identity Engine] Identity Semantic Phase completed")
+            # After the SQL phase, which replaces semantic_data on the matches
+            # global rules hit: put the Wing-rule annotations back.
+            self._write_wing_rule_annotations(streaming_enabled, feather_metadata)
             # The phase may hand back another result object; the statistics
             # built above must stay on whatever the pipeline saves next, or its
             # final save_result writes the row back without them.
@@ -1036,8 +1126,16 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         cache_key = None
         if cache is not None:
             try:
+                # The feather id is part of the key: the rows carry it
+                # (record['_feather_id'] and every reference), and two wings
+                # can name one feather file differently - Execution Proof's
+                # 'amcache_file' is Execution Without Trace's 'amcache'. Keyed
+                # by the file alone, the second wing got the first wing's
+                # rows, failed to resolve them (KeyError on the other id) and
+                # reported 0 matches; which wing lost depended on the order
+                # the wings ran in (2026-11-02, E9).
                 cache_key = cache.key(db_path, self._filter_signature(),
-                                      kind="identity_records")
+                                      kind="identity_records:%s" % feather_id)
                 hit = cache.get(cache_key)
             except Exception as e:
                 logger.warning(f"[Identity Engine] Feather cache unusable for "
@@ -1385,9 +1483,11 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             
             if streaming_writer:
                 streaming_writer.close()
-            
-            return matches, 0
-        
+
+            # Three values, like every other return: the caller unpacks
+            # (matches, identities, feather_stats).
+            return matches, 0, {}
+
         if self.debug_mode:
             logger.info(f"[Identity Engine] Loading {len(feather_paths)} feathers...")
         
@@ -1584,8 +1684,32 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         
         logger.info(f"\n[Identity Engine] Correlating {len(identity_index):,} identities...")
         
-        min_matches = 1 # Show ALL identities
-        time_window_minutes = 180 # Time window for anchor clustering (default: 3 hours)
+        min_matches = 1 # identities of one record still form anchors; the floor below filters them
+        # The Wing's corroboration floor (Ghassan, 2026-10-31: Identity honours
+        # minimum_matches as Time does). Identity emitted every anchor, so
+        # 75,274 of 76,369 matches on the 16-2-2026 case named one feather
+        # and correlated nothing.
+        feather_floor = self._feather_floor(wing_config)
+        from .behaviour_context import context_feather_ids, corroborating_count
+        _context_ids = context_feather_ids(wing_config)
+        self._anchor_wing = wing_config
+        # The Wing's targets (wing_targets): an identity is kept when its name
+        # or path is the target application and its path the target path.
+        # Event IDs are a row's, and the identities here are formed before the
+        # rows are read, so they are said to be unused rather than ignored.
+        from .wing_targets import WingTargets
+        wing_targets = WingTargets(wing_config)
+        if wing_targets.active:
+            print(f"[Identity Engine] Wing narrowed to {wing_targets.describe()}")
+        if wing_targets.event_ids:
+            print("[Identity Engine] The Wing's Event ID target is not applied by the Identity "
+                  "engine (it groups identities before reading rows); run it as a Time Wing to "
+                  "filter by Event ID.")
+        below_floor_dropped = 0
+        # The Wing's own time window clusters its anchors: a Wing written for a
+        # burst (60 minutes, a brute-force spray) or a day (1440) was clustered
+        # at a fixed 180 minutes whatever it said. 180 when the Wing names none.
+        time_window_minutes = wing_time_window_minutes(wing_config)
         
         # Diagnostic counters
         single_record_identities = 0
@@ -1638,6 +1762,13 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         cancellation_check_interval = 15000 if total_identities > 100000 else 10000 # Less frequent checks for large datasets
         # Full rows are read back by rowid only when a match is built.
         self._row_fetcher = _RowFetcher(feather_paths)
+        # The Wing's own semantic rules (match per anchor, advanced per
+        # identity), annotating the matches they hit.
+        from .wing_rule_pass import WingRulePass
+        rule_pass = WingRulePass(
+            wing_config,
+            semantic_manager=getattr(self.semantic_integration, 'semantic_manager', None))
+        self._wing_rule_passes.append(rule_pass)
         import time as _time
         last_phase_emit = 0.0
         
@@ -1705,7 +1836,9 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 multi_feather_identities += 1
             
             # Create anchors for this identity using temporal clustering
-            if len(records) >= min_matches:
+            in_target = (not wing_targets.active or
+                         wing_targets.identity_matches(identity_data.get('name'), identity_data.get('path')))
+            if len(records) >= min_matches and in_target:
                 # Log hash processing for first few identities or periodically
                 if self.debug_mode and (processed_count < 5 or processed_count % 1000 == 0):
                     logger.info(f"[Identity Engine] Processing identity {processed_count}: {len(records)} records, {len(feather_ids)} feathers")
@@ -1725,6 +1858,20 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 
                 # Increment match counter for next identity
                 match_counter += len(identity_anchors)
+
+                if feather_floor > 1 and not self.low_confidence_review_mode:
+                    # A Behaviour feather is context, never corroboration
+                    # (engine/behaviour_context).
+                    kept = [a for a in identity_anchors
+                            if (corroborating_count(a.feather_records or {}, _context_ids)
+                                if _context_ids else
+                                (getattr(a, 'feather_count', 0) or len(a.feather_records or {})))
+                            >= feather_floor]
+                    below_floor_dropped += len(identity_anchors) - len(kept)
+                    identity_anchors = kept
+
+                if rule_pass.enabled:
+                    rule_pass.annotate(identity_data, records, identity_anchors)
                 
                 # Handle streaming vs in-memory
                 if streaming_enabled and streaming_writer:
@@ -1766,6 +1913,7 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # Requirements: 4.1, 4.5
         progress_reporter.force_report()
         self._row_fetcher.close()
+        rule_pass.log_summary()
         
         # Flush any remaining matches in streaming mode
         if streaming_enabled and streaming_writer:
@@ -1797,6 +1945,13 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             logger.info(f"[Identity Engine] - Single record: {single_record_identities:,}")
             logger.info(f"[Identity Engine] - Same feather: {single_feather_identities:,}")
             logger.info(f"[Identity Engine] - Multi-feather: {multi_feather_identities:,} (correlated)")
+
+        if below_floor_dropped:
+            # Said where the analyst reads the run: fewer matches than before
+            # is the floor working, not evidence missing.
+            print(f"[Identity Engine] {below_floor_dropped:,} anchor(s) spanning fewer than "
+                  f"{feather_floor} feathers were not emitted (the Wing's minimum_matches). "
+                  f"Set low_confidence_review_mode to see them labelled Low.")
         
         if self.verbose_logging:
             logger.info(f"Created {match_count} correlation matches for wing {wing_id}")
@@ -1852,12 +2007,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         Returns:
             List of CorrelationMatch objects (one per anchor)
         """
-        # PERFORMANCE FIX: Import dateutil parser ONCE at the top, not in the loop
-        try:
-            from dateutil import parser as date_parser
-            has_dateutil = True
-        except ImportError:
-            has_dateutil = False
+        # Times parse with parse_anchor_time (standard library only), so the
+        # anchors do not depend on whether dateutil is installed (E8).
         
         # Step 1: Extract timestamps and sort records. A reference carries
         # its first timestamp (read when the feather streamed).
@@ -1885,19 +2036,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         dt_anchor_end_ok = False
 
         for timestamp, record in records_with_timestamps:
-            dt_current = None
-            dt_current_ok = False
-            if has_dateutil:
-                try:
-                    # ISO strings (what the feathers store) parse natively;
-                    # dateutil only for anything else - same datetime either way.
-                    try:
-                        dt_current = datetime.fromisoformat(timestamp)
-                    except ValueError:
-                        dt_current = date_parser.parse(timestamp)
-                    dt_current_ok = True
-                except Exception:
-                    dt_current_ok = False
+            dt_current = parse_anchor_time(timestamp)
+            dt_current_ok = dt_current is not None
             if not current_anchor_records:
                 # Start first anchor
                 current_anchor_records = [record]
@@ -1909,26 +2049,18 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
                 # Parse timestamps and calculate time difference
                 should_create_new_anchor = False
                 
-                if has_dateutil:
-                    try:
-                        if not (dt_current_ok and dt_anchor_end_ok):
-                            raise ValueError("unparsable timestamp")
+                try:
+                    if not (dt_current_ok and dt_anchor_end_ok):
+                        raise ValueError("unparsable timestamp")
 
-                        # Calculate time difference in minutes
-                        time_diff = (dt_current - dt_anchor_end).total_seconds() / 60
+                    # Calculate time difference in minutes
+                    time_diff = (dt_current - dt_anchor_end).total_seconds() / 60
 
-                        # If time difference exceeds window, create new anchor
-                        if abs(time_diff) > time_window_minutes:
-                            should_create_new_anchor = True
-                    except Exception as e:
-                        # If parsing fails, try simple string comparison
-                        # If timestamps are different, might be different time periods
-                        if timestamp != current_anchor_end:
-                            # For safety, keep in same anchor if can't parse
-                            pass
-                else:
-                    # dateutil not available, use simple heuristic
-                    # If timestamps are very different strings, might be different periods
+                    # If time difference exceeds window, create new anchor
+                    if abs(time_diff) > time_window_minutes:
+                        should_create_new_anchor = True
+                except Exception:
+                    # An unparsable time stays in the current anchor.
                     pass
                 
                 if should_create_new_anchor:
@@ -1968,13 +2100,16 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             if anchor_match:
                 anchors.append(anchor_match)
         
-        # Step 3: Handle records without timestamps (create separate anchor)
+        # Step 3: Handle records without timestamps (create separate anchor).
+        # It has no time: it was stamped with the moment the engine ran, which
+        # put undated evidence on the timeline at the analysis and made two
+        # runs of the same case disagree.
         if records_without_timestamps:
             anchor_match = self._create_anchor_match(
                 records_without_timestamps,
                 identity_data,
-                datetime.now().isoformat(),
-                datetime.now().isoformat(),
+                "",
+                "",
                 feather_paths,
                 match_counter=match_counter_start + len(anchors)
             )
@@ -2126,9 +2261,15 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
         # PERFORMANCE: Use counter-based ID with execution_id for guaranteed uniqueness
         # Include execution_id and counter to prevent collisions
         import time
-        timestamp_micros = int(time.time() * 1000000)
-        exec_id_part = f"e{self._execution_id}_" if self._execution_id else ""
-        match_id = f"match_{exec_id_part}{timestamp_micros}_{match_counter}_{len(feather_ids)}"
+        # The execution and the run's own counter make the id unique, and the
+        # same on a rerun of the same case (the counter follows the engine's
+        # deterministic order), so two runs can be compared match by match.
+        # The clock was part of it, which made every rerun's ids differ; it is
+        # kept only when there is no execution to scope the counter.
+        if self._execution_id:
+            match_id = f"match_e{self._execution_id}_{match_counter}_{len(feather_ids)}"
+        else:
+            match_id = f"match_{int(time.time() * 1000000)}_{match_counter}_{len(feather_ids)}"
         
         if self.debug_mode:
             logger.info(f"[Identity Engine] MATCH: Generated ID = {match_id}")
@@ -2169,7 +2310,8 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             match_score=confidence_score,
             feather_count=n_feathers,
             time_spread_seconds=0, # Simplified for performance
-            anchor_feather_id=feather_ids[0] if feather_ids else '',
+            # The Wing's anchor priority (anchor_choice), not list order.
+            anchor_feather_id=choose_anchor(feather_ids, getattr(self, '_anchor_wing', None)),
             anchor_artifact_type='Identity',
             matched_application=identity_data.get('base_name', identity_data['name']), # Use base name for display
             matched_file_path=identity_data['path'],
@@ -3312,6 +3454,27 @@ class IdentityBasedEngineAdapter(BaseCorrelationEngine):
             logger.info(f"[Identity Engine] Continuing with original correlation results")
             return correlation_results
     
+    def _write_wing_rule_annotations(self, streaming_enabled: bool,
+                                     feather_metadata: Dict[str, Any]) -> None:
+        """Store the Wing-rule hits of this call and note them in the run's
+        engine metadata (counts per rule; never part of the score)."""
+        from pathlib import Path
+        passes = getattr(self, '_wing_rule_passes', None) or []
+        summaries = []
+        for rule_pass in passes:
+            if streaming_enabled and self._output_dir:
+                try:
+                    written = rule_pass.write_back(
+                        str(Path(self._output_dir) / "correlation_results.db"))
+                    if written:
+                        logger.info(f"[Identity Engine] Wing rule hits written to "
+                                    f"{written:,} matches")
+                except Exception as e:
+                    logger.warning(f"[Identity Engine] Could not store Wing rule hits: {e}")
+            summaries.append(rule_pass.summary())
+        if summaries and isinstance(feather_metadata.get('_engine_metadata'), dict):
+            feather_metadata['_engine_metadata']['wing_rules'] = summaries
+
     def _estimate_total_identities(self, wing_configs: List[Any]) -> int:
         """
         Estimate total number of identities to process for progress tracking.

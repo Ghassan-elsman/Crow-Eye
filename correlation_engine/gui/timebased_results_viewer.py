@@ -27,8 +27,8 @@ from correlation_engine.gui.identity_results_view import (
     _search_semantic_data, _tone, _colour_score, _colour_severity, _percent, _item_font,
     HIDDEN_RECORD_KEYS, style_viewer_bars, bar_label, begin_dialog_look, finish_dialog_look,
 )
-from ui import site_theme as _site
-from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
+from ui import app_theme as _theme
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label, icon_table_item
 
 logger = logging.getLogger(__name__)
 
@@ -249,7 +249,7 @@ class TimeBasedResultsViewer(QWidget):
         # Reset button
         reset_btn = QPushButton("Reset")
         reset_btn.setMaximumWidth(50)
-        _site.set_variant(reset_btn, "ghost")
+        _theme.set_variant(reset_btn, "ghost")
         # The variant's uppercase, tracked font is wider: never clip the label
         reset_btn.setMaximumWidth(max(reset_btn.maximumWidth(), reset_btn.sizeHint().width()))
         reset_btn.clicked.connect(self._reset_filters)
@@ -263,7 +263,7 @@ class TimeBasedResultsViewer(QWidget):
         # Pagination controls
         self.prev_btn = QPushButton("<")
         self.prev_btn.setMaximumWidth(24)
-        _site.set_variant(self.prev_btn, "ghost")
+        _theme.set_variant(self.prev_btn, "ghost")
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
@@ -273,7 +273,7 @@ class TimeBasedResultsViewer(QWidget):
         
         self.next_btn = QPushButton(">")
         self.next_btn.setMaximumWidth(24)
-        _site.set_variant(self.next_btn, "ghost")
+        _theme.set_variant(self.next_btn, "ghost")
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -336,7 +336,7 @@ class TimeBasedResultsViewer(QWidget):
 
         # Guide lines show which row nests under which, chevrons the expanded /
         # collapsed state: ui_styling.engine_extra(), the same rule set as the
-        # identity viewer's tree (the window's site sheet).
+        # identity viewer's tree (the window's theme sheet).
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
@@ -794,7 +794,7 @@ class TimeBasedResultsViewer(QWidget):
         # Update windows label with cancelled indicator
         if is_cancelled:
             apply_status_to_label(self.windows_lbl, "WARN", f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
-            _site.set_status(self.windows_lbl, "warn")
+            _theme.set_status(self.windows_lbl, "warn")
             tooltip_text = (
                 f"[WARN] EXECUTION CANCELLED\n"
                 f"Showing partial results\n\n"
@@ -806,7 +806,7 @@ class TimeBasedResultsViewer(QWidget):
             )
         else:
             self.windows_lbl.setText(f"{total_windows:,} ({windows_with_data}/{empty_skipped})")
-            _site.set_status(self.windows_lbl, "info")
+            _theme.set_status(self.windows_lbl, "info")
             tooltip_text = (
                 f"Windows\n\n"
                 f"Total: {total_windows:,}\n"
@@ -1698,7 +1698,7 @@ class TimeBasedResultsViewer(QWidget):
         item_type = data.get('type')
         item_data = data.get('data', {})
         
-        # Parented, so the window's site sheet reaches it (a parentless menu
+        # Parented, so the window's theme sheet reaches it (a parentless menu
         # is its own top-level window and only got the app's old colours)
         menu = QMenu(self)
         
@@ -1779,7 +1779,7 @@ class TimeBasedResultsViewer(QWidget):
         
         # Title
         title = QLabel("<b>Time Window Visual Indicators</b>")
-        _site.set_role(title, "section")
+        _theme.set_role(title, "section")
         layout.addWidget(title)
         
         # Legend content
@@ -1997,7 +1997,7 @@ stronger evidence and better temporal correlation.
         for row, (feather, stats) in enumerate(sorted(feather_stats.items(),
                                                        key=lambda x: x[1]['records'],
                                                        reverse=True)):
-            self.feather_table.setItem(row, 0, QTableWidgetItem(feather))
+            self.feather_table.setItem(row, 0, icon_table_item(CrowEyeIcons.feather(), feather))
             self.feather_table.setItem(row, 1, QTableWidgetItem(str(len(stats['windows']))))
             self.feather_table.setItem(row, 2, QTableWidgetItem(str(stats['records'])))
             self.feather_table.setItem(row, 3, QTableWidgetItem(str(len(stats['identities']))))
@@ -2103,11 +2103,11 @@ stronger evidence and better temporal correlation.
         if total_scored > 0:
             self.scoring_enabled = True
             self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
-            _site.set_status(self.scoring_lbl, "ok")
+            _theme.set_status(self.scoring_lbl, "ok")
         else:
             self.scoring_enabled = False
             self.scoring_lbl.setText("Scoring: Off")
-            _site.set_status(self.scoring_lbl, "neutral")
+            _theme.set_status(self.scoring_lbl, "neutral")
 
 
 class TimeWindowDetailDialog(QDialog):
@@ -2203,7 +2203,7 @@ class TimeWindowDetailDialog(QDialog):
         """Create header with visual indicators."""
         frame = QFrame()
         frame.setMaximumHeight(50)
-        _site.set_card(frame)
+        _theme.set_card(frame)
         layout = QHBoxLayout(frame)
         
         if self.item_type == 'window':
@@ -2229,7 +2229,7 @@ class TimeWindowDetailDialog(QDialog):
             
             indicator_lbl = QLabel(indicator)
             indicator_lbl.setToolTip(tooltip)
-            _site.set_role(indicator_lbl, "label")
+            _theme.set_role(indicator_lbl, "label")
             layout.addWidget(indicator_lbl)
             
             layout.addWidget(QLabel(f"<b>Time:</b> {time_str}"))
@@ -2419,7 +2419,7 @@ class TimeWindowDetailDialog(QDialog):
         
         # Statistics frame
         stats_frame = QFrame()
-        _site.set_card(stats_frame)
+        _theme.set_card(stats_frame)
         stats_layout = QHBoxLayout(stats_frame)
         
         # Variants count - meaningless on a single variant, which is
@@ -2451,7 +2451,7 @@ class TimeWindowDetailDialog(QDialog):
         feather_layout = QVBoxLayout(feather_group)
         from .crow_eye_icons import group_title_label
         _ce_title = group_title_label("feather", "Feather Contributions", size_px=16)
-        _site.set_role(_ce_title, "section")
+        _theme.set_role(_ce_title, "section")
         feather_layout.addWidget(_ce_title)
         
         # Group feather records by base name
@@ -2471,7 +2471,7 @@ class TimeWindowDetailDialog(QDialog):
         
         for row, (base_name, records) in enumerate(sorted(grouped_feather_records.items(), 
                                                      key=lambda x: len(x[1]), reverse=True)):
-            feather_table.setItem(row, 0, QTableWidgetItem(base_name))
+            feather_table.setItem(row, 0, icon_table_item(CrowEyeIcons.feather(), base_name))
             feather_table.setItem(row, 1, QTableWidgetItem(str(len(records))))
         
         feather_layout.addWidget(feather_table)
@@ -2488,7 +2488,7 @@ class TimeWindowDetailDialog(QDialog):
         
         # Header
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
-        _site.set_role(header, "muted")
+        _theme.set_role(header, "muted")
         layout.addWidget(header)
         
         # Search box
@@ -2569,7 +2569,7 @@ class TimeWindowDetailDialog(QDialog):
         
         # Header
         header = QLabel(f"<b>{feather_id}</b> - All records across all identities in this time window")
-        _site.set_role(header, "muted")
+        _theme.set_role(header, "muted")
         layout.addWidget(header)
         
         # Search box
@@ -2730,7 +2730,7 @@ class TimeWindowDetailDialog(QDialog):
             feather_layout = QVBoxLayout(feather_group)
             from .crow_eye_icons import group_title_label
             _ce_title = group_title_label("feather", "Feather Records", size_px=16)
-            _site.set_role(_ce_title, "section")
+            _theme.set_role(_ce_title, "section")
             feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
@@ -2740,11 +2740,11 @@ class TimeWindowDetailDialog(QDialog):
                 if isinstance(feather_data, list) and feather_data:
                     # Create table for this feather's records
                     feather_table = self._create_feather_records_table(feather_name, feather_data)
-                    feather_tabs.addTab(feather_table, f"{feather_name} ({len(feather_data)})")
+                    feather_tabs.addTab(feather_table, CrowEyeIcons.feather(), f"{feather_name} ({len(feather_data)})")
                 elif isinstance(feather_data, dict):
                     # Single record as dict
                     feather_table = self._create_feather_records_table(feather_name, [feather_data])
-                    feather_tabs.addTab(feather_table, feather_name)
+                    feather_tabs.addTab(feather_table, CrowEyeIcons.feather(), feather_name)
             
             feather_layout.addWidget(feather_tabs)
             

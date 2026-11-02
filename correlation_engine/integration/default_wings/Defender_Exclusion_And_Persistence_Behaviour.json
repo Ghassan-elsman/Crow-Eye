@@ -1,0 +1,61 @@
+{
+  "config_name": "defender_exclusion_and_persistence_behaviour",
+  "wing_name": "Defender Exclusion Near New Persistence (Behaviour)",
+  "wing_id": "default_behaviour_defender_exclusion_persistence_001",
+  "wing_category": "behaviour",
+  "description": "Within one hour, Windows Defender is told to ignore a path, process or extension and something is set to start on its own: a service installed, an auto-start service, a scheduled task registered or an auto-start program. UBA rules: defender_exclusion and service_installed / autostart_service / scheduled_task_registered / autostart_persistence. None of these records an account, so a hit describes the machine and is capped at low. The exclusion's time is the registry key's last write (an upper bound): several exclusions written together share one time.",
+  "proves": "Defender was told to ignore something close to when new persistence appeared",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Defender exclusion added (no account recorded)",
+      "rule_id": "defender_exclusion",
+      "actor": "machine"
+    },
+    {
+      "label": "Something set to start on its own (no account recorded)",
+      "rule_id": [
+        "service_installed",
+        "autostart_service",
+        "scheduled_task_registered",
+        "autostart_persistence"
+      ],
+      "actor": "machine"
+    }
+  ],
+  "ordered": false,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1562.001",
+      "T1543.003",
+      "T1053.005",
+      "T1547.001"
+    ],
+    "tactic": [
+      "defense_evasion",
+      "persistence"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "defense_evasion",
+    "persistence",
+    "defender",
+    "default"
+  ],
+  "case_types": [
+    "malware",
+    "intrusion"
+  ]
+}

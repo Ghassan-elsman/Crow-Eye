@@ -56,7 +56,22 @@ the $FILE_NAME times (`created`, `modified`, `accessed`, `mft_modified`), writte
 by the kernel - $SI creation later than $FN creation is the classic timestomp
 signature. A $SI time of 1601 is a zero FILETIME, not a date.
 
-## Common Queries
+## NTFS integrity checks and the delta parse
+Every MFT parse (live or from a collected $MFT) digests each record and runs the integrity
+checks; their findings are in `ntfs_integrity_findings` (same database). A second parse of the
+same volume in the same case reads every record but parses only those whose stored fields
+changed (`parse_mode = 'delta'`); records deleted or reused in between get D1 rows. A change to
+the last-access time alone is not re-parsed, so `accessed_time` can be older than the volume's.
+
+How to weigh the rules:
+- D7 `si_created_before_fn_created` is common on any Windows install (files deployed from the
+  image keep the image's SI times; FN takes the install date) - low on its own, and reported once
+  per volume (`_volume`) when widespread. Fresh rows on a delta parse are the interesting ones.
+- D3, D9, D10 BAAD and fixup mismatches, D29 on an image: high. D29 on a live volume is low (the
+  on-disk bitmap can lag its record by minutes).
+- Absence of findings is not a clean result when a check was off: check the custody ledger for
+  "integrity check disabled".
+
 - Identify files created in a specific time range
 - Find deleted files (`in_use = 0` - the record survives, the data may not)
 - Trace file system activity by directory (`reconstructed_path` in the correlated DB)
@@ -73,6 +88,16 @@ signature. A $SI time of 1601 is a zero FILETIME, not a date.
 - **Timestomp candidates (`mft_usn_correlated_analysis.db`):**
   ```sql
   SELECT DISTINCT reconstructed_path, si_creation_time, fn_creation_time FROM mft_usn_correlated WHERE has_mft_record = 1 AND si_creation_time > fn_creation_time AND fn_creation_time >= '2008-01-01' LIMIT 50;
+  ```
+
+- **NTFS integrity findings, most serious first (`mft_claw_analysis.db`):**
+  ```sql
+  SELECT severity, rule, check_name, record_number, file_name, detail, evidence FROM ntfs_integrity_findings ORDER BY CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 WHEN 'low' THEN 2 ELSE 3 END, rule LIMIT 50;
+  ```
+
+- **Timestomp judged in ticks (`mft_claw_analysis.db`):**
+  ```sql
+  SELECT s.record_number, s.file_name, s.created_filetime, f.created_filetime AS fn_created_filetime FROM mft_standard_info s JOIN mft_file_names f ON f.record_number = s.record_number AND f.volume_letter = s.volume_letter AND f.namespace <> 2 WHERE s.created_filetime < f.created_filetime LIMIT 50;
   ```
 
 - **Deleted entries (`mft_claw_analysis.db` - ONLY if the correlated DB is missing):**

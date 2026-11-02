@@ -384,7 +384,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=5
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] sc query return code: {result.returncode}")
             logger.debug(f"[VSSDiagnostics] sc query stdout: {result.stdout}")
@@ -403,7 +403,7 @@ class VSSDiagnostics:
                         capture_output=True,
                         text=True,
                         timeout=5
-                    )
+                    , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     
                     if config_result.returncode == 0:
                         config_output = config_result.stdout
@@ -548,11 +548,18 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=30
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] vssadmin list shadows return code: {result.returncode}")
             logger.debug(f"[VSSDiagnostics] vssadmin list shadows stdout length: {len(result.stdout)}")
             
+            if result.returncode == 1 and not (result.stderr or "").strip() and "{" not in (result.stdout or ""):
+                # vssadmin exits 1 when there is nothing to list ("No items found that
+                # satisfy the query."): no shadow copies, not a failure.
+                logger.info(f"[VSSDiagnostics] No shadow copies exist (vssadmin found none) for volume {volume}")
+                return ShadowCopyStatus(exists=False, count=0, shadow_copies=[], most_recent=None,
+                                        error_message=None)
+
             if result.returncode != 0:
                 # Command failed
                 logger.error(f"[VSSDiagnostics] vssadmin list shadows failed with return code {result.returncode}")
@@ -767,7 +774,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=30
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] vssadmin list shadowstorage return code: {result.returncode}")
             
@@ -866,8 +873,11 @@ class VSSDiagnostics:
                                      "files and unallocated clusters are evidence")
             remediation_steps.append("Collect the locked files by raw disk access, which needs no shadow storage")
         
+        # A percentage is a warning, not a block: on a 924 GB disk 4.8% free is
+        # 44 GB, far more than a snapshot needs, and refusing it left a locked
+        # SRUDB.dat with no way to be read. What VSS really needs is the
+        # absolute minimum above and shadow storage that is not exhausted below.
         if free_space_percent < MIN_FREE_SPACE_PERCENT:
-            sufficient_for_shadow = False
             if f"Insufficient disk space" not in str(remediation_steps):
                 remediation_steps.append(f"Low disk space: {free_space_percent:.1f}% free (recommend at least 5%)")
         
@@ -973,7 +983,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=30
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] vssadmin list providers return code: {result.returncode}")
             logger.debug(f"[VSSDiagnostics] vssadmin list providers stdout length: {len(result.stdout)}")
@@ -1104,7 +1114,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=30
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] vssadmin list writers return code: {result.returncode}")
             logger.debug(f"[VSSDiagnostics] vssadmin list writers stdout length: {len(result.stdout)}")
@@ -1310,7 +1320,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=30
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             logger.debug(f"[VSSDiagnostics] manage-bde -status return code: {result.returncode}")
             
@@ -1402,7 +1412,7 @@ class VSSDiagnostics:
                 capture_output=True,
                 text=True,
                 timeout=10
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if result.returncode == 0:
                 output = result.stdout.lower()
@@ -1504,7 +1514,7 @@ class VSSDiagnostics:
                         capture_output=True,
                         text=True,
                         timeout=30
-                    )
+                    , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     
                     logger.debug(f"[VSSDiagnostics] wevtutil query for {source} in {log_name}: return code {result.returncode}")
                     

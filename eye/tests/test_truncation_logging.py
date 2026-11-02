@@ -498,7 +498,9 @@ class TestQueryProcessorTruncationLogging(unittest.TestCase):
         self.assertIn("processed_content", event["metadata"])
         cap = EvidenceSeal.CUT_PREVIEW_CHARS
         # The cut content should be the characters beyond index 10,000 of the json-serialized output
-        tool_output_str = json.dumps([huge_result], indent=2)
+        # The model-facing serialisation: compact, without UI-only keys (QueryProcessor._model_view).
+        tool_output_str = json.dumps(QueryProcessor._model_view([huge_result]), ensure_ascii=False,
+                                     separators=(",", ":"), default=str)
         expected_cut = tool_output_str[10000:]
         expected_processed = tool_output_str[:10000]
         self.assertEqual(event["metadata"]["cut_content"], expected_cut[:cap])

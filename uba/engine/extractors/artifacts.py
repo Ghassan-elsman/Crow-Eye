@@ -23,6 +23,7 @@ from datetime import datetime
 from typing import List, Optional
 
 from uba.engine import description
+from uba.engine.attribution import Actor
 from uba.engine.models import (BehaviorEvent, EvidenceRef, CONF_ARTIFACT_ONLY,
                                CONF_CORROBORATED, CONF_PRESENCE,
                                SEV_SUSPICIOUS)
@@ -57,6 +58,11 @@ CAVEAT_FILE_OPEN = (
     "Shortcuts, jump lists and recent-file lists are also written by "
     "applications opening files on the user's behalf — this shows the file was "
     "accessed in this user's session, not necessarily opened by hand.")
+CAVEAT_SHARED_SHORTCUT = (
+    "This shortcut sits outside every user profile (for example the Start Menu "
+    "all users share), so it belongs to no one person. Installers create such "
+    "shortcuts; its times say when the shortcut or its target was last touched, "
+    "not that anyone opened the file.")
 CAVEAT_PRESENCE = (
     "Presence evidence only: this shows the program existed on the computer. "
     "It does not prove the program was run, or by whom.")
@@ -84,6 +90,7 @@ def _mk(rule, ctx, ts, actor, text, evidence, confidence=CONF_ARTIFACT_ONLY,
         rule_id=rule["id"], behavior_class=rule["behavior_class"],
         activity=rule["activity"], ts_start=ts, ts_end=ts_end or ts,
         actor_type=actor_type, actor_name=actor_name, actor_basis=actor_basis,
+        actor_sid=getattr(actor, "sid", ""),
         description=text, severity=severity or rule["severity"],
         confidence=confidence, caveat=caveat, app_name=app_name,
         session_context=ctx.session_context(ts) if ts else "",
@@ -113,6 +120,33 @@ def _value_column(ctx, table, default="row_data"):
         if ctx.pool.has_column("registry", table, name):
             return name
     return default
+
+
+def _owner_column(ctx, db, table, column):
+    """`column` when this case's table has it, else NULL - for the per-row
+    owner of a per-user artifact (a registry row's `user_name`, a shortcut's
+    `Source_Path`). Older cases lack the column; asking for it anyway would
+    throw inside `_rows` and empty the whole behaviour."""
+    return column if ctx.pool.has_column(db, table, column) else "NULL"
+
+
+def _hive_actor(ctx, label, owner=None, source_path=None):
+    """The person a per-user artifact row belongs to.
+
+    `owner` is the row's user_name (the hive it was read from); `source_path`
+    is where a shortcut or jump-list file lives (...\\Users\\<profile>\\...).
+    Either names the profile - and its SID - without guessing. Neither given:
+    the only-profile rule in ActorResolver.from_user_hive.
+
+    A file whose path is known but lies in no profile (ProgramData's Start
+    Menu, Users\\Public) belongs to the machine, not to a person: it stays
+    unattributed even on a one-profile machine.
+    """
+    if not owner and source_path:
+        owner = ctx.resolver.profile_folder_in(source_path)
+        if not owner:
+            return Actor()
+    return ctx.resolver.from_user_hive(label, owner=owner or None)
 
 
 # A registry key's write time is an upper bound on every value under it: writing
@@ -424,16 +458,17 @@ def network_share_access(ctx, rules) -> List[BehaviorEvent]:
     if not ctx.pool.has_table("registry", "Shellbags"):
         return []
     events = []
-    for rowid, name, network_share, server, share, accessed in _rows(
+    owner_col = _owner_column(ctx, "registry", "Shellbags", "user_name")
+    for rowid, name, network_share, server, share, accessed, owner in _rows(
             ctx, "registry",
             "SELECT rowid, file_name, network_share, server_name, share_name, "
-            "accessed_date FROM Shellbags "
+            "accessed_date, " + owner_col + " FROM Shellbags "
             "WHERE (network_share IS NOT NULL AND network_share != '') "
             "OR (server_name IS NOT NULL AND server_name != '')"):
         location = network_share or (
             "\\\\{}\\{}".format(server, share) if server else (name or "a network share"))
         ts = normalize_ts(accessed)
-        actor = ctx.resolver.from_user_hive("the folder-view (ShellBags) record")
+        actor = _hive_actor(ctx, "the folder-view (ShellBags) record", owner)
         events.append(_mk(
             rule, ctx, ts, actor,
             "{} browsed the network share '{}'".format(
@@ -458,12 +493,14 @@ def shellbags_browsing(ctx, rules) -> List[BehaviorEvent]:
     # behaviour out of the report with only a log line to show for it.
     has_views = ctx.pool.has_column("registry", "Shellbags", "bag_views")
     sql = ("SELECT rowid, file_name, parent_path, accessed_date, modified_date"
-           + (", bag_views" if has_views else ", NULL") + " FROM Shellbags")
-    for rowid, name, parent, accessed, modified, views in _rows(
+           + (", bag_views" if has_views else ", NULL")
+           + ", " + _owner_column(ctx, "registry", "Shellbags", "user_name")
+           + " FROM Shellbags")
+    for rowid, name, parent, accessed, modified, views, owner in _rows(
             ctx, "registry", sql):
         folder = "{}\\{}".format(parent, name) if parent else (name or "")
         ts = normalize_ts(accessed) or normalize_ts(modified)
-        actor = ctx.resolver.from_user_hive("the folder-view (ShellBags) record")
+        actor = _hive_actor(ctx, "the folder-view (ShellBags) record", owner)
         who = actor[1] or "this user profile"
         kinds = set((views or "").split(","))
         if kinds == {"ComDlg"}:
@@ -492,13 +529,15 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
 
-    for rowid, source_name, local_path, t_access, t_mod, vol_type, net_share in _rows(
+    for rowid, source_name, local_path, t_access, t_mod, vol_type, net_share, src in _rows(
             ctx, "lnk",
             "SELECT rowid, Source_Name, Local_Path, Time_Access, Time_Modification, "
-            "Volume_Type, Network_Share_Name FROM LNK_Files"):
+            "Volume_Type, Network_Share_Name, "
+            + _owner_column(ctx, "lnk", "LNK_Files", "Source_Path")
+            + " FROM LNK_Files"):
         target = local_path or source_name or ""
         ts = normalize_ts(t_access) or normalize_ts(t_mod)
-        actor = ctx.resolver.from_user_hive("the Windows shortcut record")
+        actor = _hive_actor(ctx, "the Windows shortcut record", source_path=src)
         doc = description.app_display_name(target) if target else "(unknown file)"
         who = actor[1] or "this user profile"
         # Flag files that came from removable media or a network location.
@@ -507,20 +546,32 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
             origin = " — stored on a network location ({})".format(net_share)
         elif vol_type and str(vol_type).strip().lower() in ("removable", "cd-rom", "remote"):
             origin = " — stored on removable media ({})".format(vol_type)
+        if src and not ctx.resolver.profile_folder_in(src):
+            # ProgramData's Start Menu, and the like: a shortcut every user of
+            # the machine shares. Saying it was opened "in this user profile's
+            # session" claimed a person and an act the file does not show.
+            text = ("A shortcut to '{}' is in a location shared by every user of "
+                    "this computer ({}){}".format(
+                        doc, description.folder_label(src), origin))
+            caveat = CAVEAT_SHARED_SHORTCUT
+        else:
+            text = "'{}' was opened in {}'s session (shortcut, from {}){}".format(
+                doc, who, description.folder_label(target), origin)
+            caveat = CAVEAT_FILE_OPEN
         events.append(_mk(
-            rule, ctx, ts, actor,
-            "'{}' was opened in {}'s session (shortcut, from {}){}".format(
-                doc, who, description.folder_label(target), origin),
+            rule, ctx, ts, actor, text,
             [EvidenceRef(db="lnk", table="LNK_Files", rowids=[rowid], count=1)],
-            caveat=CAVEAT_FILE_OPEN, details={"path": target}))
+            caveat=caveat, details={"path": target, "shortcut_path": src or ""}))
 
-    for rowid, app_desc, local_path, t_access in _rows(
+    for rowid, app_desc, local_path, t_access, src in _rows(
             ctx, "lnk",
-            "SELECT rowid, AppDesc, Local_Path, Time_Access FROM Automatic_JumpLists"):
+            "SELECT rowid, AppDesc, Local_Path, Time_Access, "
+            + _owner_column(ctx, "lnk", "Automatic_JumpLists", "Source_Path")
+            + " FROM Automatic_JumpLists"):
         if not local_path:
             continue
         ts = normalize_ts(t_access)
-        actor = ctx.resolver.from_user_hive("the jump-list record")
+        actor = _hive_actor(ctx, "the jump-list record", source_path=src)
         doc = description.app_display_name(local_path)
         via = " using {}".format(app_desc) if app_desc else ""
         who = actor[1] or "this user profile"
@@ -534,15 +585,17 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
 
     # Custom jump lists = per-application pinned/recent items the user opened.
     if ctx.pool.has_table("lnk", "Custom_JumpLists"):
-        for rowid, app_name, app_desc, local_path, t_access in _rows(
+        for rowid, app_name, app_desc, local_path, t_access, src in _rows(
                 ctx, "lnk",
-                "SELECT rowid, Source_Name, AppDesc, Local_Path, Time_Access "
-                "FROM Custom_JumpLists"):
+                "SELECT rowid, Source_Name, AppDesc, Local_Path, Time_Access, "
+                + _owner_column(ctx, "lnk", "Custom_JumpLists", "Source_Path")
+                + " FROM Custom_JumpLists"):
             app = app_desc or app_name
             if not app and not local_path:
                 continue
             ts = normalize_ts(t_access)
-            actor = ctx.resolver.from_user_hive("the application jump-list record")
+            actor = _hive_actor(ctx, "the application jump-list record",
+                                source_path=src)
             what = description.app_display_name(local_path) if local_path else (app or "an item")
             events.append(_mk(
                 rule, ctx, ts, actor,
@@ -558,13 +611,15 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
             ("LastSaveMRU", "folder_name", "access_date", "saved a file into")):
         if not ctx.pool.has_table("registry", table):
             continue
-        for rowid, name, date in _rows(
+        for rowid, name, date, owner in _rows(
                 ctx, "registry",
-                "SELECT rowid, {}, {} FROM {}".format(name_col, date_col, table)):
+                "SELECT rowid, {}, {}, {} FROM {}".format(
+                    name_col, date_col,
+                    _owner_column(ctx, "registry", table, "user_name"), table)):
             if not name:
                 continue
             ts = normalize_ts(date)
-            actor = ctx.resolver.from_user_hive("the open/save-dialog record")
+            actor = _hive_actor(ctx, "the open/save-dialog record", owner)
             events.append(_mk(
                 rule, ctx, ts, actor,
                 "{} {} '{}' via an Open/Save window".format(
@@ -582,18 +637,20 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
         # and every RecentDocs document silently vanished from the report.
         # Older cases really do use `data`, so ask which one is there.
         column = _value_column(ctx, "RecentDocs")
-        items = []
-        for rowid, mru_name, data in _rows(
+        owner_col = _owner_column(ctx, "registry", "RecentDocs", "user_name")
+        # One list per hive: two profiles' recent documents are two people's.
+        by_owner = defaultdict(list)
+        for rowid, mru_name, data, owner in _rows(
                 ctx, "registry",
-                "SELECT rowid, name, %s FROM RecentDocs" % column):
+                "SELECT rowid, name, %s, %s FROM RecentDocs" % (column, owner_col)):
             if not data or mru_name == "MRUListEx":
                 continue
             doc = str(data).strip()
             if not doc or doc.startswith("b'") or doc.startswith('b"'):
                 continue                 # undecoded binary value
-            items.append((rowid, doc))
-        if items:
-            actor = ctx.resolver.from_user_hive("the recent-documents list")
+            by_owner[owner or ""].append((rowid, doc))
+        for owner, items in by_owner.items():
+            actor = _hive_actor(ctx, "the recent-documents list", owner)
             docs, _seen = [], set()      # dedupe (same file appears per-extension subkey)
             for _r, d in items:
                 if d.lower() not in _seen:
@@ -615,6 +672,19 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
 
 
 # --------------------------------------------------------------------- #
+_USB_STORAGE_DRIVER = re.compile(r"usbstor|uaspstor|mass storage", re.I)
+
+
+def _usb_is_storage(device_id, desc_text, friendly) -> bool:
+    """A drive files can be copied to or from, not a mouse, webcam or hub.
+    USBDevices lists every USB device, the motherboard's root hubs included;
+    a storage drive is enumerated under USBSTOR, or names a storage driver
+    (usbstor.inf / uaspstor.inf, "Mass Storage") in its description."""
+    if str(device_id or "").upper().startswith("USBSTOR"):
+        return True
+    return any(_USB_STORAGE_DRIVER.search(str(v or "")) for v in (desc_text, friendly))
+
+
 def usb_devices(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
@@ -628,7 +698,9 @@ def usb_devices(ctx, rules) -> List[BehaviorEvent]:
             rule, ctx, ts, ("", "", ""),
             "The USB device '{}' was plugged into this computer".format(label),
             [EvidenceRef(db="registry", table="USBDevices", rowids=[rowid], count=1)],
-            details={"device": label, "device_id": device_id}))
+            details={"device": label, "device_id": device_id,
+                     "storage": "yes" if _usb_is_storage(device_id, desc_text, friendly)
+                     else "no"}))
     if ctx.pool.has_table("registry", "USBStorageDevices"):
         for rowid, friendly, serial, first_c, last_c, last_r in _rows(
                 ctx, "registry",
@@ -643,7 +715,7 @@ def usb_devices(ctx, rules) -> List[BehaviorEvent]:
                 [EvidenceRef(db="registry", table="USBStorageDevices",
                              rowids=[rowid], count=1)],
                 details={"device": label, "serial": serial,
-                         "removed": normalize_ts(last_r)}))
+                         "removed": normalize_ts(last_r), "storage": "yes"}))
     return events
 
 
@@ -682,13 +754,15 @@ def local_search(ctx, rules) -> List[BehaviorEvent]:
     for table, value_col, date_col, template in specs:
         if not ctx.pool.has_table("registry", table):
             continue
-        for rowid, value, date in _rows(
+        for rowid, value, date, owner in _rows(
                 ctx, "registry",
-                "SELECT rowid, {}, {} FROM {}".format(value_col, date_col, table)):
+                "SELECT rowid, {}, {}, {} FROM {}".format(
+                    value_col, date_col,
+                    _owner_column(ctx, "registry", table, "user_name"), table)):
             if not value:
                 continue
             ts = normalize_ts(date)
-            actor = ctx.resolver.from_user_hive("the {} record".format(table))
+            actor = _hive_actor(ctx, "the {} record".format(table), owner)
             events.append(_mk(
                 rule, ctx, ts, actor,
                 "{} {}".format(actor[1] or "A user of this profile",
@@ -698,11 +772,15 @@ def local_search(ctx, rules) -> List[BehaviorEvent]:
     if ctx.pool.has_table("registry", "TypedPaths"):
         # `row_data`, not `data` - see _value_column. Seventeen typed paths on
         # the reference system were being dropped by this one wrong name.
-        items = [(rowid, data) for rowid, data in _rows(
-            ctx, "registry", "SELECT rowid, %s FROM TypedPaths"
-            % _value_column(ctx, "TypedPaths")) if data]
-        if items:
-            actor = ctx.resolver.from_user_hive("the typed-paths record")
+        by_owner = defaultdict(list)
+        for rowid, data, owner in _rows(
+                ctx, "registry", "SELECT rowid, %s, %s FROM TypedPaths"
+                % (_value_column(ctx, "TypedPaths"),
+                   _owner_column(ctx, "registry", "TypedPaths", "user_name"))):
+            if data:
+                by_owner[owner or ""].append((rowid, data))
+        for owner, items in by_owner.items():
+            actor = _hive_actor(ctx, "the typed-paths record", owner)
             events.append(_mk(
                 rule, ctx, None, actor,
                 "{} typed {} location{} directly into the Explorer address "
@@ -1447,15 +1525,61 @@ def connected_device(ctx, rules) -> List[BehaviorEvent]:
     return events
 
 
+def _usb_volumes(ctx):
+    """(volume GUIDs, drive letters) Windows recorded for USB storage
+    (USBStorageVolumes, from MountedDevices): GUIDs lower case without
+    braces, letters as one upper-case character."""
+    guids, letters = set(), set()
+    for guid, letter in _rows(
+            ctx, "registry",
+            "SELECT volume_guid, drive_letter FROM USBStorageVolumes"):
+        g = str(guid or "").strip().strip("{}").lower()
+        if g:
+            guids.add(g)
+        l = str(letter or "").strip().rstrip(":\\").upper()
+        if len(l) == 1 and l.isalpha():
+            letters.add(l)
+    return guids, letters
+
+
+def _volume_kind(mount_id, mount_type, usb_guids, usb_letters):
+    """usb | network | internal_or_unknown for one MountPoints2 entry.
+
+    MountPoints2 records EVERY volume the user's shell saw: the system disk,
+    a second internal partition, a share. Only a volume Windows also
+    recorded as USB storage is called one; a letter is compared with the
+    letters USB storage was given, which a later internal volume can reuse,
+    so a letter match is said with that caveat."""
+    mid = str(mount_id or "").strip()
+    kind = str(mount_type or "").lower()
+    if mid.startswith("##") or "network" in kind or mid.startswith("\\\\"):
+        return "network"
+    if mid.startswith("{") and mid.strip("{}").lower() in usb_guids:
+        return "usb"
+    letter = mid.rstrip(":\\").upper()
+    if len(letter) == 1 and letter in usb_letters and letter != "C":
+        return "usb_letter"
+    return "internal_or_unknown"
+
+
 def mounted_volume(ctx, rules) -> List[BehaviorEvent]:
     """Volumes THIS user actually opened, from MountPoints2.
 
     Machine-wide keys record every volume the computer saw; MountPoints2 is
     per-user and records the ones that account browsed. Retires "Per-user USB
     drive mapping" from requires_collection.
+
+    NOT EVERY VOLUME IS A DEVICE. MountPoints2 lists the system disk, other
+    internal partitions and shares too, and calling each "opened the volume"
+    at notable severity put C: beside a USB stick. Each entry is classed
+    against USBStorageVolumes: a USB storage volume stays notable, a share
+    is said as a share, and anything else - C:, an internal partition's
+    GUID, a letter no USB drive was given - is routine and said as an
+    internal disk or a drive whose type was not recorded.
     """
     rule = rules[0]
     events = []
+    usb_guids, usb_letters = _usb_volumes(ctx)
     for rowid, user, mount_id, mount_type, last_written, basis in _rows(
             ctx, "registry",
             "SELECT rowid, user_name, mount_id, mount_type, last_written, "
@@ -1463,16 +1587,31 @@ def mounted_volume(ctx, rules) -> List[BehaviorEvent]:
         ts = normalize_ts(last_written)
         when, caveat = _time_phrase(ts, basis)
         who = user or "a user"
-        text = ("{} opened the volume '{}' ({}){}".format(
-            who, mount_id or "(unnamed)", mount_type or "volume",
-            " " + when if when else ""))
+        name = mount_id or "(unnamed)"
+        vkind = _volume_kind(mount_id, mount_type, usb_guids, usb_letters)
+        severity = None
+        if vkind == "network":
+            what = "the network share '{}'".format(
+                name.replace("#", "\\") if name.startswith("##") else name)
+        elif vkind == "usb":
+            what = "the USB storage volume '{}'".format(name)
+        elif vkind == "usb_letter":
+            what = ("the drive {}: (a letter Windows once gave a USB storage "
+                    "drive)".format(name.rstrip(":\\").upper()))
+        else:
+            what = ("the volume '{}' ({}; an internal disk or a drive whose "
+                    "type was not recorded, not known to be removable)"
+                    .format(name, mount_type or "volume"))
+            severity = "routine"
+        text = "{} opened {}{}".format(who, what, " " + when if when else "")
         events.append(_mk(
             rule, ctx, ts, ("", "", ""), text,
             [EvidenceRef(db="registry", table="MountPoints2",
                          rowids=[rowid], count=1)],
-            caveat=caveat,
+            caveat=caveat, severity=severity,
             details={"volume": mount_id, "mount_type": mount_type or "",
-                     "user": who, "time_basis": basis or ""}))
+                     "volume_kind": vkind, "user": who,
+                     "time_basis": basis or ""}))
     return events
 
 

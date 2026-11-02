@@ -53,13 +53,29 @@ CLI_PROFILES: Dict[str, Dict[str, Any]] = {
         # system prompt is appended with `--append-system-prompt` (there is no
         # `--system-prompt`). The old values made every invocation fail on flag
         # parsing. Verified against `claude --help`.
-        "default_flags": ["-p"],
+        # Eye builds ClaudeCodeBackend for this id (claude_code_backend.py); these flags
+        # only matter to anything that still runs the profile generically, and keep
+        # Claude Code's own tools, CLAUDE.md, hooks and MCP switched off there too.
+        "default_flags": ["-p", "--tools", "", "--safe-mode", "--strict-mcp-config",
+                          "--no-session-persistence"],
         "model_flag": "--model",
-        "system_flag": "--append-system-prompt",
+        "system_flag": "--system-prompt",
         "discovery_method": "probe",
         "model_pattern": r"(claude-[a-z0-9.-]+)",
         "use_stdin": True,
         "description": "Anthropic's Claude Code CLI"
+    },
+    "codex_cli": {
+        "display_name": "Codex CLI (OpenAI)",
+        "default_executable": "codex",
+        # Eye builds CodexBackend for this id (codex_backend.py): `codex exec` with a
+        # structured reply, an empty working folder and a read-only sandbox; any
+        # command the agent tries ends the turn.
+        "default_flags": ["exec", "--json", "--ephemeral", "--skip-git-repo-check", "-s", "read-only"],
+        "model_flag": "-m",
+        "discovery_method": "probe",
+        "use_stdin": True,
+        "description": "OpenAI's Codex CLI, on your ChatGPT sign-in"
     },
     "jules_cli": {
         "display_name": "Jules CLI",

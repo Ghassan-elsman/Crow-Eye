@@ -1,7 +1,8 @@
 {
   "config_name": "security_control_tampering_correlation",
-  "wing_name": "Security Control Tampering Correlation",
+  "wing_name": "Security Control Tampering Correlation (Identity)",
   "wing_id": "security_control_tampering_001",
+  "wing_category": "identity",
   "description": "Establishes what the machine's defences were set to, and which of them had been moved off their stock default. Correlates the security posture set (Mark-of-the-Web handling, virtualisation-based security and Credential Guard, SMB signing and guest authentication) with the flat configuration set (fast startup, which decides whether a shutdown was a real one) and the Internet Explorer zone map, where a host promoted to Trusted Sites runs content every other zone would block. Answers the question the other wings assume: were the defences on at the time?",
   "proves": "A security control was moved off its default, changing what was possible on this machine",
   "author": "Crow-Eye Team",

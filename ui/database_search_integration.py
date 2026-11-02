@@ -46,6 +46,7 @@ class DatabaseSearchIntegration:
             'mft_file_names': ('MFT File Names', 'MFT_file_names_table', 'mft_loader', 'id', ['record_number', 'file_name', 'parent_record_number']),
             'mft_standard_info': ('MFT Standard Info', 'MFT_standard_info_table', 'mft_loader', 'id', ['record_number', 'creation_time']),
             'mft_data_attributes': ('MFT Data Attributes', 'MFT_data_attributes_table', 'mft_loader', 'id', ['record_number', 'attribute_type']),
+            'ntfs_integrity_findings': ('MFT Integrity Findings', 'MFT_integrity_findings_table', 'mft_loader', 'id', ['finding_id', 'record_number']),
             
             # USN tables - under MFT_USN_tab_widget -> USN Journal tab
             'journal_events': ('USN Journal', 'USN_table', 'usn_loader', 'id', ['usn', 'filename', 'timestamp', 'file_name']),

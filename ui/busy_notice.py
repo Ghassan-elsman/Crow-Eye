@@ -28,11 +28,11 @@ from ui import busy_guard
 NOT_LOADING = ("Database Search", "Correlation Engine pipeline", "Feather import")
 
 _CARD_QSS = """
-QFrame#busyNoticeCard { background: #0f172a; border: 1px solid #f59e0b; border-radius: 10px; }
+QFrame#busyNoticeCard { background: #0f172a; border: 3px solid #f59e0b; border-radius: 10px; }
 QLabel { background: transparent; color: #e2e8f0; font-family: 'Segoe UI'; font-size: 13px; }
 QLabel#busyNoticeTitle { color: #fbbf24; font-size: 15px; font-weight: 700; }
 QLabel#busyNoticeNow { color: #94a3b8; font-size: 12px; font-family: 'Consolas'; }
-QPushButton { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;
+QPushButton { background: #1e293b; color: #e2e8f0; border: 3px solid #334155; border-radius: 6px;
               padding: 6px 22px; font-weight: 700; }
 QPushButton:hover { border-color: #fbbf24; color: #fbbf24; }
 """
@@ -123,7 +123,7 @@ class _Banner(QtWidgets.QFrame):
         super().__init__(host)
         self.setObjectName("busyNoticeBanner")
         self.setStyleSheet(
-            "QFrame#busyNoticeBanner { background: rgba(120,72,6,0.94); border: 1px solid #f59e0b;"
+            "QFrame#busyNoticeBanner { background: rgba(120,72,6,0.94); border: 3px solid #f59e0b;"
             " border-radius: 6px; }"
             " QLabel { background: transparent; color: #fde68a; font-family: 'Segoe UI';"
             " font-size: 12px; font-weight: 600; }"
@@ -266,7 +266,7 @@ class _Toast(QtWidgets.QLabel):
         self.setObjectName("blockingToast")
         self.setStyleSheet(
             "QLabel#blockingToast { background: rgba(15,23,42,0.97); color: #e2e8f0;"
-            " border: 1px solid #38bdf8; border-radius: 8px; padding: 10px 16px;"
+            " border: 3px solid #38bdf8; border-radius: 8px; padding: 10px 16px;"
             " font-family: 'Segoe UI'; font-size: 13px; }")
         self.setWordWrap(True)
         self._hide = QtCore.QTimer(self)

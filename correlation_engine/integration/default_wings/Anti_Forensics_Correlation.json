@@ -2,6 +2,7 @@
   "config_name": "anti_forensics_correlation",
   "wing_name": "Anti-Forensics & Evidence Tampering Correlation",
   "wing_id": "default_wing_antiforensics_001",
+  "wing_category": "identity",
   "description": "Detects evidence that an actor attempted to remove forensic traces or tamper with logging on the host. Uses a tiered approach with audit-log clearance events (Security 1102 / System 104) and wiper-tool prefetch hits weighted highest, followed by mass-delete bursts in USN, RecycleBin context, and tampering with Defender / autostart / services as supporting context.",
   "proves": "An actor attempted to remove forensic traces or tamper with logging",
   "author": "Crow-Eye Team",
@@ -224,34 +225,6 @@
       "severity": "critical"
     },
     {
-      "rule_id": "af_mass_delete",
-      "name": "Mass Delete Burst in USN Journal (Threshold)",
-      "semantic_value": "Mass File Deletion",
-      "description": "A genuine burst of >=20 FILE_DELETE entries in USN within 5 minutes \u2014 characteristic of cleanup activity. Uses a threshold rule so a single deletion no longer trips the signal.",
-      "rule_type": "threshold",
-      "threshold": {
-        "condition": {
-          "feather_id": "mft_usn",
-          "field_name": "usn_reason",
-          "operator": "contains",
-          "value": "FILE_DELETE"
-        },
-        "min_count": 20,
-        "within_minutes": 5
-      },
-      "scope": "wing",
-      "category": "anti_forensics",
-      "severity": "high",
-      "technique_id": [
-        "T1070.004",
-        "T1485"
-      ],
-      "tactic": [
-        "defense-evasion",
-        "impact"
-      ]
-    },
-    {
       "rule_id": "af_defender_tamper",
       "name": "Defender / Logging Service Tampered (OR)",
       "semantic_value": "Security Tooling Tamper",
@@ -330,6 +303,14 @@
         "T1562.002"
       ],
       "description": "A disabled channel explains a silence that would otherwise read as nothing having happened. Judge against the known-good defaults first: TaskScheduler/Operational and DNS-Client/Operational ship disabled, and calling those tampering is a false positive."
+    }
+  ],
+  "moved_rules": [
+    {
+      "rule_id": "af_mass_delete",
+      "moved_to": "Mass_File_Deletion_Behaviour.json",
+      "moved_to_wing": "Mass File Deletion Burst (Behaviour)",
+      "why": "A mass delete spans many files, and each file is its own identity, so a per-identity threshold only saw one file's journal rows. The Behavioural engine counts UBA's file_deleted bursts per person."
     }
   ],
   "tags": [

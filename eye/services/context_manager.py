@@ -21,6 +21,7 @@ SUB-SERVICES:
 
 import logging
 import json
+import re
 import threading
 import time
 from pathlib import Path
@@ -74,11 +75,16 @@ class ContextManager:
         # When ON, the planner builds the claim hierarchy, seeds the Narrative Map, and
         # proves one sub-narrative at a time; falls back to the flat path on failure.
         "enable_hierarchy": True,
-        "max_narratives": 12,
-        "max_sub_narratives": 8,
+        # Upper bounds; the planner sizes the plan to the question. 12 x 8 with a
+        # "decompose fully" prompt made a one-fact question cost 27-53 model calls
+        # (2026-11-02). Raise these for a deep, open-ended investigation.
+        "max_narratives": 4,
+        "max_sub_narratives": 3,
         # Upper bound on the model-call iterations a single hierarchical run may use
         # (scaled to plan size, capped here). Raise for very large plans.
         "max_iterations": 300,
+        # Model calls one question may use before the Eye answers from what it has.
+        "max_model_calls": 30,
         "enable_premise_verification": True,
         "enable_question_memory": True,
         "prior_findings_count": 3,
@@ -539,6 +545,19 @@ class ContextManager:
             )
 
 
+    def _handle_recall_result(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        """The full text of an earlier tool result that was sent as a digest."""
+        from eye.services.result_compaction import find_result
+        rid = str((params or {}).get("result_id") or "").strip().strip("[]")
+        if not rid:
+            return {"success": False, "error": "result_id is required (the [id] shown in the digest)."}
+        with self.history_manager._lock:
+            history = list(self.history_manager.history)
+        found = find_result(history, rid)
+        if found is None:
+            return {"success": False, "error": "No earlier tool result has id %s. Re-run the query instead." % rid}
+        return {"success": True, "result_id": rid, "result": found}
+
     def _initialize_tool_handlers(self) -> Dict[str, Callable]:
         """
         Maps tool names (as seen by the AI) to their Python handler methods.
@@ -559,6 +578,7 @@ class ContextManager:
             "query_correlation_results": f.handle_query_correlation_results,
             "correlate_imported_evidence": f.handle_correlate_imported_evidence,
             "list_case_files": f.handle_list_case_files,
+            "recall_result": self._handle_recall_result,
             "read_imported_evidence": f.handle_read_imported_evidence,
             "internet_search": f.handle_internet_search,
             "fetch_web_content": f.handle_fetch_web_content,
@@ -625,6 +645,27 @@ class ContextManager:
         renders a "Backend unreachable" bubble instead of hanging silently.
         The check is TTL-cached so a burst of queries doesn't re-ping every turn.
         """
+        # ---- The model setup, asked in the chat ---------------------
+        # Answered before the pre-flight: "check model setup" must work precisely
+        # when the model does not.
+        try:
+            from eye.services import backend_doctor as _bd
+            if _bd.is_doctor_query(query):
+                with self._lock:
+                    reply = _bd.chat_command(self.model_router,
+                                             getattr(self.model_router, "credential_manager", None),
+                                             query, getattr(self, "case_directory", None))
+                self._connectivity_cache = None
+                try:
+                    self.history_manager.add_message("user", query)
+                    self.history_manager.add_message("assistant", reply["response"])
+                except Exception:
+                    pass
+                reply["context_stats"] = self.get_context_stats()
+                return reply
+        except Exception as e:
+            self.logger.warning(f"Model setup check failed: {e}")
+
         # ---- GEP-1: Pre-Flight Ping (TTL-cached) -------------------
         try:
             ok = self._validate_connectivity_cached()
@@ -632,6 +673,8 @@ class ContextManager:
         except Exception as e:
             ok = False
             ping_err = str(e)
+        if not ok and not ping_err:
+            ping_err = getattr(getattr(self.model_router, "backend", None), "last_error", "") or None
         if not ok:
             if status_callback:
                 try:
@@ -644,16 +687,32 @@ class ContextManager:
                     }))
                 except Exception:
                     pass  # status_callback is best-effort; never block the error return
+            # Say what is wrong and how to fix it: the doctor's offline checks
+            # (provider, model name, key, CLI installed) plus the connection error.
+            response = f"Backend unreachable: {ping_err or 'no response from LLM backend'}"
+            chips = []
+            try:
+                from eye.services import backend_doctor as _bd
+                rep = _bd.diagnose(self.model_router,
+                                   getattr(self.model_router, "credential_manager", None), connect=False)
+                if rep.get("ok"):
+                    rep["checks"].append(_bd.connect_failure(self.model_router, ping_err or "", 0.0))
+                    rep["ok"] = False
+                    rep["summary"] = rep["checks"][-1]["detail"]
+                _bd.record(getattr(self, "case_directory", None), rep)
+                response = _bd.to_markdown(rep, heading="The Eye cannot reach its model")
+                chips = _bd.fix_chips(rep)
+            except Exception as e:
+                self.logger.debug(f"Doctor not run on the failed pre-flight: {e}")
             return {
                 "success": False,
                 "error": "Backend unreachable",
-                "data": {
-                    "response": f"Backend unreachable: {ping_err or 'no response from LLM backend'}"
-                }
+                "data": {"response": response, "action_chips": chips}
             }
         # -----------------------------------------------------------------
 
         with self._lock:
+            self._active_query = query or ""
             return self.query_processor.process_query(
                 query, status_callback, hitl_callback, report_callback, dialogue_callback
             )
@@ -1009,6 +1068,8 @@ class ContextManager:
         params = call.get("parameters", {})
         if name not in self.tool_handlers:
             return {"tool_name": name, "success": False, "error": f"Tool '{name}' is not recognized."}
+        if name == "export_report":
+            return self._request_report_export(params, hitl_callback)
         try:
             handler = self.tool_handlers[name]
             # Handlers are responsible for their own error handling and parameter validation
@@ -1017,6 +1078,54 @@ class ContextManager:
         except Exception as e:
             self.logger.error(f"Tool execution failed [{name}]: {e}")
             return {"tool_name": name, "success": False, "error": str(e)}
+
+    def _request_report_export(self, params: Dict, hitl_callback=None) -> Dict:
+        """A model's ``export_report`` call: ask the investigator, never write here.
+
+        The callback (``QueryWorker.run``'s ``hitl_callback``) shows the export
+        approval dialog on the main thread; on approval the main thread writes
+        the file and records it in the custody ledger, and the callback returns
+        the path written. This thread only waits. The argument is preferred over
+        ``self.hitl_callback``: two workers can share one ContextManager, so the
+        attribute can be replaced or deleted mid-run. With no callback at all
+        (headless, CLI, tests) the export is refused - nothing is written.
+        """
+        name = "export_report"
+        params = params if isinstance(params, dict) else {}
+        fmt = str(params.get("format") or "html").strip().lower()
+        if fmt == "md":
+            fmt = "markdown"
+        if fmt not in ("html", "pdf", "markdown"):
+            return {"tool_name": name, "success": False,
+                    "error": f"Unsupported export format: {fmt}. Use html, pdf or markdown."}
+
+        cb = hitl_callback or getattr(self, "hitl_callback", None)
+        if not callable(cb):
+            return {"tool_name": name, "success": False,
+                    "error": "export_report requires investigator approval and no approval "
+                             "dialog is available in this session; nothing was written."}
+        try:
+            res = cb("export_report", fmt, {})
+        except Exception as e:
+            self.logger.error(f"Export approval request failed: {e}")
+            return {"tool_name": name, "success": False,
+                    "error": f"Export approval request failed: {e}; nothing was written."}
+
+        if isinstance(res, str) and res:
+            return {"tool_name": name, "success": True,
+                    "result": {"success": True, "approved": True, "format": fmt,
+                               "file_path": res,
+                               "message": f"Investigator approved the export; report written "
+                                          f"as {fmt.upper()} to {res}."}}
+        if isinstance(res, dict) and res.get("error"):
+            return {"tool_name": name, "success": False,
+                    "error": f"Export failed after approval: {res.get('error')}; "
+                             f"no file was recorded."}
+        return {"tool_name": name, "success": True,
+                "result": {"success": False, "approved": False, "format": fmt,
+                           "file_path": None,
+                           "message": "Export declined by investigator; nothing was written. "
+                                      "Do not request it again unless the investigator asks."}}
 
     def _build_system_prompt(self, rag_context: str, history: List[Dict],
                              recalled_conversation: str = "",
@@ -1060,6 +1169,13 @@ class ContextManager:
         # stipulated and which narratives carry investigator notes. Budget is
         # weight-based, so derive a small cap from the system_prompt share rather
         # than adding a new budget component.
+        #
+        # It changes whenever a narrative's status does (every few steps of an
+        # investigation), so it goes at the top of the per-step context, never in
+        # the core: in the core it broke every backend's cached prefix, and Claude
+        # Code sessions restarted every 2-3 steps (2026-11-02). It is still never
+        # truncated (it is prepended after the optional trim).
+        case_memory = ""
         nms = getattr(self, "narrative_map_service", None)
         if nms is not None:
             try:
@@ -1067,8 +1183,7 @@ class ContextManager:
                 mem_cap = min(800, max(200, sp_budget // 4))
                 overview = nms.overview_block(max_chars=mem_cap * 4)
                 if overview:
-                    overview = self.token_counter.truncate_text(overview, mem_cap)
-                    core_str += f"\n\n{overview}"
+                    case_memory = self.token_counter.truncate_text(overview, mem_cap)
             except Exception as e:
                 self.logger.debug(f"Case Memory (Tier A) injection skipped: {e}")
 
@@ -1247,9 +1362,10 @@ class ContextManager:
             core_str += "\n\n" + "\n".join(toon_docs)
 
         core_tokens = self.token_counter.count_tokens(core_str)
-        
+        memory_tokens = self.token_counter.count_tokens(case_memory) if case_memory else 0
+
         # Safety margin for separators and model overhead
-        remaining_budget = budget_config - core_tokens - 100
+        remaining_budget = budget_config - core_tokens - memory_tokens - 100
         
         # 4. OPTIONAL CONTEXT (Priority 2: TRUNCATABLE)
         optional_parts = []
@@ -1336,7 +1452,13 @@ class ContextManager:
                     except Exception:
                         pass
                 optional_str = self.token_counter.truncate_text(optional_str, remaining_budget)
-            return core_str + "\n\n" + optional_str
+            # The core never changes within a question; the optional part is rebuilt for
+            # every call. The heading lets a caching backend keep the core as a stable,
+            # cached prefix (see eye.backends.base.split_step_context).
+            from eye.backends.base import STEP_CONTEXT_HEADING
+            if case_memory:
+                optional_str = case_memory + "\n\n" + optional_str
+            return core_str + "\n\n" + STEP_CONTEXT_HEADING + "\n" + optional_str
         else:
             # Extreme case: Core is already too big (unlikely with 4k budget).
             # (Fixes a latent NameError — this branch referenced an undefined
@@ -1573,6 +1695,9 @@ class ContextManager:
             lines.append("")
         return "\n".join(lines).rstrip()
 
+    _CORRELATION_AUTHORING_Q = re.compile(
+        r"\b(wings?|semantic mappings?|mappings?|feathers?|correlation|correlate|pipelines?|anchor)\b", re.I)
+
     def _get_tool_definitions(self) -> List[Dict]:
         """
         Returns the JSON tool definitions sent to the LLM.
@@ -1589,6 +1714,14 @@ class ContextManager:
                 all_tools = [t for t in all_tools if t.get("name") != "semantic_search_artifacts"]
         except Exception:
             all_tools = [t for t in all_tools if t.get("name") != "semantic_search_artifacts"]
+
+        # The Correlation Engine authoring tools (create/edit a Wing or a semantic
+        # mapping; ~11K characters of definitions) go out only when the question is
+        # about the engine - they were sent on every call of every question.
+        if not self._CORRELATION_AUTHORING_Q.search(getattr(self, "_active_query", "") or ""):
+            all_tools = [t for t in all_tools
+                         if not str(t.get("name") or "").startswith(("correlation_create_",
+                                                                       "correlation_edit_"))]
 
         # If the model has plenty of space, send everything
         if self.max_total_tokens > 8192:
@@ -1716,6 +1849,10 @@ class ContextManager:
                 "case_directory_available": self.case_directory is not None
             }
         })
+        # What the provider reports this session (Claude Code: tokens, cache, list-price cost).
+        su = getattr(getattr(self.model_router, "backend", None), "session_usage", None)
+        if isinstance(su, dict) and su.get("calls"):
+            stats["provider_usage"] = dict(su)
         
         # Add audit trail status if available
         if self.truncation_auditor:

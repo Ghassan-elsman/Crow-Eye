@@ -506,6 +506,7 @@ class QueryProcessor:
             success = bool(r.get("success") or (isinstance(inner, dict) and inner.get("success")))
             try:
                 payload = inner.get("data", inner) if isinstance(inner, dict) else inner
+                payload = QueryProcessor._model_view(payload)
                 result_text = payload if isinstance(payload, str) else _json.dumps(payload, default=str)
             except Exception:
                 result_text = str(inner)
@@ -1550,6 +1551,9 @@ class QueryProcessor:
             except Exception:
                 pass
 
+        # Model calls this question has used (every call goes through guarded_generate).
+        model_calls = {"n": 0}
+
         def guarded_generate(system_prompt, user_message, history, tools, *, phase, iteration):
             """Single choke point for every LLM call:
             (1) SELF-HEAL: if the assembled payload exceeds the model's context
@@ -1562,6 +1566,7 @@ class QueryProcessor:
             (3) SEAL the exact payload sent (hash + provenance) for chain of
                 custody, then call the model with one transient-error retry.
             """
+            model_calls["n"] += 1
             tc = self.cm.token_counter
             try:
                 tools_str = json.dumps(tools, default=str) if tools else ""
@@ -1582,6 +1587,20 @@ class QueryProcessor:
                 return base_tokens + sum(tc.count_tokens(m.get("content") or "") for m in (hist or []))
 
             working = list(history or [])
+            # Older tool results go out as digests (full result: recall_result);
+            # the stored history keeps them whole. See result_compaction.
+            try:
+                working = self._result_compactor().apply(working)
+                _ev = self._result_compactor().last_event
+                if _ev:
+                    emit_step("thinking", "Compacted %d earlier tool result(s) to save context "
+                              "(full results stay available)" % _ev["messages"], "done")
+                    self._audit_event("COMPACTED_TOOL_RESULTS",
+                                      reason="older tool results sent as digests; full results kept "
+                                             "in history and available through recall_result",
+                                      metadata=_ev)
+            except Exception as _ce:
+                self.logger.debug(f"Tool-result compaction skipped: {_ce}")
             healed = False
             cut_details = []
 
@@ -2057,8 +2076,14 @@ class QueryProcessor:
             consulted_dbs = set()
             coverage_sampled = False
 
-            active_keywords = set(keywords)
-            active_keywords.add("Global_schema_database_Reference")
+            # The question's own keywords stay for the whole run; what the model wrote
+            # and what the tools returned add keywords for the NEXT step only. They
+            # used to accumulate, so a long run pulled in more and more knowledge
+            # files that no longer bore on the step (2026-11-02 review).
+            base_keywords = set(keywords)
+            base_keywords.add("Global_schema_database_Reference")
+            step_keywords_ai, step_keywords_tools = set(), set()
+            active_keywords = set(base_keywords)
 
             # --- STAGE 4b: Investigation Planning (decomposition + premises) ---
             # Build a sub-question checklist so multi-part questions are driven
@@ -2219,6 +2244,7 @@ class QueryProcessor:
                             for _kw in self.cm.intent_engine.detect_keywords(_sq):
                                 _subq_keywords.add(_kw)
                         if _subq_keywords - active_keywords:
+                            base_keywords |= _subq_keywords      # part of the question itself
                             active_keywords |= _subq_keywords
                             emit_step("rag", "Retrieving targeted knowledge for each sub-question...", "active")
                             rag_context = self.cm.rag_service.retrieve_context(
@@ -2273,7 +2299,18 @@ class QueryProcessor:
             except Exception:
                 pass
 
+            # Per-question budget of model calls. A three-fact question took 35 calls
+            # (2026-11-02 baseline); past the budget the Eye answers from the evidence
+            # it has and says so, instead of investigating on.
+            max_model_calls = int(reasoning_cfg.get("max_model_calls", 30) or 0)
+            budget_hit = False
             while iteration < MAX_ITERATIONS:
+                if max_model_calls and model_calls["n"] >= max_model_calls:
+                    budget_hit = True
+                    emit_step("thinking",
+                              "Model-call budget reached (%d): answering from the evidence gathered"
+                              % max_model_calls, "done")
+                    break
                 iteration += 1
 
                 # RE-INSERT USER QUERY: If we just started and tools were run,
@@ -2381,9 +2418,8 @@ class QueryProcessor:
                         self.cm.history_manager.add_message("user", step_message, {"internal": True})
                     
                     ai_content = llm_response.get("content", "")
-                    new_kws = self.cm.intent_engine.detect_keywords(ai_content)
-                    for kw in new_kws:
-                        active_keywords.add(kw)
+                    step_keywords_ai = set(self.cm.intent_engine.detect_keywords(ai_content))
+                    active_keywords = base_keywords | step_keywords_ai | step_keywords_tools
 
                     # Refresh sub-question/premise checklist from this turn's
                     # answer + accumulated evidence (drives the completion gate).
@@ -2414,6 +2450,23 @@ class QueryProcessor:
                     if _sv is None and sub_rounds > MAX_SUBNARR_ROUNDS:
                         _sv, _sv_reason = self._resolve_by_evidence(
                             plan_steps[focus_idx], all_tool_results[step_result_start:])
+                    if _sv == "ANSWERED":
+                        # The evidence already answers the question (e.g. no USB storage
+                        # device exists, so per-device first/last times are moot). Working
+                        # the remaining steps cost ~3 model calls each and changed nothing:
+                        # 2026-11-01, one direct question ran 21 steps for ~18 minutes.
+                        _esv, _ereason = self._resolve_by_evidence(
+                            plan_steps[focus_idx], all_tool_results[step_result_start:])
+                        self._resolve_substep(plan_steps[focus_idx], _esv, _sv_reason or _ereason,
+                                              all_tool_results[step_result_start:])
+                        _skipped = len(plan_steps) - focus_idx - 1
+                        self._mark_moot(plan_steps[focus_idx + 1:], _sv_reason)
+                        emit_step("synthesis",
+                                  f"Question answered at step {focus_idx + 1}/{len(plan_steps)} - "
+                                  f"{_skipped} remaining step(s) not needed", "done")
+                        focus_idx = len(plan_steps)
+                        self._save_active_plan(hierarchy_plan, focus_idx, user_query)
+                        break
                     if _sv is not None:
                         self._resolve_substep(plan_steps[focus_idx], _sv, _sv_reason,
                                               all_tool_results[step_result_start:])
@@ -2618,11 +2671,12 @@ class QueryProcessor:
                         "iteration": iteration,
                         "tool": tool_name,
                         "params": call.get("parameters"),
-                        "success": bool(result.get("success")),
+                        # The handler's own verdict, not just "it did not raise".
+                        "success": self._tool_succeeded(result),
                         "result": result.get("result") if isinstance(result.get("result"), dict) else result,
                     })
 
-                    status = "done" if result.get("success") else "error"
+                    status = "done" if self._tool_succeeded(result) else "error"
                     emit_step("tool_call", f"Tool complete: {tool_name}", status, tool=tool_name, detail=result.get("error"))
 
                     # Record the tool result fed back to the model.
@@ -2645,7 +2699,13 @@ class QueryProcessor:
                 # default=str so a non-JSON-serializable tool result (e.g. a
                 # dataclass that slipped through a handler) can NEVER crash the
                 # whole investigation turn — it degrades to a string instead.
-                tool_output_str = json.dumps(iteration_tool_results, indent=2, default=str)
+                # What the MODEL reads: no `full_rows` (the whole result set kept beside a
+                # compressed sample for the data viewer and map-reduce, which read it
+                # from `all_tool_results`, never from history) and compact JSON
+                # (indent=2 added ~30% whitespace). A 1,500-row result went into the
+                # history whole twice over (2026-11-02 review).
+                tool_output_str = json.dumps(self._model_view(iteration_tool_results),
+                                             ensure_ascii=False, separators=(",", ":"), default=str)
 
                 # Token-aware, window-scaled cap on a single tool output (P3 #11).
                 tool_output_limit = self._tool_output_char_limit()
@@ -2686,8 +2746,8 @@ class QueryProcessor:
                     except Exception:
                         pass
 
-                new_kws_from_tools = self.cm.intent_engine.detect_keywords(tool_output_str)
-                for kw in new_kws_from_tools: active_keywords.add(kw)
+                step_keywords_tools = set(self.cm.intent_engine.detect_keywords(tool_output_str))
+                active_keywords = base_keywords | step_keywords_ai | step_keywords_tools
 
                 # GEP-8 (Tool Traceability): prepend an LLM-visible header
                 # listing every tool call in this iteration with its name + iteration
@@ -2711,15 +2771,7 @@ class QueryProcessor:
                     f"{trace_header}\nInvestigation Tool Results:\n{history_tool_output}",
                     {"is_tool_result": True, "tool_names": [r.get("tool_name") for r in iteration_tool_results], "iteration": iteration}
                 )
-                current_user_message = (
-                    "Analyze the tool results above. If the question asks whether something "
-                    "exists / was installed / was run, you are NOT finished until you have "
-                    "checked EVERY relevant database in sequence (Amcache, Prefetch, Registry "
-                    "Uninstall keys, ShimCache, SRUM, MFT) — do not stop after one database "
-                    "returns nothing, and do not hand back to the investigator mid-sweep. "
-                    "If you have genuinely enough evidence, provide your final synthesis; "
-                    "otherwise call the next tool now."
-                )
+                current_user_message = self._next_step_guidance(user_query)
                 
                 # Update history snapshot for next turn
                 with self.cm.history_manager._lock:
@@ -2758,7 +2810,7 @@ class QueryProcessor:
             # 5. A hierarchical run that finished proving its narratives ALWAYS gets a
             #    synthesis pass to aggregate the sub-narratives into the verdict answer.
             hierarchical_done = hierarchical and focus_idx >= len(plan_steps)
-            needs_synthesis = (hit_max_iter or empty_response
+            needs_synthesis = (hit_max_iter or budget_hit or empty_response
                                or tools_were_run_but_no_synthesis or force_honest_synthesis
                                or hierarchical_done)
 
@@ -2841,7 +2893,10 @@ class QueryProcessor:
                                     "error": str(exec_exc),
                                 })
 
-                    if synthesis_content:
+                    # A one-line "I'm recording the verdict in the report..." beside the
+                    # report tool calls is a progress note, not an answer: 2026-11-01 a
+                    # 17-minute investigation ended with exactly that in the chat.
+                    if synthesis_content and not self._is_progress_note(synthesis_content):
                         ai_content = synthesis_content
                     else:
                         # The model documented to the report but gave us no chat text.
@@ -3054,6 +3109,15 @@ class QueryProcessor:
             # tool_output), so this only strips the raw protocol text from the prose.
             ai_content = self._strip_tool_call_blocks(ai_content)
 
+            # Claim check: every specific value in the answer (time, device ID, SID,
+            # hash, path) looked up in what the tools actually returned in this
+            # conversation; the ones not found are listed under the answer and
+            # recorded for the compliance trail. Never changes the answer itself.
+            try:
+                ai_content = self._apply_claim_check(ai_content, all_tool_results)
+            except Exception as _e:
+                self.logger.debug(f"Claim check skipped: {_e}")
+
             # Persist the full Eye<->LLM transcript ONTO this turn's final
             # assistant message so the "Show the Eye's thinking" dropdown
             # survives close/reopen for EVERY message — not just the last.
@@ -3205,6 +3269,85 @@ class QueryProcessor:
         r"|\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM|UTC)"  # 10:42 PM / 14:02 UTC
     )
 
+    # A question about whether a program/file exists or ran: one silent database
+    # proves nothing, so the cross-artifact sweep is right there.
+    _EXISTENCE_Q = re.compile(
+        r"\b(install(ed)?|run|ran|execut\w*|launch\w*|exist\w*|present|ever (used|opened)|"
+        r"was .{1,40} (used|on (this|the) machine))\b", re.I)
+
+    @classmethod
+    def _next_step_guidance(cls, user_query: str) -> str:
+        """What to ask after a tool round. The cross-artifact sweep (Amcache,
+        Prefetch, Uninstall keys, ShimCache, SRUM, MFT) used to be demanded after
+        EVERY round, for every question - a direct question like "what is the
+        computer name" was pushed through six databases (2026-11-02 review)."""
+        if cls._EXISTENCE_Q.search(user_query or ""):
+            return (
+                "Analyze the tool results above. This question asks whether something exists / "
+                "was installed / was run, so you are NOT finished until you have checked every "
+                "artifact that would record it (Amcache, Prefetch, Registry Uninstall keys, "
+                "ShimCache, SRUM, MFT) — one database returning nothing proves nothing. "
+                "If you have genuinely enough evidence, provide your final synthesis; "
+                "otherwise call the next tool now."
+            )
+        return (
+            "Analyze the tool results above. If they answer the question (or the current "
+            "step), say so and give the answer with its evidence now. If one specific artifact "
+            "is still needed, call the one tool that reads it. Do not query databases that "
+            "cannot bear on this question."
+        )
+
+    def _apply_claim_check(self, ai_content: str, all_tool_results) -> str:
+        from eye.services.claim_check import check_claims, note_for
+        if not (ai_content or "").strip():
+            return ai_content
+        texts = []
+        for r in all_tool_results or []:
+            try:
+                texts.append(json.dumps(r, ensure_ascii=False, default=str))
+            except Exception:
+                texts.append(str(r))
+        hm = getattr(self.cm, "history_manager", None)
+        if hm is not None:
+            with hm._lock:
+                for m in hm.history:
+                    if (m.get("metadata") or {}).get("is_tool_result"):
+                        texts.append(str(m.get("content") or ""))
+        result = check_claims(ai_content, texts)
+        self.last_claim_check = result
+        if result["checked"]:
+            try:
+                self._audit_event(
+                    "CLAIM_CHECK", reason="specific values checked against tool results",
+                    metadata={"checked": result["checked"],
+                              "unsupported": [c["value"] for c in result["unsupported"]][:50],
+                              "shifted": [[c["value"], c["shift_hours"]]
+                                          for c in result.get("shifted") or []][:50]})
+            except Exception:
+                pass
+        return ai_content + note_for(result)
+
+    def _result_compactor(self):
+        comp = getattr(self, "_compactor", None)
+        if comp is None:
+            from eye.services.result_compaction import ResultCompactor, DEFAULT_TRIGGER_CHARS
+            cfg = getattr(self.cm, "reasoning_config", None) or {}
+            comp = ResultCompactor(trigger_chars=int(cfg.get("compact_tool_results_over_chars",
+                                                             DEFAULT_TRIGGER_CHARS)))
+            self._compactor = comp
+        return comp
+
+    _MODEL_HIDDEN_KEYS = frozenset({"full_rows"})
+
+    @classmethod
+    def _model_view(cls, value):
+        """A copy of tool results without the parts only the UI needs."""
+        if isinstance(value, dict):
+            return {k: cls._model_view(v) for k, v in value.items() if k not in cls._MODEL_HIDDEN_KEYS}
+        if isinstance(value, list):
+            return [cls._model_view(v) for v in value]
+        return value
+
     @staticmethod
     def _tool_succeeded(r: Dict[str, Any]) -> bool:
         """A tool result counts as successful when neither the executor wrapper
@@ -3237,11 +3380,14 @@ class QueryProcessor:
         checks = []
 
         # GEP-10 (Defensibility) — Direct Answer: a substantive chat answer must exist.
-        substantive = len(ai_content.strip()) >= 40
+        # A progress note ("I'm recording the verdict...") is not one, whatever its length.
+        _note = self._is_progress_note(ai_content)
+        substantive = len(ai_content.strip()) >= 40 and not _note
         checks.append({
             "id": "GEP-10", "name": "Direct Answer (GEP-10)",
             "status": "PASS" if substantive else "FAIL",
-            "detail": f"chat answer is {len(ai_content.strip())} chars"
+            "detail": (f"chat answer is a progress note, not an answer ({len(ai_content.strip())} chars)"
+                       if _note else f"chat answer is {len(ai_content.strip())} chars")
                       if substantive else "no substantive chat answer produced",
         })
 
@@ -4036,8 +4182,8 @@ class QueryProcessor:
         failure (caller falls back to the flat sub-question path). The model decides
         what to prove (verdict), the activities to prove it (narratives), and the
         specific evidence-bearing steps + which tools prove each (sub-narratives)."""
-        max_nar = int(reasoning_cfg.get("max_narratives", 12))
-        max_sub = int(reasoning_cfg.get("max_sub_narratives", 8))
+        max_nar = int(reasoning_cfg.get("max_narratives", 4))
+        max_sub = int(reasoning_cfg.get("max_sub_narratives", 3))
         tool_names = sorted({(t.get("name") or "") for t in self.cm._get_tool_definitions()
                              if (t.get("name") or "") and not (t.get("name") or "").startswith("report_")})
         planning_system = (
@@ -4054,24 +4200,28 @@ class QueryProcessor:
             'matters to the verdict>","sub_narratives":[ ... ]}.\n'
             '  Each sub_narrative is an object {"claim":"<a specific, evidence-bearing step/behavior>",'
             '"evidence_needed":"<the concrete artifact evidence that would prove it>","tools":["<tool>", ...]}.\n'
-            "\nBe THOROUGH and SPECIFIC — a richer plan investigates better:\n"
-            "- DECOMPOSE FULLY: cover every distinct angle needed to settle the verdict — each relevant "
-            "artifact (SRUM, registry Run keys, services, prefetch, amcache, event logs, MFT/USN, "
-            "network), time window, user/process/file identity, and any premise the investigator "
-            "assumed. Prefer several focused narratives over one broad one.\n"
+            "\nSIZE THE PLAN TO THE QUESTION — every step costs model calls and time:\n"
+            "- A DIRECT question (one fact or a short list: a name, a time, which accounts, which "
+            "programs, was X present) needs ONE narrative with 1-2 sub-narratives that read the "
+            "artifact(s) holding that fact.\n"
+            "- An OPEN question (what happened, reconstruct the activity, was there exfiltration) "
+            "needs a narrative per distinct activity, covering the relevant artifacts (SRUM, Run "
+            "keys, services, prefetch, amcache, event logs, MFT/USN, network), the time window, "
+            "the user/process/file identity, and any premise the investigator assumed.\n"
+            "- Never add a step that cannot change the answer.\n"
             "- CONCRETE SUB-NARRATIVES: each claim names a specific behavior, and evidence_needed names "
             "the concrete artifact / table / field / value that proves it (not a vague 'check logs').\n"
-            "- CROSS-SOURCE TOOLS: for each sub_narrative list ALL tools whose results would corroborate "
-            "it — e.g. `query_database` on the relevant artifact AND `query_correlation_results` AND a "
-            "second artifact table — so the proof rests on multiple sources, not one. Use exact names.\n"
+            "- TOOLS: for each sub_narrative list the 1-3 tools that read its artifact; add a second "
+            "source only where corroboration can change the conclusion (an execution, a deletion, "
+            "a connection time). Use exact names.\n"
             "\nForensic artifacts available in this case — map each sub_narrative's evidence_needed to "
             "the artifact that holds its evidence, and choose the tools that read it:\n"
             + self._artifact_catalog_block() + "\n"
             "(e.g. execution → Prefetch/AmCache/ShimCache/SRUM; persistence → Registry Run keys; "
             "deletion → USN Journal/Recycle Bin/MFT; network → SRUM; file access → Jump Lists/LNK/ShellBags.)\n"
             f"\nAvailable tools (use these exact names): {', '.join(tool_names)}.\n"
-            f"Use up to {max_nar} narratives and up to {max_sub} sub_narratives each — go deep enough to "
-            "actually prove the verdict. Order them so the investigation flows logically. "
+            f"Use at most {max_nar} narratives and at most {max_sub} sub_narratives each — the fewest "
+            "that settle the verdict. Order them so the investigation flows logically. "
             "Return ONLY the JSON object.\n\n"
             f"Investigator goal: {user_query}"
         )
@@ -4207,6 +4357,10 @@ class QueryProcessor:
             for sub in nar.get("sub_narratives", []):
                 st = (sub.get("status") or "open").upper()
                 lines.append(f"    • [{st}] {sub.get('claim', '')}")
+        if any((sub.get("status") or "") == "moot"
+               for nar in plan.get("narratives", []) for sub in nar.get("sub_narratives", [])):
+            lines.append("[MOOT] = not checked, because the evidence had already answered the question; "
+                         "say so rather than reporting those steps as disproven.")
         lines.append(
             "Decide whether the VERDICT is PROVEN or NOT-PROVEN from the sub-narrative outcomes above "
             "and the cited evidence, and explain the reasoning.")
@@ -4238,6 +4392,10 @@ class QueryProcessor:
             "  SUBVERDICT: PROVEN || <the artifact evidence + one-line why>",
             "  — or —",
             "  SUBVERDICT: NOT-PROVEN || <what you checked and why it is not established>",
+            "  — or, only when the evidence gathered so far already answers the investigator's "
+            "question and no remaining step can change that answer (for example the thing they "
+            "all depend on does not exist in this case) —",
+            "  SUBVERDICT: ANSWERED || <the answer the evidence gives, and why the remaining steps are moot>",
         ])
 
     @staticmethod
@@ -4251,6 +4409,10 @@ class QueryProcessor:
         first so 'not proven' never matches as 'proven'."""
         if not text:
             return None, ""
+        # ANSWERED: the question is settled and the rest of the plan is moot.
+        m = re.search(r'(?im)SUB[\s\-]?VERDICT\b[\s*_`:|-]*?ANSWERED\b(.*)$', text)
+        if m:
+            return "ANSWERED", re.sub(r'^[\s*_`|-]+', '', m.group(1) or '').strip()
         # Canonical / decorated marker, tolerant of surrounding **/`/_ decoration and
         # a trailing `|| reason` (anywhere on its line).
         m = re.search(
@@ -4276,11 +4438,31 @@ class QueryProcessor:
         best = self._best_step_result(step_results, step)
         if best is None:
             return "NOT-PROVEN", "No supporting tool result was found for this sub-narrative."
-        inner = best.get("result") if isinstance(best.get("result"), dict) else {}
-        blob = str(best.get("data") or (inner.get("data") if isinstance(inner, dict) else "") or inner or "")
-        if blob.strip():
+        if self._result_payload(best):
             return "PROVEN", "Established from the tool evidence gathered for this sub-narrative."
         return "NOT-PROVEN", "Tool ran but returned no supporting data."
+
+    @staticmethod
+    def _result_payload(r) -> str:
+        """The DATA a tool result carries, as text - never its error or status.
+
+        The old check took `str(inner)` when there was no `data`, so a failed SQL
+        call ({"success": False, "error": "no such column"}) was non-empty text and
+        settled a sub-narrative as PROVEN (2026-11-02 review)."""
+        if not isinstance(r, dict):
+            return ""
+        inner = r.get("result") if isinstance(r.get("result"), dict) else {}
+        for src in (r, inner):
+            if not isinstance(src, dict):
+                continue
+            for key in ("data", "rows", "results", "events", "matches", "records", "toon_summary"):
+                val = src.get(key)
+                if val in (None, "", [], {}):
+                    continue
+                if isinstance(val, (list, dict)):
+                    return json.dumps(val, default=str)[:20000]
+                return str(val)[:20000]
+        return ""
 
     @staticmethod
     def _best_step_result(step_results, step):
@@ -4290,15 +4472,18 @@ class QueryProcessor:
         def _toks(s):
             return {w for w in _re.findall(r"[a-zA-Z_][a-zA-Z0-9_]{2,}", (s or "").lower())}
         want = _toks(step.get("claim", "") + " " + step.get("evidence_needed", ""))
-        best, best_score = None, -1
+        best, best_score = None, 0
         for r in (step_results or []):
             if not isinstance(r, dict):
                 continue
-            inner = r.get("result") if isinstance(r.get("result"), dict) else {}
-            if not (r.get("success") or (isinstance(inner, dict) and inner.get("success"))):
+            # Both the executor and the handler must report success, and there must
+            # be data: a failed query, an empty result or unrelated rows prove nothing.
+            if not QueryProcessor._tool_succeeded(r):
                 continue
-            blob = str(r.get("data") or (inner.get("data") if isinstance(inner, dict) else "") or inner or "")
-            score = len(want & _toks(blob))
+            blob = QueryProcessor._result_payload(r)
+            if not blob.strip():
+                continue
+            score = len(want & _toks(blob)) if want else 1
             if score > best_score:
                 best, best_score = r, score
         return best
@@ -4320,6 +4505,37 @@ class QueryProcessor:
             "query": params.get("sql_query") or "",
             "database": params.get("database_name") or "",
         }
+
+    _PROGRESS_NOTE = re.compile(
+        r"^\s*(i'?m|i am|i'?ll|i will|let me|now i|next,? i|recording|rendering|documenting|writing)\b",
+        re.IGNORECASE)
+
+    @classmethod
+    def _is_progress_note(cls, text: str) -> bool:
+        """A short note about what the model is doing next, not an answer to the question."""
+        t = (text or "").strip()
+        return bool(t) and len(t) < 300 and "\n" not in t and bool(cls._PROGRESS_NOTE.match(t))
+
+    def _mark_moot(self, steps, reason):
+        """Steps not worked because the question was already answered: recorded as
+        not pursued (status 'moot' in the plan; 'negative' on the map, which has no
+        skipped state, with the reason saying they were not checked)."""
+        nms = getattr(self.cm, "narrative_map_service", None)
+        model = self._hier_model()
+        why = "Not checked: the question was already answered - %s" % (reason or "see the answer")
+        for step in steps:
+            step["sub"]["status"] = "moot"
+            try:
+                if nms is not None and step.get("sub_id"):
+                    nms.set_state(step["sub_id"], "negative", reason=why, model=model)
+                if nms is not None and step.get("is_last_in_nar") and step.get("nar_id"):
+                    any_proven = any(s.get("status") == "proven"
+                                     for s in step["nar"].get("sub_narratives", []))
+                    nms.set_state(step["nar_id"], "proven" if any_proven else "negative",
+                                  reason=("Established by a proven sub-narrative." if any_proven else why),
+                                  model=model)
+            except Exception:
+                pass
 
     def _resolve_substep(self, step, subverdict, reason, step_results):
         """Flip the sub-narrative's map node from the step's outcome, then roll the
@@ -4640,7 +4856,10 @@ class QueryProcessor:
         )
 
         try:
-            results_str = json.dumps(results, indent=2)
+            # Without `full_rows`: one compressed result's whole row set used to fill
+            # the 40,000-character window, so the synthesis never saw the others.
+            results_str = json.dumps(self._model_view(results), ensure_ascii=False,
+                                     separators=(",", ":"), default=str)
             if len(results_str) > 40000:
                 results_str = results_str[:40000] + "\n... [TRUNCATED DUE TO SIZE. SYNTHESIZE AVAILABLE DATA] ..."
         except Exception:
@@ -4679,8 +4898,18 @@ class QueryProcessor:
         
         # Discover fallback options
         model_chips = []
+        backend_id = (self.cm.model_router.config or {}).get("backend")
+        if getattr(error, "kind", None) is not None:
+            # A typed Claude Code error says what it is; "limit" in "the request is
+            # ~1003302 tokens (limit 1000000)" made a too-long prompt read as a quota.
+            is_quota_error = error.kind in ("limit", "rate")
         try:
             available = self.cm.model_router.list_models()
+            if backend_id == "claude_code":
+                # Its full ids repeat the aliases; and a Claude plan's limit covers every
+                # model, so switching models cannot get round it.
+                from eye.backends.local_cli.claude_code_backend import MODEL_ALIASES
+                available = [] if is_quota_error else [m for m in available if m in MODEL_ALIASES]
             model_chips = [{
                 "id": f"switch_{m}", "label": f"Try {m}", "query": f"Switch model to {m}", "icon": "brain"
             } for m in available if m != current_model]
@@ -4739,11 +4968,32 @@ class QueryProcessor:
             except Exception as ex:
                 self.logger.error(f"Failed to auto-adapt context: {ex}")
 
+        try:
+            from eye.backends.base import describe_backend_error
+            plain = describe_backend_error(error)
+        except Exception:
+            plain = err_str
         response = (
             f"### Model Connection Failed\n"
-            f"The forensic model encountered an error:\n`{err_str}`\n\n"
+            f"{plain}\n\n"
         )
-        if is_quota_error:
+        # Every failure is on record, and the investigator gets the setup check.
+        try:
+            from eye.services import backend_doctor as _bd
+            _bd.record(getattr(self.cm, "case_directory", None), {
+                "ok": False, "summary": plain, "during": "investigation",
+                "backend": (self.cm.model_router.config or {}).get("backend"), "model": current_model,
+                "checks": []})
+            model_chips = [{"id": "doctor_again", "label": "Check the model setup", "icon": "refresh",
+                            "query": "Check model setup"}] + model_chips
+        except Exception:
+            pass
+        if is_quota_error and backend_id == "claude_code":
+            response += (
+                "This limit is your Claude plan's, so it covers every Claude model. Ask again "
+                "once it resets, or switch the Eye to an API provider in Settings -> Eye AI."
+            )
+        elif is_quota_error:
             response += (
                 "Your current model has exhausted its rate limit. Please wait or "
                 "select an alternative model below:"

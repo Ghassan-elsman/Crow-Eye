@@ -5,7 +5,7 @@
   gap: 6px;
   padding: 5px 10px;
   border-radius: var(--radius-full);
-  border: 1px solid var(--color-border-muted);
+  border: 3px solid var(--color-border-muted);
   background: var(--color-bg-elevated);
   cursor: default;
   -webkit-transition: border-color 0.2s, background 0.2s;
@@ -51,7 +51,7 @@
   left: 0;
   min-width: 240px;
   background: var(--color-bg-overlay);
-  border: 1px solid var(--color-border-muted);
+  border: 3px solid var(--color-border-muted);
   border-radius: var(--radius-md);
   padding: 12px 14px;
   box-shadow: var(--shadow-lg);

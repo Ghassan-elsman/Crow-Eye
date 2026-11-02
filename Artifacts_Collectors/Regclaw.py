@@ -128,6 +128,27 @@ _REG_TYPE_NAMES = {
 
 
 
+
+def _live_known_folders(hive, prefix, profile):
+    """GUID -> folder path for one live user: ``prefix`` is "" for HKCU or
+    "<sid>\\" under HKEY_USERS. Unreadable keys leave Windows' defaults."""
+    shell_folders, onedrive = {}, None
+    try:
+        with winreg.OpenKey(hive, prefix + r"Software\Microsoft\Windows\CurrentVersion"
+                            r"\Explorer\User Shell Folders") as key:
+            for i in range(winreg.QueryInfoKey(key)[1]):
+                name, value, _type = winreg.EnumValue(key, i)
+                if isinstance(value, str):
+                    shell_folders[name] = value
+    except OSError:
+        pass
+    try:
+        with winreg.OpenKey(hive, prefix + "Environment") as key:
+            onedrive = winreg.QueryValueEx(key, "OneDrive")[0]
+    except OSError:
+        pass
+    return registry_binary_parser.known_folders_from_hive(shell_folders, onedrive, profile)
+
 def _live_device_property_time(hive_path, enum_path, device, instance, pid):
     r"""One device property FILETIME, read from an acquired hive file.
 
@@ -1639,8 +1660,11 @@ def main_live_reg(db_filename='registry_data.db'):
             profile_path TEXT,
             profile_image_path TEXT,
             profile_loaded INTEGER,
-            parsed_at TEXT
+            parsed_at TEXT,
+            profile_load_time TEXT,
+            profile_unload_time TEXT
         )''')
+        user_identity.ensure_user_profiles_columns(cursor)
         # Insert data into the respective tables
         for table_name, (hive, key) in paths.items():
             output = reg_Claw_live(hive, key)
@@ -3309,6 +3333,12 @@ def main_live_reg(db_filename='registry_data.db'):
                           (name, str(data), value_type, _live_user,
                            mru_position, _tp_lastwrite, _tp_stamp))
         print("TypedPaths data inserted into database successfully.")
+        # The current user's known folders (User Shell Folders, the OneDrive
+        # root), so a PIDL rooted on Documents or Downloads decodes to the
+        # folder this user actually has - a redirected OneDrive\Documents
+        # included - rather than to a fragment.
+        _cu_known_folders = _live_known_folders(
+            HKEY_CURRENT_USER, "", os.environ.get("USERPROFILE"))
         # Files that have been opened or saved by Windows shell dialog box - Enhanced version
         shellbags_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU"
         try:
@@ -3377,7 +3407,8 @@ def main_live_reg(db_filename='registry_data.db'):
                     if value_type == "REG_BINARY" and isinstance(data, bytes):
                         try:
                             # Use the specialized binary parser for OpenSaveMRU entries
-                            parsed_data = registry_binary_parser.parse_opensavemru_entry(data)
+                            parsed_data = registry_binary_parser.parse_opensavemru_entry(
+                                data, _cu_known_folders)
                             file_path = parsed_data.get('file_path', '')
                             file_name = parsed_data.get('file_name', '')
                             drive_letter = parsed_data.get('drive_letter', '')
@@ -3454,7 +3485,8 @@ def main_live_reg(db_filename='registry_data.db'):
                 if value_type == "REG_BINARY" and isinstance(data, bytes):
                     try:
                         # Use the specialized LastSaveMRU parser
-                        parsed_data = registry_binary_parser.parse_lastsavemru_entry(data)
+                        parsed_data = registry_binary_parser.parse_lastsavemru_entry(
+                            data, _cu_known_folders)
                         application = parsed_data.get('application', '')
                         folder_path = parsed_data.get('folder_path', '')
                         folder_name = parsed_data.get('file_name', '')  # file_name contains folder name
@@ -3968,14 +4000,19 @@ def main_live_reg(db_filename='registry_data.db'):
                                 if profile_image_path else "")
                     if not username:
                         username = "Unknown"
-                    
+
+                    # LocalProfileLoadTime/UnloadTime High+Low, the same
+                    # function the offline parser calls.
+                    _load, _unload = user_identity.profile_load_times(profile_values)
+
                     # Insert user profile data into database
                     cursor.execute('''
                     INSERT OR REPLACE INTO UserProfiles
-                    (user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at)
-                    VALUES (?, ?, ?, ?, ?, ?)''',
-                    (sid, username, profile_path, profile_image_path, profile_loaded, 
-                     format_forensic_timestamp(get_current_utc())))
+                    (user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at,
+                     profile_load_time, profile_unload_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (sid, username, profile_path, profile_image_path, profile_loaded,
+                     format_forensic_timestamp(get_current_utc()), _load, _unload))
                     
                     user_count += 1
                     
@@ -5704,10 +5741,28 @@ def main_live_reg(db_filename='registry_data.db'):
             # ActiveComputerName is the name in use for this boot; it can differ
             # from ComputerName after a rename that has not been rebooted.
             ACN = r"SYSTEM\CurrentControlSet\Control\ComputerName\ActiveComputerName"
+            # A VOLATILE key: Windows builds it at boot and no hive file holds
+            # it, so the key-time pass below - which dates rows from the hives
+            # it walks - can never reach it, and last_written stayed empty on
+            # every row with no error. Its LastWrite is read here through the
+            # same API that read the values: for this key, when this boot set
+            # the name.
+            _acn_written = ""
+            try:
+                with winreg.OpenKey(HKLM_R, ACN, 0, RD64) as _acn_key:
+                    _acn_ft = winreg.QueryInfoKey(_acn_key)[2]
+                if _acn_ft:
+                    _acn_written = format_forensic_timestamp(
+                        filetime_to_datetime(_acn_ft))
+            except (OSError, ValueError, OverflowError):
+                _acn_written = ""
             for _vn, _vd, _vt in _cvals(HKLM_R, ACN):
                 _ins("active_computer_name",
-                     ["name", "value", "key_path", "parsed_at"],
-                     (_vn, _fmt(_vd), ACN, cov_stamp), ["name"])
+                     ["name", "value", "key_path", "last_written",
+                      "time_basis", "parsed_at"],
+                     (_vn, _fmt(_vd), ACN, _acn_written,
+                      "key upper bound" if _acn_written else "", cov_stamp),
+                     ["name"])
 
             # hivelist names the backing file of every loaded hive - which is how
             # an examiner confirms the hives they collected are the ones in use.
@@ -5854,8 +5909,9 @@ def main_live_reg(db_filename='registry_data.db'):
                         f"UPDATE {_t} SET user_name = ? WHERE user_name IS NULL",
                         (current_username,))
 
-            # SID -> profile name, from ProfileList.
+            # SID -> profile name (and folder), from ProfileList.
             sid_names = {}
+            sid_profiles = {}
             try:
                 with winreg.OpenKey(HKLM_R, PROFILE_LIST_PATH, 0, RD64) as _pk:
                     for _i in range(winreg.QueryInfoKey(_pk)[0]):
@@ -5864,6 +5920,7 @@ def main_live_reg(db_filename='registry_data.db'):
                             with winreg.OpenKey(_pk, _sid, 0, RD64) as _sk:
                                 _pp, _ = winreg.QueryValueEx(_sk, "ProfileImagePath")
                                 sid_names[_sid] = os.path.basename(_pp)
+                                sid_profiles[_sid] = os.path.expandvars(_pp)
                         except OSError:
                             pass
             except OSError as e:
@@ -6101,8 +6158,10 @@ def main_live_reg(db_filename='registry_data.db'):
                     except Exception as e:
                         logger.debug(f"WordWheelQuery {uname}/{nm}: {e}")
 
-                # OpenSaveMRU / LastSaveMRU - shell Open/Save dialog history.
+                # OpenSaveMRU / LastSaveMRU - shell Open/Save dialog history,
+                # decoded with this user's own known folders.
                 _cdlg = base + r"\Explorer\ComDlg32"
+                _known_folders = _live_known_folders(HKU_R, sid + "\\", sid_profiles.get(sid))
                 for _ext, _vals in (get_subkeys_live(
                         HKU_R, _cdlg + r"\OpenSavePidlMRU") or {}).items():
                     for nm, (dt, _ty) in (_vals or {}).items():
@@ -6111,7 +6170,7 @@ def main_live_reg(db_filename='registry_data.db'):
                         try:
                             # Same decoder the current-user pass uses, so a file
                             # resolves identically whichever account opened it.
-                            p = registry_binary_parser.parse_opensavemru_entry(dt) or {}
+                            p = registry_binary_parser.parse_opensavemru_entry(dt, _known_folders) or {}
                             fname = p.get('file_name', '')
                             if not fname or check_exists(
                                     cursor, 'OpenSaveMRU',
@@ -6135,7 +6194,7 @@ def main_live_reg(db_filename='registry_data.db'):
                     if nm.lower() == "mrulistex" or not isinstance(dt, bytes):
                         continue
                     try:
-                        p = registry_binary_parser.parse_lastsavemru_entry(dt) or {}
+                        p = registry_binary_parser.parse_lastsavemru_entry(dt, _known_folders) or {}
                         app = p.get('application', '')
                         if not app or check_exists(
                                 cursor, 'LastSaveMRU',
@@ -6450,15 +6509,41 @@ def main_live_reg(db_filename='registry_data.db'):
                 r"default|ntuser\.dat|usrclass\.dat|hklm|hkcu|hku|"
                 r"hkey_local_machine|hkey_current_user|hkey_users)$")
 
+            def _current_control_set():
+                """'controlset001' - the stored key CurrentControlSet links to.
+
+                CurrentControlSet is a link Windows assembles at boot and never
+                writes into the SYSTEM hive file, so the walk below reports
+                ControlSet001 while every live row read through the API says
+                CurrentControlSet. Unmapped, the two never met: FirewallRules,
+                system_environment, device_classes and every other SYSTEM table
+                kept last_written and time_basis empty on every row, with no
+                error. Proven against an exported SYSTEM hive: the
+                FirewallRules key matched under ControlSet001 and not under
+                CurrentControlSet.
+                """
+                try:
+                    with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                        r"SYSTEM\Select") as _sel:
+                        _cur = int(winreg.QueryValueEx(_sel, "Current")[0])
+                    return "controlset%03d" % _cur if _cur > 0 else None
+                except Exception:
+                    return None
+
+            _CCS = _current_control_set()
+
             def _norm_key(path):
                 """One spelling for a key, so the two sides of a join meet.
 
                 The walk reports a hive-rooted path and the artifact tables
-                store what the parser read, which is not the same string.
+                store what the parser read, which is not the same string - and
+                a live row's CurrentControlSet is the walk's ControlSet00N.
                 """
                 parts = [x for x in (path or "").replace("/", chr(92)).split(chr(92)) if x]
                 while parts and _KEY_ROOTS.match(parts[0].lower()):
                     parts.pop(0)
+                if _CCS and parts and parts[0].lower() == "currentcontrolset":
+                    parts[0] = _CCS
                 return chr(92).join(parts).lower()
 
             def _key_columns(cur):
@@ -6481,7 +6566,28 @@ def main_live_reg(db_filename='registry_data.db'):
                 return out
 
             _pending_changes = []
-            _pending_keytimes = []
+            # Every key's latest write time by normalised path, folded in
+            # hive by hive. It used to be a list of one dict per key of every
+            # hive, folded only after the last one - all of them alive at
+            # once, beside each hive's value index.
+            _key_time = {}
+
+            def _fold_key_times(_label, _path):
+                for _kt in registry_hive_walk.iter_key_times(_path):
+                    if not (_kt["key_path"] and _kt["timestamp_raw"]):
+                        continue
+                    _when = _fmt_ft(_kt["timestamp_raw"])
+                    if not _when:
+                        continue
+                    _nk = _norm_key(_kt["key_path"])
+                    _prev = _key_time.get(_nk)
+                    # Where two hives spell the same path, take the LATEST.
+                    # An upper bound that is too late is still true; one
+                    # that is too early is a false claim.
+                    if _prev is None or _when > _prev[2]:
+                        _key_time[_nk] = (_label, _kt["key_path"], _when,
+                                          _kt["cell_offset"])
+
             for _label, _on_disk in _targets:
                 with live_hive_access.acquire_hive(
                         _label, on_disk_path=_on_disk,
@@ -6516,12 +6622,14 @@ def main_live_reg(db_filename='registry_data.db'):
                     try:
                         for _r in registry_hive_walk.value_changes(_path):
                             _pending_changes.append((_label, _r))
-                        for _kt in registry_hive_walk.key_times(_path):
-                            if _kt["key_path"] and _kt["timestamp_raw"]:
-                                _pending_keytimes.append((_label, _kt))
+                        _fold_key_times(_label, _path)
                     except Exception as _exc:
                         logger.debug("value changes %s: %s", _label, _exc)
+                    # The copy is gone when this block exits, so nothing can
+                    # ask for its index again (registry_hive_walk.forget_index).
+                    registry_hive_walk.forget_index(_path)
 
+                    _w = None
                     _w = registry_hive_walk.walk_hive(_path)
                     if _w.error:
                         logger.debug("hive walk %s: %s", _label, _w.error)
@@ -6817,7 +6925,6 @@ def main_live_reg(db_filename='registry_data.db'):
             _changes = 0
             _change_hives = 0
             _key_rows = 0
-            _key_time = {}
             try:
                 _change_hives = len({_l for _l, _ in _pending_changes})
                 for _label, _r in _pending_changes:
@@ -6838,19 +6945,6 @@ def main_live_reg(db_filename='registry_data.db'):
                          _r["value_before"], _r["changed_bytes"],
                          _r["offset"], _kw, _walk_stamp))
                     _changes += cursor.rowcount if cursor.rowcount > 0 else 0
-
-                for _label, _kt in _pending_keytimes:
-                    _when = _fmt_ft(_kt["timestamp_raw"])
-                    if not _when:
-                        continue
-                    _nk = _norm_key(_kt["key_path"])
-                    _prev = _key_time.get(_nk)
-                    # Where two hives spell the same path, take the LATEST.
-                    # An upper bound that is too late is still true; one
-                    # that is too early is a false claim.
-                    if _prev is None or _when > _prev[2]:
-                        _key_time[_nk] = (_label, _kt["key_path"], _when,
-                                          _kt["cell_offset"])
                 conn.commit()
             except Exception as _exc:
                 logger.debug("live value change pass: %s", _exc)
@@ -6958,11 +7052,22 @@ def main_live_reg(db_filename='registry_data.db'):
         try:
             _hs_stamp = format_forensic_timestamp(get_current_utc())
             for _label, _route in sorted(_hive_routes.items()):
+                # The route is what live_hive_access did to the copy:
+                # "+replayed" means the hive was dirty and its logs were
+                # applied, "+dirty-not-replayed" that it was dirty and they
+                # could not be. The row used to say replayed = 0 and
+                # was_dirty = NULL beside a route reading "+replayed".
+                _route_text = _route or ""
+                _replayed = 1 if "+replayed" in _route_text else 0
+                _was_dirty = (1 if (_replayed or
+                                    "+dirty-not-replayed" in _route_text)
+                              else None)
                 # registry_hive_state carries no UNIQUE constraint, so OR IGNORE
                 # would be a no-op and re-parsing the same machine would append
                 # these rows again. Keyed on the hive and the route it came by:
                 # a second parse that used a different route is a new fact and
-                # gets its own row.
+                # gets its own row. Keep this guard directly above the INSERT:
+                # test_reparse_is_stable looks for it in the dozen lines there.
                 if check_exists(cursor, 'registry_hive_state',
                                 ['hive_name', 'acquisition_route'],
                                 (_label, _route)):
@@ -6974,10 +7079,17 @@ def main_live_reg(db_filename='registry_data.db'):
                     'source_sha256, acquisition_route, reorganized_at, reason, '
                     'parsed_at) '
                     'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-                    (_label, "", None, None, None, "", "", 0, 0, 0, None, "",
+                    (_label, "", None, None, _was_dirty, "", "", _replayed,
+                     0, 0, None, "",
                      _route, _hive_reorg.get(_label),
-                     "live parse: the running registry is the state, so there is "
-                     "no hive file to be mid-transaction", _hs_stamp))
+                     ("live parse: the hive was dirty and its transaction "
+                      "logs were applied to the acquired copy" if _replayed
+                      else "live parse: the hive was dirty and its "
+                      "transaction logs could not be applied"
+                      if _was_dirty else
+                      "live parse: the running registry is the state, so "
+                      "there is no hive file to be mid-transaction"),
+                     _hs_stamp))
             conn.commit()
         except Exception as e:
             logger.error("Could not record acquisition routes: %s", e)

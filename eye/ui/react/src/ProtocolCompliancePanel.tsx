@@ -95,9 +95,9 @@ const RULE_BLURB: Record<number | string, string> = {
   7: 'Structured JSON audit trail for automated compliance review.',
   // Write-side rules — apply to the four correlation_create_* and
   // correlation_edit_* tools.
-  8: 'Every Wing or Mapping EYE authors must carry a non-empty forensic reason.',
+  8: 'Every Wing or Mapping Eye authors must carry a non-empty forensic reason.',
   9: 'Every authored artifact must cite at least one database:table:rowid evidence ref (soft-warning on unresolvable refs).',
-  10: 'Every EYE-authored artifact carries a populated EyeAuthorship block (model, time, reason, evidence, edit history).',
+  10: 'Every Eye-authored artifact carries a populated EyeAuthorship block (model, time, reason, evidence, edit history).',
 };
 
 /**
@@ -107,18 +107,18 @@ const RULE_BLURB: Record<number | string, string> = {
  */
 const RULE_GUIDANCE: Record<number | string, Partial<Record<string, string>>> = {
   0: {
-    PASS: 'Case context is loaded and injected into every prompt the EYE sends.',
-    FAIL: 'No case context is loaded. Open / create a case in Crow-Eye so the EYE can ground its answers in real evidence.',
+    PASS: 'Case context is loaded and injected into every prompt the Eye sends.',
+    FAIL: 'No case context is loaded. Open / create a case in Crow-Eye so the Eye can ground its answers in real evidence.',
   },
   1: {
     PASS: 'The configured AI backend responded to the last connectivity ping.',
-    FAIL: 'The EYE cannot reach its AI backend. Check the API key, network, or local model service in Settings.',
+    FAIL: 'The Eye cannot reach its AI backend. Check the API key, network, or local model service in Settings.',
     PARTIAL: 'The backend answered, but with a degraded signal. Verify the model service is healthy.',
   },
   2: {
     PASS: 'Recent messages carry inline <evidence anchor="…"> tags — raw artifacts travel with the text and survive summarization.',
     PARTIAL: 'Evidence is flagged in metadata but no in-content anchor tags were found in the last 25 messages. Confirm the evidence detector is enabled.',
-    'N-A': 'The session has not produced messages containing detectable evidence yet. Ask the EYE a forensic question to populate this rule.',
+    'N-A': 'The session has not produced messages containing detectable evidence yet. Ask the Eye a forensic question to populate this rule.',
   },
   3: {
     PASS: 'Every preservation, summarization, and pin event is appended to EYE_Logs/truncation_audit.log.',
@@ -128,44 +128,44 @@ const RULE_GUIDANCE: Record<number | string, Partial<Record<string, string>>> = 
   4: {
     PASS: 'All recent message IDs are 16-char SHA-chained — any tampering would break the chain on the next message.',
     PARTIAL: 'Some recent messages use the legacy ID format. They will be re-hashed on the next history rewrite; new messages already use SHA.',
-    FAIL: 'No message IDs match the SHA-16 chain format. Restart the EYE so history_manager._generate_message_id runs on new turns.',
+    FAIL: 'No message IDs match the SHA-16 chain format. Restart the Eye so history_manager._generate_message_id runs on new turns.',
     'N-A': 'No messages have been added to history yet.',
   },
   5: {
     PASS: 'One or more messages are pinned / evidence-preserved and will be skipped by the summarizer.',
-    FAIL: 'The pin handler is missing from history_manager. This is a build issue — reinstall / restart the EYE.',
+    FAIL: 'The pin handler is missing from history_manager. This is a build issue — reinstall / restart the Eye.',
     'N-A': 'The pin handler is present but no messages have been pinned yet. Use the pin icon on a chat bubble to lock it.',
   },
   6: {
     PASS: 'The most recent tool-result message starts with a [Tool i/N: name, iteration X] header, so the LLM can see exactly which tool produced which evidence.',
-    PARTIAL: 'Tool-result messages exist but the trace header is only in metadata. Restart the EYE so the next iteration uses the in-content header.',
-    'N-A': 'The EYE has not run any tools yet in this session.',
+    PARTIAL: 'Tool-result messages exist but the trace header is only in metadata. Restart the Eye so the next iteration uses the in-content header.',
+    'N-A': 'The Eye has not run any tools yet in this session.',
   },
   7: {
     PASS: 'EYE_Logs/audit_trail.json is up to date — auto-exported on every preservation and summarization event.',
-    FAIL: 'audit_trail.json has not been written yet. It is created automatically when the EYE preserves evidence or summarizes history. You can also force one with Export Audit JSON.',
+    FAIL: 'audit_trail.json has not been written yet. It is created automatically when the Eye preserves evidence or summarizes history. You can also force one with Export Audit JSON.',
   },
   8: {
-    PASS: 'Every EYE-authored Wing and Semantic Mapping in this case carries a non-empty forensic reason. Hover an item in the Wings or Mappings panel to see its full justification.',
-    FAIL: 'One or more EYE-authored artifacts lack a populated reason — handler bug; expected to be impossible. Review the latest audit-trail entries.',
-    'N-A': 'EYE has not authored any Wings or Mappings in this case yet. The rule is dormant until the first correlation_create_* call.',
+    PASS: 'Every Eye-authored Wing and Semantic Mapping in this case carries a non-empty forensic reason. Hover an item in the Wings or Mappings panel to see its full justification.',
+    FAIL: 'One or more Eye-authored artifacts lack a populated reason — handler bug; expected to be impossible. Review the latest audit-trail entries.',
+    'N-A': 'Eye has not authored any Wings or Mappings in this case yet. The rule is dormant until the first correlation_create_* call.',
   },
   9: {
-    PASS: 'Every EYE-authored artifact in this case has fully resolved evidence references — each cited database:table:rowid still resolves to a live row.',
-    PARTIAL: 'At least one EYE-authored artifact has unresolved evidence refs (soft-warning model). The artifact was still persisted; refs are recorded in eye_authorship.unresolved_evidence_refs. Common causes: row deleted post-write, DB locked at write time, archived case.',
-    FAIL: 'One or more EYE-authored artifacts cite no evidence at all — handler bug; should be impossible. Review the audit trail.',
-    'N-A': 'No EYE-authored artifacts yet in this case.',
+    PASS: 'Every Eye-authored artifact in this case has fully resolved evidence references — each cited database:table:rowid still resolves to a live row.',
+    PARTIAL: 'At least one Eye-authored artifact has unresolved evidence refs (soft-warning model). The artifact was still persisted; refs are recorded in eye_authorship.unresolved_evidence_refs. Common causes: row deleted post-write, DB locked at write time, archived case.',
+    FAIL: 'One or more Eye-authored artifacts cite no evidence at all — handler bug; should be impossible. Review the audit trail.',
+    'N-A': 'No Eye-authored artifacts yet in this case.',
   },
   10: {
-    PASS: 'Every EYE-authored artifact carries a complete EyeAuthorship block (model name, timestamp, reason, evidence, GEP per-rule status). Analysts can trace each artifact back to its EYE conversation.',
-    FAIL: 'One or more EYE-authored artifacts have an incomplete EyeAuthorship block — likely a partially-written file. Re-run the EYE turn that produced it, or delete it and re-author.',
-    'N-A': 'No EYE-authored artifacts yet in this case.',
+    PASS: 'Every Eye-authored artifact carries a complete EyeAuthorship block (model name, timestamp, reason, evidence, GEP per-rule status). Analysts can trace each artifact back to its Eye conversation.',
+    FAIL: 'One or more Eye-authored artifacts have an incomplete EyeAuthorship block — likely a partially-written file. Re-run the Eye turn that produced it, or delete it and re-author.',
+    'N-A': 'No Eye-authored artifacts yet in this case.',
   },
 };
 
 const TYPE_STYLE: Record<AuditEntryType, { label: string; color: string; bg: string; border: string }> = {
   user_query:         { label: 'USER QUERY',    color: '#60a5fa', bg: 'rgba(96,165,250,0.10)',  border: 'rgba(96,165,250,0.40)'  },
-  assistant_response: { label: 'EYE RESPONSE',  color: '#e2e8f0', bg: 'rgba(226,232,240,0.08)', border: 'rgba(226,232,240,0.25)' },
+  assistant_response: { label: 'Eye RESPONSE',  color: '#e2e8f0', bg: 'rgba(226,232,240,0.08)', border: 'rgba(226,232,240,0.25)' },
   tool_call:          { label: 'QUERY RUN',     color: '#a78bfa', bg: 'rgba(167,139,250,0.12)', border: 'rgba(167,139,250,0.45)' },
   tool_result:        { label: 'EVIDENCE',      color: '#10b981', bg: 'rgba(16,185,129,0.10)',  border: 'rgba(16,185,129,0.45)'  },
   report_added:       { label: 'REPORT +',      color: '#34d399', bg: 'rgba(52,211,153,0.12)',  border: 'rgba(52,211,153,0.45)'  },
@@ -1210,7 +1210,7 @@ const ProtocolCompliancePanel: React.FC = () => {
             <span style={styles.helpNoteIcon}>ⓘ</span>
             <div>
               <strong>How to read this dashboard.</strong> Each row is one forensic-integrity rule or Eye process
-              the EYE enforces while answering, tagged with the GEP principle(s) it upholds.
+              the Eye enforces while answering, tagged with the GEP principle(s) it upholds.
               <span style={styles.tagPass}>PASS</span> means the rule is
               actively in force right now. <span style={styles.tagPartial}>PARTIAL</span> means it is wired in
               but only partially observed. <span style={styles.tagFail}>FAIL</span> means a precondition is
@@ -1384,7 +1384,7 @@ const ProtocolCompliancePanel: React.FC = () => {
             )}
             {!gepTurnsLoading && (gepTurns || []).length === 0 && (
               <div style={styles.timelineEmpty}>
-                No answered turns recorded yet. Ask the EYE a question to populate this.
+                No answered turns recorded yet. Ask the Eye a question to populate this.
               </div>
             )}
             {gepTurnsPaged.visible.map((turn, idx) => {
@@ -1475,7 +1475,7 @@ const ProtocolCompliancePanel: React.FC = () => {
             )}
             {!reasoningLoading && (reasoningTurns || []).length === 0 && (
               <div style={styles.timelineEmpty}>
-                No reasoning traces yet. Ask the EYE a multi-part question to populate this.
+                No reasoning traces yet. Ask the Eye a multi-part question to populate this.
               </div>
             )}
             {reasoningPaged.visible.map((turn, idx) => {
@@ -1661,7 +1661,7 @@ const ProtocolCompliancePanel: React.FC = () => {
                 setSearch={setSealSearch}
                 placeholder="Search seals by question…"
                 unit="seals"
-                emptyText="No payloads sealed yet. Ask the EYE a question to generate sealed records."
+                emptyText="No payloads sealed yet. Ask the Eye a question to generate sealed records."
                 renderItem={renderSeal}
               />
             )}
@@ -1789,7 +1789,7 @@ const ProtocolCompliancePanel: React.FC = () => {
       <section style={styles.auditWindow}>
         <header style={styles.auditHeader}>
           <div>
-            <div style={styles.eyebrow}>EYE Execution Steps</div>
+            <div style={styles.eyebrow}>Eye Execution Steps</div>
             <h2
               style={{ ...styles.auditTitle, cursor: 'pointer' }}
               onClick={() => setStepsExpanded(!stepsExpanded)}
@@ -1798,7 +1798,7 @@ const ProtocolCompliancePanel: React.FC = () => {
               {stepsExpanded ? '▼' : '▶'} Per-Step Timeline &amp; Timestamps
             </h2>
             <p style={styles.auditSubtitle}>
-              Every pipeline step the EYE ran. Group by the investigator <strong>question</strong>
+              Every pipeline step the Eye ran. Group by the investigator <strong>question</strong>
               to see each question's steps in order, or by <strong>step type</strong> for
               run-count aggregates. Each run keeps its exact timestamp and status.
             </p>
@@ -1939,7 +1939,7 @@ const ProtocolCompliancePanel: React.FC = () => {
       <section style={styles.auditWindow}>
         <header style={styles.auditHeader}>
           <div>
-            <div style={styles.eyebrow}>EYE ↔ LLM Conversation</div>
+            <div style={styles.eyebrow}>Eye ↔ LLM Conversation</div>
             <h2
               style={{ ...styles.auditTitle, cursor: 'pointer' }}
               onClick={() => setConvExpanded(!convExpanded)}
@@ -1948,7 +1948,7 @@ const ProtocolCompliancePanel: React.FC = () => {
               {convExpanded ? '▼' : '▶'} Reasoning, Tool Calls &amp; Model Exchange
             </h2>
             <p style={styles.auditSubtitle}>
-              The complete exchange between the EYE and the language model for every question:
+              The complete exchange between the Eye and the language model for every question:
               the full prompt sent (including the system prompt), the model's reasoning, each tool
               call with its arguments, the results returned, and the final synthesis.
             </p>
@@ -1975,7 +1975,7 @@ const ProtocolCompliancePanel: React.FC = () => {
             )}
             {!convLoading && (conversations || []).length === 0 && (
               <div style={styles.timelineEmpty}>
-                No conversation recorded yet. Ask the EYE a question to populate this transcript.
+                No conversation recorded yet. Ask the Eye a question to populate this transcript.
               </div>
             )}
             {convPaged.visible.map((conv, idx) => {
@@ -2012,14 +2012,14 @@ const ProtocolCompliancePanel: React.FC = () => {
         )}
       </section>
 
-      {/* ── EYE Activity Window ───────────────────────────────────── */}
+      {/* ── Eye Activity Window ───────────────────────────────────── */}
       <section style={styles.auditWindow}>
         <header style={styles.auditHeader}>
           <div>
-            <div style={styles.eyebrow}>EYE Activity Window</div>
+            <div style={styles.eyebrow}>Eye Activity Window</div>
             <h2 style={styles.auditTitle}>Queries, Evidence &amp; Report Changes</h2>
             <p style={styles.auditSubtitle}>
-              Chronological audit of every query the EYE issued, the evidence each tool call returned,
+              Chronological audit of every query the Eye issued, the evidence each tool call returned,
               and every change made to the forensic report during this session.
             </p>
           </div>
@@ -2048,9 +2048,9 @@ const ProtocolCompliancePanel: React.FC = () => {
         <div style={{ ...styles.helpNote, margin: '12px 22px 0' }}>
           <span style={styles.helpNoteIcon}>ⓘ</span>
           <div>
-            <strong>What you are looking at.</strong> A chronological log of everything the EYE did while
+            <strong>What you are looking at.</strong> A chronological log of everything the Eye did while
             answering you: every <span style={{ color: '#60a5fa' }}>question</span> you asked, every
-            <span style={{ color: '#a78bfa' }}> query the EYE ran</span> (with parameters), the
+            <span style={{ color: '#a78bfa' }}> query the Eye ran</span> (with parameters), the
             <span style={{ color: '#10b981' }}> evidence</span> each query returned, and every
             <span style={{ color: '#34d399' }}> block added</span> /
             <span style={{ color: '#f59e0b' }}> edited</span> /

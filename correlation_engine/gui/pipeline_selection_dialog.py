@@ -17,8 +17,8 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 
-# The site look (ui/site_theme.py): one sheet, set before the children exist
-from ui.site_theme import begin_site_theme, apply_site_theme, set_role, set_variant
+# The site look (ui/app_theme.py): one sheet, set before the children exist
+from ui.app_theme import begin_theme, apply_theme, set_role, set_variant
 
 
 class PipelineSelectionDialog(QDialog):
@@ -43,9 +43,9 @@ class PipelineSelectionDialog(QDialog):
         self.pipelines_dir = self.case_directory / "Correlation" / "pipelines"
         self.selected_pipeline_path: Optional[str] = None
 
-        begin_site_theme(self)
+        begin_theme(self)
         self._init_ui()
-        apply_site_theme(self)
+        apply_theme(self)
         self._load_pipelines()
     
     def _init_ui(self):
@@ -78,6 +78,9 @@ class PipelineSelectionDialog(QDialog):
         self.pipeline_table.setHorizontalHeaderLabels([
             "Pipeline Name", "Wings", "Feathers", "Last Modified"
         ])
+        from .crow_eye_icons import CrowEyeIcons
+        self.pipeline_table.horizontalHeaderItem(1).setIcon(CrowEyeIcons.wing())
+        self.pipeline_table.horizontalHeaderItem(2).setIcon(CrowEyeIcons.feather())
         self.pipeline_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.pipeline_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.pipeline_table.setEditTriggers(QAbstractItemView.NoEditTriggers)

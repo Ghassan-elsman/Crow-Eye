@@ -55,6 +55,37 @@ def read_global_setting(key: str, default=None):
         return default
 
 
+def write_global_setting(key: str, value) -> bool:
+    """Set one value in global_config.json, keeping every other key.
+
+    The counterpart of read_global_setting, for settings GlobalConfig does not
+    model (uba_disabled_rules): read the file, change one key, write it back
+    the way CaseHistoryManager does (.bak copy, temp file, atomic replace).
+    A setting written here is never held in a manager's memory, so no later
+    Settings save can put an older copy back - _save_global_config keeps keys
+    it does not know.
+    """
+    path = Path(default_config_dir()) / 'global_config.json'
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = {}
+        if path.exists():
+            with open(path, 'r', encoding='utf-8') as handle:
+                data = json.load(handle)
+            if not isinstance(data, dict):
+                data = {}
+            shutil.copy2(path, path.with_suffix(path.suffix + '.bak'))
+        data[key] = value
+        temp_path = path.with_suffix(path.suffix + '.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as handle:
+            json.dump(data, handle, indent=2, ensure_ascii=False)
+        temp_path.replace(path)
+        return True
+    except Exception as e:
+        print(f"[Config] Error writing global setting {key}: {e}")
+        return False
+
+
 class CaseHistoryManager:
     """Manages case history and configuration persistence."""
     
@@ -106,7 +137,20 @@ class CaseHistoryManager:
         """
         try:
             config.last_updated = datetime.now()
-            self._atomic_write(self.global_config_path, config.to_dict())
+            data = config.to_dict()
+            # Keys GlobalConfig does not model (written by write_global_setting,
+            # e.g. uba_disabled_rules) survive the save. to_dict() lists only the
+            # dataclass's fields, so without this every Settings save erased them.
+            try:
+                if self.global_config_path.exists():
+                    with open(self.global_config_path, 'r', encoding='utf-8') as f:
+                        existing = json.load(f)
+                    if isinstance(existing, dict):
+                        for key, value in existing.items():
+                            data.setdefault(key, value)
+            except (json.JSONDecodeError, IOError):
+                pass
+            self._atomic_write(self.global_config_path, data)
             return True
         except Exception as e:
             print(f"[Config] Error saving global config: {e}")

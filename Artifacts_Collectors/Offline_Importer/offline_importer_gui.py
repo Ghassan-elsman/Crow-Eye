@@ -356,11 +356,11 @@ class OfflineImporterGUI(QMainWindow):
                 (screen.height() - window_height) // 2
             )
 
-            # The site look (ui/site_theme.py), set before the widgets exist;
+            # The site look (ui/app_theme.py), set before the widgets exist;
             # the roles follow at the end of __init__.
             try:
-                from ui.site_theme import begin_site_theme
-                begin_site_theme(self)
+                from ui.app_theme import begin_theme
+                begin_theme(self)
             except Exception:
                 if STYLES_AVAILABLE:
                     self.setStyleSheet(CrowEyeStyles.MAIN_WINDOW)
@@ -376,7 +376,7 @@ class OfflineImporterGUI(QMainWindow):
             # Setup GUI logging handler after log_text_area is created
             self._setup_gui_logging_handler()
 
-            self._apply_site_look()
+            self._apply_theme()
 
             # Update button states if default scan path was provided
             if default_scan_path:
@@ -404,7 +404,7 @@ class OfflineImporterGUI(QMainWindow):
         """Setup the menu bar (File, Case, Help)"""
         menubar = self.menuBar()
 
-        # The site sheet styles the bar and its menus (ui/site_theme.py)
+        # The theme sheet styles the bar and its menus (ui/app_theme.py)
 
         # File Menu
         file_menu = menubar.addMenu("&File")
@@ -565,7 +565,7 @@ class OfflineImporterGUI(QMainWindow):
                 QFrame {{
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                         stop:0 {Colors.BG_PANELS}, stop:0.3 #1E293B, stop:0.7 #1E293B, stop:1 {Colors.BG_PANELS});
-                    border: 1px solid {Colors.BORDER_ACCENT};
+                    border: 3px solid {Colors.BORDER_ACCENT};
                     border-radius: 8px;
                     margin: 5px;
                 }}
@@ -646,7 +646,7 @@ class OfflineImporterGUI(QMainWindow):
                     color: {Colors.TEXT_PRIMARY};
                     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
                         stop:0 {Colors.BG_PRIMARY}, stop:1 #0B1220);
-                    border: 1px solid {Colors.BORDER_ACCENT};
+                    border: 3px solid {Colors.BORDER_ACCENT};
                     border-radius: 6px;
                     padding: 10px 14px;
                     font-size: 13px;
@@ -706,12 +706,12 @@ class OfflineImporterGUI(QMainWindow):
                 QComboBox {{
                     color: {Colors.TEXT_PRIMARY};
                     background-color: {Colors.BG_PRIMARY};
-                    border: 1px solid {Colors.BORDER_SUBTLE};
+                    border: 3px solid {Colors.BORDER_SUBTLE};
                     border-radius: 4px;
                     padding: 8px 10px;
                     font-size: 13px;
                 }}
-                QComboBox:hover {{ border: 1px solid {Colors.ACCENT_BLUE}; }}
+                QComboBox:hover {{ border: 3px solid {Colors.ACCENT_BLUE}; }}
                 QComboBox::drop-down {{ width: 30px; border-left: 1px solid {Colors.BORDER_SUBTLE}; }}
                 QComboBox QAbstractItemView {{
                     background-color: {Colors.BG_PANELS};
@@ -1564,7 +1564,7 @@ class OfflineImporterGUI(QMainWindow):
             QTextEdit {{
                 background-color: {Colors.BG_PRIMARY};
                 color: {Colors.TEXT_PRIMARY};
-                border: 1px solid {Colors.BORDER_ACCENT};
+                border: 3px solid {Colors.BORDER_ACCENT};
                 border-radius: 6px;
                 padding: 8px;
                 font-family: 'Consolas', 'Courier New', monospace;
@@ -1666,14 +1666,14 @@ class OfflineImporterGUI(QMainWindow):
                 QComboBox {{
                     color: {Colors.TEXT_PRIMARY};
                     background-color: {Colors.BG_PANELS};
-                    border: 1px solid {Colors.BORDER_SUBTLE};
+                    border: 3px solid {Colors.BORDER_SUBTLE};
                     border-radius: 6px;
                     padding: 8px 12px;
                     font-size: 14px;
                     font-weight: 600;
                 }}
                 QComboBox:hover {{
-                    border: 1px solid {Colors.ACCENT_BLUE};
+                    border: 3px solid {Colors.ACCENT_BLUE};
                 }}
                 QComboBox::drop-down {{
                     border-left: 1px solid {Colors.BORDER_SUBTLE};
@@ -3740,11 +3740,11 @@ class OfflineImporterGUI(QMainWindow):
             "<p><b>License:</b> GPL-3.0</p>"
         )
 
-    def _apply_site_look(self):
-        """One sheet for the window (ui/site_theme.py): the per-widget sheets
+    def _apply_theme(self):
+        """One sheet for the window (ui/app_theme.py): the per-widget sheets
         become roles; the found / copied counters and the log keep theirs."""
         try:
-            from ui.site_theme import apply_site_theme, set_variant, keep_style, log_view_sheet
+            from ui.app_theme import apply_theme, set_variant, keep_style, log_view_sheet
         except Exception:
             return
         for name, variant in (("scan_artifacts_button", "ghost"),
@@ -3765,7 +3765,7 @@ class OfflineImporterGUI(QMainWindow):
         if log is not None:
             log.setStyleSheet(log_view_sheet())
             keep_style(log)
-        apply_site_theme(self)
+        apply_theme(self)
 
     def show(self):
         """Show the GUI window"""

@@ -60,10 +60,10 @@ def _icon_for_severity(severity: str, widget: QWidget) -> QIcon:
         return CrowEyeIcons.warning()
     return CrowEyeIcons.info()
 
-# The site look (ui/site_theme.py): the panel, tree and button come from the
+# The site look (ui/app_theme.py): the panel, tree and button come from the
 # window sheet; severity colours are the site's meaning colours, so the tree
 # matches status colours everywhere else in the engine.
-from ui.site_theme import STATUS_COLORS, set_status, set_variant
+from ui.app_theme import STATUS_COLORS, set_status, set_variant
 
 _COLOR_ERROR = QColor(STATUS_COLORS["bad"])
 _COLOR_WARNING = QColor(STATUS_COLORS["warn"])
@@ -129,7 +129,7 @@ class IssuesTab(QWidget):
         self._tree.setHeaderLabels(["Issue", "Detail"])
         self._tree.setColumnWidth(0, 280)
         self._tree.setAlternatingRowColors(True)
-        # The tree takes the window's site sheet, like every other tree.
+        # The tree takes the window's theme sheet, like every other tree.
         layout.addWidget(self._tree, 1)
 
     def _copy_to_clipboard(self):

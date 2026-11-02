@@ -12,6 +12,7 @@ from pathlib import Path
 from ..config import PipelineConfig, FeatherConfig, WingConfig
 from ..engine import CorrelationResult
 from ..engine.engine_selector import EngineSelector, EngineType
+from ..engine import engine_registry
 from ..engine.base_engine import FilterConfig, BaseCorrelationEngine
 from ..wings.core.wing_model import Wing, FeatherSpec, CorrelationRules
 
@@ -98,12 +99,11 @@ class PipelineExecutor:
         
         # NEW: Create engine using selector based on pipeline config with integrations
         # Use getattr with default to handle old configs without engine_type
-        # Default to identity_based (the preferred default engine)
-        engine_type = getattr(pipeline_config, 'engine_type', EngineType.IDENTITY_BASED)
-        
-        # Normalize engine type - handle legacy 'time_based' value
-        if engine_type == 'time_based':
-            engine_type = EngineType.TIME_WINDOW_SCANNING
+        # Default to identity_based (the preferred default engine). Legacy
+        # names ('time_based'...) are mapped by the registry; a name it does
+        # not know raises here instead of running some other engine.
+        engine_type = engine_registry.normalize_engine_type(
+            getattr(pipeline_config, 'engine_type', None) or EngineType.IDENTITY_BASED)
 
         # What was ASKED for. `self.engine_type` is set after construction, from
         # the engine that actually exists - see below.
@@ -116,6 +116,9 @@ class PipelineExecutor:
         self.results: List[CorrelationResult] = []
         self.errors: List[str] = []
         self.warnings: List[str] = []
+        # Wings this engine will not run, each with the one-line reason
+        # (engine_registry.wing_skip_message). Recorded, never dropped.
+        self.skipped_wings: List[Dict[str, Any]] = []
 
         _say(f"[PipelineExecutor] Creating engine: {engine_type}")
 
@@ -181,7 +184,7 @@ class PipelineExecutor:
             self.engine.set_feather_cache(cache)
     
     @staticmethod
-    def _engine_type_of(engine, fallback: str) -> str:
+    def _engine_type_of(engine, fallback: str = None) -> str:
         """The engine type of the object that was actually built.
 
         Read from the instance rather than from the value that was requested.
@@ -193,16 +196,12 @@ class PipelineExecutor:
         summary that names the wrong one is wrong about how its own findings
         were produced.
 
-        `fallback` is used only when the class is unrecognised, so an engine
-        added later degrades to the requested name instead of reporting
-        nothing.
+        The type is the class's declared ENGINE_TYPE (engine_registry), not a
+        guess from its name. An engine class that declares none raises: a
+        summary naming the wrong strategy is worse than a loud failure.
+        `fallback` is accepted for old callers and ignored.
         """
-        name = type(engine).__name__ if engine is not None else ""
-        if "TimeWindow" in name:
-            return EngineType.TIME_WINDOW_SCANNING
-        if "Identity" in name:
-            return EngineType.IDENTITY_BASED
-        return fallback
+        return engine_registry.engine_type_of(engine)
 
     def _create_shared_integrations(self, pipeline_config: PipelineConfig):
         """
@@ -277,31 +276,11 @@ class PipelineExecutor:
         Returns:
             Engine instance with injected integrations
         """
-        from ..engine.time_based_engine import TimeWindowScanningEngine
-        from ..engine.identity_based_engine_adapter import IdentityBasedEngineAdapter
-        
-        if engine_type == EngineType.TIME_WINDOW_SCANNING:
-            return TimeWindowScanningEngine(
-                config=pipeline_config,
-                filters=self.filters,
-                debug_mode=getattr(pipeline_config, 'debug_mode', False),
-                scoring_integration=self.scoring_integration,
-                mapping_integration=self.semantic_integration
-            )
-        elif engine_type == EngineType.IDENTITY_BASED:
-            return IdentityBasedEngineAdapter(
-                config=pipeline_config,
-                filters=self.filters,
-                mapping_integration=self.semantic_integration,
-                scoring_integration=self.scoring_integration
-            )
-        else:
-            # Fallback to EngineSelector for other engine types
-            return EngineSelector.create_engine(
-                config=pipeline_config,
-                engine_type=engine_type,
-                filters=self.filters
-            )
+        return engine_registry.create_engine(
+            engine_type, pipeline_config, self.filters,
+            scoring_integration=self.scoring_integration,
+            mapping_integration=self.semantic_integration,
+        )
     
     def _parse_datetime(self, dt_str: Optional[str]) -> Optional[datetime]:
         """Parse datetime string to datetime object"""
@@ -351,7 +330,12 @@ class PipelineExecutor:
         if self.verbose:
             _say(f"Executing Pipeline: {self.config.pipeline_name}")
             _say("=" * 60)
-        
+
+        # Behaviour Wings name no Feathers: they read the case's UBA analysis,
+        # and the Behavioural engine stores its own run.
+        if engine_registry.normalize_engine_type(self.engine_type) == engine_registry.BEHAVIOURAL:
+            return self._execute_behavioural(start_time)
+
         # Step 1: Create feathers (if configured)
         feather_paths = {}
         if self.config.auto_create_feathers:
@@ -377,6 +361,11 @@ class PipelineExecutor:
             if self.verbose:
                 _say("\nStep 2: Executing Wings...")
 
+            # Wings this engine does not run are set aside first, each with
+            # its reason, so the feather checks below only judge the Wings
+            # that will actually run.
+            self._record_category_skips()
+
             # Pre-flight: surface unsupported operators / missing fields BEFORE
             # the evaluator silently logger.warnings them. Non-fatal; rules
             # still run but the analyst now sees what was problematic.
@@ -395,7 +384,7 @@ class PipelineExecutor:
             dep_report = self._detect_circular_dependencies(feather_paths)
             
             unsatisfiable = self._unsatisfiable_wings(feather_paths)
-            runnable = len(self.config.wing_configs) - len(unsatisfiable)
+            runnable = len(self._wings_to_run()) - len(unsatisfiable)
 
             if dep_report['errors']:
                 if self.verbose:
@@ -405,7 +394,11 @@ class PipelineExecutor:
                 for error in dep_report['errors']:
                     self.errors.append(error)
 
-            if dep_report['errors'] and not runnable:
+            if not self._wings_to_run():
+                if self.verbose:
+                    _say(" No Wing in this pipeline can run on the "
+                         f"{engine_registry.get_spec(self.engine_type).display_name}")
+            elif dep_report['errors'] and not runnable:
                 # Nothing can run. This is the case the halt was written for.
                 if self.verbose:
                     _say(" Halting execution: no wing has all of its feathers")
@@ -504,6 +497,8 @@ class PipelineExecutor:
             'feathers_created': len(feather_paths),
             'feathers_used': feathers_used if feathers_used > 0 else len(feather_paths),
             'wings_executed': len(self.results),
+            'wings_skipped': len(self.skipped_wings),
+            'skipped_wings': list(self.skipped_wings),
             'total_matches': sum(r.total_matches for r in self.results),
             'errors': self.errors,
             'warnings': self.warnings,
@@ -536,6 +531,91 @@ class PipelineExecutor:
         
         return summary
     
+    def set_behaviour_cache(self, cache: Dict[str, Any]) -> None:
+        """A dict the caller keeps for one run, holding the case's opened UBA
+        analysis, so each Behaviour Wing's executor does not load it again.
+        Ignored by the other engines."""
+        self.behaviour_cache = cache
+
+    def _execute_behavioural(self, start_time: float) -> Dict[str, Any]:
+        """Run the pipeline's Behaviour Wings on the Behavioural engine.
+
+        No feathers are built or read: the engine opens the case's UBA
+        analysis (``<case>/UBA/uba_events.db``) and writes its own execution,
+        results rows and behaviour_hits / behaviour_actors / behaviour_runs.
+        Wings of another category get a SKIPPED row in that same execution,
+        with the registry's reason, and are listed in ``skipped_wings``.
+        """
+        self._record_category_skips()
+        runnable = self._wings_to_run()
+        if self.config.output_directory and hasattr(self.engine, 'set_output_directory'):
+            self.engine.set_output_directory(self.config.output_directory)
+        if not self.config.output_directory:
+            self.warnings.append("No output directory specified; the Behaviour Wings' "
+                                 "hits are not saved")
+
+        cache = getattr(self, 'behaviour_cache', None)
+        cached = cache.get('uba') if cache else None
+        if (cached is not None and runnable
+                and cache.get('artifacts_dir') == getattr(self.engine, 'artifacts_dir', None)
+                and hasattr(self.engine, 'attach_uba')):
+            self.engine.attach_uba(cached)
+
+        # The engine is given the Wings it runs; the ones set aside above get
+        # their SKIPPED rows in the same execution, with the same reason.
+        outcome: Dict[str, Any] = {}
+        if runnable or self.skipped_wings:
+            outcome = self.engine.execute(runnable) or {}
+            if self.config.output_directory:
+                self._record_skipped_rows(
+                    Path(self.config.output_directory) / "correlation_results.db",
+                    outcome.get('execution_id'))
+        if cache is not None and getattr(self.engine, 'uba', None) is not None:
+            cache['uba'] = self.engine.uba
+            cache['artifacts_dir'] = getattr(self.engine, 'artifacts_dir', None)
+
+        self.results = list(outcome.get('result') or [])
+        for message in outcome.get('errors') or []:
+            if message not in self.errors:
+                self.errors.append(message)
+        for message in outcome.get('warnings') or []:
+            if message not in self.warnings:
+                self.warnings.append(message)
+        for r in self.results:
+            for note in getattr(r, 'notes', None) or []:
+                self.warnings.append(f"[{r.wing_name}] {note}")
+
+        self.config.last_executed = datetime.now().isoformat()
+        execution_id = outcome.get('execution_id')
+        db_path = (str(Path(self.config.output_directory) / "correlation_results.db")
+                   if self.config.output_directory else None)
+        total_hits = sum(r.total_matches for r in self.results)
+        if self.verbose or self.results:
+            _say(f" [OK] Behaviour Wings run: {len(self.results)}, hits: {total_hits:,}"
+                 + (f", execution {execution_id}" if execution_id else ""))
+        return {
+            'pipeline_name': self.config.pipeline_name,
+            'execution_time': time.time() - start_time,
+            'feathers_created': 0,
+            'feathers_used': 0,
+            'wings_executed': len(self.results),
+            'wings_skipped': len(self.skipped_wings),
+            'skipped_wings': list(self.skipped_wings),
+            'total_matches': total_hits,
+            'errors': self.errors,
+            'warnings': self.warnings,
+            'results': [r.to_dict() for r in self.results],
+            'execution_id': execution_id,
+            'database_path': db_path,
+            'output_directory': self.config.output_directory,
+            'engine_type': self.engine_type,
+            'run_group_id': getattr(self.config, 'run_group_id', None),
+            'cancelled': self._cancelled or bool((outcome.get('statistics') or {}).get('cancelled')),
+            'rule_diagnostics': [],
+            'evidence_accounting': {},
+            'statistics': outcome.get('statistics') or {},
+        }
+
     def _collect_evidence_accounting(self) -> Dict[str, Any]:
         """Aggregate the engine's existing per-feather / per-wing counters
         into a single summary surface so analysts can see silent drops.
@@ -695,6 +775,8 @@ class PipelineExecutor:
             'feathers_created': 0,
             'feathers_used': 0,
             'wings_executed': len(self.results),
+            'wings_skipped': len(self.skipped_wings),
+            'skipped_wings': list(self.skipped_wings),
             'total_matches': sum(r.total_matches for r in self.results),
             'errors': self.errors + ["Execution cancelled by user"],
             'warnings': self.warnings,
@@ -771,7 +853,7 @@ class PipelineExecutor:
             for error in validation_report['errors']:
                 if error not in self.errors:
                     self.errors.append(error)
-            if len(unsatisfiable) >= len(self.config.wing_configs):
+            if len(unsatisfiable) >= len(self._wings_to_run()):
                 return
 
         if validation_report['warnings']:
@@ -782,7 +864,8 @@ class PipelineExecutor:
             for warning in validation_report['warnings']:
                 self.warnings.append(warning)
         
-        for i, wing_config in enumerate(self.config.wing_configs, 1):
+        wings_to_run = self._wings_to_run()
+        for i, wing_config in enumerate(wings_to_run, 1):
             if wing_config.wing_name in unsatisfiable:
                 absent = ", ".join(unsatisfiable[wing_config.wing_name])
                 message = (f"Wing '{wing_config.wing_name}' skipped: this case has no "
@@ -790,12 +873,12 @@ class PipelineExecutor:
                 if message not in self.warnings:
                     self.warnings.append(message)
                 if self.verbose:
-                    _say(f"\n [{i}/{len(self.config.wing_configs)}] Skipping Wing: "
+                    _say(f"\n [{i}/{len(wings_to_run)}] Skipping Wing: "
                           f"{wing_config.wing_name} (missing {absent})")
                 continue
 
             if self.verbose:
-                _say(f"\n [{i}/{len(self.config.wing_configs)}] Executing Wing: {wing_config.wing_name}")
+                _say(f"\n [{i}/{len(wings_to_run)}] Executing Wing: {wing_config.wing_name}")
                 _say(f" Wing ID: {wing_config.wing_id}")
                 _say(f" Feathers in wing: {len(wing_config.feathers)}")
             
@@ -821,9 +904,12 @@ class PipelineExecutor:
                 # Convert WingConfig to Wing (with validation)
                 wing = self._wing_config_to_wing(wing_config)
             except ValueError as e:
-                # Validation failed - skip this wing
-                if self.verbose:
-                    _say(f" [FAIL] Configuration validation failed: {str(e)}")
+                # Validation failed - skip this wing (normally caught earlier,
+                # in _record_category_skips, with a SKIPPED row).
+                reason = f"Wing '{wing_config.wing_name}' was not run: its configuration is not valid ({e})"
+                if reason not in self.warnings:
+                    self.warnings.append(reason)
+                _say(f" [FAIL] {reason}")
                 continue
             
             try:
@@ -907,10 +993,10 @@ class PipelineExecutor:
                         if self.verbose:
                             _say(f" [FAIL] {error_msg}")
                 
-                if len(wing_feather_paths) < wing.correlation_rules.minimum_matches:
+                if len(wing_feather_paths) < wing.correlation_rules.required_feather_count():
                     warning_msg = (
                         f"Not enough feathers available for {wing_config.wing_name}: "
-                        f"found {len(wing_feather_paths)}, need {wing.correlation_rules.minimum_matches}"
+                        f"found {len(wing_feather_paths)}, need {wing.correlation_rules.required_feather_count()}"
                     )
                     self.warnings.append(warning_msg)
                     if self.verbose:
@@ -919,7 +1005,7 @@ class PipelineExecutor:
                 
                 # Create execution record BEFORE wing execution for streaming support
                 execution_id = None
-                if hasattr(self.engine, 'set_output_directory') and self.config.output_directory:
+                if getattr(self.engine, 'SUPPORTS_STREAMING', False) and self.config.output_directory:
                     # Create database and execution record first
                     output_dir = Path(self.config.output_directory)
                     output_dir.mkdir(parents=True, exist_ok=True)
@@ -964,6 +1050,12 @@ class PipelineExecutor:
                     # with full per-wing attribution.
                     self._reconcile_identity_wing(execution_id)
 
+                    # Who and what: the people and activities UBA recorded for
+                    # each match's program or file around its time. Context,
+                    # attached after the matches are written - the score and
+                    # the floor are what the engine made them.
+                    self._attach_behaviour_context(execution_id)
+
                 # Progress reported via events, not print
                 
                 if result.errors:
@@ -990,7 +1082,7 @@ class PipelineExecutor:
             'linkages': []
         }
         
-        for wing_config in self.config.wing_configs:
+        for wing_config in self._wings_to_run():
             for feather_ref in wing_config.feathers:
                 linkage = {
                     'wing_name': wing_config.wing_name,
@@ -1025,6 +1117,64 @@ class PipelineExecutor:
         
         return report
     
+    def _record_category_skips(self) -> None:
+        """Set aside every Wing this engine does not run, with its reason.
+
+        One clear line per Wing goes to the case log and the run's warnings,
+        and the Wing is kept in `skipped_wings` so the results database gets a
+        SKIPPED row for it. The text comes from engine_registry, so the log,
+        the SKIPPED row and the Execution tab say the same thing.
+        """
+        self.skipped_wings = []
+        runnable = []
+        for wing_config in self.config.wing_configs:
+            ok, reason = engine_registry.check_wing(wing_config, self.engine_type)
+            is_behaviour = getattr(wing_config, 'is_behaviour_wing', lambda: False)()
+            if ok and not is_behaviour:
+                # A Wing whose settings cannot run (minimum_matches past its
+                # feathers, no feathers) is set aside here too, with its
+                # reason: it used to be dropped at run time by a bare
+                # `continue`, leaving no row, no warning and no trace.
+                try:
+                    self._wing_config_to_wing(wing_config)
+                except ValueError as e:
+                    ok, reason = False, (
+                        f"Wing '{getattr(wing_config, 'wing_name', '')}' was not run: "
+                        f"its configuration is not valid ({e})")
+            if ok:
+                runnable.append(wing_config)
+                continue
+            self.skipped_wings.append({
+                'wing_id': getattr(wing_config, 'wing_id', '') or '',
+                'wing_name': getattr(wing_config, 'wing_name', '') or '',
+                'wing_category': getattr(wing_config, 'wing_category', None),
+                'engine_type': self.engine_type,
+                'reason': reason,
+            })
+            if reason not in self.warnings:
+                self.warnings.append(reason)
+            _say(f"[WARN] {reason}")
+        self._runnable_wing_configs = runnable
+
+    def _wings_to_run(self) -> List[WingConfig]:
+        """The pipeline's Wings minus those set aside by _record_category_skips."""
+        runnable = getattr(self, '_runnable_wing_configs', None)
+        return list(self.config.wing_configs) if runnable is None else runnable
+
+    def _record_skipped_rows(self, db_file, execution_id) -> None:
+        """A SKIPPED `results` row per Wing the engine did not run."""
+        if not self.skipped_wings or not execution_id:
+            return
+        from ..engine.database_persistence import ResultsDatabase
+        try:
+            with ResultsDatabase(str(db_file)) as db:
+                for skip in self.skipped_wings:
+                    db.record_skipped_wing(execution_id, skip)
+        except Exception as e:
+            warning = f"Could not record skipped Wing rows: {e}"
+            self.warnings.append(warning)
+            _say(f"[Pipeline] WARNING: {warning}")
+
     def _unsatisfiable_wings(self, feather_paths: Dict[str, str]) -> Dict[str, list]:
         """Wings that cannot run, mapped to the feathers they are missing.
 
@@ -1037,7 +1187,7 @@ class PipelineExecutor:
         that genuinely cannot be done.
         """
         missing = {}
-        for wing_config in self.config.wing_configs:
+        for wing_config in self._wings_to_run():
             absent = [
                 ref.feather_config_name
                 for ref in wing_config.feathers
@@ -1063,7 +1213,7 @@ class PipelineExecutor:
         # Track which feathers are referenced by which wings
         feather_usage = {} # feather_config_name -> list of wing_names
         
-        for wing_config in self.config.wing_configs:
+        for wing_config in self._wings_to_run():
             for feather_ref in wing_config.feathers:
                 feather_name = feather_ref.feather_config_name or feather_ref.feather_id
                 
@@ -1109,12 +1259,12 @@ class PipelineExecutor:
         
         dot.append("")
         dot.append(" // Wing nodes")
-        for wing_config in self.config.wing_configs:
+        for wing_config in self._wings_to_run():
             dot.append(f' "{wing_config.wing_name}" [style=filled, fillcolor=lightgreen];')
         
         dot.append("")
         dot.append(" // Dependencies")
-        for wing_config in self.config.wing_configs:
+        for wing_config in self._wings_to_run():
             for feather_ref in wing_config.feathers:
                 feather_name = feather_ref.feather_config_name or feather_ref.feather_id
                 dot.append(f' "{feather_name}" -> "{wing_config.wing_name}";')
@@ -1213,6 +1363,16 @@ class PipelineExecutor:
         wing.description = wing_config.description
         wing.proves = wing_config.proves
         wing.author = wing_config.author
+        wing.version = wing_config.version
+        wing.created_date = wing_config.created_date
+        wing.wing_category = wing_config.wing_category
+        # The Wing's own rules. Dropped here, no production run ever evaluated
+        # them: the five advanced Wings' absence / sequence / threshold rules
+        # never fired.
+        wing.semantic_rules = [dict(r) for r in (wing_config.semantic_rules or [])
+                               if isinstance(r, dict)]
+        wing.metadata.tags = list(wing_config.tags or [])
+        wing.metadata.case_types = list(wing_config.case_types or [])
         
         # Convert feather references to FeatherSpecs
         # Ensure feather_id consistency: use feather_config_name as primary identifier
@@ -1229,9 +1389,11 @@ class PipelineExecutor:
             feather_spec = FeatherSpec(
                 feather_id=consistent_feather_id,
                 database_filename=feather_ref.feather_database_path,
-                artifact_type=feather_ref.artifact_type,
+                # The analyst's override of the detected type wins; it was
+                # dropped here, so the engine used the type it had overridden.
+                artifact_type=getattr(feather_ref, 'artifact_type_override', None) or feather_ref.artifact_type,
                 detection_confidence="high",
-                manually_overridden=False,
+                manually_overridden=bool(getattr(feather_ref, 'artifact_type_override', None)),
                 # Preserve the original config-name from the wing JSON so
                 # the engine's per-feather lookups (e.g. source_timezone)
                 # can resolve via feather_config_name when feather_id is a
@@ -1251,7 +1413,7 @@ class PipelineExecutor:
         wing.correlation_rules.target_file_path = wing_config.target_file_path
         wing.correlation_rules.target_event_id = wing_config.target_event_id
         wing.correlation_rules.apply_to = wing_config.apply_to
-        wing.correlation_rules.anchor_priority = wing_config.anchor_priority
+        wing.correlation_rules.anchor_priority = list(wing_config.anchor_priority or [])
         
         # Set scoring parameters
         wing.use_weighted_scoring = getattr(wing_config, 'use_weighted_scoring', True)
@@ -1285,13 +1447,59 @@ class PipelineExecutor:
             _say(f"[Pipeline] Could not look up run_group_id for resume: {e}")
             return None
 
+    def _behaviour_index(self):
+        """The case's UBA events by program and file name, built once per
+        run: from the analysis the run already opened (behaviour_cache), else
+        from the case's stored analysis, refreshed when stale."""
+        if getattr(self, '_behaviour_index_built', False):
+            return self._behaviour_index_value
+        self._behaviour_index_built = True
+        self._behaviour_index_value = None
+        try:
+            from ..engine.behaviour_context import BehaviourIndex
+            cache = getattr(self, 'behaviour_cache', None)
+            uba = cache.get('uba') if cache else None
+            if uba is None:
+                case_dir = getattr(self.config, 'case_directory', None)
+                artifacts = os.path.join(case_dir, 'Target_Artifacts') if case_dir else None
+                if not artifacts or not os.path.isdir(artifacts):
+                    return None
+                from uba.engine.behavior_engine import BehaviorEngine
+                uba = BehaviorEngine(artifacts)
+                uba.run_or_load()
+                if cache is not None:
+                    cache.setdefault('uba', uba)
+                    cache.setdefault('artifacts_dir', artifacts)
+            self._behaviour_index_value = BehaviourIndex.from_uba(uba)
+        except Exception as e:
+            self.warnings.append(f"Behaviour context not added: the user behaviour "
+                                 f"analysis could not be opened ({e})")
+        return self._behaviour_index_value
+
+    def _attach_behaviour_context(self, execution_id: Optional[int]) -> None:
+        if not execution_id or not self.config.output_directory:
+            return
+        index = self._behaviour_index()
+        if index is None:
+            return
+        try:
+            from ..engine.behaviour_context import attach_to_execution
+            db_file = os.path.join(self.config.output_directory, "correlation_results.db")
+            stats = attach_to_execution(db_file, execution_id, index)
+            if stats.get("matches"):
+                _say(f"[Pipeline] Behaviour context: {stats['with_context']:,} of "
+                     f"{stats['matches']:,} matches have UBA activity for the same "
+                     f"program or file")
+        except Exception as e:
+            self.warnings.append(f"Behaviour context not added: {e}")
+
     def _reconcile_identity_wing(self, execution_id: Optional[int]) -> None:
         """Merge a finished wing's identities into the per-run identity
         registry (identity engine only). Non-fatal: reconciliation failures
         become warnings, never break the run."""
         if not execution_id or not self.config.output_directory:
             return
-        if self.config.engine_type != 'identity_based':
+        if not engine_registry.is_identity_engine(self.engine_type):
             return
         try:
             from ..engine.identity_run_reconciler import reconcile_wing
@@ -1411,6 +1619,19 @@ class PipelineExecutor:
             # window past its wait into killing the thread.
             if not streaming_used:
                 self._reconcile_identity_wing(execution_id)
+
+            # Wing-rule hits of matches that were saved just now (a run the
+            # Time-Window engine did not stream): their rows did not exist
+            # when the engine finished, and save_match stores no
+            # semantic_data. Streamed matches were annotated by the engine.
+            store_hits = getattr(self.engine, 'write_wing_rule_annotations', None)
+            if callable(store_hits):
+                try:
+                    store_hits(str(db_file))
+                except Exception as e:
+                    self.warnings.append(f"Could not store Wing rule hits: {e}")
+
+            self._record_skipped_rows(db_file, execution_id)
 
             # Get run name from database for display
             with ResultsDatabase(str(db_file)) as db:

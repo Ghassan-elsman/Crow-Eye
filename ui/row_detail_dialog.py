@@ -11,7 +11,7 @@ names, Identity, Values & flags, Other) instead of one long list. Every value
 is coloured by its kind, with the same palette the table columns use
 (ui/column_colors.py).
 
-The site's look (ui/site_theme.py): one sheet for the whole dialog. The old
+The site's look (ui/app_theme.py): one sheet for the whole dialog. The old
 version set a stylesheet on every label, so a 400-field row polished 800+
 sheets.
 """
@@ -25,11 +25,11 @@ from PyQt5.QtCore import Qt
 from styles import CrowEyeStyles
 
 try:
-    from ui.site_theme import (apply_site_theme, begin_site_theme, set_role, set_variant, Card,
-                               font as site_font,
+    from ui.app_theme import (apply_theme, begin_theme, set_role, set_variant, Card,
+                               font as theme_font,
                                families, MUTED, LINE, BG, CARD, TEXT, LAVENDER)
 except Exception:                                         # pragma: no cover
-    apply_site_theme = None
+    apply_theme = None
 
 try:
     from ui.column_colors import classify_column, COLORS as KIND_COLORS
@@ -93,12 +93,12 @@ def _kind(field):
 
 
 def _extra_qss():
-    """The dialog's own pieces on top of the site sheet: value wells coloured
+    """The dialog's own pieces on top of the theme sheet: value wells coloured
     by kind (one rule per kind, not one sheet per label)."""
-    mono = families()[1] if apply_site_theme else "Consolas"
+    mono = families()[1] if apply_theme else "Consolas"
     rules = [
         "QLabel[rdField=\"true\"] { color: %s; font-size: 12px; font-weight: 600; padding: 7px 4px 0 0; }" % MUTED,
-        "QLabel[rdValue=\"true\"] { color: %s; background: %s; border: 1px solid %s; border-left: 2px solid %s;"
+        "QLabel[rdValue=\"true\"] { color: %s; background: %s; border: 3px solid %s; border-left: 2px solid %s;"
         " border-radius: 8px; padding: 6px 10px; font-family: '%s'; font-size: 12px; }"
         % ("#E2E8F0", BG, LINE, "rgba(255,255,255,0.14)", mono),
         "QLabel[rdListHead=\"true\"] { color: %s; font-size: 11px; font-weight: 700; padding: 2px 0 4px 2px; }" % MUTED,
@@ -108,10 +108,10 @@ def _extra_qss():
         "QLabel#rdChevron { color: %s; font-size: 11px; }" % MUTED,
         "QLabel#rdCount { color: %s; font-size: 11px; }" % MUTED,
         "QWidget#rdIndent { border-left: 1px solid %s; margin-left: 10px; }" % LINE,
-        "QLabel#rdChip { color: %s; background: rgba(99,102,241,0.16); border: 1px solid #6366F1;"
+        "QLabel#rdChip { color: %s; background: rgba(99,102,241,0.16); border: 3px solid #6366F1;"
         " border-radius: 10px; padding: 2px 10px; font-family: '%s'; font-size: 12px; font-weight: 700; }"
         % (LAVENDER, mono),
-        "QFrame#rdHeader { background: %s; border: 1px solid %s; border-radius: 16px; }" % (CARD, LINE),
+        "QFrame#rdHeader { background: %s; border: 3px solid %s; border-radius: 16px; }" % (CARD, LINE),
     ]
     for kind, colour in KIND_COLORS.items():
         rules.append("QLabel[rdValue=\"true\"][kind=\"%s\"] { color: %s; border-left: 2px solid %s; }"
@@ -148,8 +148,8 @@ class CollapsibleSection(QtWidgets.QFrame):
 
         self.title_label = QtWidgets.QLabel(title)
         self.title_label.setObjectName("rdSectionTitle")
-        if apply_site_theme:
-            self.title_label.setFont(site_font("ui", 12, QtGui.QFont.Bold, upper=True, spacing=108))
+        if apply_theme:
+            self.title_label.setFont(theme_font("ui", 12, QtGui.QFont.Bold, upper=True, spacing=108))
         self.header_layout.addWidget(self.title_label)
 
         self.count_label = QtWidgets.QLabel("")
@@ -260,16 +260,16 @@ class RowDetailDialog(QtWidgets.QDialog):
         self._sections = []
 
         # The sheet first, so every label is polished once, under it.
-        extra = _extra_qss() if apply_site_theme else ""
-        if apply_site_theme:
-            begin_site_theme(self, extra)
+        extra = _extra_qss() if apply_theme else ""
+        if apply_theme:
+            begin_theme(self, extra)
         self._setup_ui()
         self._position_dialog()
         if self.row_data:
             self._populate_grid(self.row_data)
         self._apply_filter()
-        if apply_site_theme:
-            apply_site_theme(self, extra=extra)
+        if apply_theme:
+            apply_theme(self, extra=extra)
 
     # ------------------------------------------------------------------ build
     def _setup_ui(self):
@@ -295,7 +295,7 @@ class RowDetailDialog(QtWidgets.QDialog):
         main_layout.setSpacing(12)
 
         # Header card: table, row, number - then the filter row.
-        header = Card() if apply_site_theme else QtWidgets.QFrame()
+        header = Card() if apply_theme else QtWidgets.QFrame()
         header.setObjectName("rdHeader")
         header.RADIUS = 16.0
         hl = QtWidgets.QVBoxLayout(header)
@@ -304,9 +304,9 @@ class RowDetailDialog(QtWidgets.QDialog):
         top = QtWidgets.QHBoxLayout()
         top.setSpacing(10)
         title_label = QtWidgets.QLabel(str(self.table_name))
-        if apply_site_theme:
+        if apply_theme:
             set_role(title_label, "title")
-            title_label.setFont(site_font("ui", 22, QtGui.QFont.ExtraBold, upper=True, spacing=104))
+            title_label.setFont(theme_font("ui", 22, QtGui.QFont.ExtraBold, upper=True, spacing=104))
         top.addWidget(title_label)
         if self.row_number > 0:
             chip = QtWidgets.QLabel("#%d" % self.row_number)
@@ -319,7 +319,7 @@ class RowDetailDialog(QtWidgets.QDialog):
             sub = QtWidgets.QLabel(name)
             sub.setWordWrap(True)
             sub.setTextInteractionFlags(Qt.TextSelectableByMouse)
-            if apply_site_theme:
+            if apply_theme:
                 set_role(sub, "subtitle")
             hl.addWidget(sub)
 
@@ -335,7 +335,7 @@ class RowDetailDialog(QtWidgets.QDialog):
         self.show_empty_check.toggled.connect(self._apply_filter)
         tools.addWidget(self.show_empty_check)
         self.count_label = QtWidgets.QLabel("")
-        if apply_site_theme:
+        if apply_theme:
             set_role(self.count_label, "mono")
         tools.addWidget(self.count_label)
         hl.addLayout(tools)
@@ -352,7 +352,7 @@ class RowDetailDialog(QtWidgets.QDialog):
         scroll_area.setWidget(self.content_widget)
         main_layout.addWidget(scroll_area, 1)
         self.empty_note = QtWidgets.QLabel("No field matches the filter.")
-        if apply_site_theme:
+        if apply_theme:
             set_role(self.empty_note, "muted")
         self.empty_note.hide()
         main_layout.addWidget(self.empty_note)
@@ -369,7 +369,7 @@ class RowDetailDialog(QtWidgets.QDialog):
         close_button.clicked.connect(self.close)
         for b, v in ((copy_button, "ghost"), (export_button, "ghost"), (close_button, "ghost")):
             b.setMinimumHeight(32)
-            if apply_site_theme:
+            if apply_theme:
                 set_variant(b, v)
             else:
                 b.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
@@ -419,8 +419,8 @@ class RowDetailDialog(QtWidgets.QDialog):
         box.setSpacing(5)
         head = QtWidgets.QLabel("%s (%d)" % (field, len(items)))
         head.setProperty("rdListHead", True)
-        if apply_site_theme:
-            head.setFont(site_font("ui", 11, QtGui.QFont.Bold, upper=True, spacing=108))
+        if apply_theme:
+            head.setFont(theme_font("ui", 11, QtGui.QFont.Bold, upper=True, spacing=108))
         box.addWidget(head)
         widgets = [head]
         for entry in items:

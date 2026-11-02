@@ -1,0 +1,80 @@
+{
+  "config_name": "lateral_movement_behaviour",
+  "wing_name": "Ordered Lateral Movement Chain (Behaviour)",
+  "wing_id": "default_behaviour_lateral_chain_001",
+  "wing_category": "behaviour",
+  "description": "Rebuilt from the Identity Wing's lat_ordered_chain, which could not fire per identity: its three steps are three different identities (an account, a program, a file). Here they are one person's set, in order, at most 60 minutes apart: (1) a sign-in - interactive_logon (Security 4624 logon types 2, 10 Remote Desktop, 11); (2) a remote-administration tool runs - program_run (Prefetch, no account) or process_created (Security 4688, the account that started it); (3) an executable lands in the Windows system area - file_created (USN journal bursts; files there carry no account). Network sign-ins (logon type 3) have no UBA rule, so a chain that starts with one is not found: that gap is recorded in the default_wings README.",
+  "proves": "A person signed in, a remote-administration tool ran, and an executable was dropped into the Windows folder, in that order",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Signed in",
+      "rule_id": "interactive_logon"
+    },
+    {
+      "label": "Remote-administration tool ran",
+      "rule_id": [
+        "program_run",
+        "process_created"
+      ],
+      "actor": "any",
+      "conditions": [
+        {
+          "field_name": "app_name",
+          "operator": "regex",
+          "value": "(?i)\\b(?:psexec|paexec|psexesvc|wmic|winrs|winrm|mstsc|smbexec|wmiexec|atexec)\\b"
+        }
+      ]
+    },
+    {
+      "label": "Executable created in the Windows system area",
+      "rule_id": "file_created",
+      "actor": "any",
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "equals",
+          "value": "the Windows system area"
+        },
+        {
+          "field_name": "details.file_types",
+          "operator": "regex",
+          "value": "\"(?:exe|dll|bat|cmd|ps1|vbs|sys)\"\\s*:"
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 180,
+  "max_gap_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "critical",
+    "technique_id": [
+      "T1021",
+      "T1570"
+    ],
+    "tactic": [
+      "lateral-movement"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "lateral_movement",
+    "sequence",
+    "default",
+    "apt"
+  ],
+  "case_types": [
+    "intrusion",
+    "apt"
+  ]
+}

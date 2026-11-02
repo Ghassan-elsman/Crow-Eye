@@ -70,7 +70,7 @@ class NodeJSInstaller:
                 text=True,
                 timeout=5,
                 shell=platform.system().lower() == 'windows'
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             # Check npm version
             npm_result = subprocess.run(
@@ -79,7 +79,7 @@ class NodeJSInstaller:
                 text=True,
                 timeout=5,
                 shell=platform.system().lower() == 'windows'
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if node_result.returncode == 0 and npm_result.returncode == 0:
                 # Check version ONLY if the command succeeded

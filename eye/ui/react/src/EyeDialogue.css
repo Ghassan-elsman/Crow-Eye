@@ -13,7 +13,7 @@
 }
 
 .eyed-entry {
-  border: 1px solid #1f2530;
+  border: 3px solid #1f2530;
   border-left: 3px solid #4a90e2;
   border-radius: 8px;
   background: #0e131c;
@@ -50,7 +50,7 @@
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #64748b;
-  border: 1px solid #1f2530;
+  border: 3px solid #1f2530;
   border-radius: 4px;
   padding: 1px 6px;
 }
@@ -62,8 +62,8 @@
   border-radius: 4px;
   padding: 1px 6px;
 }
-.eyed-badge--ok   { color: #10b981; background: rgba(16,185,129,0.12);  border: 1px solid rgba(16,185,129,0.45); }
-.eyed-badge--fail { color: #f43f5e; background: rgba(244,63,94,0.14);    border: 1px solid rgba(244,63,94,0.5); }
+.eyed-badge--ok   { color: #10b981; background: rgba(16,185,129,0.12);  border: 3px solid rgba(16,185,129,0.45); }
+.eyed-badge--fail { color: #f43f5e; background: rgba(244,63,94,0.14);    border: 3px solid rgba(244,63,94,0.5); }
 
 .eyed-entry-body { display: flex; flex-direction: column; gap: 6px; }
 
@@ -87,7 +87,7 @@
   margin: 4px 0 0;
   padding: 8px 10px;
   background: #07090e;
-  border: 1px solid #1f2530;
+  border: 3px solid #1f2530;
   border-radius: 6px;
   color: #cbd5e1;
   font-family: 'Space Mono', ui-monospace, monospace;

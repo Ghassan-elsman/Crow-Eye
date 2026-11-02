@@ -1,9 +1,10 @@
 {
   "config_name": "execution_proof_correlation",
-  "wing_name": "Execution Proof Correlation",
+  "wing_name": "Execution Proof Correlation (Identity)",
   "wing_id": "default_wing_execution_001",
-  "description": "Proves program execution using weighted scoring based on forensic strength of evidence. Uses a tiered approach with direct execution evidence (Prefetch, ShimCache) weighted highest, followed by supporting evidence (AmCache), user-triggered traces (LNK, Jumplists), and runtime behavior (SRUM).",
-  "proves": "Program was executed on the system",
+  "wing_category": "identity",
+  "description": "Scores execution likelihood by weighted corroboration across artifacts: Prefetch (strongest execution indicator), ShimCache/AmCache (presence/compatibility indicators that do not by themselves prove execution), user-triggered traces (LNK, Jumplists), and runtime behavior (SRUM).",
+  "proves": "Corroborated indicators that a program executed on the system",
   "author": "Crow-Eye Team",
   "created_date": "2024-12-23T00:00:00Z",
   "last_modified": "2024-12-23T00:00:00Z",
@@ -16,7 +17,7 @@
       "feather_id": "prefetch",
       "weight": 0.4,
       "tier": 1,
-      "tier_name": "Direct execution evidence"
+      "tier_name": "Primary execution indicator"
     },
     {
       "feather_config_name": "ShimCache_CrowEyeFeather",
@@ -25,7 +26,7 @@
       "feather_id": "shimcache",
       "weight": 0.25,
       "tier": 1,
-      "tier_name": "Direct execution evidence"
+      "tier_name": "Presence / compatibility indicator"
     },
     {
       "feather_config_name": "InventoryApplication_CrowEyeFeather",
@@ -34,7 +35,7 @@
       "feather_id": "amcache_app",
       "weight": 0.15,
       "tier": 2,
-      "tier_name": "Strong supporting evidence"
+      "tier_name": "Presence / inventory indicator (AmCache)"
     },
     {
       "feather_config_name": "InventoryApplicationFile_CrowEyeFeather",
@@ -43,7 +44,7 @@
       "feather_id": "amcache_file",
       "weight": 0.15,
       "tier": 2,
-      "tier_name": "Strong supporting evidence"
+      "tier_name": "Presence / inventory indicator (AmCache)"
     },
     {
       "feather_config_name": "InventoryApplicationShortcut_CrowEyeFeather",
@@ -52,7 +53,7 @@
       "feather_id": "amcache_shortcut",
       "weight": 0.15,
       "tier": 2,
-      "tier_name": "Strong supporting evidence"
+      "tier_name": "Presence / inventory indicator (AmCache)"
     },
     {
       "feather_config_name": "LNK_CrowEyeFeather",
@@ -159,11 +160,11 @@
     "score_interpretation": {
       "confirmed": {
         "min": 0.7,
-        "label": "Confirmed Execution"
+        "label": "Strongly Corroborated Execution"
       },
       "probable": {
         "min": 0.4,
-        "label": "Probable Execution"
+        "label": "Likely Execution"
       },
       "weak": {
         "min": 0.2,
@@ -171,13 +172,14 @@
       },
       "not_proven": {
         "min": 0.0,
-        "label": "Not Proven"
+        "label": "Insufficient Evidence"
       }
     }
   },
   "semantic_rules": [
     {
       "rule_id": "exec_prefetch_run",
+      "confidence": 0.5,
       "name": "Program Execution via Prefetch",
       "semantic_value": "Program Executed",
       "description": "Prefetch file indicates program was executed",
@@ -196,9 +198,10 @@
     },
     {
       "rule_id": "exec_shimcache_evidence",
-      "name": "ShimCache Execution Evidence",
+      "confidence": 0.5,
+      "name": "ShimCache Presence Indicator",
       "semantic_value": "Application Compatibility Evidence",
-      "description": "ShimCache entry indicates program was executed or prepared for execution",
+      "description": "ShimCache entry indicates the file was present/seen by the compatibility layer; not proof of execution on its own",
       "conditions": [
         {
           "feather_id": "shimcache",
@@ -214,6 +217,7 @@
     },
     {
       "rule_id": "exec_user_launched",
+      "confidence": 0.5,
       "technique_id": [
         "T1204"
       ],
@@ -244,9 +248,10 @@
     },
     {
       "rule_id": "exec_any_evidence",
-      "name": "Execution Evidence (OR)",
-      "semantic_value": "Execution Evidence Found",
-      "description": "Prefetch OR ShimCache OR AmCache indicates execution evidence",
+      "confidence": 0.5,
+      "name": "Execution Indicators (OR)",
+      "semantic_value": "Execution Indicators Found",
+      "description": "Prefetch OR ShimCache OR AmCache provides execution-related indicators",
       "conditions": [
         {
           "feather_id": "prefetch",
@@ -274,6 +279,7 @@
     },
     {
       "rule_id": "exec_user_interaction",
+      "confidence": 0.5,
       "name": "User Interaction Evidence (OR)",
       "semantic_value": "User Interaction Detected",
       "description": "LNK OR Jumplist indicates user interacted with application",
@@ -304,9 +310,10 @@
     },
     {
       "rule_id": "exec_confirmed_run",
-      "name": "Confirmed Execution (AND)",
-      "semantic_value": "Confirmed Program Execution",
-      "description": "Prefetch AND ShimCache together confirm program execution. Severity is 'info' because confirmed-execution is the baseline forensic finding the wing was built to surface \u2014 chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to 'Confirmed Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
+      "confidence": 0.5,
+      "name": "Corroborated Execution (AND)",
+      "semantic_value": "Corroborated Program Execution",
+      "description": "Prefetch AND ShimCache together corroborate program execution. Severity is 'info' because corroborated execution is the baseline forensic finding the wing was built to surface \u2014 chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to the 'Strongly Corroborated Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
       "conditions": [
         {
           "feather_id": "prefetch",
@@ -328,6 +335,7 @@
     },
     {
       "rule_id": "exec_runtime_evidence",
+      "confidence": 0.5,
       "name": "Runtime Evidence (AND)",
       "semantic_value": "Application Runtime Evidence",
       "description": "SRUM AND MFT together indicate application runtime activity",
@@ -352,6 +360,7 @@
     },
     {
       "rule_id": "exec_network_activity",
+      "confidence": 0.5,
       "name": "Network Activity Evidence",
       "semantic_value": "Network Activity Detected",
       "description": "SRUM network data indicates application network usage",
@@ -370,6 +379,7 @@
     },
     {
       "rule_id": "exec_app_logs_evidence",
+      "confidence": 0.5,
       "name": "Application Log Evidence",
       "semantic_value": "Application Event Logged",
       "description": "Application logs provide additional execution evidence",
@@ -388,6 +398,7 @@
     },
     {
       "rule_id": "exec_folder_navigation",
+      "confidence": 0.5,
       "name": "Folder Navigation Evidence",
       "semantic_value": "User Navigated to Folder",
       "description": "ShellBags indicate user navigated to application folder",
@@ -406,6 +417,7 @@
     },
     {
       "rule_id": "exec_comprehensive_evidence",
+      "confidence": 0.5,
       "name": "Comprehensive Execution Evidence (OR)",
       "semantic_value": "Multiple Evidence Sources",
       "description": "Network activity OR Application logs OR ShellBags provide supporting execution evidence",

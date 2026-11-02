@@ -23,8 +23,50 @@ sending data to the cloud.
 from typing import Dict, List, Any, Optional
 import logging
 import json
+import re
 
-from eye.backends.base import LLMBackend
+from eye.backends.base import LLMBackend, describe_backend_error, _get, _num
+
+# Models that reject sampling parameters: a non-default temperature / top_p is a
+# 400 on Claude Haiku 5.5, Sonnet 5 / 5.5, Opus 4.7 and later, and Fable / Mythos.
+# Sent anyway, every Eye request to them failed before the model said a word.
+_NO_SAMPLING = re.compile(r"claude-(fable|mythos)|opus-4-[78]|opus-5|sonnet-5|haiku-5")
+
+# The client's own limits. The SDK default is 10 minutes with 2 retries, so a
+# dead network held whoever called it for up to half an hour.
+CLIENT_TIMEOUT = 120.0
+CLIENT_RETRIES = 1
+CHECK_TIMEOUT = 20.0
+
+
+def sampling_allowed(model_name):
+    return not _NO_SAMPLING.search(str(model_name or "").lower())
+
+
+# Models that take output_config.effort (how much the model thinks and works per reply).
+# Defaults differ by model - Sonnet 5.5 high, Haiku 5.5 and Opus 5.5 medium - so the Eye
+# sends the investigator's choice explicitly instead of inheriting whichever applies.
+_EFFORT_MODELS = re.compile(r"claude-(fable|mythos)|opus-4-[678]|opus-5|sonnet-4-6|sonnet-5|haiku-5")
+EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+# Models that think by default: thinking counts toward max_tokens, so the reply needs room.
+_THINKS = re.compile(r"claude-(fable|mythos)|opus-5|sonnet-5|haiku-5")
+
+
+def effort_supported(model_name):
+    return bool(_EFFORT_MODELS.search(str(model_name or "").lower()))
+
+
+def thinks_by_default(model_name):
+    return bool(_THINKS.search(str(model_name or "").lower()))
+
+# What a refusal's stop_details category means, in words the investigator can act on.
+_REFUSAL_WORDS = {
+    "cyber": "the model's cyber-safety filter",
+    "bio": "the model's biology-safety filter",
+    "reasoning_extraction": "a request to write out the model's internal reasoning",
+    "frontier_llm": "a request about building AI models",
+    "general_harms": "the model's usage-policy filter",
+}
 
 
 class AnthropicBackend(LLMBackend):
@@ -32,13 +74,16 @@ class AnthropicBackend(LLMBackend):
     Official Anthropic (Claude) Cloud Backend.
     Handles specialized tool-use schema conversion for Claude 3+.
     """
-    def __init__(self, model_name: str, credential_manager):
+    def __init__(self, model_name: str, credential_manager, effort: Optional[str] = None):
         self.model_name = model_name
         self.credential_manager = credential_manager
+        # low | medium | high | xhigh | max, or None for the model's own default.
+        self.effort = effort if effort in EFFORT_LEVELS else None
         self.logger = logging.getLogger(__name__)
         self.quota_stats = "API Managed"
         self._client = None
         self._model_cache = []
+        self.last_error = ""
 
     @property
     def client(self):
@@ -48,7 +93,8 @@ class AnthropicBackend(LLMBackend):
             api_key = self.credential_manager.get_credential("anthropic_api_key")
             if not api_key:
                 raise ValueError("Anthropic API key not found. Please configure it in the Setup Wizard.")
-            self._client = anthropic.Anthropic(api_key=api_key)
+            self._client = anthropic.Anthropic(api_key=api_key, timeout=CLIENT_TIMEOUT,
+                                               max_retries=CLIENT_RETRIES)
         return self._client
 
     def generate(self, system_prompt, user_message, tools=None, history=None, gen_params=None):
@@ -85,17 +131,23 @@ class AnthropicBackend(LLMBackend):
                 # Output budget for the model's REPLY (not the context window).
                 # 4096 silently clipped long forensic syntheses; 8192 is a safer
                 # default and a length-cap is now surfaced (see stop_reason below).
-                "max_tokens": gp.get("max_output_tokens", 8192),
+                # A model that thinks spends part of the budget thinking, so it
+                # gets twice the room.
+                "max_tokens": gp.get("max_output_tokens", 16000 if thinks_by_default(self.model_name) else 8192),
                 "system": final_system,
                 "messages": final_history,
                 # Explicit request timeout so a hung provider cannot freeze the
                 # worker thread (parity with Ollama/LM Studio).
                 "timeout": 120,
             }
-            if gp.get("temperature") is not None:
-                api_params["temperature"] = gp["temperature"]
-            if gp.get("top_p") is not None:
-                api_params["top_p"] = gp["top_p"]
+            if sampling_allowed(self.model_name):
+                if gp.get("temperature") is not None:
+                    api_params["temperature"] = gp["temperature"]
+                if gp.get("top_p") is not None:
+                    api_params["top_p"] = gp["top_p"]
+            if self.effort and effort_supported(self.model_name):
+                api_params["output_config"] = {"effort": self.effort}
+            self._apply_prompt_caching(api_params)
             if tools:
                 # Claude uses 'input_schema' instead of 'parameters' - we're translating
                 # from Eye's standard format to what Claude understands
@@ -116,6 +168,23 @@ class AnthropicBackend(LLMBackend):
                     if reset: self.quota_stats += f" (resets at {reset})"
 
             resp = resp_raw.parse()
+            _u = getattr(resp, "usage", None)
+            usage = self.record_usage(_num(_u, "input_tokens"), _num(_u, "output_tokens"),
+                                      _num(_u, "cache_read_input_tokens"),
+                                      _num(_u, "cache_creation_input_tokens"),
+                                      model=getattr(resp, "model", None))
+            if getattr(resp, "stop_reason", None) == "refusal":
+                # A decline is a normal 200 with no answer in it: say so, never return
+                # an empty reply that reads as "the model had nothing to say".
+                details = getattr(resp, "stop_details", None)
+                cat = getattr(details, "category", None) if details is not None else None
+                if cat is None and isinstance(details, dict):
+                    cat = details.get("category")
+                why = _REFUSAL_WORDS.get(cat, "the model's safety filter")
+                return {"content": "[The model declined this request (%s%s). Rephrase it around the "
+                                   "evidence - what the artifacts show - or switch to another model.]"
+                                   % (why, ", category %s" % cat if cat else ""),
+                        "tool_calls": [], "refusal": cat or True, "usage": usage}
             content = ""
             tool_calls = []
             # Claude can return multiple content blocks - we need to process each one
@@ -131,10 +200,42 @@ class AnthropicBackend(LLMBackend):
             # investigator can see the reply was truncated by the model's budget.
             if getattr(resp, "stop_reason", None) == "max_tokens" and content:
                 content += "\n\n[⚠ Output truncated at the model's max output tokens — ask for the remainder or narrow the request.]"
-            return {"content": content, "tool_calls": tool_calls}
+            return {"content": content, "tool_calls": tool_calls, "usage": usage}
         except Exception as e:
-            self.logger.error(f"Anthropic API failure: {e}")
+            self.last_error = describe_backend_error(e)
+            self.logger.error(f"Anthropic API failure: {self.last_error}")
             raise
+
+    @staticmethod
+    def _apply_prompt_caching(api_params):
+        """Cache what repeats between the calls of one investigation.
+
+        The system prompt's stable core (identity, schema, tools) becomes a cached
+        system block; the context rebuilt for every call moves to the end of the
+        current user message, after the conversation, so the conversation stays a
+        byte-identical prefix that automatic caching reads back at a tenth of the
+        price. Without this one question cost ~15M uncached input tokens (66 calls)."""
+        from eye.backends.base import split_step_context, STEP_CONTEXT_HEADING
+        core, step = split_step_context(api_params.get("system") or "")
+        api_params["system"] = [{"type": "text", "text": core, "cache_control": {"type": "ephemeral"}}]
+        msgs = api_params.get("messages") or []
+        if msgs and msgs[-1].get("role") == "user":
+            last = dict(msgs[-1])
+            content = last.get("content")
+            blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
+                      else [dict(b) for b in (content or [])])
+            # The breakpoint goes on the last block that the NEXT call will send unchanged
+            # (this message as the history keeps it), not on the per-call context after it:
+            # that context never enters the history, so a breakpoint after it is never read.
+            if blocks:
+                blocks[-1]["cache_control"] = {"type": "ephemeral"}
+            if step:
+                blocks.append({"type": "text", "text": "%s (from the Eye, not the investigator)\n%s"
+                                                       % (STEP_CONTEXT_HEADING, step)})
+            last["content"] = blocks
+            api_params["messages"] = msgs[:-1] + [last]
+        elif step:
+            api_params["system"].append({"type": "text", "text": STEP_CONTEXT_HEADING + "\n" + step})
 
     def validate_connectivity(self):
         """
@@ -147,17 +248,24 @@ class AnthropicBackend(LLMBackend):
         ``get_backend_status()`` and on every model switch, so a billable
         generation here charged the investigator just to answer "are you up?".
         """
+        self.last_error = ""
         try:
+            # A check answers in seconds or not at all: no retries, a short limit.
+            client = self.client.with_options(timeout=CHECK_TIMEOUT, max_retries=0)
             if self.model_name and self.model_name not in ["", "default"]:
-                models_api = getattr(self.client, "models", None)
+                models_api = getattr(client, "models", None)
                 if models_api is not None and hasattr(models_api, "retrieve"):
                     models_api.retrieve(self.model_name)
                     return True
             # No model name yet, or an SDK too old for models.retrieve: fall back
             # to discovery, which validates the key just as well.
-            return bool(self.list_models())
+            ok = bool(self.list_models())
+            if not ok:
+                self.last_error = "The provider returned no models for this key."
+            return ok
         except Exception as e:
-            self.logger.error(f"Anthropic connectivity check failed: {e}")
+            self.last_error = describe_backend_error(e)
+            self.logger.error(f"Anthropic connectivity check failed: {self.last_error}")
             return False
 
     def list_models(self):

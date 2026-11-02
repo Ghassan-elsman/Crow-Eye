@@ -623,12 +623,23 @@ class ShadowCopyManager:
         else:
             logger.debug(f"[ShadowCopyManager] {provider_status.provider_count} VSS provider(s) available")
         
-        # Check 5: VSS writers
-        logger.debug("[ShadowCopyManager] Checking VSS writers")
-        writer_status = self.diagnostics.check_vss_writers()
-        checks["vss_writers_stable"] = writer_status.all_stable
+        # Check 5: VSS writers - on a retry only. `vssadmin list writers` took
+        # 5.1 s of an 8.5 s snapshot at the start of every live Parse All, and
+        # a failed writer is only ever a warning here: it explains a failed
+        # Create, it never stops one. The first attempt goes straight to
+        # Create; an attempt after a failure still diagnoses the writers.
+        if self.creation_attempts.get(volume, 0) <= 1:
+            logger.debug("[ShadowCopyManager] VSS writers not checked on a first attempt")
+            checks["vss_writers_stable"] = None
+            writer_status = None
+        else:
+            logger.debug("[ShadowCopyManager] Checking VSS writers")
+            writer_status = self.diagnostics.check_vss_writers()
+            checks["vss_writers_stable"] = writer_status.all_stable
         
-        if not writer_status.all_stable:
+        if writer_status is None:
+            pass
+        elif not writer_status.all_stable:
             warnings.append(
                 f"{len(writer_status.failed_writers)} VSS writer(s) in failed state"
             )
@@ -685,7 +696,7 @@ class ShadowCopyManager:
                         capture_output=True,
                         text=True,
                         timeout=10
-                    )
+                    , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                     # Starting a service changes the target; it goes in the record.
                     _note_process(["net", "start", "VSS"],
                                   "start the Volume Shadow Copy service", result.returncode)
@@ -754,7 +765,7 @@ class ShadowCopyManager:
                 capture_output=True,
                 text=True,
                 timeout=timeout
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             _note_process(["powershell", "-Command", powershell_command],
                           "create a shadow copy of %s" % volume_path, result.returncode)
 
@@ -812,7 +823,7 @@ class ShadowCopyManager:
                 capture_output=True,
                 text=True,
                 timeout=timeout
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             _note_process(["wmic", "shadowcopy", "call", "create", f"Volume={volume_path}"],
                           "create a shadow copy of %s" % volume_path, wmic_result.returncode)
 

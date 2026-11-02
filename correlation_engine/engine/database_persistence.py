@@ -16,11 +16,28 @@ import sqlite3
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 import logging
 
 from .correlation_result import CorrelationResult, CorrelationMatch
+
+
+def not_skipped_sql(conn, alias: str = "") -> str:
+    """" AND <alias.>status <> 'SKIPPED'" for queries listing a run's results.
+
+    A Wing the engine did not run has a SKIPPED results row (its reason in
+    progress_info); it is accounting, not a result to draw. Databases written
+    before the status column existed get no filter.
+    """
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(results)")}
+    except Exception:
+        return ""
+    if 'status' not in columns:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f" AND COALESCE({prefix}status, '') <> 'SKIPPED'"
 
 logger = logging.getLogger(__name__)
 
@@ -617,7 +634,9 @@ class ResultsDatabase:
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_executions_engine ON executions(engine_type)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_executions_time ON executions(execution_time)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_executions_pipeline ON executions(pipeline_name)")
-        
+
+        self._create_behaviour_schema(cursor)
+
         self.conn.commit()
         
         # Migration: Add new columns to existing databases
@@ -778,8 +797,10 @@ class ResultsDatabase:
         # Generate timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
-        # Create run name
-        engine_prefix = "TimeWindow" if engine_type == "time_based" else "Identity"
+        # Create run name. The prefix comes from the registry: comparing with
+        # "time_based" alone named every time_window_scanning run "Identity_".
+        from . import engine_registry
+        engine_prefix = engine_registry.run_prefix(engine_type)
         if pipeline_name:
             run_name = f"{engine_prefix}_{pipeline_name}_Run{run_number:03d}_{timestamp}"
         else:
@@ -845,6 +866,37 @@ class ResultsDatabase:
         print(f"[Database] Created execution '{run_name}' (ID: {execution_id}) for streaming")
         return execution_id
     
+    def record_skipped_wing(self, execution_id: int, skip: Dict[str, Any]) -> int:
+        """A `results` row with status SKIPPED for a Wing the engine did not run.
+
+        ``skip`` carries wing_id, wing_name, wing_category, engine_type and the
+        one-line reason (engine_registry.wing_skip_message), kept in
+        ``progress_info`` so the run's accounting names every Wing it was
+        given, run or not.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO results (
+                execution_id, wing_id, wing_name, total_matches,
+                feathers_processed, total_records_scanned, duplicates_prevented,
+                matches_failed_validation, execution_duration_seconds,
+                filters_applied, feather_metadata, status, progress_info
+            ) VALUES (?, ?, ?, 0, 0, 0, 0, 0, 0.0, ?, ?, 'SKIPPED', ?)
+        """, (
+            execution_id,
+            skip.get('wing_id') or '',
+            skip.get('wing_name') or '',
+            json.dumps({}),
+            json.dumps({}),
+            json.dumps({
+                'skip_reason': skip.get('reason', ''),
+                'wing_category': skip.get('wing_category'),
+                'engine_type': skip.get('engine_type'),
+            }),
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
+
     def update_execution_stats(self, execution_id: int, execution_duration: float = 0.0,
                                total_matches: int = 0, total_records_scanned: int = 0,
                                errors: List[str] = None, warnings: List[str] = None):
@@ -876,7 +928,7 @@ class ResultsDatabase:
             row = cursor.execute("""
                 SELECT COUNT(*), COALESCE(SUM(total_matches), 0),
                        COALESCE(SUM(total_records_scanned), 0)
-                FROM results WHERE execution_id = ?
+                FROM results WHERE execution_id = ?""" + not_skipped_sql(self.conn) + """
             """, (execution_id,)).fetchone()
             if row and row[0]:
                 derived_wings, derived_matches, derived_scanned = row[0], row[1], row[2]
@@ -971,7 +1023,7 @@ class ResultsDatabase:
                 totals = cursor.execute("""
                     SELECT COUNT(*), COALESCE(SUM(total_matches), 0),
                            COALESCE(SUM(total_records_scanned), 0)
-                    FROM results WHERE execution_id = ?
+                    FROM results WHERE execution_id = ?""" + not_skipped_sql(self.conn) + """
                 """, (sibling_id,)).fetchone()
             except sqlite3.Error:
                 continue
@@ -1546,7 +1598,7 @@ class ResultsDatabase:
                    feathers_processed, total_records_scanned,
                    duplicates_prevented, execution_duration_seconds
             FROM results
-            WHERE execution_id = ?
+            WHERE execution_id = ?""" + not_skipped_sql(self.conn) + """
         """, (execution_id,))
         
         columns = [desc[0] for desc in cursor.description]
@@ -1730,6 +1782,13 @@ class ResultsDatabase:
                 if match_data.get('anchor_record_count'):
                     match.anchor_record_count = match_data['anchor_record_count']
 
+                # Behaviour context (engine/behaviour_context), when attached.
+                if match_data.get('behaviour_context'):
+                    try:
+                        match.behaviour_context = json.loads(match_data['behaviour_context'])
+                    except (TypeError, ValueError):
+                        pass
+
                 # Add semantic data if available
                 if match_data.get('semantic_data'):
                     try:
@@ -1795,6 +1854,276 @@ class ResultsDatabase:
         
         return results
     
+    # ------------------------------------------------------------------
+    # Behavioural engine (engine/behavioural_engine.py)
+    #
+    # A Behavioural run is an `executions` row (engine_type 'behavioural', run
+    # name 'Behavioural_...') with one `results` row per Behaviour Wing, like
+    # any other engine. What it found lives in its own tables:
+    #
+    #   behaviour_hits    one row per Wing rule that fired for one person: who
+    #                     (SID, name, host), when (first/last UTC), the UBA
+    #                     events it rests on, and those events' evidence
+    #                     references (db / table / rowids).
+    #   behaviour_actors  one row per person per run: names seen, events
+    #                     evaluated, events that could not be (no time), hits.
+    #   behaviour_runs    the run's custody record: the UBA store it read
+    #                     (rules version and SHA-256, switches, built time),
+    #                     each Wing's SHA-256, source tables, UTC times.
+    #
+    # A hit is a POINTER (kind = 'pointer'), never evidence on its own: it
+    # names UBA events, which name artifact rows. Cite the artifact rows,
+    # re-read from the case, not the hit.
+    # ------------------------------------------------------------------
+
+    BEHAVIOUR_HIT_NOTE = ("A pointer to UBA behaviour events, not evidence. Cite the "
+                          "artifact rows its evidence references name, re-read from the case.")
+
+    def _create_behaviour_schema(self, cursor):
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS behaviour_hits (
+                hit_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                result_id INTEGER,
+                wing_id TEXT NOT NULL,
+                wing_name TEXT,
+                rule TEXT NOT NULL,
+                rule_name TEXT,
+                rule_type TEXT,
+                actor_sid TEXT,
+                actor_name TEXT,
+                host TEXT,
+                first_ts TEXT,
+                last_ts TEXT,
+                severity TEXT,
+                uba_severity TEXT,
+                technique_id TEXT,
+                tactic TEXT,
+                event_ids TEXT,
+                steps_json TEXT,
+                evidence_refs TEXT,
+                conditions TEXT,
+                machine_steps INTEGER DEFAULT 0,
+                uba_rules_hash TEXT,
+                wing_hash TEXT,
+                kind TEXT NOT NULL DEFAULT 'pointer',
+                note TEXT,
+                created_utc TEXT,
+                FOREIGN KEY (execution_id) REFERENCES executions(execution_id),
+                FOREIGN KEY (result_id) REFERENCES results(result_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS behaviour_actors (
+                actor_row_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                execution_id INTEGER NOT NULL,
+                actor_sid TEXT,
+                actor_name TEXT,
+                host TEXT,
+                names_json TEXT,
+                events_evaluated INTEGER DEFAULT 0,
+                events_timeless INTEGER DEFAULT 0,
+                events_outside_time_filter INTEGER DEFAULT 0,
+                hits INTEGER DEFAULT 0,
+                wings_json TEXT,
+                note TEXT,
+                FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
+            )
+        """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS behaviour_runs (
+                execution_id INTEGER PRIMARY KEY,
+                status TEXT,
+                started_utc TEXT,
+                finished_utc TEXT,
+                case_directory TEXT,
+                artifacts_directory TEXT,
+                uba_store_path TEXT,
+                uba_built_at_utc TEXT,
+                uba_loaded_from_store INTEGER,
+                uba_rules_version TEXT,
+                uba_rules_sha256 TEXT,
+                uba_rules_count INTEGER,
+                uba_disabled_rules TEXT,
+                uba_user_rules_hash TEXT,
+                wing_hashes TEXT,
+                source_tables TEXT,
+                not_evaluated TEXT,
+                custody_json TEXT,
+                FOREIGN KEY (execution_id) REFERENCES executions(execution_id)
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_behaviour_hits_execution "
+                       "ON behaviour_hits(execution_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_behaviour_hits_actor "
+                       "ON behaviour_hits(actor_sid)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_behaviour_actors_execution "
+                       "ON behaviour_actors(execution_id)")
+
+    def save_behaviour_result(self, execution_id: int, wing_id: str, wing_name: str,
+                              total_hits: int, events_evaluated: int,
+                              duration_seconds: float, status: str = 'COMPLETED',
+                              info: Optional[Dict[str, Any]] = None,
+                              filters: Optional[Dict[str, Any]] = None) -> int:
+        """The `results` row of one Behaviour Wing in a Behavioural run.
+
+        ``total_matches`` holds its hits and ``total_records_scanned`` the
+        behaviour events it evaluated, so the run's totals (derived from these
+        rows by update_execution_stats) mean the same as for other engines.
+        ``info`` (steps not evaluable, events not evaluated, notes) goes to
+        progress_info, where a SKIPPED row keeps its reason.
+        """
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO results (
+                execution_id, wing_id, wing_name, total_matches,
+                feathers_processed, total_records_scanned, duplicates_prevented,
+                matches_failed_validation, execution_duration_seconds,
+                filters_applied, feather_metadata, status, progress_info
+            ) VALUES (?, ?, ?, ?, 0, ?, 0, 0, ?, ?, ?, ?, ?)
+        """, (
+            execution_id, wing_id or '', wing_name or '', int(total_hits or 0),
+            int(events_evaluated or 0), float(duration_seconds or 0.0),
+            json.dumps(_json_safe(filters or {})), json.dumps({}),
+            status, json.dumps(_json_safe(info or {})),
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def save_behaviour_hits(self, execution_id: int, result_id: Optional[int],
+                            hits: List[Dict[str, Any]]) -> int:
+        """Insert the hits of one Wing. Returns how many were written."""
+        if not hits:
+            return 0
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        def js(value):
+            return json.dumps(_json_safe(value if value is not None else []))
+
+        rows = []
+        for h in hits:
+            rows.append((
+                execution_id, result_id, h.get('wing_id') or '', h.get('wing_name') or '',
+                h.get('rule') or '', h.get('rule_name') or '', h.get('rule_type') or '',
+                h.get('actor_sid') or '', h.get('actor_name') or '', h.get('host') or '',
+                h.get('first_ts'), h.get('last_ts'), h.get('severity') or '',
+                h.get('uba_severity') or '', js(h.get('technique_id')), js(h.get('tactic')),
+                js(h.get('event_ids')), js(h.get('steps')), js(h.get('evidence_refs')),
+                js(h.get('conditions')), int(h.get('machine_steps') or 0),
+                h.get('uba_rules_hash') or '', h.get('wing_hash') or '',
+                'pointer', h.get('note') or self.BEHAVIOUR_HIT_NOTE, now,
+            ))
+        self.conn.executemany("""
+            INSERT INTO behaviour_hits (
+                execution_id, result_id, wing_id, wing_name, rule, rule_name, rule_type,
+                actor_sid, actor_name, host, first_ts, last_ts, severity, uba_severity,
+                technique_id, tactic, event_ids, steps_json, evidence_refs, conditions,
+                machine_steps, uba_rules_hash, wing_hash, kind, note, created_utc
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        self.conn.commit()
+        return len(rows)
+
+    def save_behaviour_actors(self, execution_id: int, actors: List[Dict[str, Any]]) -> int:
+        """One row per person of the run (plus, when there were any, a row with
+        no SID counting the events attributed to a name no profile matched)."""
+        if not actors:
+            return 0
+        rows = [(
+            execution_id, a.get('actor_sid') or '', a.get('actor_name') or '',
+            a.get('host') or '', json.dumps(_json_safe(a.get('names') or [])),
+            int(a.get('events_evaluated') or 0), int(a.get('events_timeless') or 0),
+            int(a.get('events_outside_time_filter') or 0), int(a.get('hits') or 0),
+            json.dumps(_json_safe(a.get('wings') or {})), a.get('note') or '',
+        ) for a in actors]
+        self.conn.executemany("""
+            INSERT INTO behaviour_actors (
+                execution_id, actor_sid, actor_name, host, names_json,
+                events_evaluated, events_timeless, events_outside_time_filter,
+                hits, wings_json, note
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, rows)
+        self.conn.commit()
+        return len(rows)
+
+    def save_behaviour_run(self, execution_id: int, record: Dict[str, Any]) -> None:
+        """The run's custody record (one row, replaced if written again)."""
+        def js(key):
+            return json.dumps(_json_safe(record.get(key)))
+        self.conn.execute("""
+            INSERT OR REPLACE INTO behaviour_runs (
+                execution_id, status, started_utc, finished_utc, case_directory,
+                artifacts_directory, uba_store_path, uba_built_at_utc,
+                uba_loaded_from_store, uba_rules_version, uba_rules_sha256,
+                uba_rules_count, uba_disabled_rules, uba_user_rules_hash,
+                wing_hashes, source_tables, not_evaluated, custody_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            execution_id, record.get('status'), record.get('started_utc'),
+            record.get('finished_utc'), record.get('case_directory'),
+            record.get('artifacts_directory'), record.get('uba_store_path'),
+            record.get('uba_built_at_utc'), int(bool(record.get('uba_loaded_from_store'))),
+            record.get('uba_rules_version'), record.get('uba_rules_sha256'),
+            record.get('uba_rules_count'), js('uba_disabled_rules'),
+            record.get('uba_user_rules_hash') or '', js('wing_hashes'),
+            js('source_tables'), js('not_evaluated'), json.dumps(_json_safe(record)),
+        ))
+        self.conn.commit()
+
+    def _rows_as_dicts(self, sql: str, params=()) -> List[Dict[str, Any]]:
+        cursor = self.conn.execute(sql, params)
+        columns = [d[0] for d in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+    def get_behaviour_hits(self, execution_id: Optional[int] = None,
+                           actor_sid: Optional[str] = None,
+                           wing_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Hits, JSON columns decoded. Each carries kind 'pointer' and its note."""
+        where, params = [], []
+        for column, value in (('execution_id', execution_id), ('actor_sid', actor_sid),
+                              ('wing_id', wing_id)):
+            if value is not None:
+                where.append(f"{column} = ?")
+                params.append(value)
+        sql = "SELECT * FROM behaviour_hits"
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY first_ts, hit_id"
+        out = self._rows_as_dicts(sql, params)
+        for row in out:
+            for key in ('technique_id', 'tactic', 'event_ids', 'steps_json',
+                        'evidence_refs', 'conditions'):
+                try:
+                    row[key] = json.loads(row[key]) if row.get(key) else []
+                except (TypeError, ValueError):
+                    pass
+            row['steps'] = row.pop('steps_json', [])
+        return out
+
+    def get_behaviour_actors(self, execution_id: int) -> List[Dict[str, Any]]:
+        out = self._rows_as_dicts(
+            "SELECT * FROM behaviour_actors WHERE execution_id = ? "
+            "ORDER BY hits DESC, actor_name", (execution_id,))
+        for row in out:
+            for key in ('names_json', 'wings_json'):
+                try:
+                    row[key] = json.loads(row[key]) if row.get(key) else None
+                except (TypeError, ValueError):
+                    pass
+        return out
+
+    def get_behaviour_run(self, execution_id: int) -> Optional[Dict[str, Any]]:
+        rows = self._rows_as_dicts(
+            "SELECT * FROM behaviour_runs WHERE execution_id = ?", (execution_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        try:
+            row['custody'] = json.loads(row.pop('custody_json') or '{}')
+        except (TypeError, ValueError):
+            row['custody'] = {}
+        return row
+
     def get_latest_execution_id(self) -> Optional[int]:
         """
         Get the ID of the most recent execution.

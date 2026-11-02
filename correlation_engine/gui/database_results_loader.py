@@ -20,7 +20,7 @@ from PyQt5.QtGui import QFont
 from ..engine.database_persistence import ResultsDatabase
 from .ui_styling import CorrelationEngineStyles
 from .crow_eye_icons import CrowEyeIcons
-from ui.site_theme import set_variant, set_status, STATUS_COLORS, font as site_font
+from ui.app_theme import set_variant, set_status, STATUS_COLORS, font as theme_font
 from PyQt5.QtGui import QColor
 
 
@@ -119,7 +119,7 @@ class DatabaseResultsLoaderDialog(QDialog):
         selection_btn_layout.addStretch()
         
         self.selection_count_label = QLabel("0 selected")
-        self.selection_count_label.setFont(site_font("ui", 13, QFont.Bold))
+        self.selection_count_label.setFont(theme_font("ui", 13, QFont.Bold))
         set_status(self.selection_count_label, "info")
         selection_btn_layout.addWidget(self.selection_count_label)
         
@@ -295,10 +295,15 @@ class DatabaseResultsLoaderDialog(QDialog):
             
             # Engine type with color coding
             engine_item = QTableWidgetItem(execution['engine_type'] or "")
-            if execution['engine_type'] == 'identity_based':
+            from ..engine import engine_registry
+            view = engine_registry.results_view_or_none(execution['engine_type'])
+            if view == 'identity':
                 engine_item.setForeground(QColor(STATUS_COLORS["accent"]))
-            elif execution['engine_type'] == 'time_window_scanning':
+            elif view == 'timebased':
                 engine_item.setForeground(QColor(STATUS_COLORS["info"]))
+            elif view is None:
+                engine_item.setForeground(QColor(STATUS_COLORS["bad"]))
+                engine_item.setToolTip("No registered engine has this type")
             self.executions_table.setItem(row_idx, 3, engine_item)
             
             self.executions_table.setItem(row_idx, 4, 

@@ -5,9 +5,12 @@ const VIEWS = [
   { id: 'map', label: 'Activity Map' },
   { id: 'signins', label: 'Sign-ins' },
   { id: 'coverage', label: 'What we can see' },
+  { id: 'rules', label: 'Rules' },
 ]
 
 export default function TopBar({ view, setView, summary, coverage, sessionsReport }) {
+  // Rules turned off in Settings: a count, in slate - a choice, not a gap.
+  const rulesOff = coverage && coverage.counts ? (coverage.counts.off || 0) : 0
   const total = summary
     ? (summary.by_class || []).reduce((a, c) => a + c.events, 0)
     : 0
@@ -36,6 +39,11 @@ export default function TopBar({ view, setView, summary, coverage, sessionsRepor
             )}
             {v.id === 'signins' && sessionCount > 0 && (
               <span className="tab-badge">{sessionCount}</span>
+            )}
+            {v.id === 'rules' && rulesOff > 0 && (
+              <span className="tab-badge muted" title="Rules turned off in Settings">
+                {rulesOff} off
+              </span>
             )}
           </button>
         ))}

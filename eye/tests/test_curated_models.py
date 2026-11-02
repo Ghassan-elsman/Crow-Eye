@@ -18,13 +18,15 @@ from eye.services.model_router import ModelRouter
 class TestCuratedCatalog(unittest.TestCase):
     def test_anthropic_curated_ids(self):
         models = curated_models("anthropic")
-        for expected in ("claude-opus-4-8", "claude-sonnet-4-6",
+        for expected in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+                         "claude-fable-5-1", "claude-opus-4-8", "claude-sonnet-4-6",
                          "claude-haiku-4-5", "claude-fable-5"):
             self.assertIn(expected, models)
 
     def test_recommended_subset(self):
         rec = recommended_models("anthropic")
-        self.assertEqual(rec[0], "claude-opus-4-8")  # deep analysis first
+        self.assertEqual(rec[0], "claude-opus-5-5")  # deep analysis first
+        self.assertIn("claude-haiku-5-5", rec)          # fast triage, the lowest cost
         self.assertTrue(set(rec).issubset(set(curated_models("anthropic"))))
 
     def test_unknown_backend_is_empty(self):
@@ -79,8 +81,12 @@ class TestCuratedCatalog(unittest.TestCase):
 
     def test_windows_resolve_for_latest_claude(self):
         for mid in ("claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5",
-                    "claude-fable-5", "claude-opus-4-6"):
+                    "claude-opus-4-6"):
             self.assertEqual(resolve_context_window("anthropic", mid), 200_000, mid)
+        # The Claude 5 family and Fable / Mythos read 1M tokens.
+        for mid in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+                    "claude-fable-5", "claude-fable-5-1"):
+            self.assertEqual(resolve_context_window("anthropic", mid), 1_000_000, mid)
 
 
 class TestGroupedBackendOptionsCurated(unittest.TestCase):

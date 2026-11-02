@@ -53,7 +53,7 @@ PROVIDER_LABELS = {
     "mistral": "Mistral",
     "xai": "xAI (Grok)",
     # local command-line agents
-    "gemini_cli": "Gemini CLI", "llama": "LLaMA (llama.cpp)", "claude_code": "Claude Code",
+    "gemini_cli": "Gemini CLI", "llama": "LLaMA (llama.cpp)", "claude_code": "Claude Code", "codex_cli": "Codex CLI (OpenAI)",
     "jules_cli": "Jules CLI", "gpt_cli": "GPT CLI", "ollama_cli": "Ollama",
     "custom_cli": "Custom command-line agent",
     # local API servers
@@ -252,14 +252,14 @@ class _DiagnosticsWorker(QThread):
 # Styling
 # ----------------------------------------------------------------------------
 
-# The site's tokens (ui/site_theme.py). The wizard keeps its own rules below
+# The site's tokens (ui/app_theme.py). The wizard keeps its own rules below
 # (page titles, cards, the selected option card, the link button) as the
 # window sheet's extra; everything else - inputs, combos, lists, check boxes,
-# scroll bars - comes from the site sheet, buttons from its role family.
+# scroll bars - comes from the theme sheet, buttons from its role family.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:                                   # pragma: no cover
-    _site = None
+    _theme = None
 _BG = "#0A0C10"
 try:
     from pathlib import Path as _Path
@@ -281,9 +281,9 @@ QLabel#pageIntro {{ color: {_MUTED}; font-size: 13px; }}
 QLabel#fieldLabel {{ color: {_TEXT}; font-size: 13px; font-weight: 600; }}
 QLabel#hint {{ color: {_MUTED}; font-size: 12px; }}
 QLabel#formMessage {{ color: {_WARN}; font-size: 12px; font-weight: 600; }}
-QFrame#card, QFrame#optionCard {{ background-color: {_CARD}; border: 1px solid {_BORDER}; border-radius: 14px; }}
-QFrame#optionCard[selected="true"] {{ border: 2px solid #6366F1; background-color: #111A33; }}
-QFrame#optionCard:hover {{ border: 1px solid rgba(99, 102, 241, 0.55); }}
+QFrame#card, QFrame#optionCard {{ background-color: {_CARD}; border: 3px solid {_BORDER}; border-radius: 14px; }}
+QFrame#optionCard[selected="true"] {{ border: 3px solid #6366F1; background-color: #111A33; }}
+QFrame#optionCard:hover {{ border: 3px solid #3B4093; }}
 QFrame#card QLabel, QFrame#optionCard QLabel {{ background: transparent; border: none; }}
 QRadioButton {{ color: {_TEXT}; font-size: 14px; font-weight: 700; spacing: 10px; background: transparent; }}
 QPushButton#linkButton {{ background: transparent; color: {_MUTED}; border: none; font-size: 12px;
@@ -293,19 +293,19 @@ QPushButton#linkButton:hover {{ color: {_ACCENT}; }}
 
 
 def _wizard_sheet(dialog):
-    """The site sheet plus the wizard's own rules, before the children exist."""
-    if _site is not None:
-        _site.begin_site_theme(dialog, extra=_WIZARD_STYLE)
+    """The theme sheet plus the wizard's own rules, before the children exist."""
+    if _theme is not None:
+        _theme.begin_theme(dialog, extra=_WIZARD_STYLE)
     else:
         dialog.setStyleSheet(_WIZARD_STYLE)
 
 
 def _variant(button, variant):
     """A button in the site's role family (also at run time: Next <-> Save)."""
-    if _site is None:
+    if _theme is None:
         return
     button.setStyleSheet("")
-    _site.restyle(button, variant)
+    _theme.restyle(button, variant)
 
 
 class CloudAPIWarningDialog(QDialog):
@@ -724,6 +724,11 @@ class OnboardingWizard(QDialog):
             self._add_row("Executable", self._hbox(path, browse))
             self._add_row("Model", self._model_row(detect=False),
                           "Optional - empty uses the agent's default model.")
+            self._cli_hint = QLabel()
+            self._cli_hint.setObjectName("hint")
+            self._cli_hint.setWordWrap(True)
+            self._form_layout.addRow("", self._cli_hint)
+            self._update_cli_hint()
         elif kind == "local_api":
             self._add_row("API endpoint", self._line(
                 "api_endpoint", "http://localhost:1234 (LM Studio) - http://localhost:11434 (Ollama)"))
@@ -780,7 +785,8 @@ class OnboardingWizard(QDialog):
             _variant(d, "ghost")
             d.clicked.connect(self._detect_models)
             parts.append(d)
-            if self.config.get("integration_type") == "cloud_api":
+        if detect or self.config.get("integration_type") == "local_cli":
+            if self.config.get("integration_type") in ("cloud_api", "local_cli"):
                 c = QPushButton("Common models")
                 c.setToolTip("A built-in list - no key or network needed")
                 _variant(c, "ghost")
@@ -792,6 +798,27 @@ class OnboardingWizard(QDialog):
         self.config["backend"] = backend
         self._invalidate_test()
         self._update_key_hint()
+        self._update_cli_hint()
+
+    def _update_cli_hint(self):
+        hint = getattr(self, "_cli_hint", None)
+        if hint is None:
+            return
+        if self.config.get("backend") == "claude_code":
+            hint.setText("Uses your Claude Code sign-in - no API key needed. The executable may stay "
+                         "empty when `claude` is on PATH. Models: sonnet (balanced), opus (deepest), "
+                         "fable, haiku (fastest). Claude Code's own tools stay switched off: only "
+                         "the Eye's tools touch the evidence.")
+        elif self.config.get("backend") == "codex_cli":
+            hint.setText("Uses your Codex (ChatGPT) sign-in - no API key needed. The executable may stay "
+                         "empty when `codex` is on PATH; leave the model empty for Codex's default. Codex "
+                         "runs read-only in an empty folder, and a turn in which it tries to run anything "
+                         "itself is stopped: only the Eye's tools read the evidence.")
+        elif self.config.get("backend") == "gemini_cli":
+            hint.setText("Google retired the Gemini CLI's free individual tier (2026). If it reports an "
+                         "unsupported client, use the Gemini API backend (Cloud API) instead.")
+        else:
+            hint.setText("")
 
     def _key_stored(self):
         if self.config.get("integration_type") != "cloud_api":
@@ -1096,9 +1123,9 @@ class OnboardingWizard(QDialog):
         lay.addWidget(t)
         report = QTextEdit()
         report.setReadOnly(True)
-        if _site is not None:
-            report.setStyleSheet(_site.log_view_sheet())
-            _site.keep_style(report)
+        if _theme is not None:
+            report.setStyleSheet(_theme.log_view_sheet())
+            _theme.keep_style(report)
 
         def mark(status):
             return "#10B981" if status == "PASS" else "#F59E0B"

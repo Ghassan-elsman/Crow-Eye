@@ -112,7 +112,7 @@
   font-size: 10px;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  border: 1px solid var(--border2);
+  border: 3px solid var(--border2);
   background: var(--bg2);
 }
 
@@ -156,7 +156,7 @@
   gap: 8px;
   padding: 7px 14px;
   background: var(--bg2);
-  border: 1px solid var(--border2);
+  border: 3px solid var(--border2);
   border-radius: 4px;
   color: var(--tx);
   font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
@@ -190,7 +190,7 @@
   font-family: 'Segoe UI', 'Inter', system-ui, sans-serif;
   font-size: 12.5px;
   color: var(--tx);
-  border: 1px solid var(--border2);
+  border: 3px solid var(--border2);
   background: var(--bg1);
 }
 
@@ -215,7 +215,7 @@
 .dismiss-button {
   margin-left: auto;
   background: transparent;
-  border: 1px solid transparent;
+  border: 3px solid transparent;
   color: inherit;
   font-size: 12px;
   font-weight: 700;
@@ -283,7 +283,7 @@
   padding: 80px 40px;
   text-align: center;
   background: var(--bg1);
-  border: 1px solid var(--border2);
+  border: 3px solid var(--border2);
   border-radius: 8px;
   max-width: 1000px;
   margin: 0 auto;
@@ -309,4 +309,195 @@
   color: var(--tx2);
   max-width: 440px;
   line-height: 1.55;
+}
+
+
+/* ---- Case facts, findings strip, contents rail, block grid (2026-11-02) ---- */
+.report-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 2px;
+}
+
+.report-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 10px;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  background: var(--bg2);
+  min-width: 0;
+}
+
+.report-fact dt {
+  color: var(--tx3);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+}
+
+.report-fact dd {
+  margin: 0;
+  color: var(--tx);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 420px;
+}
+
+/* Export buttons: one quiet group instead of three loud boxes. */
+.export-group {
+  display: inline-flex;
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 0;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  overflow: hidden;
+  align-self: flex-start;
+}
+
+.export-group .export-button {
+  white-space: nowrap;
+  border: 0;
+  border-radius: 0;
+  border-right: 1px solid var(--border2);
+  background: transparent;
+  box-shadow: none;
+}
+
+.export-group .export-button:last-child { border-right: 0; }
+.export-group .export-button:hover:not(:disabled) { background: var(--accent-dim); color: var(--tx); }
+
+.report-layout {
+  display: block;
+  max-width: 1240px;
+  margin: 0 auto;
+}
+
+.report-rail { display: none; }
+
+.report-main { min-width: 0; }
+
+.findings-strip { margin-bottom: 20px; }
+
+.strip-title,
+.rail-title {
+  color: var(--tx2);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.findings-strip ol,
+.report-rail ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.findings-strip button {
+  --finding-tone: var(--accent);
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  text-align: left;
+  padding: 10px 14px;
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--border2);
+  border-radius: 8px;
+  background: var(--bg1);
+  color: var(--tx);
+  cursor: pointer;
+  font: inherit;
+}
+
+.findings-strip button.has-severity { border-left-color: var(--finding-tone); }
+.findings-strip button:hover { border-color: var(--accent); }
+
+.finding-num,
+.rail-num {
+  flex: none;
+  min-width: 18px;
+  color: var(--accent-strong);
+  font-family: var(--font-mono, 'JetBrains Mono', Consolas, monospace);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.finding-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.finding-text strong { font-size: 14px; font-weight: 600; }
+.finding-text span { color: var(--tx2); font-size: 13px; line-height: 1.45; }
+
+.blocks-container {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  max-width: none;
+}
+
+@media (min-width: 1280px) {
+  .report-layout {
+    display: grid;
+    grid-template-columns: 210px minmax(0, 1fr);
+    gap: 24px;
+    align-items: start;
+  }
+
+  .report-rail {
+    display: block;
+    position: sticky;
+    top: 0;
+    max-height: calc(100vh - 140px);
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+
+  .report-rail ol { gap: 2px; }
+
+  .report-rail button {
+    width: 100%;
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--tx2);
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+  }
+
+  .report-rail button:hover { background: var(--bg1); color: var(--tx); }
+
+  .rail-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .blocks-container { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .blocks-container > * { grid-column: 1 / -1; }
+  .blocks-container > :has(> .layout-half) { grid-column: auto; }
+  .blocks-container > .layout-half { grid-column: auto; }
 }

@@ -175,6 +175,7 @@ _STATIC_SOURCES: Dict[str, Tuple[str, str, str]] = {
     "MFT_standard_info_table": ("mft", "mft_claw_analysis.db", "mft_standard_info"),
     "MFT_file_names_table": ("mft", "mft_claw_analysis.db", "mft_file_names"),
     "MFT_data_attributes_table": ("mft", "mft_claw_analysis.db", "mft_data_attributes"),
+    "MFT_integrity_findings_table": ("mft", "mft_claw_analysis.db", "ntfs_integrity_findings"),
     "USN_table": ("usn", "USN_journal.db", "journal_events"),
     "Correlated_table": ("mft_usn_correlation", "mft_usn_correlated_analysis.db",
                          "mft_usn_correlated"),

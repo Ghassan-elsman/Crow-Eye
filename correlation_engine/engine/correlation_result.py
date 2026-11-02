@@ -54,6 +54,11 @@ class CorrelationMatch:
     # NEW: Semantic mapping data
     semantic_data: Optional[Dict[str, Any]] = None
 
+    # Who and what, from UBA: the people and activities recorded for this
+    # match's program or file around its time (engine/behaviour_context).
+    # Context only - it never moved the score or the floor.
+    behaviour_context: Optional[Dict[str, Any]] = None
+
     # The anchor's own window: when its records start and end, and how many it
     # contributed. `matches` has had these three columns, a migration for them
     # and a write path reading them off this object since the schema was

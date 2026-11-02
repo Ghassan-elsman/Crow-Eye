@@ -13,6 +13,7 @@ Key Fix: Uses proper regex matching instead of substring search to avoid over-ma
 """
 
 import sqlite3
+from correlation_engine.engine.gui_pump import pump_gui
 import json
 import time
 import logging
@@ -55,6 +56,100 @@ def _default_config_path():
     except Exception:
         pass
     return os.path.join("configs", "semantic_mapping_config.json")
+
+
+_NOT_CACHED = object()
+
+
+def _is_term_word(word):
+    """A word the FTS5 prefilter can search for: 3+ characters, alphanumeric."""
+    return len(word) >= 3 and word.replace('_', '').replace('-', '').isalnum()
+
+
+def _regex_term_alternatives(value):
+    """The words of each `|` alternative of a regex, for FTS5 terms.
+
+    Lookarounds and inline flags are dropped (`(?<![A-Za-z0-9])CMD` keeps
+    CMD); a group's brackets become spaces, so `(?:MY|FAKE)(?:CHROME|EDGE)`
+    gives CHROME and EDGE rather than nothing - deleting `(?:...)` whole lost
+    every term of such a rule."""
+    import re
+    text = re.sub(r'\(\?<?[=!][^)]*\)', ' ', str(value))
+    text = re.sub(r'\(\?[a-zA-Z]+\)', ' ', text)
+    text = re.sub(r'\(\?(?::|P<\w+>)', '(', text)
+    out = []
+    for alt in text.split('|'):
+        clean = re.sub(r'[\\+*?\[\](){}^$.]', ' ', alt.replace('\\.', ' '))
+        out.append([w for w in clean.split() if _is_term_word(w)])
+    return out
+
+
+def _row_holds(condition, record, compiled):
+    """One condition on one record, as the SQL path reads a field: name
+    without case, value upper-cased; `compiled` is the regex or None."""
+    wanted = str(condition.get('field_name')).lower()
+    value = next((v for k, v in record.items() if str(k).lower() == wanted), None)
+    pattern, op = condition.get('value'), condition.get('operator')
+    if pattern is None or pattern == '*' or op == 'wildcard':
+        return value is not None and bool(str(value).strip())
+    if value is None:
+        return False
+    text = str(value).upper()
+    if op == 'regex':
+        return bool(compiled is not None and compiled.search(text))
+    if op == 'contains':
+        return str(pattern).upper() in text
+    if op == 'equals':
+        return str(pattern).upper() == text
+    return False
+
+
+def _same_row_ok(conditions, feather_data, get_pattern):
+    """True unless two or more conditions name one feather and no single
+    row of it holds them all. Conditions on the match itself
+    (`_identity`, `matched_application`) take no part."""
+    groups = {}
+    for c in conditions:
+        fid = c.get('feather_id')
+        if fid in ('_identity', '', None) or c.get('field_name') in ('matched_application', 'identity_value'):
+            continue
+        groups.setdefault(str(fid).lower(), []).append(c)
+    for fid, conds in groups.items():
+        if len(conds) < 2:
+            continue
+        compiled = [get_pattern(c['value']) if c.get('operator') == 'regex' and c.get('value') not in (None, '*')
+                    else None for c in conds]
+        rows = [r for name, content in (feather_data or {}).items() if str(name).lower() == fid
+                for r in (content if isinstance(content, list) else [content])
+                if isinstance(r, dict) and r.get('_table') != 'feather_metadata']
+        if not any(all(_row_holds(c, r, rx) for c, rx in zip(conds, compiled)) for r in rows):
+            return False
+    return True
+
+
+def _presence_hit(condition, feather_data, matched_application):
+    """(field, feather, value) of the first non-empty value of the condition's
+    field in the feather it names (any feather for '_identity' or none), or
+    None. The match's own application stands for `matched_application` and
+    `identity_value`. feather_metadata rows are not evidence."""
+    field_name = condition.get('field_name')
+    if field_name in ('matched_application', 'identity_value') and matched_application:
+        return (field_name, '_match', str(matched_application))
+    want = condition.get('feather_id')
+    want = None if want in ('_identity', '', None) else str(want).lower()
+    wanted_field = str(field_name).lower()
+    for fname, content in (feather_data or {}).items():
+        if want is not None and str(fname).lower() != want:
+            continue
+        for record in (content if isinstance(content, list) else [content]):
+            if not isinstance(record, dict) or record.get('_table') == 'feather_metadata':
+                continue
+            # Field names without case and a blank value as empty, as the
+            # evaluator's smart lookup reads them.
+            for key, value in record.items():
+                if str(key).lower() == wanted_field and value is not None and str(value).strip():
+                    return (key, fname, str(value))
+    return None
 
 
 class SQLSemanticMapper:
@@ -300,10 +395,16 @@ class SQLSemanticMapper:
         """
         import re
 
-        with self._pattern_cache_lock:
-            if pattern_str in self._pattern_cache:
-                self._pattern_cache.move_to_end(pattern_str)
-                return self._pattern_cache[pattern_str]
+        # Read without the lock: a dict read is atomic, and the lock on every
+        # lookup - each condition of each rule on each match, from four worker
+        # threads - was 55% of the identity run's samples on 76,000 matches.
+        # The lock still guards the insert and eviction below; a hit no longer
+        # refreshes LRU order, which only decides which of a few hundred
+        # patterns is compiled again first. A cached None is an invalid
+        # pattern, so a miss is told apart by the sentinel.
+        cached = self._pattern_cache.get(pattern_str, _NOT_CACHED)
+        if cached is not _NOT_CACHED:
+            return cached
 
         # Compile outside lock to avoid holding it during re.compile
         try:
@@ -686,7 +787,16 @@ class SQLSemanticMapper:
         # Extract rule fields
         rule_id = rule.get('rule_id', 'unknown')
         requires_multi = rule.get('_requires_multi_indicator', False)
-        min_indicators = rule.get('_min_indicators', self.config.get('min_indicators_default', 1))
+        # A rule saved with "_min_indicators": null (or text) is read as the
+        # default: comparing None raised TypeError, which escaped to the
+        # per-match handler and dropped every rule's labels for that match.
+        try:
+            min_indicators = max(1, int(rule.get('_min_indicators')))
+        except (TypeError, ValueError):
+            try:
+                min_indicators = max(1, int(self.config.get('min_indicators_default', 1) or 1))
+            except (TypeError, ValueError):
+                min_indicators = 1
 
         # Backward compatibility: if _requires_multi_indicator is not set, allow single-indicator matching
         if not requires_multi:
@@ -987,7 +1097,6 @@ class SQLSemanticMapper:
 
                     for rule_id, logic_operator, conditions, conditions_json, requires_multi_indicator, min_indicators in parsed_rules:
                         all_conditions_met = True
-                        has_non_wildcard = False
                         matched_conditions_count = 0
 
                         for condition in conditions:
@@ -997,9 +1106,23 @@ class SQLSemanticMapper:
                                 operator = condition['operator']
 
                                 if pattern is None or pattern == "*" or operator == "wildcard":
+                                    # A presence condition: the field is there
+                                    # and not empty, in the feather it names -
+                                    # what config/semantic_mapping reads it as.
+                                    # This path skipped it, so a rule of only
+                                    # presence conditions never fired here and
+                                    # `X AND B.*` never asked whether B existed.
+                                    hit = _presence_hit(condition, feather_data, matched_application)
+                                    if hit is None:
+                                        all_conditions_met = False
+                                        if logic_operator == "AND":
+                                            break
+                                    else:
+                                        matched_conditions_count += 1
+                                        rule_hits.setdefault(rule_id, []).append({
+                                            'field': hit[0], 'feather': hit[1], 'value': hit[2][:200]})
                                     continue
 
-                                has_non_wildcard = True
                                 condition_met = False
                                 # What actually satisfied this condition, so the
                                 # stored evidence can name the value an analyst
@@ -1007,7 +1130,12 @@ class SQLSemanticMapper:
                                 cond_hit = None
 
                                 # STRATEGY 1: Check matched_application column directly
-                                if field_name == 'matched_application' and matched_application:
+                                # identity_value is the match's own identity:
+                                # the Identity phase writes it into the records,
+                                # a Time run never does, so a rule on it
+                                # (identity-generic-executable) could not fire
+                                # there. The match's application is the same value.
+                                if field_name in ('matched_application', 'identity_value') and matched_application:
                                     matched_app_upper = str(matched_application).upper()
 
                                     if operator == "regex":
@@ -1170,10 +1298,17 @@ class SQLSemanticMapper:
                                     break
 
                         # Determine if rule matched based on logic_operator
+                        # A presence condition counts like any other now, so
+                        # a rule no longer needs a non-presence one to fire.
                         if logic_operator == "OR":
-                            rule_matched = has_non_wildcard and matched_conditions_count > 0
+                            rule_matched = matched_conditions_count > 0
                         else:
-                            rule_matched = has_non_wildcard and all_conditions_met
+                            rule_matched = all_conditions_met and bool(conditions)
+                            # Conditions on one feather hold on one row of it.
+                            if rule_matched and not _same_row_ok(
+                                    conditions, feather_data,
+                                    lambda p, _r=rule_id: self._get_cached_pattern(p, _r)):
+                                rule_matched = False
 
                         if rule_matched:
                             rule_dict = {
@@ -1274,11 +1409,7 @@ class SQLSemanticMapper:
                         print(f"[SQL Semantic] Progress: {current_pct:.0f}% - {processed_count[0]} matches processed")
                         
                         # Force GUI update to prevent freezing
-                        try:
-                            from PyQt5.QtWidgets import QApplication
-                            QApplication.processEvents()
-                        except Exception as e:
-                            pass # Ignore if not in GUI context
+                        pump_gui()  # GUI thread only; a worker must not run GUI events
                         
                         last_report_pct[0] = current_pct
                         last_report_time[0] = current_time
@@ -1341,11 +1472,7 @@ class SQLSemanticMapper:
                     print(f"[SQL Semantic] Worker progress: {current_pct:.0f}% - {processed_count[0]} matches processed")
                     
                     # Force GUI update to prevent freezing
-                    try:
-                        from PyQt5.QtWidgets import QApplication
-                        QApplication.processEvents()
-                    except Exception as e:
-                        pass # Ignore if not in GUI context
+                    pump_gui()  # GUI thread only; a worker must not run GUI events
                     
                     last_report_pct[0] = current_pct
                     last_report_time[0] = current_time
@@ -1360,9 +1487,11 @@ class SQLSemanticMapper:
                     future = executor.submit(self._process_match_batch, batch, rules, worker_id, worker_progress_callback)
                     future_to_worker[future] = worker_id
                 
-                # Collect results as workers complete
+                # Collect results in batch order, not as workers finish: the
+                # order the four threads happened to finish in reached the
+                # stored semantic data, so two runs of the same case differed.
                 completed_workers = 0
-                for future in as_completed(future_to_worker):
+                for future in list(future_to_worker):
                     worker_id = future_to_worker[future]
                     try:
                         results, errors, pattern_counts = future.result()
@@ -1599,30 +1728,16 @@ class SQLSemanticMapper:
                 conditions = json.loads(conditions_json)
                 for cond in conditions:
                     if cond['operator'] == 'regex' and cond['value'] != '*':
-                        # Extract alternatives from regex (split on |).
-                        #
-                        # Strip group constructs FIRST. A guard such as
-                        # `(?<![A-Za-z0-9])CMD` must not be torn apart here:
-                        # splitting a pattern that contains `(?:a|b)` on `|`
-                        # yields fragments that clean up into junk terms, and
-                        # the real term is lost. Terms are what put a match in
-                        # the candidate set, so losing one silently drops
-                        # matches from the scan entirely.
-                        pattern_text = re.sub(r'\(\?[^)]*\)', '', cond['value'])
-                        alternatives = pattern_text.split('|')
-                        for alt in alternatives:
-                            # Improved cleaning: handle common patterns like CHROME\.EXE
-                            # First, replace escaped dots with spaces to separate words
-                            clean = alt.replace('\\.', ' ')
-                            # Remove other regex special characters but keep the content
-                            clean = re.sub(r'[\\+*?\[\](){}^$.]', '', clean)
-                            # Split on spaces and extract individual words
-                            words = clean.split()
-                            for word in words:
-                                word = word.strip()
-                                # Only add words that are 3+ characters and alphanumeric
-                                if len(word) >= 3 and word.replace('_', '').replace('-', '').isalnum():
-                                    fts_terms.add(word.lower())
+                        # Terms are what put a match in the candidate set, so
+                        # a term lost here silently drops matches from the scan.
+                        for words in _regex_term_alternatives(cond['value']):
+                            fts_terms.update(w.lower() for w in words)
+                    elif cond['operator'] == 'equals' and cond['value'] != '*':
+                        # A whole value of one word (an EventID, a setting
+                        # name) is its own term.
+                        value = str(cond['value']).strip()
+                        if _is_term_word(value):
+                            fts_terms.add(value.lower())
                     elif cond['operator'] == 'contains' and cond['value'] != '*':
                         # Also extract terms from 'contains' operators
                         value = cond['value'].strip()
@@ -1632,6 +1747,47 @@ class SQLSemanticMapper:
                 logger.debug(f"[FTS5] Error extracting terms from rule {rule_id}: {e}")
                 continue
         return fts_terms
+
+    @staticmethod
+    def _terms_miss_a_condition(rules) -> Optional[str]:
+        """The first condition the FTS5 terms cannot find, or None.
+
+        A candidate reaches the rules only if one of its terms is in the
+        match. A regex alternative with no 3-character word (`\\.JS$`) or an
+        `equals` condition adds no term, so a match that only such a condition
+        would label was never a candidate. On `matched_application` the
+        app-name pass re-adds those (_app_name_extra_candidates); on any other
+        field the scan must read every match.
+
+        An AND rule needs only one condition with a term: whatever it labels
+        holds that condition, so it is a candidate. An OR rule needs a term in
+        every condition. A presence condition (wildcard) never has one."""
+        for rule_id, _logic, conditions_json, _multi, _min in rules:
+            try:
+                conditions = json.loads(conditions_json)
+            except Exception:
+                continue
+            misses = []
+            for cond in conditions:
+                op, value = cond.get('operator'), cond.get('value')
+                field = cond.get('field_name')
+                if value in (None, '*') or op == 'wildcard':
+                    misses.append(f"a presence condition ({field})")
+                elif field in ('matched_application', 'identity_value'):
+                    continue
+                elif op == 'equals':
+                    if not _is_term_word(str(value).strip()):
+                        misses.append(f"{field} equals {value!r}")
+                elif op == 'regex':
+                    if not all(_regex_term_alternatives(value)):
+                        misses.append(f"{field} ~ {value!r}")
+                elif op == 'contains' and len(str(value).strip()) < 3:
+                    misses.append(f"{field} contains {value!r}")
+            if not misses:
+                continue
+            if str(_logic).upper() == 'OR' or len(misses) == len(conditions):
+                return f"{rule_id}: {misses[0]}"
+        return None
 
     def _estimate_term_coverage(self, fts_terms, total_matches, sample_size=None):
         """Share (0..1) of this execution's matches the FTS5 prefilter would
@@ -1769,6 +1925,11 @@ class SQLSemanticMapper:
         # can help. Skipping it only ever ADDS candidates - the rule regexes
         # below still decide every label.
         use_fts = bool(fts_terms)
+        missed = self._terms_miss_a_condition(rules) if use_fts else None
+        if missed:
+            logger.info(f"[SQL Semantic] FTS5 prefilter skipped: a condition has no search term "
+                        f"({missed}), so every match is scanned")
+            use_fts = False
         if use_fts:
             share = self._estimate_term_coverage(fts_terms, total_matches)
             threshold = self.config.get('fts_skip_coverage', 0.5)
@@ -1844,7 +2005,9 @@ class SQLSemanticMapper:
         """
         if fts_available:
             # Requirement 6.4: limit to 1000 terms
-            fts_query = " OR ".join(f'"{term}"' for term in list(fts_terms)[:1000])
+            # Sorted before the cut: a set's order changes in every process,
+            # so which terms survived the 1000-term limit did too.
+            fts_query = " OR ".join(f'"{term}"' for term in sorted(fts_terms)[:1000])
             if len(fts_terms) > 1000:
                 logger.warning(f"[SQL Semantic] FTS5 query limited to 1000 terms from {len(fts_terms)} total terms")
             results, errors, pattern_match_counts, seen = self._match_streamed("""
@@ -2119,11 +2282,7 @@ class SQLSemanticMapper:
                 print(f"[SQL Semantic] Build progress: {progress_pct:.0f}% - {len(update_data)} matches with semantic data")
                 
                 # Force GUI update to prevent freezing
-                try:
-                    from PyQt5.QtWidgets import QApplication
-                    QApplication.processEvents()
-                except Exception as e:
-                    pass # Ignore if not in GUI context
+                pump_gui()  # GUI thread only; a worker must not run GUI events
         
         if build_errors > 0:
             logger.info(f"[SQL Semantic] WARNING: {build_errors} errors occurred during data building")
@@ -2180,11 +2339,7 @@ class SQLSemanticMapper:
                         print(f"[SQL Semantic] Update progress: {progress_pct:.0f}% - {successful_updates} records updated")
                         
                         # Force GUI update to prevent freezing
-                        try:
-                            from PyQt5.QtWidgets import QApplication
-                            QApplication.processEvents()
-                        except Exception as e:
-                            pass # Ignore if not in GUI context
+                        pump_gui()  # GUI thread only; a worker must not run GUI events
                 
                 except sqlite3.OperationalError as e:
                     # Database lock or operational error (Requirement 8.5)

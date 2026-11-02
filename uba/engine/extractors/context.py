@@ -1,5 +1,6 @@
 """Shared state handed to every extractor."""
 
+import bisect
 import logging
 import ntpath
 from typing import Dict, List, Optional, Tuple
@@ -66,11 +67,16 @@ class ExtractorContext:
             needle_alt = needle + ".exe"
         else:
             needle_alt = needle
+        # The index is sorted by time, so jump straight to the window instead
+        # of walking every 4688 row before it - called once per UserAssist,
+        # BAM and Prefetch run, that walk was quadratic on a busy log.
+        index = self._index_4688
+        lo = bisect.bisect_left(index, (center - delta_seconds,))
         hits = []
-        for epoch, basename, rowid in self._index_4688:
-            if epoch < center - delta_seconds:
-                continue
-            if epoch > center + delta_seconds:
+        upper = center + delta_seconds
+        for i in range(lo, len(index)):
+            epoch, basename, rowid = index[i]
+            if epoch > upper:
                 break
             if basename in (needle, needle_alt):
                 hits.append(rowid)

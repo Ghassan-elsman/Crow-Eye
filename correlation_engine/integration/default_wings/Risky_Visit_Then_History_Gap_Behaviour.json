@@ -1,0 +1,52 @@
+{
+  "config_name": "risky_visit_then_history_gap_behaviour",
+  "wing_name": "Risky Site, Then a Gap in Browser History (Behaviour)",
+  "wing_id": "default_behaviour_history_gap_001",
+  "wing_category": "behaviour",
+  "description": "One person visits an anonymising service or a hacking resource and, within three days, their browser history goes silent while the same profile was still in use (other records show activity on days the history does not). UBA rules: browser_visit_anonymiser / browser_visit_hacking_resource then browser_history_gap. A gap is consistent with history being cleared; private windows and a browser that was not used leave the same shape, so read the corroborating days in the evidence.",
+  "proves": "A person's browser history went silent soon after a risky site visit",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Anonymiser or hacking resource visited",
+      "rule_id": [
+        "browser_visit_anonymiser",
+        "browser_visit_hacking_resource"
+      ]
+    },
+    {
+      "label": "Browser history goes silent",
+      "rule_id": "browser_history_gap"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 4320,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1070"
+    ],
+    "tactic": [
+      "defense_evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "anti_forensics",
+    "browser",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "intrusion"
+  ]
+}

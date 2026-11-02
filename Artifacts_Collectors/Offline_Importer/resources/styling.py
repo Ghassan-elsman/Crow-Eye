@@ -132,14 +132,14 @@ def get_lineedit_style() -> str:
         QLineEdit {{
             background-color: {AppColors.BG_SECONDARY};
             color: {AppColors.TEXT_PRIMARY};
-            border: 1px solid {AppColors.BORDER_DEFAULT};
+            border: 3px solid {AppColors.BORDER_DEFAULT};
             border-radius: 4px;
             padding: {AppSpacing.PADDING_NORMAL};
             font-family: {AppFonts.FAMILY_DEFAULT};
             font-size: {AppFonts.SIZE_NORMAL};
         }}
         QLineEdit:focus {{
-            border: 1px solid {AppColors.BORDER_FOCUS};
+            border: 3px solid {AppColors.BORDER_FOCUS};
         }}
         QLineEdit:disabled {{
             background-color: {AppColors.BG_HOVER};
@@ -153,14 +153,14 @@ def get_combobox_style() -> str:
         QComboBox {{
             background-color: {AppColors.BG_SECONDARY};
             color: {AppColors.TEXT_PRIMARY};
-            border: 1px solid {AppColors.BORDER_DEFAULT};
+            border: 3px solid {AppColors.BORDER_DEFAULT};
             border-radius: 4px;
             padding: {AppSpacing.PADDING_NORMAL};
             font-family: {AppFonts.FAMILY_DEFAULT};
             font-size: {AppFonts.SIZE_NORMAL};
         }}
         QComboBox:hover {{
-            border: 1px solid {AppColors.BORDER_FOCUS};
+            border: 3px solid {AppColors.BORDER_FOCUS};
         }}
         QComboBox::drop-down {{
             border: none;
@@ -210,7 +210,7 @@ def get_progressbar_style() -> str:
     return f"""
         QProgressBar {{
             background-color: {AppColors.BG_SECONDARY};
-            border: 1px solid {AppColors.BORDER_DEFAULT};
+            border: 3px solid {AppColors.BORDER_DEFAULT};
             border-radius: 4px;
             text-align: center;
             color: {AppColors.TEXT_PRIMARY};
@@ -231,7 +231,7 @@ def get_table_style() -> str:
             background-color: {AppColors.BG_SECONDARY};
             color: {AppColors.TEXT_PRIMARY};
             gridline-color: {AppColors.BORDER_DEFAULT};
-            border: 1px solid {AppColors.BORDER_DEFAULT};
+            border: 3px solid {AppColors.BORDER_DEFAULT};
             font-family: {AppFonts.FAMILY_DEFAULT};
             font-size: {AppFonts.SIZE_NORMAL};
         }}
@@ -259,7 +259,7 @@ def get_panel_style() -> str:
     return f"""
         QFrame {{
             background-color: {AppColors.BG_PANELS};
-            border: 1px solid {AppColors.BORDER_DEFAULT};
+            border: 3px solid {AppColors.BORDER_DEFAULT};
             border-radius: 4px;
             padding: {AppSpacing.PADDING_LARGE};
         }}

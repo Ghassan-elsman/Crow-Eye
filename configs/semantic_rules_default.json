@@ -145,7 +145,7 @@
         {
           "feather_id": "_identity",
           "field_name": "matched_application",
-          "value": "TEAMVIEWER|ANYDESK|(?<![A-Za-z0-9])VNC|LOGMEIN|AMMYY|ULTRAVIEWER|RUSTDESK|MSTSC|RDPCLIP",
+          "value": "TEAMVIEWER|ANYDESK|(?<![A-Za-z0-9])VNC|LOGMEIN|AMMYY|ULTRAVIEWER|RUSTDESK|MSTSC|RDPCLIP|SCREENCONNECT|SPLASHTOP|SRSERVICE|SRMANAGER|ATERAAGENT|NINJARMM|ZOHO.?ASSIST|ZA_CONNECT|RADMIN|RUTSERV|RFUSCLIENT|MESHAGENT|ACTION1|SIMPLEHELP|SIMPLESERVICE|REMOTEPCSERVICE|SUPREMO|PARSECD|REMOTING_HOST|TACTICALRMM|GOTOASSIST|GOTORESOLVE|DWAGENT|GETSCREEN|QUICKASSIST",
           "operator": "regex"
         }
       ],
@@ -764,13 +764,13 @@
         {
           "feather_id": "prefetch",
           "field_name": "executable_name",
-          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9])FTP|RCLONE",
+          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9-])FTP|RCLONE|MEGACMD|MEGA-CMD|MEGACLIENT|RESTIC|AZCOPY|GSUTIL|(?<![A-Za-z0-9])CROC",
           "operator": "regex"
         },
         {
           "feather_id": "srum_network",
           "field_name": "app_name",
-          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9])FTP|RCLONE",
+          "value": "CURL|WGET|POWERSHELL|BITSADMIN|CERTUTIL|(?<![A-Za-z0-9-])FTP|RCLONE|MEGACMD|MEGA-CMD|MEGACLIENT|RESTIC|AZCOPY|GSUTIL|(?<![A-Za-z0-9])CROC",
           "operator": "regex"
         }
       ],
@@ -1044,7 +1044,7 @@
         {
           "feather_id": "prefetch",
           "field_name": "executable_name",
-          "value": "NETCAT|NC\\.EXE|NCAT|SOCAT|PLINK|NGROK",
+          "value": "NETCAT|(?<![A-Za-z0-9])NC\\.EXE|(?<![A-Za-z0-9])NCAT|SOCAT|PLINK|NGROK|CLOUDFLARED|CHISEL|(?<![A-Za-z0-9])FRPC|LOCLX|(?<![A-Za-z0-9])GOST\\.EXE|PINGGY|ZROK",
           "operator": "regex"
         },
         {
@@ -1364,7 +1364,7 @@
       ]
     }
   ],
-  "_modified": "2026-02-04T05:04:21.781182",
+  "_modified": "2026-11-01T00:00:00",
   "_original_backup": "semantic_rules_default_backup_20260126_014211.json",
   "_multi_indicator_update": "2026-02-04T04:56:20.051776",
   "_and_logic_update": "2026-02-04T05:04:21.781182"

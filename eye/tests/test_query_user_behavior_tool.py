@@ -157,3 +157,56 @@ class TheHandlerAnswers(unittest.TestCase):
         from eye.services.forensic_handlers import ForensicHandlers
         r = ForensicHandlers(_Cm(None)).handle_query_user_behavior({})
         self.assertFalse(r["success"])
+
+
+class TurnedOffRulesAreNamed(unittest.TestCase):
+    """A rule an administrator turned off is listed as off - so Eye never
+    reads its missing events as "this did not happen" - and the stored
+    analysis the UBA window wrote is the one Eye answers from."""
+
+    @classmethod
+    def setUpClass(cls):
+        import tempfile
+        from unittest import mock
+        from uba.tests import conftest
+        tmp = pathlib.Path(tempfile.mkdtemp(prefix="eye_uba_off_"))
+        conftest.artifacts_dir.__wrapped__(tmp)
+        (tmp / "Target_Artifacts" / "NOT_A_REAL_CASE").write_text("fixture", encoding="utf-8")
+        cls.tmp = tmp
+        # This test's own global settings, never the analyst's.
+        cls.env = mock.patch.dict(os.environ, {"APPDATA": str(tmp / "settings")})
+        cls.env.start()
+        from uba.engine import rule_switches
+        rule_switches.set_rule_enabled("usb_connected", False)
+        # The UBA window's analysis, stored before Eye is asked anything.
+        from uba.engine.behavior_engine import BehaviorEngine
+        window = BehaviorEngine(str(tmp / "Target_Artifacts"))
+        window.run_or_load()
+        window.close()
+        from eye.services.forensic_handlers import ForensicHandlers
+        cls.cm = _Cm(str(tmp))
+        cls.r = ForensicHandlers(cls.cm).handle_query_user_behavior({"limit": 300})
+
+    @classmethod
+    def tearDownClass(cls):
+        import shutil
+        engine = (getattr(cls.cm, "_uba_cache", None) or {}).get("engine")
+        if engine is not None:
+            engine.close()
+        cls.env.stop()
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_off_rules_are_listed_as_not_evidence(self):
+        off = self.r["rules_turned_off"]
+        self.assertIn("usb_connected", [x["rule"] for x in off["rules"]])
+        self.assertIn("absence is not evidence", off["meaning"])
+        self.assertNotIn("usb_connected", [x["rule"] for x in
+                                           (self.r.get("rules_unavailable") or {}).get("examples", [])])
+
+    def test_it_reads_the_stored_analysis(self):
+        self.assertTrue(self.r["analysis"]["loaded_from_store"])
+        self.assertFalse(self.r["analysis"]["ran_now"])
+
+    def test_events_carry_the_person_key(self):
+        sids = {e["actor_sid"] for e in self.r["events"] if e["actor"] == "Alice"}
+        self.assertEqual(sids, {"S-1-5-21-111-222-333-1001"})

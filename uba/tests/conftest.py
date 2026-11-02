@@ -23,6 +23,21 @@ def _mk(path, schema, rows_by_table):
     conn.close()
 
 
+@pytest.fixture(autouse=True)
+def _isolated_settings(tmp_path_factory, monkeypatch):
+    """Every UBA test reads and writes its own global_config.json.
+
+    Rule switches (uba_disabled_rules) live in Crow-Eye's global settings.
+    Without this a rule the analyst turned off in the real app would vanish
+    from these tests, and a test that turns one off would turn it off in the
+    real app.
+    """
+    home = tmp_path_factory.mktemp("crow_eye_settings")
+    monkeypatch.setenv("APPDATA", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def artifacts_dir(tmp_path):
     """A small but schema-accurate Target_Artifacts directory."""
@@ -56,9 +71,11 @@ def artifacts_dir(tmp_path):
             execution_flags TEXT, parsed_at TEXT);
         CREATE TABLE Shellbags (file_name TEXT, parent_path TEXT,
             accessed_date TEXT, modified_date TEXT, created_date TEXT,
-            registry_path TEXT, bag_views TEXT);
+            registry_path TEXT, bag_views TEXT, user_name TEXT);
         CREATE TABLE USBDevices (device_id TEXT, description TEXT,
             manufacturer TEXT, friendly_name TEXT, last_connected TEXT);
+        CREATE TABLE USBStorageVolumes (device_id TEXT, volume_guid TEXT,
+            volume_name TEXT, drive_letter TEXT, parsed_at TEXT);
         CREATE TABLE InstalledSoftware (display_name TEXT, display_version TEXT,
             publisher TEXT, install_date TEXT, install_location TEXT,
             uninstall_string TEXT, timestamp TEXT);
@@ -169,15 +186,20 @@ def artifacts_dir(tmp_path):
         # extractor's three branches are all reached. Before this the fixture
         # had no bag_views column at all and two of them never ran.
         "Shellbags": [
+            # user_name is the hive the row was read from - the person key a
+            # multi-profile machine needs (user_identity.USER_NAME_TABLES).
             {"file_name": "Secret", "parent_path": "C:\\Users\\Alice\\Documents",
              "accessed_date": "2026-06-12 13:30:00", "modified_date": "",
-             "created_date": "", "registry_path": "", "bag_views": None},
+             "created_date": "", "registry_path": "", "bag_views": None,
+             "user_name": "Alice"},
             {"file_name": "Reports", "parent_path": "C:\\Users\\Alice\\Documents",
              "accessed_date": "2026-06-12 13:31:00", "modified_date": "",
-             "created_date": "", "registry_path": "", "bag_views": "Shell"},
+             "created_date": "", "registry_path": "", "bag_views": "Shell",
+             "user_name": "Alice"},
             {"file_name": "Exports", "parent_path": "C:\\Users\\Alice\\Documents",
              "accessed_date": "2026-06-12 13:32:00", "modified_date": "",
-             "created_date": "", "registry_path": "", "bag_views": "ComDlg"}],
+             "created_date": "", "registry_path": "", "bag_views": "ComDlg",
+             "user_name": "Alice"}],
         "USBDevices": [
             {"device_id": "USB\\VID_1234", "description": "Kingston",
              "manufacturer": "Kingston", "friendly_name": "Kingston DataTraveler",
@@ -291,10 +313,31 @@ def artifacts_dir(tmp_path):
              "friendly_name": "Alice's Headset", "details": "",
              "key_path": "", "last_written": "2026-06-09 16:00:00",
              "time_basis": "key upper bound", "parsed_at": ""}],
+        # E: and C: and the second GUID are internal; F: and the first GUID
+        # are the USB stick's (USBStorageVolumes); one share.
         "MountPoints2": [
             {"user_name": "Alice", "mount_id": "E", "mount_type": "drive letter",
              "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            {"user_name": "Alice", "mount_id": "C", "mount_type": "drive letter",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            {"user_name": "Alice", "mount_id": "F", "mount_type": "drive letter",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            {"user_name": "Alice", "mount_id": "{aaaa1111-0000-0000-0000-000000000001}", "mount_type": "volume GUID",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            {"user_name": "Alice", "mount_id": "{bbbb2222-0000-0000-0000-000000000002}", "mount_type": "volume GUID",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
+             "time_basis": "key upper bound", "parsed_at": ""},
+            {"user_name": "Alice", "mount_id": "##fileserver#finance", "mount_type": "network share",
+             "key_path": "", "last_written": "2026-06-10 17:00:00",
              "time_basis": "key upper bound", "parsed_at": ""}],
+        "USBStorageVolumes": [
+            {"device_id": "Disk&Ven_Kingston&Prod_DT&Rev_1.00\0011", "volume_guid":
+             "{AAAA1111-0000-0000-0000-000000000001}", "volume_name": "",
+             "drive_letter": "F:", "parsed_at": ""}],
         "OfficeDocuments": [
             {"user_name": "Alice", "application": "Word", "version": "16.0",
              "kind": "File MRU", "document": "C:\\Users\\Alice\\report.docx",
@@ -604,17 +647,28 @@ def artifacts_dir(tmp_path):
 
     # LnkDB.db ----------------------------------------------------------
     _mk(str(d / "LnkDB.db"), """
-        CREATE TABLE LNK_Files (Source_Name TEXT, Local_Path TEXT,
-            Time_Access TEXT, Time_Modification TEXT);
-        CREATE TABLE Automatic_JumpLists (AppDesc TEXT, Local_Path TEXT, Time_Access TEXT);
-        CREATE TABLE Custom_JumpLists (entry_id INTEGER, Source_Name TEXT, AppDesc TEXT,
-            Local_Path TEXT, Time_Access TEXT);
+        CREATE TABLE LNK_Files (Source_Name TEXT, Source_Path TEXT,
+            Local_Path TEXT, Time_Access TEXT, Time_Modification TEXT,
+            Volume_Type TEXT, Network_Share_Name TEXT);
+        CREATE TABLE Automatic_JumpLists (Source_Name TEXT, Source_Path TEXT,
+            AppDesc TEXT, Local_Path TEXT, Time_Access TEXT);
+        CREATE TABLE Custom_JumpLists (entry_id INTEGER, Source_Name TEXT,
+            Source_Path TEXT, AppDesc TEXT, Local_Path TEXT, Time_Access TEXT);
     """, {
+        # Source_Path is where the shortcut itself lives: the profile folder it
+        # sits in names its owner. The table had no Volume_Type or
+        # Network_Share_Name here, which the extractor selects, so the LNK
+        # query failed and this row never produced an event.
         "LNK_Files": [
-            {"Source_Name": "budget.lnk", "Local_Path": "C:\\Users\\Alice\\Documents\\budget.xlsx",
-             "Time_Access": "2026-06-12 10:30:00", "Time_Modification": ""}],
+            {"Source_Name": "budget.lnk",
+             "Source_Path": "C:\\Users\\Alice\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\budget.lnk",
+             "Local_Path": "C:\\Users\\Alice\\Documents\\budget.xlsx",
+             "Time_Access": "2026-06-12 10:30:00", "Time_Modification": "",
+             "Volume_Type": "Fixed", "Network_Share_Name": ""}],
         "Custom_JumpLists": [
-            {"entry_id": 1, "Source_Name": "Windows Terminal", "AppDesc": "Windows Terminal",
+            {"entry_id": 1, "Source_Name": "Windows Terminal",
+             "Source_Path": "C:\\Users\\Alice\\AppData\\Roaming\\Microsoft\\Windows\\Recent\\CustomDestinations\\1a.customDestinations-ms",
+             "AppDesc": "Windows Terminal",
              "Local_Path": "C:\\Users\\Alice\\project\\notes.txt",
              "Time_Access": "2026-06-12 11:00:00"}],
     })

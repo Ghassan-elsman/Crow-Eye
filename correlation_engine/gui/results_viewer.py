@@ -282,11 +282,11 @@ def _matches_by_feather(feather_statistics, limit=10):
     return dict(sorted(data.items(), key=lambda kv: kv[1], reverse=True)[:limit])
 
 
-from ui.site_theme import (font as _site_font, chart_color, CHART_PALETTE, STATUS_COLORS,
+from ui.app_theme import (font as _theme_font, chart_color, CHART_PALETTE, STATUS_COLORS,
                            SCORE_COLORS, severity_kind, set_card, set_role, set_status, set_variant,
-                           keep_style, apply_site_theme)
+                           keep_style, apply_theme)
 
-# Chart surfaces in the site's tokens (ui/site_theme.py): the card behind,
+# Chart surfaces in the site's tokens (ui/app_theme.py): the card behind,
 # light text, hairline grid. Series colours come from chart_color(), so one
 # feather keeps one colour in every chart.
 _CHART_BG = "#0F172A"           # the card the charts sit on
@@ -307,6 +307,11 @@ def _series_color(label, order=None) -> QColor:
 def _feather_order(feather_statistics) -> list:
     """Every feather of a run, the key list both Summary charts colour by."""
     return [fid for fid in (feather_statistics or {}) if not str(fid).startswith('_')]
+
+
+def _not_skipped(conn, alias=""):
+    from ..engine.database_persistence import not_skipped_sql
+    return not_skipped_sql(conn, alias)
 
 
 class PyQt5BarChart(QWidget):
@@ -370,7 +375,7 @@ class PyQt5BarChart(QWidget):
 
         if not self.data or chart_width <= 0 or chart_height <= 0:
             painter.setPen(QPen(QColor(_CHART_MUTED)))
-            painter.setFont(_site_font("ui", 13))
+            painter.setFont(_theme_font("ui", 13))
             painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
             return
 
@@ -381,7 +386,7 @@ class PyQt5BarChart(QWidget):
 
         # Draw title
         painter.setPen(QPen(QColor(_CHART_TEXT)))
-        painter.setFont(_site_font("ui", 15, QFont.Bold))
+        painter.setFont(_theme_font("ui", 15, QFont.Bold))
         painter.drawText(QRect(0, 5, width, 30), Qt.AlignCenter, self.title)
 
         # Draw Y-axis label
@@ -389,13 +394,13 @@ class PyQt5BarChart(QWidget):
         painter.translate(15, height // 2)
         painter.rotate(-90)
         painter.setPen(QPen(QColor(_CHART_MUTED)))
-        painter.setFont(_site_font("ui", 12, QFont.DemiBold))
+        painter.setFont(_theme_font("ui", 12, QFont.DemiBold))
         painter.drawText(QRect(-50, -10, 100, 20), Qt.AlignCenter, self.ylabel)
         painter.restore()
 
         # Draw Y-axis grid lines and labels
         num_grid_lines = 5
-        painter.setFont(_site_font("mono", 11))
+        painter.setFont(_theme_font("mono", 11))
 
         for i in range(num_grid_lines + 1):
             y = top_margin + chart_height - (i * chart_height // num_grid_lines)
@@ -421,8 +426,8 @@ class PyQt5BarChart(QWidget):
 
         # Clear bar rectangles
         self.bar_rects = []
-        value_font = _site_font("mono", 11, QFont.DemiBold)
-        label_font = _site_font("ui", 12)
+        value_font = _theme_font("mono", 11, QFont.DemiBold)
+        label_font = _theme_font("ui", 12)
 
         # Draw bars
         for i, (label, value) in enumerate(self.data.items()):
@@ -564,13 +569,13 @@ class PyQt5PieChart(QWidget):
 
         if not self.data:
             painter.setPen(QPen(QColor(_CHART_MUTED)))
-            painter.setFont(_site_font("ui", 13))
+            painter.setFont(_theme_font("ui", 13))
             painter.drawText(self.rect(), Qt.AlignCenter, "No data available")
             return
 
         # Draw title
         painter.setPen(QPen(QColor(_CHART_TEXT)))
-        painter.setFont(_site_font("ui", 14, QFont.Bold))
+        painter.setFont(_theme_font("ui", 14, QFont.Bold))
         painter.drawText(QRect(0, 5, width, 25), Qt.AlignCenter, self.title)
 
         # Calculate pie dimensions
@@ -613,13 +618,13 @@ class PyQt5PieChart(QWidget):
 
             # Draw "Feathers:" title
             painter.setPen(QPen(QColor(_CHART_ACCENT)))
-            painter.setFont(_site_font("ui", 12, QFont.Bold, upper=True, spacing=106))
+            painter.setFont(_theme_font("ui", 12, QFont.Bold, upper=True, spacing=106))
             painter.drawText(legend_x, legend_y, "Feathers:")
             legend_y += 20
 
             # Draw legend items
-            name_font = _site_font("ui", 12)
-            stats_font = _site_font("ui", 12)
+            name_font = _theme_font("ui", 12)
+            stats_font = _theme_font("ui", 12)
 
             legend_items = list(self.data.items())
 
@@ -831,7 +836,7 @@ class PieChartWithBreakdown(QWidget):
 
             # Feather name and stats
             text_label = QLabel(f"{feather_name}")
-            text_label.setFont(_site_font("ui", 12, QFont.DemiBold))
+            text_label.setFont(_theme_font("ui", 12, QFont.DemiBold))
             text_label.setWordWrap(False)
             text_label.setToolTip(f"{feather_name}\nRecords: {int(count):,}\nPercentage: {percentage:.1f}%")
             item_layout.addWidget(text_label, stretch=1)
@@ -883,7 +888,8 @@ def _pct(value) -> str:
 
 
 from .ui_styling import CorrelationEngineStyles
-from .crow_eye_icons import apply_status_to_label, CrowEyeIcons
+from .crow_eye_icons import (apply_status_to_label, CrowEyeIcons, engine_icon, engine_wing_icon,
+                             icon_table_item, pair_icon_size)
 
 
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
@@ -905,8 +911,8 @@ class LoadingProgressDialog(QProgressDialog):
         self.setMinimumWidth(350)
         self.setMinimumHeight(120)
         
-        # The site look: card, gradient bar, ghost Cancel (ui/site_theme.py)
-        apply_site_theme(self)
+        # The site look: card, gradient bar, ghost Cancel (ui/app_theme.py)
+        apply_theme(self)
         for button in self.findChildren(QPushButton):
             set_variant(button, "ghost")
     
@@ -1130,7 +1136,7 @@ class MatchDetailViewer(QWidget):
         feather_layout.setSpacing(5)
         
         feather_label = QLabel("Feather Records")
-        feather_label.setFont(_site_font("ui", 13, QFont.Bold))
+        feather_label.setFont(_theme_font("ui", 13, QFont.Bold))
         feather_layout.addWidget(feather_label)
         
         # Feather selector label
@@ -1170,7 +1176,7 @@ class MatchDetailViewer(QWidget):
         semantic_icon = QLabel()
         semantic_icon.setPixmap(CrowEyeIcons.settings().pixmap(14, 14))
         semantic_label = QLabel("Semantic Mappings")
-        semantic_label.setFont(_site_font("ui", 13, QFont.Bold))
+        semantic_label.setFont(_theme_font("ui", 13, QFont.Bold))
         semantic_header.addWidget(semantic_icon)
         semantic_header.addWidget(semantic_label)
         semantic_header.addStretch()
@@ -1305,7 +1311,7 @@ class MatchDetailViewer(QWidget):
                 
                 # Field column (bold)
                 field_item = QTableWidgetItem(key)
-                field_item.setFont(_site_font("ui", 12, QFont.Bold))
+                field_item.setFont(_theme_font("ui", 12, QFont.Bold))
                 self.feather_table.setItem(row, 0, field_item)
                 
                 # Value column
@@ -1436,6 +1442,9 @@ class DynamicResultsTabWidget(QWidget):
         self._identity_run_wing_names: List[str] = []
         self._identity_tab_container: Optional[QWidget] = None
         self._identity_tab_viewer: Optional[QWidget] = None
+        # Behaviour Wings of a live run share one "Behaviour Results" tab too.
+        self._behaviour_tab_container: Optional[QWidget] = None
+        self._behaviour_tab_viewer: Optional[QWidget] = None
         
         # Use results tab widget
         self.enhanced_tab_widget = ResultsTabWidget()
@@ -1691,7 +1700,7 @@ class DynamicResultsTabWidget(QWidget):
             for row, (feather_id, count) in enumerate(sorted_data):
                 percentage = (count / total_count * 100) if total_count > 0 else 0
                 
-                table.setItem(row, 0, QTableWidgetItem(feather_id))
+                table.setItem(row, 0, icon_table_item(CrowEyeIcons.feather(), feather_id))
                 table.setItem(row, 1, QTableWidgetItem(f"{count:,}"))
                 table.setItem(row, 2, QTableWidgetItem(f"{percentage:.1f}%"))
             
@@ -1920,7 +1929,9 @@ class DynamicResultsTabWidget(QWidget):
             
             print(f"[DynamicResultsTabWidget] DEBUG: engine_type = {self.engine_type}")
             
-            if self.engine_type == "identity_based" and feather_metadata:
+            from ..engine import engine_registry
+            view = engine_registry.results_view_or_none(self.engine_type)
+            if view == 'identity' and feather_metadata:
                 print("[DynamicResultsTabWidget] Rendering Identity Engine charts...")
                 try:
                     chart_widget = self._render_identity_charts(feather_metadata)
@@ -1930,7 +1941,7 @@ class DynamicResultsTabWidget(QWidget):
                     import traceback
                     traceback.print_exc()
             
-            elif self.engine_type in ["time_window_scanning", "time_based"]:
+            elif view == 'timebased':
                 # Try to get time_windows data
                 print("[DynamicResultsTabWidget] Rendering Time-Based Engine charts...")
                 try:
@@ -1980,8 +1991,11 @@ class DynamicResultsTabWidget(QWidget):
                 # Detailed results will be shown in wing-specific tabs (Requirements 1.1, 1.2)
                 main_layout.addWidget(chart_section, stretch=1)
                 
-                # Add chart container to Summary tab (index 0)
-                summary_tab = self.enhanced_tab_widget.tab_widget.widget(0)
+                # Add chart container to the Summary tab - found by its name: the tabs
+                # are movable, so index 0 is not always Summary.
+                _tabs = self.enhanced_tab_widget.tab_widget
+                _i = next((k for k in range(_tabs.count()) if _tabs.tabText(k).strip() == "Summary"), -1)
+                summary_tab = _tabs.widget(_i) if _i >= 0 else None
                 if summary_tab:
                     summary_layout = summary_tab.layout()
                     if summary_layout:
@@ -2349,8 +2363,14 @@ class DynamicResultsTabWidget(QWidget):
 
             # Identity wings share ONE unified tab (with wing attribution per
             # identity) instead of one tab per wing
-            if engine_type == 'identity_based':
+            from ..engine import engine_registry
+            view = engine_registry.results_view_or_none(engine_type)
+            if view is None:
+                return None
+            if view == 'identity':
                 return self.create_or_update_identity_tab(wing_summary, show_progress=show_progress)
+            if view == 'behaviour':
+                return self.create_or_update_behaviour_tab([wing_summary])
 
             # Create container widget for the tab
             tab_container = QWidget()
@@ -2381,6 +2401,7 @@ class DynamicResultsTabWidget(QWidget):
 
             # Add tab to ResultsTabWidget with wing name
             tab_index = self.enhanced_tab_widget.tab_widget.addTab(tab_container, wing_name)
+            self.enhanced_tab_widget.tab_widget.setTabIcon(tab_index, engine_icon(engine_type))
             _retheme(self, tab_container)
 
             print(f"[DynamicResultsTabWidget] [OK] Wing tab created: {wing_name}")
@@ -2461,6 +2482,7 @@ class DynamicResultsTabWidget(QWidget):
                 self._identity_tab_container = container
                 self._identity_tab_viewer = viewer
                 tab_index = tab_widget.addTab(container, tab_title)
+                tab_widget.setTabIcon(tab_index, engine_icon("identity_based"))
                 _retheme(self, container)
                 print(f"[DynamicResultsTabWidget] [OK] Unified identity tab created: {tab_title}")
                 return tab_index
@@ -2511,10 +2533,13 @@ class DynamicResultsTabWidget(QWidget):
         try:
             tab_widget = self.enhanced_tab_widget.tab_widget
 
+            from ..engine import engine_registry
             identity_wings = [w for w in wing_summaries
-                              if w.get('engine_type') == 'identity_based']
+                              if engine_registry.results_view_or_none(w.get('engine_type')) == 'identity']
             other_wings = [w for w in wing_summaries
-                           if w.get('engine_type') != 'identity_based']
+                           if engine_registry.results_view_or_none(w.get('engine_type')) == 'timebased']
+            behaviour_wings = [w for w in wing_summaries
+                               if engine_registry.results_view_or_none(w.get('engine_type')) == 'behaviour']
 
             show_index = None
 
@@ -2570,6 +2595,7 @@ class DynamicResultsTabWidget(QWidget):
                         self._identity_tab_container = container
                         self._identity_tab_viewer = viewer
                         show_index = tab_widget.addTab(container, tab_title)
+                        tab_widget.setTabIcon(show_index, engine_icon("identity_based"))
                         _retheme(self, container)
                     else:
                         layout = self._identity_tab_container.layout()
@@ -2585,6 +2611,11 @@ class DynamicResultsTabWidget(QWidget):
 
                     print(f"[DynamicResultsTabWidget] [OK] Unified identity tab built once "
                           f"for {n_wings} wing(s) across {len(self._identity_run_exec_ids)} execution(s)")
+
+            if behaviour_wings:
+                index = self.create_or_update_behaviour_tab(behaviour_wings)
+                if index is not None:
+                    show_index = index
 
             return show_index
 
@@ -2637,7 +2668,7 @@ class DynamicResultsTabWidget(QWidget):
             total_matches = wing_summary.get('total_matches', 0)
             matches_label = QLabel(f"Matches: {total_matches:,}")
             set_status(matches_label, "ok")
-            matches_label.setFont(_site_font("ui", 13, QFont.Bold))
+            matches_label.setFont(_theme_font("ui", 13, QFont.Bold))
             header_layout.addWidget(matches_label)
             
             execution_time = wing_summary.get('execution_time', 0)
@@ -2658,22 +2689,8 @@ class DynamicResultsTabWidget(QWidget):
             
             summary_layout.addWidget(header_frame)
             
-            # Wing-specific chart (using existing chart rendering methods)
-            feather_metadata = wing_summary.get('feather_metadata', {})
-            if feather_metadata:
-                chart_widget = None
-                
-                if engine_type == 'identity_based':
-                    chart_widget = self._render_identity_charts(feather_metadata)
-                elif engine_type in ['time_window_scanning', 'time_based']:
-                    # For time-based, we might not have time_windows in summary
-                    # Use feather_metadata to create a chart
-                    chart_widget = self._render_identity_charts(feather_metadata) # Reuse identity chart for feather stats
-                
-                if chart_widget:
-                    chart_widget.setMaximumHeight(200) # Compact chart for wing summary
-                    summary_layout.addWidget(chart_widget)
-            
+            # No chart here: the "Identities Found" chart is in the Summary tab only
+            # (Ghassan, 2026-11-01). Each wing's tab keeps its header and its results.
             return summary_widget
             
         except Exception as e:
@@ -2682,6 +2699,93 @@ class DynamicResultsTabWidget(QWidget):
             traceback.print_exc()
             return None
     
+    @staticmethod
+    def _behaviour_run_of(wing_summaries: list):
+        """(database path, execution ids, Wing count) of a run's Behaviour Wings.
+
+        Each Wing of a live run is its own execution, so the view is given
+        every one of them; a Wing listed twice is counted once.
+        """
+        database_path, execution_ids, names = None, [], []
+        for w in wing_summaries:
+            database_path = database_path or w.get('database_path')
+            eid = w.get('execution_id')
+            if eid is not None and eid not in execution_ids:
+                execution_ids.append(eid)
+            name = w.get('wing_id') or w.get('wing_name')
+            if name not in names:
+                names.append(name)
+        return database_path, execution_ids, len(names)
+
+    @staticmethod
+    def behaviour_tab_title(n_wings: int) -> str:
+        return f"Behaviour Results ({n_wings} wing{'s' if n_wings != 1 else ''})"
+
+    def _create_behaviour_viewer(self, database_path: str, execution_ids) -> QWidget:
+        """The Behaviour Results view (person -> Behaviour Wing -> hits) over
+        the given Behavioural executions."""
+        try:
+            from .behaviour_results_view import BehaviourResultsView
+            return BehaviourResultsView(database_path, list(execution_ids))
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            label = QLabel(f"The Behaviour Results could not be shown: {e}\n\n"
+                           f"The hits are stored in {database_path} "
+                           f"(behaviour_hits, executions {', '.join(str(i) for i in execution_ids)}).")
+            _banner(label, "warn")
+            label.setAlignment(Qt.AlignCenter)
+            label.setWordWrap(True)
+            return label
+
+    @staticmethod
+    def _behaviour_tab_icon():
+        try:
+            from .behaviour_results_view import behaviour_tab_icon
+            return behaviour_tab_icon()
+        except Exception:
+            return None
+
+    def create_or_update_behaviour_tab(self, behaviour_wings: list) -> Optional[int]:
+        """Build the one "Behaviour Results" tab of a run, replacing the
+        previous run's. Returns its index, or None when nothing can be shown."""
+        database_path, execution_ids, n_wings = self._behaviour_run_of(behaviour_wings)
+        if not database_path or not execution_ids:
+            print("[DynamicResultsTabWidget] [WARN] Behaviour Wings finished with no "
+                  "execution id or database path; no Behaviour Results tab built")
+            return None
+        tab_widget = self.enhanced_tab_widget.tab_widget
+        viewer = self._create_behaviour_viewer(database_path, execution_ids)
+        title = self.behaviour_tab_title(n_wings)
+
+        container = self._behaviour_tab_container
+        index = tab_widget.indexOf(container) if container is not None else -1
+        if index == -1:
+            container = QWidget()
+            layout = QVBoxLayout(container)
+            layout.setContentsMargins(5, 5, 5, 5)
+            layout.setSpacing(5)
+            layout.addWidget(viewer)
+            self._behaviour_tab_container = container
+            index = tab_widget.addTab(container, title)
+        else:
+            layout = container.layout()
+            old = self._behaviour_tab_viewer
+            if old is not None:
+                layout.removeWidget(old)
+                old.setParent(None)
+                old.deleteLater()
+            layout.addWidget(viewer)
+            tab_widget.setTabText(index, title)
+        self._behaviour_tab_viewer = viewer
+        icon = self._behaviour_tab_icon()
+        if icon is not None:
+            tab_widget.setTabIcon(index, icon)
+        _retheme(self, container)
+        print(f"[DynamicResultsTabWidget] [OK] Behaviour Results tab built for {n_wings} "
+              f"wing(s) across {len(execution_ids)} execution(s)")
+        return index
+
     def _create_identity_viewer(self, database_path: str, execution_ids, show_progress=True, wing_count=None):
         """
         Create and populate the unified Identity-Based results viewer.
@@ -2715,17 +2819,13 @@ class DynamicResultsTabWidget(QWidget):
 
             print(f"[DynamicResultsTabWidget] Creating Identity viewer for execution(s) {exec_ids}")
 
-            # Read the CorrelationResult from the DB (pure-data helper, no Qt —
-            # also called by the background ResultsLoadWorker), then populate.
-            # On this (UI-thread) path pump the event loop between row batches so
-            # the loading dialog stays responsive during the gzip/JSON parse.
-            from PyQt5.QtWidgets import QApplication as _QApp
-            result = self._read_identity_result(
-                database_path, exec_ids, wing_count,
-                progress_cb=lambda done, total: _QApp.processEvents())
+            # The matches are read (SQLite, gzip, JSON per row) and grouped into
+            # identities on a worker thread; the viewer is returned at once with a
+            # loading panel and filled when the worker is done. Both steps ran on the
+            # GUI thread, pumped with processEvents, freezing Crow-Eye for tens of
+            # seconds after a large run (2026-11-01).
             viewer = IdentityResultsView()
-            viewer.load_from_correlation_result(result, show_progress=show_progress)
-
+            self._fill_identity_viewer_async(viewer, database_path, exec_ids, wing_count)
             return viewer
             
         except Exception as e:
@@ -2747,6 +2847,64 @@ class DynamicResultsTabWidget(QWidget):
             viewer.layout().insertWidget(0, error_label)
 
             return viewer
+
+    def _fill_identity_viewer_async(self, viewer, database_path, exec_ids, wing_count):
+        """Read and group the identity results on a worker; fill `viewer` when done."""
+        from ui.app_acquisition_dialog import _Worker
+        from ui.loading_panel import LoadingPanel, step
+        from .identity_results_view import IdentityResultsView, convert_matches_to_identities
+
+        lay = viewer.layout()
+        hidden = []
+        for i in range(lay.count()):
+            w = lay.itemAt(i).widget()
+            if w is not None and not w.isHidden():
+                hidden.append(w)
+                w.hide()
+        panel = LoadingPanel("Loading identity results",
+                             "The matches are read and grouped in the background; Crow-Eye stays usable.",
+                             ["Reading the matches", "Grouping identities"], compact=True)
+        lay.insertWidget(0, panel, 1)
+
+        def work(report):
+            step(report, "Reading the matches")
+            result = self._read_identity_result(
+                database_path, exec_ids, wing_count,
+                progress_cb=lambda d, t: report("Reading the matches - %s of %s" % ("{:,}".format(d), "{:,}".format(t)), d, t),
+                is_canceled=lambda: worker.cancelled)
+            if result is None:
+                return None
+            step(report, "Grouping identities")
+            identities = convert_matches_to_identities(
+                result.matches, IdentityResultsView._normalize_for_grouping,
+                IdentityResultsView._get_display_name_for_gui,
+                progress_cb=lambda d, t: report("Grouping identities - %s of %s matches" % ("{:,}".format(d), "{:,}".format(t)), d, t),
+                is_canceled=lambda: worker.cancelled)
+            return (result, identities)
+
+        def done(payload):
+            viewer._results_load_worker = None
+            if payload is None or payload[1] is None:
+                panel.fail("Stopped before the results were loaded.")
+                return
+            result, identities = payload
+            panel.hide()
+            panel.deleteLater()
+            for w in hidden:
+                w.show()
+            viewer.load_from_correlation_result(result, show_progress=False, identities=identities)
+
+        def failed(message):
+            viewer._results_load_worker = None
+            panel.fail(message)
+
+        worker = _Worker(work, viewer)
+        worker.progress.connect(panel.report)
+        worker.finished_ok.connect(done)
+        worker.failed.connect(failed)
+        viewer._results_load_worker = worker          # kept alive while it runs
+        viewer.destroyed.connect(lambda *_a, w=worker: setattr(w, "cancelled", True))
+        worker.start()
 
     @staticmethod
     def _read_identity_result(database_path, exec_ids, wing_count=None,
@@ -2782,6 +2940,11 @@ class DynamicResultsTabWidget(QWidget):
                 optional_cols.extend(["m.anchor_start_time", "m.anchor_end_time", "m.anchor_record_count"])
             else:
                 optional_cols.extend(["NULL AS anchor_start_time", "NULL AS anchor_end_time", "NULL AS anchor_record_count"])
+            # What the Behavioural engine said about the match (added by
+            # engine/behaviour_context.py): never read here, so the detail window's
+            # behaviour section did not appear for these results.
+            optional_cols.append("m.behaviour_context" if 'behaviour_context' in match_columns
+                                 else "NULL AS behaviour_context")
 
             placeholders = ",".join("?" for _ in exec_ids)
             cursor.execute(f"""
@@ -2827,7 +2990,8 @@ class DynamicResultsTabWidget(QWidget):
                      weighted_score_value, weighted_score_interpretation, semantic_data_json,
                      result_id, wing_id, wing_name,
                      confidence_score, confidence_category, score_breakdown_json,
-                     compressed, anchor_start_time, anchor_end_time, anchor_record_count) = row
+                     compressed, anchor_start_time, anchor_end_time, anchor_record_count,
+                     behaviour_context_json) = row
 
                     feather_records = {}
                     if feather_records_json:
@@ -2886,6 +3050,11 @@ class DynamicResultsTabWidget(QWidget):
                         match.anchor_end_time = anchor_end_time
                     if anchor_record_count is not None:
                         match.anchor_record_count = anchor_record_count
+                    if behaviour_context_json:
+                        try:
+                            match.behaviour_context = json.loads(behaviour_context_json)
+                        except Exception:
+                            pass
                     matches.append(match)
                 except Exception as row_error:
                     failed_rows += 1
@@ -2898,7 +3067,7 @@ class DynamicResultsTabWidget(QWidget):
                 SELECT wing_name, feather_metadata, feathers_processed,
                        total_records_scanned, execution_duration_seconds
                 FROM results
-                WHERE execution_id IN ({placeholders})
+                WHERE execution_id IN ({placeholders}){_not_skipped(conn)}
             """, tuple(exec_ids))
 
             feather_metadata = {}
@@ -3517,8 +3686,22 @@ class DynamicResultsTabWidget(QWidget):
             
             # Identity wings share ONE unified sub-tab (with per-identity wing
             # attribution); time-window wings keep one sub-tab per wing
-            identity_wings = [w for w in wing_summaries if w.get('engine_type') == 'identity_based']
-            time_wings = [w for w in wing_summaries if w.get('engine_type') != 'identity_based']
+            from ..engine import engine_registry
+            identity_wings = [w for w in wing_summaries
+                              if engine_registry.results_view_or_none(w.get('engine_type')) == 'identity']
+            time_wings = [w for w in wing_summaries
+                          if engine_registry.results_view_or_none(w.get('engine_type')) == 'timebased']
+            behaviour_wings = [w for w in wing_summaries
+                               if engine_registry.results_view_or_none(w.get('engine_type')) == 'behaviour']
+
+            if behaviour_wings:
+                update_progress("Loading Behaviour Wings...", 85)
+                b_db, b_ids, b_count = self._behaviour_run_of(behaviour_wings)
+                viewer = self._create_behaviour_viewer(b_db or str(db_path), b_ids or [execution_id])
+                index = combined_viewer.addTab(viewer, self.behaviour_tab_title(b_count))
+                icon = self._behaviour_tab_icon()
+                if icon is not None:
+                    combined_viewer.setTabIcon(index, icon)
 
             if identity_wings:
                 update_progress("Loading identity wings (unified view)...", 85)
@@ -3536,7 +3719,8 @@ class DynamicResultsTabWidget(QWidget):
                     show_progress=False, wing_count=n_wings
                 )
                 if viewer:
-                    combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                    index = combined_viewer.addTab(viewer, f"Identity Results ({n_wings} wing{'s' if n_wings != 1 else ''})")
+                    combined_viewer.setTabIcon(index, engine_icon("identity_based"))
                     print(f"[DynamicResultsTabWidget] [OK] Added unified identity view ({n_wings} wings)")
 
             for i, wing_summary in enumerate(time_wings):
@@ -3550,7 +3734,7 @@ class DynamicResultsTabWidget(QWidget):
                 print(f"[DynamicResultsTabWidget] Creating viewer for wing: {wing_name} ({engine_type})")
 
                 viewer = None
-                if engine_type in ['time_window_scanning', 'time_based']:
+                if engine_registry.results_view_or_none(engine_type) == 'timebased':
                     # Use the wing's own execution id (live runs give each
                     # wing its own execution)
                     wing_exec_id = wing_summary.get('execution_id', execution_id)
@@ -3559,7 +3743,8 @@ class DynamicResultsTabWidget(QWidget):
                         result_id=wing_summary.get('result_id'))
 
                 if viewer:
-                    combined_viewer.addTab(viewer, wing_name)
+                    index = combined_viewer.addTab(viewer, wing_name)
+                    combined_viewer.setTabIcon(index, engine_icon(engine_type))
                     print(f"[DynamicResultsTabWidget] [OK] Added {wing_name} to combined viewer")
             
             # Add the combined viewer as a single Results tab (Requirements 5.1, 5.3)
@@ -3631,7 +3816,7 @@ class DynamicResultsTabWidget(QWidget):
                     e.total_matches
                 FROM results r
                 JOIN executions e ON r.execution_id = e.execution_id
-                WHERE r.execution_id = ?
+                WHERE r.execution_id = ?""" + _not_skipped(conn, "r") + """
                 ORDER BY r.result_id ASC
             """, (execution_id,))
             
@@ -3789,7 +3974,7 @@ class DynamicResultsTabWidget(QWidget):
         table.setSelectionBehavior(QTableWidget.SelectRows)
 
         # Reserve room for the text plus the 8px of padding above and below it
-        # that the site sheet's header sections draw. Derived, so a larger system font still
+        # that the theme sheet's header sections draw. Derived, so a larger system font still
         # fits; floored so the band never looks cramped at the default one.
         header = table.horizontalHeader()
         header.setDefaultAlignment(Qt.AlignLeft | Qt.AlignVCenter)
@@ -3797,6 +3982,7 @@ class DynamicResultsTabWidget(QWidget):
         header.setMinimumHeight(max(32, text_height + 16))
 
         table.setRowCount(len(wing_summaries))
+        table.setIconSize(pair_icon_size(16))  # the Wing + engine pair in column 0
 
         # Every wing, no filtering (Requirements 4.1, 4.2, 4.4)
         for row, wing_summary in enumerate(wing_summaries):
@@ -3812,8 +3998,9 @@ class DynamicResultsTabWidget(QWidget):
             print(f"[DynamicResultsTabWidget] Row {row}: {wing_name} | {engine_type} | "
                   f"{matches:,} matches | {time_formatted} | {status}")
 
-            table.setItem(row, 0, QTableWidgetItem(wing_name))
-            table.setItem(row, 1, QTableWidgetItem(engine_type))
+            # A Wing is the Wing art beside the icon of the engine that ran it.
+            table.setItem(row, 0, icon_table_item(engine_wing_icon(wing_summary.get('engine_type')), wing_name))
+            table.setItem(row, 1, icon_table_item(engine_icon(wing_summary.get('engine_type')), engine_type))
 
             matches_item = QTableWidgetItem(f"{matches:,}")
             matches_item.setForeground(QColor(STATUS_COLORS["ok"]))
@@ -4127,6 +4314,15 @@ class DynamicResultsTabWidget(QWidget):
                     
                     charts_layout.addLayout(charts_row)
                     
+                    # Identities found per feather (Identity engine runs): here in Summary
+                    # only, no longer repeated at the top of every wing's Results tab.
+                    if any(isinstance(v, dict) and (v.get('identities_found') or v.get('identities_final'))
+                           for k, v in feather_statistics.items() if not str(k).startswith('_')):
+                        ident_chart = self._render_identity_charts(feather_statistics)
+                        if ident_chart is not None:
+                            ident_chart.setMinimumHeight(200)
+                            charts_layout.addWidget(ident_chart)
+
                     # Chart 3: Feather Extraction Summary - Compact Grid Layout (4 per row)
                     extraction_frame = QFrame()
                     set_card(extraction_frame)
@@ -4207,7 +4403,7 @@ class DynamicResultsTabWidget(QWidget):
                         # Feather name (truncated if too long) - smaller font
                         display_name = feather_id if len(feather_id) <= 18 else feather_id[:15] + "..."
                         name_label = QLabel(display_name)
-                        name_label.setFont(_site_font("ui", 13, QFont.Bold))
+                        name_label.setFont(_theme_font("ui", 13, QFont.Bold))
                         name_label.setToolTip(feather_id)
                         card_layout.addWidget(name_label)
                         
@@ -4220,7 +4416,7 @@ class DynamicResultsTabWidget(QWidget):
                         # PRIMARY Percentage (Extraction Rate) - larger, bold, colored
                         pct_label = QLabel(f"{extraction_percentage:.1f}%")
                         set_status(pct_label, rate_status)
-                        pct_label.setFont(_site_font("ui", 13, QFont.Bold))
+                        pct_label.setFont(_theme_font("ui", 13, QFont.Bold))
                         pct_label.setToolTip(f"Extraction Rate: {extraction_percentage:.1f}% of records had evidence extracted")
                         card_layout.addWidget(pct_label)
                         
@@ -4515,18 +4711,12 @@ class ResultsViewer(QWidget):
         self.engine_type = engine_type
         self.results_widget.set_engine_type(engine_type)
         
-        # Update engine label with visual indicator
-        engine_display = {
-            "time_based": "Time-Based",
-            "time_window_scanning": "Time-Based",
-            "identity_based": "Identity-Based"
-        }.get(engine_type, f"{engine_type.title()}")
-        
-        self.engine_label.setText(f"Engine: {engine_display}")
-        
-        # Show warning for unrecognized engine types
-        if engine_type not in ("time_based", "time_window_scanning", "identity_based"):
-            print(f"[ResultsViewer] Warning: Unrecognized engine type '{engine_type}', defaulting to time_window_scanning")
+        # Update engine label. An engine type nobody registered is named as
+        # such; it used to be described as the Time-Window engine.
+        from ..engine import engine_registry
+        self.engine_label.setText(f"Engine: {engine_registry.display_name_or_raw(engine_type)}")
+        if engine_registry.results_view_or_none(engine_type) is None:
+            print(f"[ResultsViewer] ERROR: unregistered engine type '{engine_type}'")
     
     def clear_and_reconfigure(self, engine_type: str = None):
         """

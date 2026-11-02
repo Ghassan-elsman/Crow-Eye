@@ -210,6 +210,11 @@ class EVTXParser:
             # Extract Provider (Source)
             provider_elem = system.find('evt:Provider', ns)
             source = provider_elem.get('Name') if provider_elem is not None else None
+            # The name the classic EventLog API (the live parse) reports for
+            # this provider, when it has one ('DCOM' for
+            # Microsoft-Windows-DistributedCOM): the same event stored by a
+            # live parse is matched under it (WinLog_Claw._drop_stored_under_alias).
+            source_alias = provider_elem.get('EventSourceName') if provider_elem is not None else None
             
             # Extract Level (EventType)
             level_elem = system.find('evt:Level', ns)
@@ -288,6 +293,7 @@ class EVTXParser:
                 'EventDescription': event_description,
                 'RecordNumber': record_number,
                 '_channel': channel,
+                '_source_alias': source_alias,
             }
             
             # Validate the extracted data (Requirements 9.1, 9.3)
@@ -771,8 +777,10 @@ def insert_event(cursor: sqlite3.Cursor, table_name: str, event_data: Dict[str, 
         data = dict(event_data)
         if table_name == 'SecurityLogs':
             data['TaskCategory'] = event_data.get('Category')
+        alias = event_data.get('_source_alias')
         insert_event_rows(cursor.connection, table_name, [tuple(data.get(c) for c in cols)],
-                          _RUN["tally"], _RUN["legacy"].get(table_name, False))
+                          _RUN["tally"], _RUN["legacy"].get(table_name, False),
+                          {data.get('Source'): alias} if alias else None)
         return
     try:
         # Handle SecurityLogs table which has TaskCategory instead of Category

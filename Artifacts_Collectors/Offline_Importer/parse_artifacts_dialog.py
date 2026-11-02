@@ -80,18 +80,18 @@ logger = logging.getLogger(__name__)
 
 
 
-def _site_look(dialog, primary=None, ghost=None, title=None, log_well=None):
+def _apply_theme(dialog, primary=None, ghost=None, title=None, log_well=None):
     """A dialog this window opens at run time, in the site look like its
     parent: one sheet, the old per-widget sheets read back into roles, the
     buttons in the role family, an error log in the mono log well."""
     try:
-        from ui.site_theme import apply_site_theme, set_variant, set_role, keep_style, log_view_sheet
+        from ui.app_theme import apply_theme, set_variant, set_role, keep_style, log_view_sheet
     except ImportError:
         return
     if log_well is not None:
         log_well.setStyleSheet(log_view_sheet())
         keep_style(log_well)
-    apply_site_theme(dialog)
+    apply_theme(dialog)
     if title is not None:
         set_role(title, "subtitle")
     if primary is not None:
@@ -216,8 +216,8 @@ class ParseArtifactsDialog(QDialog):
         self.load_artifacts()
         # Roles for what the per-widget sheets said, once the tables exist.
         try:
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(self)
+            from ui.app_theme import apply_theme
+            apply_theme(self)
         except Exception:
             pass
     
@@ -240,10 +240,10 @@ class ParseArtifactsDialog(QDialog):
         self.setWindowTitle("Parse Offline Artifacts")
         self.setMinimumSize(900, 600)
         
-        # The site look (ui/site_theme.py), set before the widgets exist.
+        # The site look (ui/app_theme.py), set before the widgets exist.
         try:
-            from ui.site_theme import begin_site_theme
-            begin_site_theme(self)
+            from ui.app_theme import begin_theme
+            begin_theme(self)
         except Exception:
             if STYLES_AVAILABLE:
                 self.setStyleSheet(f"""
@@ -933,7 +933,7 @@ class ParseArtifactsDialog(QDialog):
                     "bad" if "Failed" in status_info['status'] else None)
             if kind:
                 try:
-                    from ui.site_theme import STATUS_COLORS
+                    from ui.app_theme import STATUS_COLORS
                     from PyQt5.QtGui import QColor
                     status_item.setForeground(QColor(STATUS_COLORS[kind]))
                 except ImportError:
@@ -972,7 +972,7 @@ class ParseArtifactsDialog(QDialog):
         button_layout.addWidget(ok_button)
         layout.addLayout(button_layout)
 
-        _site_look(dialog, primary=ok_button, title=title_label)
+        _apply_theme(dialog, primary=ok_button, title=title_label)
 
         # Show dialog
         dialog.exec_()
@@ -1075,7 +1075,7 @@ class ParseArtifactsDialog(QDialog):
                     color: {Colors.TEXT_PRIMARY};
                     font-family: 'Consolas', 'Courier New', monospace;
                     font-size: 11px;
-                    border: 1px solid {Colors.ACCENT_BLUE};
+                    border: 3px solid {Colors.ACCENT_BLUE};
                     border-radius: 4px;
                     padding: 8px;
                 }}
@@ -1102,7 +1102,7 @@ class ParseArtifactsDialog(QDialog):
         button_layout.addWidget(close_button)
         dialog_layout.addLayout(button_layout)
 
-        _site_look(error_dialog, ghost=close_button, log_well=error_text)
+        _apply_theme(error_dialog, ghost=close_button, log_well=error_text)
 
         # Show dialog modally (centering handled by showEvent)
         error_dialog.exec_()

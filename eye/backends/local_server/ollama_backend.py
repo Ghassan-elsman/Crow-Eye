@@ -329,9 +329,12 @@ class OllamaBackend(LLMBackend):
             content = message.get("content", "")
             tool_calls = message.get("tool_calls", [])
             
+            usage = self.record_usage(data.get("prompt_eval_count"), data.get("eval_count"),
+                                      model=data.get("model"))
             return {
                 "content": content,
-                "tool_calls": tool_calls
+                "tool_calls": tool_calls,
+                "usage": usage,
             }
             
         except (ConnectionError, TimeoutError, RuntimeError):

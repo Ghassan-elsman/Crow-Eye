@@ -172,6 +172,16 @@
       "anchor_priority": 7,
       "category": "contextual_evidence",
       "forensic_strength": "medium"
+    },
+    {
+      "id": "Behaviour",
+      "name": "Behaviour (UBA)",
+      "description": "User Behavior Analytics events: what a person did, each pointing at the artifact rows it rests on",
+      "default_weight": 0.15,
+      "default_tier": 2,
+      "anchor_priority": 12,
+      "category": "supporting_evidence",
+      "forensic_strength": "medium"
     }
   ]
 }

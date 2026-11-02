@@ -232,7 +232,7 @@ class VSSAccessStrategy(FileAccessStrategy):
                     capture_output=True,
                     text=True,
                     timeout=5
-                )
+                , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
                 
                 # Check if service is running
                 if result.returncode == 0:
@@ -274,7 +274,7 @@ class VSSAccessStrategy(FileAccessStrategy):
                 capture_output=True,
                 text=True,
                 timeout=10
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if result.returncode != 0:
                 self.vss_available = False
@@ -515,7 +515,7 @@ class VSSAccessStrategy(FileAccessStrategy):
                 capture_output=True,
                 text=True,
                 timeout=60 # Creating a shadow can take some time
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if result.returncode != 0:
                 # Log the actual error from vssadmin

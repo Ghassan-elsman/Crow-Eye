@@ -111,6 +111,35 @@ except ImportError:
 # PHASE 1: UTILITY FUNCTIONS & HELPERS
 # ============================================================================
 
+
+def _offline_known_folders(ntuser_hive, accounts, read_registry_values):
+    """GUID -> folder path for the owner of one NTUSER hive: its User Shell
+    Folders (a redirected OneDrive\\Documents included), its OneDrive root,
+    and the profile folder ProfileList gave that SID. Whatever cannot be read
+    keeps Windows' default location, with %USERPROFILE% left as written when
+    the profile folder is not known."""
+    shell_folders, onedrive, profile = {}, None, None
+    try:
+        values = read_registry_values(
+            ntuser_hive, "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders")
+        shell_folders = {n: v for n, (v, _t) in (values or {}).items() if isinstance(v, str)}
+    except Exception as e:
+        logger.debug(f"User Shell Folders unreadable in {ntuser_hive}: {e}")
+    try:
+        env = read_registry_values(ntuser_hive, "Environment") or {}
+        if isinstance(env.get("OneDrive", (None,))[0], str):
+            onedrive = env["OneDrive"][0]
+    except Exception as e:
+        logger.debug(f"Environment unreadable in {ntuser_hive}: {e}")
+    try:
+        sid = user_identity.resolve_hive_owner_sid(ntuser_hive, accounts)
+        if sid:
+            profile = next((a.get("profile_path") for a in accounts or []
+                            if a.get("user_sid") == sid and a.get("profile_path")), None)
+    except Exception as e:
+        logger.debug(f"Profile folder unknown for {ntuser_hive}: {e}")
+    return registry_binary_parser.known_folders_from_hive(shell_folders, onedrive, profile)
+
 def _configure_logging(log_file='offline_regclaw_errors.log'):
     """Kept for callers; configures nothing.
 
@@ -1693,8 +1722,10 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     cursor.execute('''
     CREATE TABLE IF NOT EXISTS UserProfiles (
         user_sid TEXT PRIMARY KEY, username TEXT, profile_path TEXT,
-        profile_image_path TEXT, profile_loaded INTEGER, parsed_at TEXT
+        profile_image_path TEXT, profile_loaded INTEGER, parsed_at TEXT,
+        profile_load_time TEXT, profile_unload_time TEXT
     )''')
+    user_identity.ensure_user_profiles_columns(cursor)
 
     conn.commit()
     print("[OK] All 40+ tables created successfully\n")
@@ -2467,6 +2498,8 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             # Whose hive is this? Rows below are attributed to this user.
             _hive_user = user_identity.display_owner(Ntuser_reg_hive, _identity_accounts)
             hive_label = f"NTUSER[{ntuser_idx}]" if len(ntuser_hives) > 1 else "NTUSER"
+            _known_folders = _offline_known_folders(Ntuser_reg_hive, _identity_accounts,
+                                                    read_registry_values)
             try:
                 opensave_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\OpenSavePidlMRU"
                 opensave_subkeys = get_subkeys(Ntuser_reg_hive, opensave_path)
@@ -2481,7 +2514,8 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                             continue
                         try:
                             if isinstance(data, bytes):
-                                parsed_data = registry_binary_parser.parse_opensavemru_entry(data)
+                                parsed_data = registry_binary_parser.parse_opensavemru_entry(
+                                    data, _known_folders)
                                 file_name = parsed_data.get('file_name', '')
                                 # The subkey names the dialog's file-type filter,
                                 # which is usually the extension - but under "*",
@@ -2512,6 +2546,8 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
             # Whose hive is this? Rows below are attributed to this user.
             _hive_user = user_identity.display_owner(Ntuser_reg_hive, _identity_accounts)
             hive_label = f"NTUSER[{ntuser_idx}]" if len(ntuser_hives) > 1 else "NTUSER"
+            _known_folders = _offline_known_folders(Ntuser_reg_hive, _identity_accounts,
+                                                    read_registry_values)
             try:
                 lastsave_path = "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ComDlg32\\LastVisitedPidlMRU"
                 lastsave_values = read_registry_values(Ntuser_reg_hive, lastsave_path)
@@ -2521,7 +2557,8 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         continue
                     try:
                         if isinstance(data, bytes):
-                            parsed_data = registry_binary_parser.parse_lastsavemru_entry(data)
+                            parsed_data = registry_binary_parser.parse_lastsavemru_entry(
+                                data, _known_folders)
                             app = parsed_data.get('application', '')
                             if not check_exists(cursor, 'LastSaveMRU', ['mru_number', 'application', 'user_name'], (name, app, _hive_user)):
                                 cursor.execute('''INSERT INTO LastSaveMRU
@@ -3814,12 +3851,29 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                         # Extract last part of path (e.g., C:\Users\John -> John)
                         username = profile_image_path.split('\\')[-1] if '\\' in profile_image_path else profile_image_path
                     
+                    # Same function the live parser calls.
+                    _load, _unload = user_identity.profile_load_times(values)
+
                     if user_sid and not check_exists(cursor, 'UserProfiles', ['user_sid'], (user_sid,)):
                         cursor.execute('''INSERT INTO UserProfiles
-                            (user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at)
-                            VALUES (?, ?, ?, ?, ?, ?)''',
+                            (user_sid, username, profile_path, profile_image_path, profile_loaded, parsed_at,
+                             profile_load_time, profile_unload_time)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
                             (user_sid, username, str(profile_image_path), str(profile_image_path),
-                             int(profile_loaded), get_current_forensic_timestamp()))
+                             int(profile_loaded), get_current_forensic_timestamp(), _load, _unload))
+                    elif user_sid and (_load or _unload):
+                        # The profile already has a row (user_sid is the key):
+                        # no new row, but these two times change on every
+                        # logon, so they follow the evidence - as the live
+                        # parser's INSERT OR REPLACE does. Only when they
+                        # differ, so an identical re-parse writes nothing.
+                        # Also fills a row from a parse made before the
+                        # columns existed (NULL IS NOT '...').
+                        cursor.execute(
+                            'UPDATE UserProfiles SET profile_load_time = ?, profile_unload_time = ? '
+                            'WHERE user_sid = ? AND (profile_load_time IS NOT ? '
+                            'OR profile_unload_time IS NOT ?)',
+                            (_load, _unload, user_sid, _load, _unload))
                 
                 except Exception as e:
                     logger.error(f"Error with user profile {user_sid}: {e}")

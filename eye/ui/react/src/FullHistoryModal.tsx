@@ -111,7 +111,7 @@ const FullHistoryModal: React.FC<FullHistoryModalProps> = ({ messages, onClose }
                     <div className="history-message-header">
                       <div className="history-message-meta">
                         <span className="history-role">
-                          {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'EYE' : 'System'}
+                          {message.role === 'user' ? 'You' : message.role === 'assistant' ? 'Eye' : 'System'}
                         </span>
                         <span className="history-timestamp">
                           {formatTimestamp(message.timestamp)}

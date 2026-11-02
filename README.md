@@ -8,7 +8,7 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.14.1-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.15.0-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.8.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -55,7 +55,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.14.1 · **Correlation Engine:** 1.8.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.15.0 · **Correlation Engine:** 1.8.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 
@@ -64,6 +64,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - **Artifact-deep, not log-shallow.** Prefetch, Amcache, ShimCache, SRUM, MFT, USN, LNK/JumpLists and more survive the log clearing and "living-off-the-land" tricks that blind log-only tools.
 - **The Eye AI assistant** — natural-language forensic investigation with an auditable, tamper-evident chain of custody, runnable in the cloud, on a private server, or fully offline.
 - **User Behavior Analytics (UBA)** — turns raw artifacts into a plain-English, HR/examiner-readable activity story.
+- **Sentinel Glance — tools built for Crow-Eye Sentinel, in the open-source engine.** Shadow copies (hidden ones included) browsed, compared and recovered from; deleted files recovered from their MFT record; App Acquisition; NTFS integrity checks with delta MFT parsing; and the Behavioural engine with 18 Behaviour Wings. They were built for [Crow-Eye Sentinel](https://crow-eye.com/sentinel), our paid enterprise platform for Continuous Forensic Reconstruction, and we give them to the community here, free.
 - **Free & open-source (GPL-3.0)** — auditable by anyone, with an active research and documentation effort.
 
 ## 👥 Who Crow-Eye Is For
@@ -94,7 +95,9 @@ Crow-Eye is built as an integrated loop — each stage feeds the next, from raw 
 | **[Interactive Timeline](#️-interactive-timeline-visualization)** | Identity-threaded timeline (Heat Map / Week / Day), read straight from the case databases. | ④ Analyse |
 | **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story — 81 behaviours. | ④ Analyse |
 | **[Dynamic Linking](#-dynamic-linking)** | Non-destructive overlay that turns SIDs, MACs and hashes into names inline. | ④ Analyse |
-| **[Correlation Engine](#-correlation-engine)** | Dual-engine (Identity + Time-Window) reconstruction via Feathers · Wings · Engines · Pipelines. | ④ Analyse |
+| **[Correlation Engine](#-correlation-engine)** | Three engines (Time-Window, Identity, Behavioural) and 35 ready Wings, via Feathers · Wings · Engines · Pipelines. | ④ Analyse |
+| **[Shadow Copies & File Browser](#️-architecture)** | Every shadow copy (hidden ones too), what made it, what changed between copies; this machine, a copy, an image or the saved MFT listing browsed with what the case knows about each file. | ② Ingest · ④ Analyse |
+| **[Recovery & App Acquisition](#️-architecture)** | Files collected or recovered into the case from a copy, an image or this machine; deleted files recovered from their MFT record; a program with everything that belongs to it. Listed under Case → Recovered & Collected Files. | ② Ingest |
 | **[Eye — AI Assistant](#️-eye--the-forensics-ai-assistant)** | GEP-governed investigation assistant with the sealed **Narrative Map** case memory. | ⑤ AI |
 | **[Storage Forensics](#-supported-artifacts)** | Physical disk & partition analysis (hidden/unmounted detection, boot warnings). | ④ Analyse |
 
@@ -119,10 +122,12 @@ flowchart TB
         I2["IMAGE PARSING<br/>no mounting"]
         I3["OFFLINE IMPORTER<br/>scan · collect · parse"]
         I4["IMPORT EVIDENCE<br/>CSV · JSON · SQLite"]
+        I5["RECOVERY TOOLS<br/>File Browser · Shadow Copies<br/>App Acquisition · MFT carve"]
     end
 
     PARSERS[["ARTIFACT PARSERS<br/>live and offline"]]
     REPLAY["DIRTY-HIVE REPLAY<br/>logs applied to a copy"]
+    NTFS["NTFS INTEGRITY<br/>digest map · delta MFT · checks"]
     CASE[("③ CASE DATABASES<br/>Target_Artifacts/<br/>Imported_Evidence/")]
     PSTAT[("PARSE STATUS<br/>one outcome per artifact")]
     CUST[("CHAIN OF CUSTODY<br/>run records · case ledger")]
@@ -131,7 +136,7 @@ flowchart TB
         TAB["ARTIFACT TABLES<br/>Anatomy · Why empty?"]
         VIZ["CHART<br/>DASHBOARDS"]
         SRCH["DATABASE<br/>SEARCH"]
-        CE["CORRELATION ENGINE<br/>Feathers → Wings →<br/>Engines → Pipelines"]
+        CE["CORRELATION ENGINE<br/>Time · Identity · Behaviour<br/>35 Wings"]
         DL["DYNAMIC LINKING<br/>SID · MAC · hash → name"]
         TL["TIMELINE<br/>heat map · day"]
         UBA["USER BEHAVIOR<br/>ANALYTICS"]
@@ -147,19 +152,25 @@ flowchart TB
 
     OUT["⑥ LIVING REPORT<br/>CSV · JSON · HTML"]
 
-    S1 --> I0 & I1
-    S2 --> I2
+    S1 --> I0 & I1 & I5
+    S2 --> I2 & I5
     S3 --> I3
     S4 --> I4
 
     I0 & I1 & I2 & I3 --> PARSERS
     PARSERS -. "every hive" .-> REPLAY
+    PARSERS -. "every MFT record" .-> NTFS
+    NTFS -- "findings" --> CASE
+    NTFS -. "manifest · findings" .-> CUST
     PARSERS == "parsed artifacts" ==> CASE
     PARSERS -. "status" .-> PSTAT
     I0 & I1 & I2 & I3 & I4 -. "custody" .-> CUST
     I4 -- "verbatim or<br/>converted" --> CASE
+    I5 -- "recovered files" --> CASE
+    I5 -. "custody" .-> CUST
 
     CASE ==> TAB & VIZ & SRCH & CE & DL & TL & UBA
+    UBA -- "behaviours" --> CE
     CE --> RES
     DL --> INTEL
 
@@ -181,7 +192,7 @@ flowchart TB
     classDef out   fill:#166534,stroke:#4ade80,stroke-width:3px,color:#f0fdf4
 
     class S1,S2,S3,S4 src
-    class I0,I1,I2,I3,I4,REPLAY ing
+    class I0,I1,I2,I3,I4,I5,REPLAY,NTFS ing
     class PARSERS hub
     class CASE,PSTAT,CUST,RES,INTEL store
     class TAB,VIZ,SRCH,TL,UBA,CE,DL ana
@@ -205,7 +216,9 @@ flowchart TB
 |---|---|
 | ① → ② | **Five independent doors into a case.** Parse a live system directly, acquire it with Crow-Claw, read a forensic image without mounting it, bring a Velociraptor / KAPE / EDR folder through the Offline Importer, or import third-party CSV / JSON / SQLite with Import Evidence. Crow-Eye's own collector is never required. |
 | ② | **The parsers read evidence, never write to it.** Registry hives are read as files from a working copy with their transaction logs replayed, so a dirty hive is seen in the state Windows had not finished writing, and free space is carved for deleted keys. SRUM is soft-recovered from its ESE logs the same way. Browsers are read from copies that keep their `-wal` files, and stored secrets are kept but never decrypted. |
-| ② | **Every run leaves a chain of custody, and every case keeps a ledger.** Crow-Claw, live Parse All, each single-artifact parse, Offline Importer collections and scans, offline parses and image parsing each write `logs/custody_<run>.json` with a `.sha256` beside it. A record holds who ran it, where and when (UTC), the time zone and decoding-library versions, and every source file: its times read before the copy, how it was read (in place, copied, shadow copy, raw volume, `NtSaveKeyEx` hive export), and the SHA-256 of the source and of the copy. It also holds each artifact's outcome, the SHA-256 of every database the run wrote, and every change made to the target: processes, services, and shadow copies created, used, deleted or evicted by Windows. Shadow copies Crow-Eye creates are deleted when the run ends, by the ID `Create()` returned. Temporary work goes under the case, not the target's `%TEMP%`. **`logs/custody_ledger.jsonl`** records everything done to the case: opened, runs started and ended (with each record's hash), exports, evidence imports, settings changes, and correlation and Dynamic Linking database rewrites (hash before and after). It is a hash chain, so an edited, removed or moved line, a rewritten or deleted record, and a ledger cut short all show. **Case → Chain of Custody…** opens a record: every source with its verdict, the artifacts, the outputs, the footprint, the shadow copies, and the case ledger with its chain check. |
+| ② | **Every run leaves a chain of custody, and every case keeps a ledger.** Crow-Claw, live Parse All, each single-artifact parse, Offline Importer collections and scans, offline parses and image parsing each write `logs/custody_<run>.json` with a `.sha256` beside it. A record holds who ran it, where and when (UTC), the time zone and decoding-library versions, and every source file: its times read before the copy, how it was read (in place, copied, shadow copy, raw volume, `NtSaveKeyEx` hive export), and the SHA-256 of the source and of the copy. A live Parse All takes each file's size and times before it parses, and hashes the files from its own shadow copy, the bytes the parsers read, while they run. It also holds each artifact's outcome, the SHA-256 of every database the run wrote, and every change made to the target: processes, services, and shadow copies created, used, deleted or evicted by Windows. Shadow copies Crow-Eye creates are deleted when the run ends, by the ID `Create()` returned. Temporary work goes under the case, not the target's `%TEMP%`. **`logs/custody_ledger.jsonl`** records everything done to the case: opened, runs started and ended (with each record's hash), exports, evidence imports, settings changes, and correlation and Dynamic Linking database rewrites (hash before and after). It is a hash chain, so an edited, removed or moved line, a rewritten or deleted record, and a ledger cut short all show. **Case → Chain of Custody…** opens a record: every source with its verdict, the artifacts, the outputs, the footprint, the shadow copies, and the case ledger with its chain check. |
+| ② | **The MFT is checked as it is parsed, and re-parsed by difference.** Every `$MFT` record is digested (keyed BLAKE2b over its fixed-up bytes, LSN and update sequence left out) into a sealed map in `<case>/state/`; a second parse of the same volume parses only the records whose stored fields changed, and records deleted or reused in between are written as findings. The USN journal is not trusted for this. The same pass runs the single-image integrity checks - timestomping, wiped records, record structure, the `$MFT` bitmap, record LSNs against `$LogFile`, USN journal and `$LogFile` state - into `ntfs_integrity_findings`, and writes one integrity manifest per volume to the custody ledger. Every check is on by default and can be turned off in Settings → Parsing; a check that is off is written to the ledger at every parse. |
+| ② | **Recover into the case.** The File Browser reads this machine, any shadow copy (Windows' own, or one it keeps only in the volume's catalog, rebuilt by Crow-Eye's VSS reader), a forensic image or the case's saved MFT listing. Ticked files are collected with their SHA-256, a check against the source, a manifest and a custody record. The Shadow Copies window recovers a file that changed or was deleted between two copies from the copy that holds it. A deleted file in the saved listing comes back from its **MFT record**. Its identity is checked first (still deleted, same sequence, same name), each cluster is checked against `$Bitmap` (a reused one is marked *may be overwritten*), and everything is read before anything is written. App Acquisition takes a program with its files, data, shortcuts and registry keys. Everything goes under `app_acquisition/` and is listed in **Case → Recovered & Collected Files…**. |
 | ② → ③ | Everything converges on **the case**. Parsed artifacts land in `Target_Artifacts/`; imported evidence lands in `Imported_Evidence/` and is auto-discovered by every reader. |
 | ② → ③ | **Every parse records why, not just whether.** Live, offline and image parses write one outcome per artifact to `logs/parse_status.json` — parsed, no records, source not found, feature disabled, unsupported format, access denied, dependency missing, partial, failed or not run. A missing artifact is **not** a failure. The Parse Status Report appears once the data loads, a **Why empty?** button explains every empty table, and each case keeps per-component logs browsable in Settings → Logs. |
 | ③ → ④ | **Nothing reads half-written data.** While a parse or load runs, the readers in stage ④ and the Eye are held — each offers *Open when ready* — so no view opens against tables still being filled. |
@@ -291,7 +304,7 @@ flowchart TB
 | SRUM | `SRUM_Claw.py` | `offline_SRUM_Claw.py` | `srum_data.db` | application usage, network usage and connectivity, energy, app timeline, metadata |
 | Event logs | `WinLog_Claw.py` | `offline_WinLog_Claw.py` | `Log_Claw.db` | SystemLogs, SecurityLogs, ApplicationLogs |
 | Recycle Bin | `recyclebin_claw.py` | `offline_RecycleBinClaw.py` | `recyclebin_analysis.db` | recycle_bin_entries |
-| $MFT | `MFT_Claw.py` | `offline_MFTClaw.py` | `mft_claw_analysis.db` | mft_records, mft_standard_info, mft_file_names, mft_data_attributes |
+| $MFT | `MFT_Claw.py` (+ `ntfs_integrity.py`, `ntfs_digest_map.py`, `logfile_restart.py`) | `offline_MFTClaw.py` | `mft_claw_analysis.db` | mft_records, mft_standard_info, mft_file_names, mft_data_attributes, ntfs_integrity_findings |
 | USN journal | `USN_Claw.py` | `offline_USNClaw.py` | `USN_journal.db` | journal_events, deleted_entries |
 | MFT ↔ USN | `mft_usn_correlator.py` | `offline_MFT_USN_Correlator.py` | `mft_usn_correlated_analysis.db` | mft_usn_correlated, filename_changes |
 | Browsers | `Browser_Claw.py` | `offline_BrowserClaw.py` | `browser_analysis.db` | 37 tables — history, downloads, cookies, Gecko history … |
@@ -362,7 +375,7 @@ None of these requires another. Each opens the case databases **read-only**, and
 | **Timeline** | `timeline/` | Heat map (per day), week and lane views. `data/artifact_map.py` is the one map of what it plots: 18 artifact types and their time columns. Registry key write times are bounded (*no later than*) and drawn hollow, so they cannot pass for an exact event time. Applies its own lightweight grouping — no correlation run needed. |
 | **User Behavior Analytics** | `uba/` | Replays the case through 81 declarative rules in `uba/config/behavior_rules.json` (44 routine, 33 notable, 3 suspicious, 1 critical) into a plain-English activity story. Sign-in sessions are built from Security events 4624/4634/4647, paired by LogonId. Every statement opens its backing record. |
 | **Dynamic Linking** | `dynamic_mapping/` | 22 rules gather identity mappings — SID → user, MAC → network, hash → file name, USB serial → device, volume GUID → volume name and more — into `Crow_Intelligence.db` by `ATTACH`ing each case database read-only. The artifact tables then show the resolved name beside the raw value through a per-row lookup on the attached database. It changes how a record *reads*, never the record. After each run a statistics window (and `dynamic_linking.log`) shows what every rule read and added, from which database and table, and how many rows of each artifact table now carry a linked name. |
-| **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Identity or Time-Window engine, and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
+| **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Time-Window, Identity or Behavioural engine (each Wing's category picks the engine), and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
 
 #### ⑤ AI layer — how a question travels
 
@@ -402,6 +415,7 @@ sequenceDiagram
 | **ContextManager** | `eye/services/context_manager.py` | Builds each turn: conversation history, the Narrative Map, retrieved knowledge, and the tool catalogue. |
 | **QueryProcessor** | `eye/services/query_processor.py` | The agentic loop: ask the model, run the tool it calls, feed the result back, until it answers. |
 | **ModelRouter & backends** | `eye/services/model_router.py`, `eye/backends/` | Local command-line agents (Gemini CLI, Claude Code, Ollama CLI and others), local servers (Ollama, LM Studio, vLLM) or cloud APIs (OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Groq and more). Local backends keep the whole loop on the machine. |
+| **Backend doctor** | `eye/services/backend_doctor.py` | Checks the model setup in order: provider, model name, API key, command-line tool or local server, connection, one tiny real request, tool use and effort. Each problem comes with its fix; results are kept in `EYE_Logs/eye_backend_doctor.jsonl`. |
 | **Tools** | `configs/llm_config.json` | 31 tools: database queries and schema, artifact and semantic search, the timeline sweep, correlation results and wing authoring, imported evidence, threat intelligence, and the ten `report_*` tools. |
 | **Knowledge base** | `configs/knowledge_base/` | Artifact guides and the live schema reference, retrieved per question — by embeddings when a model is configured, by a built-in BM25 index when not. |
 | **Narrative Map** | `eye/services/narrative_map_service.py` | Verdict → narrative → evidence, written by the Eye and the analyst alike, hash-chained in `EYE_Logs/narrative_map_audit.jsonl` and injected into every prompt. |
@@ -519,7 +533,7 @@ Crow-Eye parses a broad set of Windows execution, file-system, and user-activity
 - **MFT** — parses the Master File Table for file metadata, attributes, timestamps, and deleted-file information (NTFS, Windows 7/10/11).
 - **USN Journal** — tracks file create/modify/delete/rename events with timestamps and full name history, for timeline reconstruction.
 - **SRUM** — visualizes app resource usage (duration bars for foreground/background time) and network activity per application.
-- **Storage Forensics Analyzer** — complete tree view of every physical disk and its partitions; color-coded partition types (EFI, Linux, Recovery, Hidden/swap, …); warnings for bootable USBs, hidden Linux roots, and Intel Rapid Start; raw sector magic-scanning fallback.
+- **Storage Forensics Analyzer** — complete tree view of every physical disk and its partitions; color-coded partition types (EFI, Linux, Recovery, Hidden/swap, …); warnings for bootable USBs, hidden Linux roots, and Intel Rapid Start; raw sector magic-scanning fallback; on each NTFS volume, where `$MFT`, the USN journal and shadow-copy storage physically sit on the partition bar, with shadow storage used, allocated and maximum and the number of copies.
 
 ## 🔧 Analysis Modes
 
@@ -637,7 +651,7 @@ The **Crow-Eye Correlation Engine** is a production-grade forensic correlation s
 
 ### 🎯 Accuracy & Evidence-Completeness
 
-A focused accuracy pass **from the 0.11.0 cycle**, validated end-to-end against a real ~700K-record Windows case and layered on top of earlier reliability work. Every fix below is locked by the pytest regression suite and verified by a holistic validation harness; it exercised the seven default wings that shipped at the time — eleven ship today. The match counts quoted below were measured under the rules of that release: **0.13.0 changed what counts as a match** (a match must now span more than one feather) **and what a confidence score means**, so treat them as a record of that pass rather than as current figures.
+A focused accuracy pass **from the 0.11.0 cycle**, validated end-to-end against a real ~700K-record Windows case and layered on top of earlier reliability work. Every fix below is locked by the pytest regression suite and verified by a holistic validation harness; it exercised the seven default wings that shipped at the time — 35 ship today. The match counts quoted below were measured under the rules of that release: **0.13.0 changed what counts as a match** (a match must now span more than one feather) **and what a confidence score means**, so treat them as a record of that pass rather than as current figures.
 
 **The identity engine captures all the evidence**
 - **Fixed: the identity engine was iterating only the FIRST row of every feather** when a time filter was active (a timezone-aware vs naive datetime comparison raised `TypeError` and aborted the per-row loop). Records-seen jumped from 3,558 → **745,615** on the validation case.
@@ -666,6 +680,7 @@ The Correlation Engine is **production-ready** and actively used in investigatio
 
 - ✅ **Time-Window Scanning Engine** — production-ready, recommended for time-based analysis (O(N log N))
 - ✅ **Identity-Based Engine** — production-ready, recommended for identity tracking (O(N log N))
+- ✅ **Behavioural Engine** — chains of one person's behaviours from UBA (18 Behaviour Wings)
 - ✅ **Feather Builder / FeatherWriter** — imports CSV/JSON/SQLite from any tool; transactional batching + schema metadata
 - ✅ **Wings System & Pipeline Orchestration** — create/manage correlation rules and automate workflows
 - ✅ **Identity Grouping** — unified across engine, viewers, and the semantic phase
@@ -676,7 +691,7 @@ The Correlation Engine is **production-ready** and actively used in investigatio
 
 ### Key Features
 
-- **🔄 Dual-Engine Architecture**: Choose between Time-Window Scanning (O(N log N)) and Identity-Based (O(N log N)) correlation strategies.
+- **🔄 Three Engines, One per Wing Category**: Time-Window Scanning and Identity-Based (both O(N log N)) over feathers, and the Behavioural engine over UBA's behaviours, one person at a time. A Wing's category (Time, Identity, Behaviour) decides which engine runs it.
 - **📊 Multi-Artifact Support**: Correlate Prefetch, ShimCache, AmCache, Event Logs, LNK files, Jumplists, MFT, USN, SRUM, Registry, RecycleBin, and more.
 - **🔌 Universal Import**: Import CSV/JSON/SQLite output from any forensic tool and convert to Feather databases.
 - **🎯 Smart Identity Grouping**: Variants like `Chrome.exe`/`chrome.dll`/`Chrome.EXE` collapse to one bucket; versions and architectural qualifiers stay distinct.
@@ -701,6 +716,8 @@ flowchart TB
     SEL{"EngineSelector"}
     ID["③ IDENTITY ENGINE<br/>who / what first, then when"]
     TW["③ TIME-WINDOW ENGINE<br/>when first, then who / what"]
+    BH["③ BEHAVIOURAL ENGINE<br/>one person, steps in order"]
+    UBAE[("UBA behaviours<br/>UBA/uba_events.db")]
     P["④ PIPELINE<br/>create feathers → run wings → report"]
     RES[("correlation_results.db")]
 
@@ -710,14 +727,17 @@ flowchart TB
     P --> SEL
     SEL -- "identity_based (default)" --> ID
     SEL -- "time_window_scanning" --> TW
+    SEL -- "behaviour Wings" --> BH
+    UBAE --> BH
     ID & TW -- "matches · scores · drop ledger" --> RES
+    BH -- "hits: pointers to behaviours" --> RES
 
     classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
     classDef comp  fill:#1e40af,stroke:#60a5fa,stroke-width:2px,color:#eff6ff
     classDef eng   fill:#6b21a8,stroke:#c084fc,stroke-width:2px,color:#faf5ff
-    class SRC,RES store
+    class SRC,RES,UBAE store
     class F,W,P,SEL comp
-    class ID,TW eng
+    class ID,TW,BH eng
     linkStyle default stroke-width:2px
 ```
 
@@ -726,7 +746,7 @@ flowchart TB
 **What they are.** A feather is one SQLite database per artifact type, holding that artifact's records in a normalized, queryable shape, plus two bookkeeping tables: `feather_metadata` (artifact type, source, record count) and `feather_lineage` (where every row came from).
 
 **How they are made.**
-- **Automatically, from the case.** `correlation_engine/integration/auto_feather_generator.py` builds feathers from the case databases into `Correlation/feathers/`, using 41 built-in artifact-to-feather mappings (`*_CrowEyeFeather`).
+- **Automatically, from the case.** `correlation_engine/integration/auto_feather_generator.py` builds feathers from the case databases into `Correlation/feathers/`, using 41 built-in artifact-to-feather mappings (`*_CrowEyeFeather`). The columns each feather declares come from `config/feather_schemas.json`, the timestamp format is read from a sample of the data, and the copy runs inside SQLite (`ATTACH` + `INSERT … SELECT`) several feathers at a time. Each feather is built beside the old one and swapped in only when complete, so a failed or cancelled build never removes a working feather. `feather_metadata` records a fingerprint of the source database, and a feather whose source has changed since is rebuilt when the case opens.
 - **From any other tool.** The **Feather Builder** (`python -m correlation_engine.feather.feather_builder` opens its window) and Import Evidence turn CSV, JSON or SQLite output — Plaso, Autopsy, Volatility or anything else with headers — into a feather: automatic column mapping, data-type detection and timestamp normalization.
 
 ```
@@ -742,7 +762,7 @@ prefetch.db (Feather)
 
 #### 2. 🎯 Wings (Correlation Rules)
 
-**What they are.** A Wing is a JSON rule that answers one investigative question — *was this program executed?*, *was a USB device used?* — by naming the feathers that can prove it, how much each one counts, and how close in time they must be. **Eleven default wings ship** in `correlation_engine/integration/default_wings/`: account logon, anti-forensics, brute force and spray, execution proof, execution without trace, lateral movement, persistence, ransomware mass encryption, security-control tampering, USB and removable media, and user activity. Every Wing is **authorable and sealed** — it records who wrote it, why, and the evidence that motivated it.
+**What they are.** A Wing is a JSON rule that answers one investigative question — *was this program executed?*, *was a USB device used?* — by naming the feathers that can prove it, how much each one counts, and how close in time they must be. **35 default Wings ship** in `correlation_engine/integration/default_wings/`. Eleven Identity Wings: account logon, anti-forensics, brute force and spray, execution proof, execution without trace, lateral movement, persistence, ransomware mass encryption, security-control tampering, USB and removable media, and user activity; six of them also ship as Time Wings. Eighteen Behaviour Wings follow one person through UBA's behaviour events: log clearing after an admin sign-in, enumeration then run-as then a new service, USB storage then mass copy, the ordered lateral-movement chain, ransomware bursts with and without recovery inhibition, mass deletion, files gathered then uploaded, an anonymiser around an upload, a risky download later opened, a remote-access or hacking site then a program download, a Defender exclusion near new persistence, failed sign-ins then a success, a network share then mass copy, an off-hours sign-in then a credential tool, a risky visit then a gap in browser history, and an unattributed log clear after an admin sign-in. Every Wing is **authorable and sealed** — it records who wrote it, why, and the evidence that motivated it.
 
 **Key fields** (from the shipped *Execution Proof* wing):
 
@@ -768,6 +788,8 @@ prefetch.db (Feather)
 
 The real wing lists fourteen feathers. Other fields: `description`, `author`, `created_date`, `version`, `target_application`, `target_file_path`, `target_event_id`, `apply_to`, `semantic_rules`, `tags`, `case_types`.
 
+`minimum_matches` counts the **corroborating** feathers: a match needs the anchor plus that many more, in both engines. The targets (`target_application` with `apply_to: specific`, `target_file_path`, `target_event_id`) narrow the evidence a Wing reads, and a shipped Wing whose rules an analyst edited keeps those edits when the defaults are reloaded.
+
 #### 3. ⚙️ Engines (Correlation Strategies)
 
 Structural links come **first**; the weighted score is layered on top as *interpretation and ranking*, never as the basis for a match. A match must span **more than one feather** — a single artifact corroborates nothing.
@@ -787,7 +809,16 @@ Structural links come **first**; the weighted score is layered on top as *interp
 4. **Group by identity** within the window and keep only groups that reach the corroboration floor (records from at least two feathers).
 5. **Score** each surviving group with the wing's weights. Duplicate records inside a window are counted in the diagnostics, not silently discarded.
 
+**Behavioural Engine** (`engine/behavioural_engine.py`) — best for "did this person do A, then B, then C?"
+1. **Read no feathers.** Its input is the behaviours User Behavior found (`<case>/UBA/uba_events.db`), each attributed to a person (SID).
+2. **Walk each person's behaviours in time order** and find the Wing's steps, in order or in any order, within `within_minutes`; two people's actions are never chained together.
+3. **Write each hit** to `behaviour_hits` / `behaviour_actors` / `behaviour_runs` in `correlation_results.db`: a hit is a pointer to the behaviours that matched, each of which points back to its artifact rows. **Behaviour Results** lists them, and **Open in User Behavior** shows the behaviours themselves.
+
 **Scoring** (`engine/weighted_scoring.py`): score = the sum of the matched feathers' weights ÷ the sum of all the wing's weights, from 0 to 1. The wing's `score_interpretation` bands turn the number into words — *Confirmed*, *Probable*, *Weak*, *Not proven*.
+
+**Semantic rules** label matches after correlation, through one meaning in both rule paths: a `*` (wildcard) condition means *the field is present and not empty*, and an `AND` between conditions on the same feather must hold on **one row** of it. Match ids are derived from the execution, so a rerun of the same case gives the same ids.
+
+**Behaviour is context, not corroboration.** UBA's behaviour events are derived from the same artifact rows the engines correlate, so they never count toward a Wing's floor or its score. What they add is *who* and *what*: after a Time or Identity run, each match gains a `behaviour_context` - the people and the UBA activities recorded for the same program or file within 30 minutes of the match - shown in the match detail as "Behaviour (UBA)". UBA's events are also a feather (`Behaviour_Events_CrowEyeFeather`, built from `<case>/UBA/uba_events.db` with a program and a path taken from each event's details) that a Wing can include as context.
 
 **Engine selection:** Identity-Based for following one subject across artifacts; Time-Window for reconstructing a period. Both read feathers through indexed timestamp queries.
 
@@ -824,7 +855,7 @@ Structural links come **first**; the weighted score is layered on top as *interp
 ```
 1. Data preparation   Case databases → auto-generated feathers (or Feather Builder imports)
 2. Configuration      Wings + feather references → pipeline config
-3. Execution          Pipeline executor → EngineSelector → Identity or Time-Window engine
+3. Execution          Pipeline executor → EngineSelector → Identity, Time-Window or Behavioural engine
 4. Correlation        Engine loads feathers, applies each wing → correlation_results.db
 5. Review             Results Viewer GUI — and the Eye, which queries the results on demand
 ```
@@ -854,7 +885,7 @@ Identity: malware.exe
     ✓ ShimCache: malware.exe modified at 10:30:15
     ✓ AmCache:  malware.exe installed at 10:29:45
 
-  Score 0.43 → Probable Execution
+  Score 0.43 → Likely Execution
   (0.80 of the wing's 1.85 total weight: 3 of its 14 feathers corroborate)
 ```
 
@@ -879,7 +910,7 @@ Identity: malware.exe
 ### 📚 Correlation Engine Documentation
 
 - **[Correlation Engine Overview](correlation_engine/docs/CORRELATION_ENGINE_OVERVIEW.md)** — system overview with architecture diagrams
-- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** — dual-engine architecture, engine selection, performance optimization
+- **[Engine Documentation](correlation_engine/docs/engine/ENGINE_DOCUMENTATION.md)** — the engines, engine selection, performance optimization
 - **[Architecture](correlation_engine/ARCHITECTURE.md)** — component integration and data flow
 - **[Feather Documentation](correlation_engine/docs/feather/FEATHER_DOCUMENTATION.md)** — the data-normalization system
 - **[Wings Documentation](correlation_engine/docs/wings/WINGS_DOCUMENTATION.md)** — correlation rules

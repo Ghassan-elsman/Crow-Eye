@@ -96,7 +96,7 @@ class ProgressIndicator(QtWidgets.QWidget):
         self.setStyleSheet("""
             QWidget {
                 background-color: #0F172A;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
                 border-radius: 12px;
             }
         """)
@@ -131,7 +131,7 @@ class ProgressIndicator(QtWidgets.QWidget):
         self.progress_bar.setStyleSheet("""
             QProgressBar {
                 background-color: #1E293B;
-                border: 2px solid #334155;
+                border: 3px solid #334155;
                 border-radius: 8px;
                 text-align: center;
                 color: #E2E8F0;
@@ -154,7 +154,7 @@ class ProgressIndicator(QtWidgets.QWidget):
             
             QProgressBar[indeterminate="true"] {
                 background-color: #1E293B;
-                border: 2px solid #00FFFF;
+                border: 3px solid #00FFFF;
             }
         """)
         
@@ -173,7 +173,7 @@ class ProgressIndicator(QtWidgets.QWidget):
                 }
                 QPushButton:hover {
                     background-color: #F87171;
-                    border: 1px solid #00FFFF;
+                    border: 3px solid #00FFFF;
                 }
                 QPushButton:pressed {
                     background-color: #B91C1C;

@@ -11,9 +11,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:                       # standalone, without Crow-Eye's ui package
-    _site = None
+    _theme = None
 
 
 class DataViewer(QWidget):
@@ -37,8 +37,8 @@ class DataViewer(QWidget):
         info_layout.addWidget(group_title_label("feather", "Feather Information"))
         
         self.feather_info_label = QLabel("No feather database loaded")
-        if _site is not None:
-            _site.set_role(self.feather_info_label, "label")
+        if _theme is not None:
+            _theme.set_role(self.feather_info_label, "label")
         info_layout.addWidget(self.feather_info_label)
         
         self.stats_label = QLabel("")

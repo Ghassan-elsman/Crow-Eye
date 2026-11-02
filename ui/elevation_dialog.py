@@ -75,7 +75,7 @@ class ElevationDialog(QtWidgets.QDialog):
         listing.setObjectName("elevationList")
         listing.setStyleSheet(
             "QLabel#elevationList { color: #F1F5F9; font-size: 14px; background: rgba(15,23,42,0.85);"
-            " border: 1px solid #1E293B; border-left: 4px solid %s; border-radius: 8px;"
+            " border: 3px solid #1E293B; border-left: 4px solid %s; border-radius: 8px;"
             " padding: 10px 14px; }" % _AMBER)
         layout.addWidget(listing)
 

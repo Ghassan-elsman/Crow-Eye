@@ -33,14 +33,14 @@ from correlation_engine.engine.identity_grouping import ( # noqa: F401
     display_grouping_key,
     extract_original_name,
 )
-from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
-from ui import site_theme as _site
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label, icon_table_item, pair_icon_size, wing_icon
+from ui import app_theme as _theme
 
-# --- the site look (ui/site_theme.py) ------------------------------------------
+# --- the site look (ui/app_theme.py) ------------------------------------------
 # Both result viewers (this one and timebased_results_viewer, which imports
 # these) take colour from the site's meaning colours, so a score, a severity or
 # a tree level reads the same everywhere in the engine. No per-widget palette.
-_TONES = dict(_site.STATUS_COLORS, empty="#64748B", variant="#FB923C")
+_TONES = dict(_theme.STATUS_COLORS, empty="#64748B", variant="#FB923C")
 # Tree levels: what each row IS. A variant is orange and an anchor amber, so
 # the two adjacent levels stay apart as they did before.
 LEVEL_TONE = {
@@ -58,7 +58,7 @@ HIDDEN_RECORD_KEYS = frozenset({
 })
 # The filter bar (36 px) and the stats strip (120 px) keep their density: the
 # site's 13 px fields with 7 px padding do not fit them. Layout only - colours
-# all come from the window's site sheet. Scoped by objectName, so it reaches
+# all come from the window's theme sheet. Scoped by objectName, so it reaches
 # nothing else; set once on the viewer (keepStyle).
 VIEWER_DENSITY_QSS = """
 QFrame#ceFilterBar QLabel { font-size: 12px; }
@@ -85,15 +85,29 @@ def _tone(kind) -> QBrush:
 def _colour_score(item, column, score):
     """Score colour, high / medium / low (the engines' 0.7 / 0.4 cut-offs);
     no colour for no score."""
-    kind = _site.score_kind(score)
+    kind = _theme.score_kind(score)
     if kind != "none":
-        item.setForeground(column, QBrush(QColor(_site.SCORE_COLORS[kind])))
+        item.setForeground(column, QBrush(QColor(_theme.SCORE_COLORS[kind])))
+
+
+def _rule_scope_words(rule) -> str:
+    """What a matched rule judged, in words: this anchor's records or the
+    whole identity (engine/wing_rule_pass writes `evaluated_on`, and
+    `identity_wide` when no anchor fell in the hit's time span)."""
+    scope = str((rule or {}).get('evaluated_on') or '').lower()
+    if scope == 'identity':
+        if (rule or {}).get('identity_wide'):
+            return "Whole identity, outside this anchor's time"
+        return "Whole identity"
+    if scope in ('anchor', 'match'):
+        return "This anchor"
+    return ""
 
 
 def _colour_severity(table_item, severity):
     """critical / high rose, medium amber, low / info green - 'critical' was
     painted green as "anything else"."""
-    table_item.setForeground(_tone(_site.severity_kind(severity)))
+    table_item.setForeground(_tone(_theme.severity_kind(severity)))
 
 
 def _percent(value) -> str:
@@ -107,25 +121,25 @@ def _percent(value) -> str:
 def _item_font(px, bold=False):
     f = _FONTS.get((px, bold))
     if f is None:
-        f = _FONTS[(px, bold)] = _site.font("ui", px, QFont.Bold if bold else QFont.Normal)
+        f = _FONTS[(px, bold)] = _theme.font("ui", px, QFont.Bold if bold else QFont.Normal)
     return f
 
 
 def style_viewer_bars(view, top_frame, stats_frame):
     """The filter bar as a site card and the stats strip, at their density."""
     top_frame.setObjectName("ceFilterBar")
-    _site.set_card(top_frame)
+    _theme.set_card(top_frame)
     stats_frame.setObjectName("ceStatsStrip")
     view.setStyleSheet(VIEWER_DENSITY_QSS)
-    _site.keep_style(view)
+    _theme.keep_style(view)
 
 
 def bar_label(label, kind=None, strong=False):
     """A filter-bar label: muted, or a meaning colour; bold for the counts."""
     if kind:
-        _site.set_status(label, kind)
+        _theme.set_status(label, kind)
     else:
-        _site.set_role(label, "muted")
+        _theme.set_role(label, "muted")
     if strong:
         label.setFont(_item_font(12, True))
     return label
@@ -137,7 +151,7 @@ def fit_header_titles(table, cap=260):
     cell content still decides nothing, the analyst can still drag. Capped so
     one long field name cannot take the whole table."""
     from PyQt5.QtGui import QFontMetrics
-    fm = QFontMetrics(_site.font("ui", 11, QFont.Bold, upper=True, spacing=108))
+    fm = QFontMetrics(_theme.font("ui", 11, QFont.Bold, upper=True, spacing=108))
     header = table.horizontalHeader()
     for c in range(table.columnCount()):
         item = table.horizontalHeaderItem(c)
@@ -149,10 +163,10 @@ def fit_header_titles(table, cap=260):
 
 
 def begin_dialog_look(dialog):
-    """The site sheet on a detail dialog BEFORE its children exist."""
+    """The theme sheet on a detail dialog BEFORE its children exist."""
     try:
         from correlation_engine.gui.ui_styling import engine_extra
-        _site.begin_site_theme(dialog, extra=engine_extra())
+        _theme.begin_theme(dialog, extra=engine_extra())
     except Exception as e:                       # cosmetic: never block the dialog
         logger.debug(f"dialog look not applied: {e}")
 
@@ -390,6 +404,10 @@ def convert_matches_to_identities(matches, normalize_for_grouping, display_name_
             'confidence_score': getattr(match, 'confidence_score', None),
             'confidence_category': getattr(match, 'confidence_category', None),
             'semantic_data': getattr(match, 'semantic_data', None),
+            'behaviour_context': getattr(match, 'behaviour_context', None),
+            'match_score': getattr(match, 'match_score', None),
+            'time_spread_seconds': getattr(match, 'time_spread_seconds', None),
+            'matched_file_path': getattr(match, 'matched_file_path', None),
             'evidence_rows': [
                 _make_evidence_row(fid, match, data)
                 for fid, data in match.feather_records.items()
@@ -709,7 +727,7 @@ class IdentityResultsView(QWidget):
         
         reset_btn = QPushButton("Reset")
         reset_btn.setMaximumWidth(50)
-        _site.set_variant(reset_btn, "ghost")
+        _theme.set_variant(reset_btn, "ghost")
         # The variant's uppercase, tracked font is wider: never clip the label
         reset_btn.setMaximumWidth(max(reset_btn.maximumWidth(), reset_btn.sizeHint().width()))
         reset_btn.clicked.connect(self._reset_filters)
@@ -723,7 +741,7 @@ class IdentityResultsView(QWidget):
         # Pagination controls
         self.prev_btn = QPushButton("<")
         self.prev_btn.setMaximumWidth(24)
-        _site.set_variant(self.prev_btn, "ghost")
+        _theme.set_variant(self.prev_btn, "ghost")
         self.prev_btn.clicked.connect(self._prev_page)
         top_layout.addWidget(self.prev_btn)
         
@@ -733,7 +751,7 @@ class IdentityResultsView(QWidget):
         
         self.next_btn = QPushButton(">")
         self.next_btn.setMaximumWidth(24)
-        _site.set_variant(self.next_btn, "ghost")
+        _theme.set_variant(self.next_btn, "ghost")
         self.next_btn.clicked.connect(self._next_page)
         top_layout.addWidget(self.next_btn)
         
@@ -758,6 +776,7 @@ class IdentityResultsView(QWidget):
         
         # Correlation results per wing
         self.type_table = self._create_compact_table(["Wing", "Results"])
+        self.type_table.setIconSize(pair_icon_size(16))  # Wing + Identity engine pair
         bottom_stats.addWidget(self._wrap_table("Wings", self.type_table), stretch=1)
         
         # Evidence Roles
@@ -795,7 +814,7 @@ class IdentityResultsView(QWidget):
 
         # Guide lines show which row nests under which, chevrons the expanded /
         # collapsed state: ui_styling.engine_extra(), one rule set for every
-        # engine tree (the window's site sheet).
+        # engine tree (the window's theme sheet).
         return tree
     
     def _create_compact_table(self, headers: List[str]) -> QTableWidget:
@@ -1075,11 +1094,11 @@ class IdentityResultsView(QWidget):
         identity_count = stats.get('total_identities', len(self.identities))
         if is_cancelled:
             apply_status_to_label(self.identities_lbl, "WARN", f"Identities: {identity_count:,} (Cancelled)")
-            _site.set_status(self.identities_lbl, "warn")
+            _theme.set_status(self.identities_lbl, "warn")
             self.identities_lbl.setToolTip("Execution was cancelled by user. Showing partial results.")
         else:
             self.identities_lbl.setText(f"Identities: {identity_count:,}")
-            _site.set_status(self.identities_lbl, "info")
+            _theme.set_status(self.identities_lbl, "info")
             self.identities_lbl.setToolTip("")
         
         self.anchors_lbl.setText(f"Anchors: {stats.get('total_anchors', 0):,}")
@@ -2006,7 +2025,7 @@ class IdentityResultsView(QWidget):
         ordered = sorted(wing_counts.items(), key=lambda kv: (-kv[1], kv[0]))
         self.type_table.setRowCount(len(ordered))
         for row, (wing_name, count) in enumerate(ordered):
-            self.type_table.setItem(row, 0, QTableWidgetItem(str(wing_name)))
+            self.type_table.setItem(row, 0, icon_table_item(wing_icon("identity"), wing_name))
             self.type_table.setItem(row, 1, QTableWidgetItem(str(count)))
         
         # Evidence roles
@@ -2068,11 +2087,11 @@ class IdentityResultsView(QWidget):
         if total_scored > 0:
             self.scoring_enabled = True
             self.scoring_lbl.setText(f"Scoring: On ({total_scored})")
-            _site.set_status(self.scoring_lbl, "ok")
+            _theme.set_status(self.scoring_lbl, "ok")
         else:
             self.scoring_enabled = False
             self.scoring_lbl.setText("Scoring: Off")
-            _site.set_status(self.scoring_lbl, "neutral")
+            _theme.set_status(self.scoring_lbl, "neutral")
         
         # Populate scoring table
         self.scoring_table.setRowCount(len(score_ranges))
@@ -2082,7 +2101,7 @@ class IdentityResultsView(QWidget):
             # Color code
             for word, kind in (('High', 'high'), ('Medium', 'medium'), ('Low', 'low')):
                 if word in range_name:
-                    count_item.setForeground(QBrush(QColor(_site.SCORE_COLORS[kind])))
+                    count_item.setForeground(QBrush(QColor(_theme.SCORE_COLORS[kind])))
                     break
             self.scoring_table.setItem(row, 1, count_item)
     
@@ -2271,8 +2290,28 @@ class IdentityDetailDialog(QDialog):
             layout.addWidget(QLabel(f"<b>Identity:</b> {self.data.get('primary_name', 'Unknown')}"))
             layout.addWidget(QLabel(f"<b>Anchors:</b> {len(self.data.get('anchors', []))}"))
         elif self.item_type == 'anchor':
-            layout.addWidget(QLabel(f"<b>Time:</b> {self.data.get('start_time', '')}"))
-            layout.addWidget(QLabel(f"<b>Feathers:</b> {', '.join(self.data.get('feathers', []))}"))
+            frame.setMaximumHeight(16777215)
+            d = self.data
+            ws = d.get('weighted_score') if isinstance(d.get('weighted_score'), dict) else {}
+            parts = [f"<b>Time:</b> {d.get('start_time', '')}"
+                     + (f" &rarr; {d.get('end_time')}" if d.get('end_time') and d.get('end_time') != d.get('start_time') else ""),
+                     f"<b>Wing:</b> {d.get('wing_name') or '-'}",
+                     f"<b>Feathers:</b> {', '.join(_feather_base_name(f) for f in d.get('feathers', []))}"]
+            if ws.get('score') is not None:
+                parts.append(f"<b>Score:</b> {ws.get('score'):.2f} {ws.get('interpretation') or ''}")
+            if d.get('confidence_category') or d.get('confidence_score') is not None:
+                cs = d.get('confidence_score')
+                parts.append(f"<b>Confidence:</b> {d.get('confidence_category') or ''}"
+                             + (f" ({cs:.2f})" if isinstance(cs, (int, float)) else ""))
+            if isinstance(d.get('time_spread_seconds'), (int, float)):
+                parts.append(f"<b>Time spread:</b> {d['time_spread_seconds']:.0f} s")
+            if d.get('matched_file_path'):
+                parts.append(f"<b>File:</b> {d['matched_file_path']}")
+            info = QLabel(" &nbsp;|&nbsp; ".join(parts))
+            info.setTextFormat(Qt.RichText)
+            info.setWordWrap(True)
+            info.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            layout.addWidget(info, 1)
         else:
             layout.addWidget(QLabel(f"<b>Feather:</b> {self.data.get('feather_id', '')}"))
             layout.addWidget(QLabel(f"<b>Artifact:</b> {self.data.get('artifact', '')}"))
@@ -2281,38 +2320,149 @@ class IdentityDetailDialog(QDialog):
         return frame
     
     def _create_identity_content(self) -> QWidget:
-        """Identity content: a SINGLE table of every record across ALL
-        sub-identities (no per-feather tabs). Each row is tagged with its
-        sub-identity name in the Identity column."""
+        """Identity: a Summary tab (what it is, its score, where it was found) and a Records
+        tab (every record across all its variants, with the Wing and anchor each came from).
+        Double-click showed the records table alone (Ghassan, 2026-11-01: "missing things")."""
         sub_identities = self.data.get('sub_identities', []) or []
-        specs, timestamps, anchor_count = [], [], 0
-
+        anchors = []
         if sub_identities:
+            specs = []
             for sub in sub_identities:
                 name = sub.get('original_name') or self.data.get('primary_name', 'Unknown')
-                anchors = sub.get('anchors', []) or []
-                anchor_count += len(anchors)
-                timestamps += [a.get('start_time') for a in anchors
-                               if isinstance(a, dict) and a.get('start_time')]
-                specs.extend(self._row_specs_from_anchors(anchors, name))
+                sub_anchors = sub.get('anchors', []) or []
+                anchors += sub_anchors
+                specs.extend(self._row_specs_from_anchors(sub_anchors, name))
         else:
-            name = self.data.get('primary_name', 'Unknown')
             anchors = self.data.get('anchors', []) or []
-            anchor_count += len(anchors)
-            timestamps += [a.get('start_time') for a in anchors
-                           if isinstance(a, dict) and a.get('start_time')]
-            specs = self._row_specs_from_anchors(anchors, name)
+            specs = self._row_specs_from_anchors(anchors, self.data.get('primary_name', 'Unknown'))
+        return self._summary_and_records(self.data.get('primary_name', 'Unknown'), self.data,
+                                         sub_identities, anchors, specs)
 
+    def _summary_and_records(self, name, data, sub_identities, anchors, specs) -> QWidget:
+        from PyQt5.QtWidgets import QTabWidget
+        timestamps = [a.get('start_time') for a in anchors if isinstance(a, dict) and a.get('start_time')]
         feathers = sorted({s['feather'] for s in specs if s.get('feather')})
         container = QWidget()
         v = QVBoxLayout(container)
         v.setContentsMargins(4, 4, 4, 4)
         v.setSpacing(6)
-        v.addWidget(self._records_header(
-            self.data.get('primary_name', 'Unknown'),
-            len(sub_identities), anchor_count, len(feathers), timestamps, len(specs)))
-        v.addWidget(self._records_table(specs, show_identity=True), stretch=10)
+        v.addWidget(self._records_header(name, len(sub_identities), len(anchors), len(feathers),
+                                         timestamps, len(specs)))
+        tabs = QTabWidget()
+        tabs.addTab(self._identity_summary(name, data, sub_identities, anchors, specs), "Summary")
+        tabs.addTab(self._records_table(specs, show_identity=True), "Records (%d)" % len(specs))
+        v.addWidget(tabs, stretch=10)
         return container
+
+    def _identity_summary(self, name, data, sub_identities, anchors, specs) -> QWidget:
+        """Everything known about an identity or a variant, at a glance."""
+        from PyQt5.QtWidgets import QScrollArea, QGridLayout
+        anchors = [a for a in anchors if isinstance(a, dict)]
+        scores = [a['weighted_score']['score'] for a in anchors
+                  if isinstance(a.get('weighted_score'), dict)
+                  and isinstance(a['weighted_score'].get('score'), (int, float))]
+        overall = data.get('overall_score') if isinstance(data.get('overall_score'), dict) else None
+        avg = overall.get('average') if overall else (sum(scores) / len(scores) if scores else None)
+        mx = overall.get('max') if overall else (max(scores) if scores else None)
+        interp = (overall or {}).get('interpretation') or (
+            "High" if (avg or 0) >= 0.7 else "Medium" if (avg or 0) >= 0.4 else "Low" if avg else "None")
+        conf = defaultdict(int)
+        for a in anchors:
+            conf[str(a.get('confidence_category') or 'not scored')] += 1
+        times = sorted(str(t)[:19] for a in anchors for t in (a.get('start_time'), a.get('end_time')) if t)
+        wings = defaultdict(lambda: [0, 0])
+        for a in anchors:
+            w = wings[a.get('wing_name') or 'unnamed Wing']
+            w[0] += 1
+            w[1] += int(a.get('record_count') or 0)
+        feather_rows = defaultdict(lambda: [0, set()])
+        for sp in specs:
+            f = feather_rows[sp.get('feather') or '-']
+            f[0] += 1
+            f[1].add(sp.get('anchor'))
+        findings = []
+        for a in anchors:
+            for line in _format_semantic_findings(a.get('semantic_data')) or []:
+                if line not in findings:
+                    findings.append(line)
+
+        page = QWidget()
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setSpacing(10)
+        card = QFrame()
+        _theme.set_card(card)
+        grid = QGridLayout(card)
+        grid.setHorizontalSpacing(24)
+        facts = [
+            ("Type", data.get('identity_type') or ("Variant" if self.item_type == 'sub_identity' else "Identity")),
+            ("Variants", len(sub_identities) or len(data.get('name_variants') or []) or "-"),
+            ("Anchors", len(anchors)),
+            ("Records", len(specs)),
+            ("Feathers", len(feather_rows)),
+            ("Wings", len(wings)),
+            ("Score", "%s  (average %.2f, highest %.2f)" % (interp, avg, mx) if avg is not None else "not scored"),
+            ("Confidence", ", ".join("%s: %d" % kv for kv in sorted(conf.items(), key=lambda kv: -kv[1]))),
+            ("First seen (UTC)", times[0] if times else "-"),
+            ("Last seen (UTC)", times[-1] if times else "-"),
+        ]
+        for i, (k, val) in enumerate(facts):
+            key = QLabel(k)
+            _theme.set_role(key, "muted")
+            value = QLabel(str(val))
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            value.setWordWrap(True)
+            grid.addWidget(key, i // 2, (i % 2) * 2)
+            grid.addWidget(value, i // 2, (i % 2) * 2 + 1)
+        lay.addWidget(card)
+
+        def small_table(title, headers, rows):
+            box = QGroupBox(title)
+            bl = QVBoxLayout(box)
+            t = QTableWidget(len(rows), len(headers))
+            t.setHorizontalHeaderLabels(headers)
+            t.verticalHeader().setVisible(False)
+            t.setEditTriggers(QTableWidget.NoEditTriggers)
+            t.setAlternatingRowColors(True)
+            for r, row in enumerate(rows):
+                for c, val in enumerate(row):
+                    it = QTableWidgetItem()
+                    if isinstance(val, (int, float)):
+                        it.setData(Qt.DisplayRole, val)
+                        it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    else:
+                        it.setText(str(val))
+                    t.setItem(r, c, it)
+            t.setSortingEnabled(True)
+            t.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            t.setMinimumHeight(min(260, 34 + 26 * max(1, len(rows))))
+            bl.addWidget(t)
+            lay.addWidget(box)
+
+        small_table("Feathers", ["Feather", "Records", "Anchors"],
+                    [(f, n, len(a - {None})) for f, (n, a) in sorted(feather_rows.items(), key=lambda kv: -kv[1][0])])
+        small_table("Wings", ["Wing", "Anchors", "Records"],
+                    [(w, n, r) for w, (n, r) in sorted(wings.items(), key=lambda kv: -kv[1][0])])
+        if sub_identities:
+            small_table("Name variants", ["Name", "Anchors", "Feathers", "Wings"],
+                        [(sub.get('original_name', 'Unknown'), len(sub.get('anchors') or []),
+                          ", ".join(_feather_base_name(f) for f in (sub.get('feathers_found') or [])),
+                          ", ".join(sub.get('wings_found') or [])) for sub in sub_identities])
+        if findings:
+            box = QGroupBox("Rule hits and ATT&CK (%d)" % len(findings))
+            bl = QVBoxLayout(box)
+            text = QLabel("<br>".join("&bull; " + str(f) for f in findings[:40]))
+            text.setTextFormat(Qt.RichText)
+            text.setWordWrap(True)
+            text.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            bl.addWidget(text)
+            lay.addWidget(box)
+        lay.addStretch(1)
+        scroll = QScrollArea()
+        scroll.setWidget(page)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        return scroll
 
     @staticmethod
     def _row_specs_from_anchors(anchors, identity_name):
@@ -2332,6 +2482,8 @@ class IdentityDetailDialog(QDialog):
                         'identity': identity_name,
                         'feather': feather,       # the real artifact (feather name)
                         'role': role,
+                        'wing': anchor.get('wing_name') or '',
+                        'anchor': str(anchor.get('anchor_id') or '')[:12],
                         'time': _record_display_time(ev, rec_data),
                         'data': rec_data if isinstance(rec_data, dict) else {},
                     })
@@ -2350,7 +2502,7 @@ class IdentityDetailDialog(QDialog):
             parts.append(f"Time: {ts[0]} → {ts[-1]}")
         lbl = QLabel(" &nbsp;|&nbsp; ".join(parts))
         lbl.setTextFormat(Qt.RichText)
-        _site.set_role(lbl, "muted")
+        _theme.set_role(lbl, "muted")
         lbl.setWordWrap(True)
         return lbl
 
@@ -2373,9 +2525,12 @@ class IdentityDetailDialog(QDialog):
         for rs in specs:
             d = rs.get('data')
             if isinstance(d, dict):
-                all_keys.update(k for k in d.keys() if not str(k).startswith('_'))
+                all_keys.update(k for k in d.keys()
+                                if not str(k).startswith('_') and k not in HIDDEN_RECORD_KEYS)
         data_cols = sorted(all_keys)
-        cols = (['Identity'] if show_identity else []) + ['Artifact', 'Time', 'Role'] + data_cols
+        # Wing and Anchor only where a table spans several anchors (an identity or a variant).
+        cols = ((['Identity'] if show_identity else []) + ['Artifact', 'Time', 'Role']
+                + (['Wing', 'Anchor'] if show_identity else []) + data_cols)
 
         table = QTableWidget()
         table.setColumnCount(len(cols))
@@ -2390,9 +2545,14 @@ class IdentityDetailDialog(QDialog):
             c = 0
             if show_identity:
                 table.setItem(row, c, QTableWidgetItem(str(rs.get('identity', '')))); c += 1
-            table.setItem(row, c, QTableWidgetItem(str(rs.get('feather', '')))); c += 1
+            table.setItem(row, c, icon_table_item(CrowEyeIcons.feather(), rs.get('feather', ''))); c += 1
             table.setItem(row, c, QTableWidgetItem(str(rs.get('time', '')))); c += 1
             table.setItem(row, c, QTableWidgetItem(str(rs.get('role', 'secondary')).capitalize())); c += 1
+            if show_identity:
+                table.setItem(row, c, QTableWidgetItem(str(rs.get('wing', '')))); c += 1
+                anchor_item = QTableWidgetItem(str(rs.get('anchor', '')))
+                anchor_item.setToolTip("The match (anchor) this record belongs to")
+                table.setItem(row, c, anchor_item); c += 1
             d = rs.get('data') if isinstance(rs.get('data'), dict) else {}
             for key in data_cols:
                 val = str(d.get(key, ''))
@@ -2400,6 +2560,8 @@ class IdentityDetailDialog(QDialog):
                 item.setToolTip(val)
                 table.setItem(row, c, item); c += 1
 
+        # Sorting on after the fill (a fill with sorting on moves rows as they land).
+        table.setSortingEnabled(True)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
         table.horizontalHeader().setStretchLastSection(True)
         fit_header_titles(table)
@@ -2437,7 +2599,7 @@ class IdentityDetailDialog(QDialog):
         
         # Statistics frame
         stats_frame = QFrame()
-        _site.set_card(stats_frame)
+        _theme.set_card(stats_frame)
         stats_layout = QHBoxLayout(stats_frame)
         
         # Sub-identities count
@@ -2464,8 +2626,8 @@ class IdentityDetailDialog(QDialog):
         feather_group = QGroupBox()
         feather_layout = QVBoxLayout(feather_group)
         from .crow_eye_icons import group_title_label
-        _feather_title = group_title_label("feather", "Feather Contributions", size_px=14)
-        _site.set_role(_feather_title, "section")
+        _feather_title = group_title_label("feather", "Feather Contributions", size_px=16)
+        _theme.set_role(_feather_title, "section")
         feather_layout.addWidget(_feather_title)
         
         # Group feather records by base name
@@ -2485,7 +2647,7 @@ class IdentityDetailDialog(QDialog):
         
         for row, (base_name, records) in enumerate(sorted(grouped_feather_records.items(), 
                                                      key=lambda x: len(x[1]), reverse=True)):
-            feather_table.setItem(row, 0, QTableWidgetItem(base_name))
+            feather_table.setItem(row, 0, icon_table_item(CrowEyeIcons.feather(), base_name))
             feather_table.setItem(row, 1, QTableWidgetItem(str(len(records))))
         
         feather_layout.addWidget(feather_table)
@@ -2522,7 +2684,7 @@ class IdentityDetailDialog(QDialog):
         
         # Header - compact, takes minimal space
         header = QLabel(f"<b>{feather_id}</b> - {len(records)} records")
-        _site.set_role(header, "muted")
+        _theme.set_role(header, "muted")
         header.setMaximumHeight(30) # Limit header height
         layout.addWidget(header)
         
@@ -2603,22 +2765,11 @@ class IdentityDetailDialog(QDialog):
         return widget
     
     def _create_sub_identity_tab(self, sub_identity: Dict) -> QWidget:
-        """Sub-identity content: a SINGLE table of every record across all its
-        anchors (no per-anchor inner tabs). Same layout as the identity view."""
+        """Sub-identity (a name variant): the same Summary and Records tabs as an identity."""
         name = sub_identity.get('original_name', 'Unknown')
         anchors = sub_identity.get('anchors', []) or []
         specs = self._row_specs_from_anchors(anchors, name)
-        timestamps = [a.get('start_time') for a in anchors
-                      if isinstance(a, dict) and a.get('start_time')]
-        feathers = sorted({s['feather'] for s in specs if s.get('feather')})
-
-        container = QWidget()
-        v = QVBoxLayout(container)
-        v.setContentsMargins(4, 4, 4, 4)
-        v.setSpacing(6)
-        v.addWidget(self._records_header(name, 0, len(anchors), len(feathers), timestamps, len(specs)))
-        v.addWidget(self._records_table(specs, show_identity=True), stretch=10)
-        return container
+        return self._summary_and_records(name, sub_identity, [], anchors, specs)
 
     def _create_anchor_table(self, anchor: Dict) -> QWidget:
         """Anchor evidence table — one row per record. Reuses the shared records
@@ -2667,12 +2818,56 @@ class IdentityDetailDialog(QDialog):
         except Exception as e:
             logger.exception("[IdentityDetailDialog] rule provenance section failed")
             vlayout.addWidget(QLabel(f"Could not render semantic mapping / rules: {e}"))
+
+        # 3) Who and what, from UBA - context, not corroboration
+        behaviour = self.data.get('behaviour_context')
+        if behaviour:
+            try:
+                vlayout.addWidget(self._create_behaviour_section(behaviour))
+            except Exception as e:
+                logger.exception("[IdentityDetailDialog] behaviour section failed")
+                vlayout.addWidget(QLabel(f"Could not render the behaviour context: {e}"))
         vlayout.addStretch()
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(container)
         return scroll
+
+    @staticmethod
+    def _behaviour_lines(context: Dict) -> list:
+        """The behaviour context as lines a person reads."""
+        lines = []
+        people = context.get('people') or []
+        if people:
+            lines.append("People: " + ", ".join(
+                "%s (%d)" % (p.get('name') or p.get('sid') or '?', p.get('events', 0))
+                for p in people))
+        for a in context.get('activities') or []:
+            when = a.get('first', '')
+            if a.get('last') and a.get('last') != a.get('first'):
+                when += " - " + a['last']
+            lines.append("%s  %s x%d  [%s]" % (when, a.get('activity') or a.get('rule_id'),
+                                              a.get('count', 0), a.get('severity', '')))
+        more = (context.get('activities_total') or 0) - len(context.get('activities') or [])
+        if more > 0:
+            lines.append("... and %d more activities" % more)
+        if context.get('basis'):
+            lines.append(context['basis'])
+        return lines
+
+    def _create_behaviour_section(self, context: Dict) -> QWidget:
+        """Who and what, from UBA: the people and activities recorded for this
+        match's program or file around its time. Context, not corroboration."""
+        from PyQt5.QtWidgets import QTextEdit
+        group = QGroupBox("Behaviour (UBA) - context, not corroboration")
+        layout = QVBoxLayout(group)
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText("\n".join(self._behaviour_lines(context)))
+        text.setMinimumHeight(110)
+        layout.addWidget(text)
+        return group
 
     @staticmethod
     def _format_rule_conditions(rule: Dict) -> str:
@@ -2804,7 +2999,7 @@ class IdentityDetailDialog(QDialog):
             fmap.setHorizontalHeaderLabels(['Feather', 'Field', 'Raw Value', 'Semantic Value'])
             fmap.setRowCount(len(field_rows))
             for r, (feather, fld, raw, sem) in enumerate(field_rows):
-                fmap.setItem(r, 0, QTableWidgetItem(feather))
+                fmap.setItem(r, 0, icon_table_item(CrowEyeIcons.feather(), feather))
                 fmap.setItem(r, 1, QTableWidgetItem(fld))
                 fmap.setItem(r, 2, QTableWidgetItem(raw))
                 fmap.setItem(r, 3, QTableWidgetItem(sem))
@@ -2830,9 +3025,9 @@ class IdentityDetailDialog(QDialog):
         if rules:
             layout.addWidget(QLabel("<b>Matched rules</b>"))
             rtable = QTableWidget()
-            rtable.setColumnCount(6)
+            rtable.setColumnCount(7)
             rtable.setHorizontalHeaderLabels([
-                'Rule', 'Semantic Value', 'Category', 'Severity', 'Confidence', 'MITRE'
+                'Rule', 'Semantic Value', 'Category', 'Severity', 'Confidence', 'MITRE', 'Scope'
             ])
             rtable.setRowCount(len(rules))
             for r, rule in enumerate(rules):
@@ -2854,6 +3049,10 @@ class IdentityDetailDialog(QDialog):
 
                 mitre = ", ".join(str(t) for t in (rule.get('technique_id') or []))
                 rtable.setItem(r, 5, QTableWidgetItem(mitre))
+                # What the rule judged: this anchor's records, or the whole
+                # identity (an absence, a sequence, a threshold over every
+                # anchor). The engines wrote this and nothing showed it.
+                rtable.setItem(r, 6, QTableWidgetItem(_rule_scope_words(rule)))
             rtable.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
             rtable.horizontalHeader().setStretchLastSection(True)
             rtable.setAlternatingRowColors(True)
@@ -2991,8 +3190,8 @@ class IdentityDetailDialog(QDialog):
             feather_group = QGroupBox()
             feather_layout = QVBoxLayout(feather_group)
             from .crow_eye_icons import group_title_label
-            _ce_title = group_title_label("feather", "Feather Records", size_px=14)
-            _site.set_role(_ce_title, "section")
+            _ce_title = group_title_label("feather", "Feather Records", size_px=16)
+            _theme.set_role(_ce_title, "section")
             feather_layout.addWidget(_ce_title)
             
             # Create tabs for each feather
@@ -3002,11 +3201,11 @@ class IdentityDetailDialog(QDialog):
                 if isinstance(feather_data_item, list) and feather_data_item:
                     # Create table for this feather's records
                     feather_table = self._create_feather_records_table(feather_name, feather_data_item)
-                    feather_tabs.addTab(feather_table, f"{feather_name} ({len(feather_data_item)})")
+                    feather_tabs.addTab(feather_table, CrowEyeIcons.feather(), f"{feather_name} ({len(feather_data_item)})")
                 elif isinstance(feather_data_item, dict):
                     # Single record as dict
                     feather_table = self._create_feather_records_table(feather_name, [feather_data_item])
-                    feather_tabs.addTab(feather_table, feather_name)
+                    feather_tabs.addTab(feather_table, CrowEyeIcons.feather(), feather_name)
             
             feather_layout.addWidget(feather_tabs)
             

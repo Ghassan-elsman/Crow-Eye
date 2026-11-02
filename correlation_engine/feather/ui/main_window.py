@@ -17,18 +17,18 @@ from ..database import FeatherDatabase
 from ..transformer import DataTransformer
 from ...gui.crow_eye_icons import apply_status_to_label
 
-# The site look (ui/site_theme.py). Standalone, without Crow-Eye's ui
+# The site look (ui/app_theme.py). Standalone, without Crow-Eye's ui
 # package, the window simply keeps Qt's own style.
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:
-    _site = None
+    _theme = None
 
 
 def _status(widget, kind):
     """Colour a label by meaning (ok / warn / bad / info) through the sheet."""
-    if _site is not None:
-        _site.set_status(widget, kind)
+    if _theme is not None:
+        _theme.set_status(widget, kind)
 
 # Import config system
 try:
@@ -79,11 +79,11 @@ class FeatherBuilderWindow(QMainWindow):
         # Freed when closed: the opener (pipeline_builder) only holds it
         # until it is destroyed, and nothing reads it after it closes.
         self.setAttribute(Qt.WA_DeleteOnClose)
-        # The site sheet BEFORE the children exist, the roles once built.
-        if _site is not None:
-            _site.begin_site_theme(self)
+        # The theme sheet BEFORE the children exist, the roles once built.
+        if _theme is not None:
+            _theme.begin_theme(self)
         self.init_ui()
-        self._apply_site_look()
+        self._apply_theme()
         self.connect_import_signals()
         
         # Update path input if auto-set
@@ -134,9 +134,10 @@ class FeatherBuilderWindow(QMainWindow):
         header_layout = QVBoxLayout()
         
         # Title label
-        title_label = QLabel("FEATHER BUILDER")
-        if _site is not None:
-            _site.set_role(title_label, "title")        # 24px, as the 18pt it was
+        from ...gui.crow_eye_icons import icon_label_html
+        title_label = QLabel(icon_label_html("feather", "FEATHER BUILDER", 24))
+        if _theme is not None:
+            _theme.set_role(title_label, "title")        # 24px, as the 18pt it was
         else:
             title_label.setFont(QFont("Consolas", 18, QFont.Bold))
         title_label.setAlignment(Qt.AlignCenter)
@@ -162,8 +163,8 @@ class FeatherBuilderWindow(QMainWindow):
         self.path_button = QPushButton("Browse...")
         self.path_button.setMaximumWidth(120)
         self.path_button.clicked.connect(self.select_feather_path)
-        if _site is not None:
-            _site.set_variant(self.path_button, "ghost")
+        if _theme is not None:
+            _theme.set_variant(self.path_button, "ghost")
         
         # Add to layout
         name_path_layout.addWidget(name_label)
@@ -191,8 +192,8 @@ class FeatherBuilderWindow(QMainWindow):
         detection_label.setMinimumWidth(120)
         self.artifact_detection_label = QLabel()
         apply_status_to_label(self.artifact_detection_label, "WARN", "Not detected yet")
-        if _site is not None:
-            self.artifact_detection_label.setFont(_site.font("ui", 13, QFont.Bold))
+        if _theme is not None:
+            self.artifact_detection_label.setFont(_theme.font("ui", 13, QFont.Bold))
         _status(self.artifact_detection_label, "info")
         detection_layout.addWidget(detection_label)
         detection_layout.addWidget(self.artifact_detection_label)
@@ -257,8 +258,8 @@ class FeatherBuilderWindow(QMainWindow):
         self.source_timezone_hint.setWordWrap(True)
         # Indented under the combo (124px: the label column), amber caption.
         self.source_timezone_hint.setContentsMargins(124, 0, 0, 0)
-        if _site is not None:
-            _site.set_role(self.source_timezone_hint, "muted")
+        if _theme is not None:
+            _theme.set_role(self.source_timezone_hint, "muted")
         _status(self.source_timezone_hint, "warn")
         self.source_timezone_hint.setVisible(False)
         layout.addWidget(self.source_timezone_hint)
@@ -271,8 +272,8 @@ class FeatherBuilderWindow(QMainWindow):
             "controls how naive timestamps in the source get converted to UTC."
         )
         help_label.setWordWrap(True)
-        if _site is not None:
-            _site.set_role(help_label, "muted")
+        if _theme is not None:
+            _theme.set_role(help_label, "muted")
         layout.addWidget(help_label)
 
         group.setLayout(layout)
@@ -587,12 +588,14 @@ class FeatherBuilderWindow(QMainWindow):
         # File menu
         file_menu = menubar.addMenu("File")
         
-        new_action = QAction("New Feather", self)
+        # Each Feather action shows the Feather.
+        from ...gui.crow_eye_icons import CrowEyeIcons
+        new_action = QAction(CrowEyeIcons.feather(), "New Feather", self)
         new_action.setShortcut("Ctrl+N")
         new_action.triggered.connect(self.new_feather)
         file_menu.addAction(new_action)
         
-        open_action = QAction("Open Feather", self)
+        open_action = QAction(CrowEyeIcons.feather(), "Open Feather", self)
         open_action.setShortcut("Ctrl+O")
         open_action.triggered.connect(self.open_feather)
         file_menu.addAction(open_action)
@@ -637,22 +640,22 @@ class FeatherBuilderWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
     
-    def _apply_site_look(self):
-        """The site look (ui/site_theme.py) - one sheet, the site fonts.
+    def _apply_theme(self):
+        """The site look (ui/app_theme.py) - one sheet, the site fonts.
 
-        It used to load feather/ui/styles.qss; the site sheet replaces it.
+        It used to load feather/ui/styles.qss; the theme sheet replaces it.
         Buttons get their role here: the import is the main action, the
         browse buttons are everyday, deleting rows is destructive."""
-        if _site is None:
+        if _theme is None:
             return
         for tab in (self.db_tab, self.csv_tab, self.json_tab):
-            _site.set_variant(tab.import_btn, "primary")
+            _theme.set_variant(tab.import_btn, "primary")
         for btn in (self.db_tab.db_browse_btn, self.csv_tab.csv_browse_btn,
                     self.json_tab.json_browse_btn, self.data_viewer.refresh_btn,
                     self.data_viewer.export_btn):
-            _site.set_variant(btn, "ghost")
-        _site.set_variant(self.data_viewer.delete_btn, "danger")
-        _site.apply_site_theme(self)
+            _theme.set_variant(btn, "ghost")
+        _theme.set_variant(self.data_viewer.delete_btn, "danger")
+        _theme.apply_theme(self)
         # The site's button font is uppercase and tracked: the capped Browse
         # button grows to the label it now carries, or "BROWSE..." clips.
         self.path_button.ensurePolished()

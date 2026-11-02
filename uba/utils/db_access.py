@@ -63,13 +63,72 @@ KEY_TABLES: Dict[str, List[str]] = {
 }
 
 
+_DB_SUFFIXES = (".db", ".sqlite", ".sqlite3", ".db3")
+
+
+def is_file_db_name(name: str) -> bool:
+    """A database named by its path inside Target_Artifacts (an analyst rule
+    can read any parsed database, not only UBA's logical ones): relative, no
+    '..', with a database suffix."""
+    text = str(name or "").replace("\\", "/")
+    if not text or text in DB_CANDIDATES or not text.lower().endswith(_DB_SUFFIXES):
+        return False
+    if text.startswith("/") or os.path.isabs(text) or ":" in text:
+        return False
+    return ".." not in text.split("/")
+
+
 def resolve_db_path(artifacts_dir: str, logical_name: str) -> Optional[str]:
-    """Return the absolute path of a logical database, or None if absent."""
+    """Return the absolute path of a logical database, or None if absent.
+
+    ``logical_name`` is one of DB_CANDIDATES, or a path relative to
+    Target_Artifacts (is_file_db_name) that must stay inside it."""
     for rel in DB_CANDIDATES.get(logical_name, []):
         path = os.path.join(artifacts_dir, rel)
         if os.path.isfile(path):
             return path
+    if artifacts_dir and is_file_db_name(logical_name):
+        root = os.path.realpath(artifacts_dir)
+        path = os.path.realpath(os.path.join(root, *logical_name.replace("\\", "/").split("/")))
+        if path.startswith(root + os.sep) and os.path.isfile(path):
+            return path
     return None
+
+
+def discover_databases(artifacts_dir: str, max_depth: int = 3) -> List[dict]:
+    """Every SQLite database in Target_Artifacts an analyst rule can read.
+
+    UBA's logical databases first (by their logical name), then any other
+    database file, named by its path relative to Target_Artifacts. A file one
+    of the logical names resolves to is listed once, under that name, so a
+    rule written against it reads the same evidence the built-in rules do.
+    -wal / -shm / journal files are skipped."""
+    out, seen = [], set()
+    if not artifacts_dir or not os.path.isdir(artifacts_dir):
+        return out
+    for logical in DB_CANDIDATES:
+        path = resolve_db_path(artifacts_dir, logical)
+        if path:
+            seen.add(os.path.normcase(os.path.realpath(path)))
+            out.append({"name": logical, "path": path, "logical": True,
+                        "rel": os.path.relpath(path, artifacts_dir).replace("\\", "/")})
+    base_depth = artifacts_dir.rstrip("\\/").count(os.sep)
+    extra = []
+    for folder, dirs, files in os.walk(artifacts_dir):
+        if folder.count(os.sep) - base_depth >= max_depth:
+            dirs[:] = []
+        dirs.sort()
+        for name in sorted(files):
+            if not name.lower().endswith(_DB_SUFFIXES):
+                continue
+            path = os.path.join(folder, name)
+            key = os.path.normcase(os.path.realpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            rel = os.path.relpath(path, artifacts_dir).replace("\\", "/")
+            extra.append({"name": rel, "path": path, "logical": False, "rel": rel})
+    return out + extra
 
 
 def open_ro(db_path: str) -> sqlite3.Connection:
@@ -242,6 +301,21 @@ class DbPool:
                 logger.warning("UBA: closing %s failed: %s", name, e)
 
 
+# The status only has to say whether there is data; counting every row of the MFT,
+# USN and event-log tables took seconds on a large case, on the GUI thread, before the
+# User Behavior window could draw (2026-11-01). A table at the cap is listed in
+# "capped": at least that many rows, never presented as the exact number.
+STATUS_COUNT_CAP = 200000
+
+
+def row_count_capped(conn: sqlite3.Connection, table: str, cap: int) -> int:
+    try:
+        return conn.execute('SELECT COUNT(*) FROM (SELECT 1 FROM "{}" LIMIT ?)'.format(table),
+                            (int(cap),)).fetchone()[0]
+    except sqlite3.Error:
+        return 0
+
+
 def data_status(artifacts_dir: str) -> dict:
     """Summarize which parsed databases exist and how much data they hold.
 
@@ -260,9 +334,11 @@ def data_status(artifacts_dir: str) -> dict:
                 try:
                     for table in KEY_TABLES.get(name, []):
                         if table_exists(conn, table):
-                            n = row_count(conn, table)
+                            n = row_count_capped(conn, table, STATUS_COUNT_CAP)
                             entry["tables"][table] = n
                             entry["total_rows"] += n
+                            if n >= STATUS_COUNT_CAP:
+                                entry.setdefault("capped", []).append(table)
                 finally:
                     conn.close()
             except sqlite3.Error as e:

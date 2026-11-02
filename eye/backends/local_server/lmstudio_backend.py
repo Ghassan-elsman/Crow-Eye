@@ -320,11 +320,15 @@ class LMStudioBackend(LLMBackend):
                     actual_model, target_model,
                 )
 
+            _u = data.get("usage") or {}
+            usage = self.record_usage(_u.get("prompt_tokens"), _u.get("completion_tokens"),
+                                      model=actual_model)
             return {
                 "content": content,
                 "tool_calls": tool_calls,
                 "model": actual_model,
                 "model_substituted": substituted,
+                "usage": usage,
             }
             
         except (ConnectionError, TimeoutError, RuntimeError):

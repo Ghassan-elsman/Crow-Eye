@@ -2,6 +2,93 @@
 
 from PyQt5.QtCore import Qt
 
+_CHEVRONS = {
+    "tab_left": '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="12" viewBox="0 0 8 12">'
+                '<path d="M6.5 1.5 L2 6 L6.5 10.5" fill="none" stroke="%s" stroke-width="2.2" '
+                'stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    "tab_right": '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="12" viewBox="0 0 8 12">'
+                 '<path d="M1.5 1.5 L6 6 L1.5 10.5" fill="none" stroke="%s" stroke-width="2.2" '
+                 'stroke-linecap="round" stroke-linejoin="round"/></svg>',
+}
+
+
+def _chevron(name, colour):
+    """Path (forward slashes) of a chevron SVG in ``colour``, written once to the temp
+    folder whole or not at all (a stylesheet url() needs a real file; a frozen build
+    has no writable program folder). Same scheme as ui.app_theme.glyph."""
+    import os
+    import tempfile
+    folder = os.path.join(tempfile.gettempdir(), "crow_eye_app_theme_1")
+    path = os.path.join(folder, "%s_%s.svg" % (name, colour.strip("#")))
+    want = _CHEVRONS[name] % colour
+    try:
+        with open(path, "r", encoding="ascii") as fh:
+            ok = fh.read() == want
+    except (OSError, ValueError):
+        ok = False
+    if not ok:
+        os.makedirs(folder, exist_ok=True)
+        tmp = "%s.%d.tmp" % (path, os.getpid())
+        with open(tmp, "w", encoding="ascii") as fh:
+            fh.write(want)
+        os.replace(tmp, path)
+    return path.replace("\\", "/")
+
+
+def _tab_scroll_buttons_qss():
+    """The previous / next buttons a tab bar shows when its tabs do not fit.
+
+    They were 24 px slate squares with Qt's own small dark arrows, on a slate
+    ground: hard to find and easy to take for a tab edge (Ghassan, 2026-11-02:
+    "give the navigation buttons between the tabs a better style, shown and
+    different"). Now each is a cyan chevron in its own rounded, teal-edged
+    button, set apart from the tabs; it brightens on hover and dims when there
+    is nothing more on that side.
+    """
+    try:
+        # Written here, not through ui.app_theme.glyph: importing the ui package
+        # from styles.py is circular (ui/__init__ -> database_search_dialog -> styles).
+        imgs = {k: _chevron(n, c) for k, (n, c) in {
+            "left": ("tab_left", "#22D3EE"), "right": ("tab_right", "#22D3EE"),
+            "left_hot": ("tab_left", "#FFFFFF"), "right_hot": ("tab_right", "#FFFFFF"),
+            "left_off": ("tab_left", "#475569"), "right_off": ("tab_right", "#475569")}.items()}
+    except Exception:
+        imgs = {}
+
+    def img(key):
+        return 'image: url("%s");' % imgs[key] if imgs.get(key) else ""
+
+    return """
+        QTabBar::scroller {
+            width: 76px;
+        }
+        QTabBar QToolButton {
+            background-color: #0B2530;
+            border: 2px solid #0E7490;
+            border-radius: 8px;
+            margin: 4px 3px 4px 3px;
+        }
+        QTabBar QToolButton:hover {
+            background-color: #155E75;
+            border-color: #22D3EE;
+        }
+        QTabBar QToolButton:pressed {
+            background-color: #0E7490;
+        }
+        QTabBar QToolButton:disabled {
+            background-color: #111827;
+            border-color: #1F2937;
+        }
+        QTabBar QToolButton::left-arrow { %s width: 8px; height: 12px; }
+        QTabBar QToolButton::right-arrow { %s width: 8px; height: 12px; }
+        QTabBar QToolButton::left-arrow:hover { %s }
+        QTabBar QToolButton::right-arrow:hover { %s }
+        QTabBar QToolButton::left-arrow:disabled { %s }
+        QTabBar QToolButton::right-arrow:disabled { %s }
+    """ % (img("left"), img("right"), img("left_hot"), img("right_hot"),
+           img("left_off"), img("right_off"))
+
+
 # Unified Color Palette
 class Colors:
     # Modern Dark Dashboard Base Colors
@@ -29,17 +116,17 @@ class Colors:
     BORDER_SUBTLE = "#334155" # Subtle borders
     BORDER_ACCENT = "#475569" # Accent borders
 
-    # The website's tokens (crow-eye.com style.css :root), for surfaces that
+    # Brand tokens - the website's (crow-eye.com style.css :root) - for surfaces that
     # follow the site's look - the loading dialog first.
-    SITE_BG = "#0A0C10"
-    SITE_CARD = "#0F172A"
-    SITE_INDIGO = "#6366F1"
-    SITE_INDIGO_HOVER = "#818CF8"
-    SITE_CYAN = "#22D3EE"
-    SITE_ROSE = "#F43F5E"
-    SITE_TEXT = "#F8FAFC"
-    SITE_MUTED = "#94A3B8"
-    SITE_HAIRLINE = "rgba(255, 255, 255, 0.08)"
+    BRAND_BG = "#0A0C10"
+    BRAND_CARD = "#0F172A"
+    BRAND_INDIGO = "#6366F1"
+    BRAND_INDIGO_HOVER = "#818CF8"
+    BRAND_CYAN = "#22D3EE"
+    BRAND_ROSE = "#F43F5E"
+    BRAND_TEXT = "#F8FAFC"
+    BRAND_MUTED = "#94A3B8"
+    BRAND_HAIRLINE = "rgba(255, 255, 255, 0.08)"
 
     # Standard columns in every artifact table (ui/column_colors.py): one
     # tint per kind of value, from the site's indigo / cyan family, all
@@ -82,7 +169,7 @@ QMessageBox QLabel, QInputDialog QLabel {{
 QMessageBox QPushButton, QInputDialog QPushButton {{
     background-color: {Colors.BG_PANELS};
     color: {Colors.TEXT_PRIMARY};
-    border: 1px solid {Colors.BORDER_SUBTLE};
+    border: 3px solid {Colors.BORDER_SUBTLE};
     border-radius: 6px;
     padding: 6px 16px;
     font-size: 10pt;
@@ -92,7 +179,7 @@ QMessageBox QPushButton, QInputDialog QPushButton {{
 }}
 QMessageBox QPushButton:hover, QInputDialog QPushButton:hover {{
     background-color: {Colors.BORDER_SUBTLE};
-    border: 1px solid {Colors.ACCENT_CYAN};
+    border: 3px solid {Colors.ACCENT_CYAN};
 }}
 QMessageBox QPushButton:pressed, QInputDialog QPushButton:pressed {{
     background-color: {Colors.BORDER_ACCENT};
@@ -101,7 +188,7 @@ QInputDialog QLineEdit, QInputDialog QComboBox, QInputDialog QSpinBox,
 QInputDialog QDoubleSpinBox, QMessageBox QTextEdit {{
     background-color: {Colors.BG_PANELS};
     color: {Colors.TEXT_PRIMARY};
-    border: 1px solid {Colors.BORDER_SUBTLE};
+    border: 3px solid {Colors.BORDER_SUBTLE};
     border-radius: 4px;
     padding: 4px;
 }}
@@ -289,6 +376,10 @@ QToolTip {{
                 continue
         return None
 
+    # (path, trim) -> QIcon. The bundled artwork does not change while the app runs, and
+    # trimming the Eye PNG scans its pixels: about 0.2 s every time Settings opened.
+    _icon_cache = {}
+
     @staticmethod
     def _trim_transparent(pixmap):
         """Crop a pixmap's fully transparent margin. Returns it unchanged on
@@ -374,6 +465,10 @@ QToolTip {{
         path = CrowEyeStyles.resource_path(*parts)
         if not path:
             return None
+        key = (path, bool(kwargs.get("trim")))
+        cached = CrowEyeStyles._icon_cache.get(key)
+        if cached is not None:
+            return cached
         try:
             if kwargs.get("trim"):
                 pixmap = QtGui.QPixmap(path)
@@ -387,10 +482,12 @@ QToolTip {{
                     icon.addPixmap(trimmed.scaled(
                         size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
                 if not icon.pixmap(32, 32).isNull():
+                    CrowEyeStyles._icon_cache[key] = icon
                     return icon
                 return None
             icon = QtGui.QIcon(path)
             if not icon.pixmap(32, 32).isNull():
+                CrowEyeStyles._icon_cache[key] = icon
                 return icon
         except Exception:
             pass
@@ -673,22 +770,22 @@ QToolTip {{
         }}
         QFrame {{
             background-color: {Colors.BG_PANELS};
-            border: 1px solid {Colors.BORDER_SUBTLE};
+            border: 3px solid {Colors.BORDER_SUBTLE};
             border-radius: 8px;
         }}
         QTextEdit, QLineEdit, QComboBox {{
             background-color: {Colors.BG_TABLES};
             color: {Colors.TEXT_PRIMARY};
-            border: 1px solid {Colors.BORDER_SUBTLE};
+            border: 3px solid {Colors.BORDER_SUBTLE};
             border-radius: 4px;
             padding: 5px;
         }}
         QTextEdit:focus, QLineEdit:focus, QComboBox:focus {{
-            border: 1px solid {Colors.ACCENT_CYAN};
+            border: 3px solid {Colors.ACCENT_CYAN};
         }}
         QProgressBar {{
             background-color: {Colors.BG_TABLES};
-            border: 1px solid {Colors.BORDER_SUBTLE};
+            border: 3px solid {Colors.BORDER_SUBTLE};
             border-radius: 5px;
             text-align: center;
             color: {Colors.TEXT_PRIMARY};
@@ -752,11 +849,11 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #4ADE80;
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #16A34A;
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -780,7 +877,7 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #3B82F6;
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #1D4ED8;
@@ -806,12 +903,12 @@ QToolTip {{
         QPushButton:hover {
             background-color: #60A5FA;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #1E40AF;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -876,12 +973,12 @@ QToolTip {{
         QPushButton:hover {
             background-color: #94A3B8;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #334155;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
         }
         QPushButton:disabled {
             background-color: #475569;
@@ -927,11 +1024,11 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #FF8C42;
-            border: 1px solid rgba(255, 255, 255, 0.4);
+            border: 3px solid #6D7179;
         }
         QPushButton:pressed {
             background-color: #E64A19;
-            border: 1px solid rgba(255, 255, 255, 0.3);
+            border: 3px solid #545963;
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -944,7 +1041,7 @@ QToolTip {{
         QDialog {
             background-color: #0F172A;
             color: #E2E8F0;
-            border: 2px solid #334155;
+            border: 3px solid #334155;
             border-radius: 10px;
         }
     """
@@ -954,7 +1051,7 @@ QToolTip {{
         QGroupBox {
             background-color: #1E293B;
             color: #E2E8F0;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 6px;
             margin-top: 10px;
             font-weight: 600;
@@ -982,7 +1079,7 @@ QToolTip {{
             min-height: 300px;
             padding: 30px;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 3px solid rgba(0, 255, 255, 0.4);
+            border: 3px solid #077179;
         }
         QMessageBox QLabel {
             color: #E2E8F0;
@@ -998,7 +1095,7 @@ QToolTip {{
         QMessageBox QPushButton {
             background-color: #3B82F6;
             color: #FFFFFF;
-            border: 2px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
             border-radius: 10px;
             padding: 15px 30px;
             font-weight: 600;
@@ -1010,13 +1107,13 @@ QToolTip {{
         }
         QMessageBox QPushButton:hover {
             background-color: #60A5FA;
-            border: 2px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
             /* Qt doesn't support box-shadow, using border instead */
-            border: 3px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QMessageBox QPushButton:pressed {
             background-color: #1E40AF;
-            border: 2px solid #00FFFF;
+            border: 3px solid #00FFFF;
         }
         QMessageBox QPushButton:focus {
             outline: none;
@@ -1040,7 +1137,7 @@ QToolTip {{
     # ------------------------------------------------------------------
     UNIFIED_TAB_STYLE = """
         QTabWidget::pane {
-            border: 1px solid #2a3a55;
+            border: 3px solid #2a3a55;
             border-radius: 8px;
             background: #0e131c;
             margin: 0px;
@@ -1050,7 +1147,7 @@ QToolTip {{
         QTabBar::tab {
             background: #1E293B;
             color: #94A3B8;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-bottom: none;
             border-top-left-radius: 6px;
             border-top-right-radius: 6px;
@@ -1072,37 +1169,28 @@ QToolTip {{
         QTabBar::tab:selected {
             background-color: #0B1220;
             color: #00FFFF;
-            border-bottom: 2px solid #00FFFF;
+            border-bottom: 3px solid #00FFFF;
             font-weight: bold;
         }
         QTabBar::tab:hover:!selected {
-            background-color: #334155;
-            color: #FFFFFF;
+            /* Ghassan, 2026-11-01: the light-grey fill with white text was too bright.
+               A darker tab with a teal edge previews the cyan of the selected one. */
+            background-color: #172437;
+            color: #E2E8F0;
+            border-color: #1F5F73;
         }
         QTabBar::tab:disabled {
             color: #64748B;
             background-color: #64748B;
         }
-        QTabBar::scroller {
-            width: 24px;
-        }
-        QTabBar QToolButton {
-            background-color: #1E293B;
-            border: 1px solid #334155;
-            border-radius: 3px;
-        }
-        QTabBar QToolButton:hover {
-            background-color: #334155;
-            border: 1px solid rgba(148, 163, 184, 0.28);
-        }
-    """
+    """ + _tab_scroll_buttons_qss()
 
     # Case Dialog Styles - Enhanced Cyberpunk Theme
     CASE_DIALOG_STYLE = """
         QDialog {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                 stop:0 #020617, stop:0.5 #0B1220, stop:1 #020617);
-            border: 2px solid #00FFFF;
+            border: 3px solid #00FFFF;
             border-radius: 16px;
         }
         
@@ -1114,7 +1202,7 @@ QToolTip {{
         QFrame[frameShape="4"] { /* HLine */
             background-color: #00FFFF;
             color: #00FFFF;
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
             margin: 15px 0;
             border-radius: 2px;
         }
@@ -1140,19 +1228,19 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                 stop:0 #3B82F6, stop:1 #2563EB);
-            border: 2px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
                 stop:0 #1D4ED8, stop:1 #1E40AF);
-            border: 2px solid #00FF7F;
+            border: 3px solid #00FF7F;
         }
         
         QPushButton:disabled {
             background: #334155;
             color: #64748B;
-            border: 1px solid #475569;
+            border: 3px solid #475569;
         }
     """
     
@@ -1183,7 +1271,7 @@ QToolTip {{
         QWidget#option_card {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                 stop:0 #0F172A, stop:0.3 #1E293B, stop:0.7 #1E293B, stop:1 #0F172A);
-            border: 2px solid #334155;
+            border: 3px solid #334155;
             border-radius: 15px;
             padding: 0px;
             margin: 8px 0;
@@ -1193,7 +1281,7 @@ QToolTip {{
         QWidget#option_card:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                 stop:0 #1E293B, stop:0.2 #2D3748, stop:0.5 #334155, stop:0.8 #2D3748, stop:1 #1E293B);
-            border: 3px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
             margin: 6px 0;
         }
         
@@ -1208,7 +1296,7 @@ QToolTip {{
         QLabel[objectName^="icon"] {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                 stop:0 rgba(0, 255, 255, 0.05), stop:1 rgba(0, 255, 255, 0.15));
-            border: 1px solid rgba(0, 255, 255, 0.3);
+            border: 3px solid #085963;
             padding: 8px;
             border-radius: 10px;
             margin: 5px;
@@ -1217,7 +1305,7 @@ QToolTip {{
         QLabel[objectName^="icon"]:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                 stop:0 rgba(59, 130, 246, 0.15), stop:1 rgba(59, 130, 246, 0.25));
-            border: 2px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         
         /* Enhanced text styling within cards */
@@ -1267,7 +1355,7 @@ QToolTip {{
         QLineEdit, QTextEdit, QPlainTextEdit {
             background-color: #1E293B;
             color: #F1F5F9;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 4px;
             padding: 4px 8px;
             selection-background-color: #3B82F6;
@@ -1281,7 +1369,7 @@ QToolTip {{
         }
         
         QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {
-            border: 1px solid #3B82F6;
+            border: 3px solid #3B82F6;
             background-color: #263449;
         }
         
@@ -1302,7 +1390,7 @@ QToolTip {{
         QDateTimeEdit {
             background-color: #1E293B;
             color: #F1F5F9;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 4px;
             padding: 4px 8px;
             font-size: 11px;
@@ -1315,7 +1403,7 @@ QToolTip {{
         }
         
         QDateTimeEdit:focus {
-            border: 1px solid #3B82F6;
+            border: 3px solid #3B82F6;
             background-color: #263449;
         }
         
@@ -1359,7 +1447,7 @@ QToolTip {{
         QCalendarWidget {
             background-color: #0F172A;
             color: #E2E8F0;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 6px;
         }
         
@@ -1441,7 +1529,7 @@ QToolTip {{
         QCalendarWidget QSpinBox {
             background-color: #1E293B;
             color: #00FFFF;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 4px;
             margin: 2px;
             padding: 2px 4px;
@@ -1573,7 +1661,7 @@ QToolTip {{
         /* Table core — near-black canvas; rows paint slightly lighter via ::item */
         QTableWidget {
             background-color: #07090e;
-            border: 1px solid #1f2530;
+            border: 3px solid #1f2530;
             border-radius: 8px;
             gridline-color: #1a1f29;
             outline: 0;
@@ -1697,7 +1785,7 @@ QToolTip {{
     UNIFIED_TREE_STYLE = """
         QTreeView, QTreeWidget {
             background-color: #0B1220;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
             color: #E2E8F0;
             font-size: 13px;
@@ -1796,7 +1884,7 @@ QToolTip {{
         }
         /* Box-style frames (StyledPanel, Box) get a subtle slate border */
         QFrame[frameShape="6"], QFrame[frameShape="2"] {
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 6px;
         }
     """
@@ -1817,7 +1905,7 @@ QToolTip {{
         }
         QSlider::handle:horizontal {
             background: #3B82F6;
-            border: 2px solid #1E40AF;
+            border: 1px solid #1E40AF;
             width: 14px;
             height: 14px;
             margin: -6px 0;
@@ -1845,7 +1933,7 @@ QToolTip {{
         }
         QSlider::handle:vertical {
             background: #3B82F6;
-            border: 2px solid #1E40AF;
+            border: 1px solid #1E40AF;
             width: 14px;
             height: 14px;
             margin: 0 -6px;
@@ -1869,7 +1957,7 @@ QToolTip {{
     UNIFIED_SCROLLAREA_STYLE = """
         QScrollArea {
             background-color: transparent;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
         }
         /* The intermediate viewport / contents widgets must be transparent so
@@ -1979,7 +2067,7 @@ QToolTip {{
     TABLE_WIDGET = """
         QFrame#info_frame {
             background-color: #0B1220;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 8px;
         }
     """
@@ -2009,25 +2097,26 @@ QToolTip {{
         QFrame[frameShape="6"] {
             background-color: #0e131c;
             color: #e6edf3;
-            border: 1px solid #2a3a55;
+            border: 3px solid #2a3a55;
             border-radius: 10px;
         }
     """
     
     # Live Analysis Label Style
+    # The side menu's section headers (Live analysis, Offline analysis): the theme's section caption -
+    # lavender, bold, tracked, a hairline under it - not a boxed neon label, which read as a button and
+    # was the only neon green left in the window.
     LIVE_ANALYSIS_LABEL = """
         QLabel {
-            /* Text Styling */
-            color: #00FF00; /* Neon green */
-            font-family: 'Arial Black', sans-serif;
-            font-size: 14px;
-            font-weight: bold;
-            
-            /* Background */
-            background-color: rgba(0, 20, 0, 0.7); /* Dark green with transparency */
-            border: 1px solid #00FF00;
-            border-radius: 4px;
-            padding: 8px 16px;
+            color: #A5B4FC;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            font-weight: 800;
+            letter-spacing: 1.6px;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid rgba(165, 180, 252, 0.30);
+            padding: 12px 6px 6px 6px;
         }
     """
     
@@ -2036,7 +2125,7 @@ QToolTip {{
         QPushButton {
             background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                       stop: 0 #10B981, stop: 1 #059669);
-            border: 1px solid #34D399;
+            border: 3px solid #34D399;
             border-radius: 8px;
             color: white;
             font-weight: bold;
@@ -2048,12 +2137,12 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                       stop: 0 #34D399, stop: 1 #10B981);
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         
         QPushButton:pressed {
             background: #047857;
-            border: 1px solid #00FFFF;
+            border: 3px solid #00FFFF;
         }
         
         QPushButton:disabled {
@@ -2066,7 +2155,7 @@ QToolTip {{
     # Loading Progress Style - Note: User requested not to change progress bars
     LOADING_PROGRESS = """
         QProgressBar {
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 8px;
             background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 0,
                                       stop: 0 #0B1220, stop: 1 #1E293B);
@@ -2155,7 +2244,7 @@ QToolTip {{
         QTextEdit {
             background-color: #0a1929;
             color: #b0bec5;
-            border: 1px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 5px;
             padding: 5px;
             font-family: 'Consolas', 'Courier New', monospace;
@@ -2180,7 +2269,7 @@ QToolTip {{
     OVERLAY_BACKDROP = """
         QWidget {
             background-color: rgba(0, 0, 0, 180);
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
         }
     """
 
@@ -2188,7 +2277,7 @@ QToolTip {{
     OVERLAY_CONTAINER = """
         QWidget {
             background-color: rgba(10, 15, 30, 220);
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 10px;
         }
     """
@@ -2202,7 +2291,7 @@ QToolTip {{
             font-family: 'Consolas', monospace;
             padding: 10px;
             background-color: rgba(0, 30, 60, 150);
-            border: 1px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 5px;
         }
     """
@@ -2220,7 +2309,7 @@ QToolTip {{
     # Overlay progress bar
     OVERLAY_PROGRESS = """
         QProgressBar {
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 8px;
             background-color: rgba(0, 30, 60, 150);
             height: 25px;
@@ -2243,7 +2332,7 @@ QToolTip {{
             color: #00ff00;
             font-family: 'Consolas', monospace;
             font-size: 12px;
-            border: 1px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 5px;
             padding: 10px;
         }
@@ -2263,7 +2352,7 @@ QToolTip {{
     MAIN_MENU_BUTTON = """
         QPushButton {
             background-color: rgba(15,23,42,0.8);
-            border: 1px solid rgba(0,255,255,0.3);
+            border: 3px solid #085963;
             padding: 0px;
             border-radius: 8px;
             max-width: 42px;
@@ -2272,15 +2361,15 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: rgba(30,41,59,0.9);
-            border-color: rgba(148, 163, 184, 0.28);
+            border-color: #313B4B;
         }
         QPushButton:pressed {
             background-color: rgba(15,23,42,1.0);
-            border-color: rgba(0,255,255,0.8);
+            border-color: #02D0D2;
         }
         QPushButton:checked {
             background-color: rgba(30,41,59,0.9);
-            border-color: rgba(0,255,255,0.8);
+            border-color: #02D0D2;
             border-width: 2px;
         }
     """
@@ -2295,12 +2384,12 @@ QToolTip {{
             padding: 4px 10px;
             background-color: rgba(15,23,42,0.7);
             border-radius: 6px;
-            border: 1px solid rgba(0,255,255,0.4);
+            border: 3px solid #077179;
             max-width: 300px;
         }
         QLabel:hover {
             background-color: rgba(15,23,42,0.8);
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
             color: #E2E8F0;
             /* Qt doesn't support text-shadow, using brighter color instead */
             color: #80FFFF;
@@ -2328,7 +2417,7 @@ QToolTip {{
     SEARCH_FRAME = """
         QFrame#search_frame {
             background-color: rgba(255,255,255,0.04);
-            border: 2px solid rgba(59,130,246,0.3);
+            border: 3px solid #193460;
             border-radius: 8px;
             padding: 6px 10px;
             margin: 6px 10px;
@@ -2454,7 +2543,7 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #A78BFA;
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #6D28D9;
@@ -2482,7 +2571,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #34D399, stop:1 #10B981);
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background: #047857;
@@ -2495,7 +2584,7 @@ QToolTip {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                                       stop:0 #0891B2, stop:1 #0E7490);
             color: #FFFFFF;
-            border: 1px solid rgba(255, 255, 255, 0.1);
+            border: 3px solid #232A36;
             border-radius: 6px;
             padding: 8px 15px;
             font-weight: 600;
@@ -2506,7 +2595,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                                       stop:0 #22D3EE, stop:1 #0891B2);
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background: #155E75;
@@ -2565,7 +2654,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #22D3EE, stop:1 #60A5FA);
-            border: 1px solid #FFFFFF;
+            border: 3px solid #FFFFFF;
         }
         QPushButton:pressed {
             background: #0E7490;
@@ -2589,7 +2678,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #FBBF24, stop:1 #F97316);
-            border: 1px solid #FFFFFF;
+            border: 3px solid #FFFFFF;
         }
         QPushButton:pressed {
             background: #B45309;
@@ -2613,7 +2702,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #2563EB, stop:1 #3B82F6);
-            border: 1px solid #FFFFFF;
+            border: 3px solid #FFFFFF;
         }
         QPushButton:pressed {
             background: #1E3A8A;
@@ -2637,7 +2726,7 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
                                       stop:0 #D12A45, stop:1 #FF5069);
-            border: 1px solid #FFFFFF;
+            border: 3px solid #FFFFFF;
         }
         QPushButton:pressed {
             background: #8E1A2C;
@@ -2650,10 +2739,11 @@ QToolTip {{
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #2563EB, stop:1 #1E40AF);
             color: #FFFFFF;
-            border: none;
-            border-right: 10px solid #1E3A8A;
+            /* one even 1px border: a thick border-right against a zero-width
+               edge made Qt draw a jagged mitred notch into the rounded corners */
+            border: 3px solid #1E3A8A;
             border-radius: 6px;
-            padding: 8px 16px;
+            padding: 3px 16px;          /* the buttons are a fixed 30 px: room for descenders */
             font-weight: 600;
             font-size: 12px;
             font-family: 'Segoe UI', sans-serif;
@@ -2663,20 +2753,18 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #1E40AF, stop:1 #1D4ED8);
-            border-left: 3px solid rgba(148, 163, 184, 0.28);
-            border-right: 10px solid #0F172A;
+            border: 3px solid #60A5FA;
         }
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #1D4ED8, stop:1 #1E3A8A);
-            border-left: 3px solid #00FFFF;
-            border-right: 10px solid #0B1220;
+            border: 3px solid #22D3EE;
         }
         QPushButton:disabled {
             background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
                 stop:0 #64748B, stop:1 #475569);
             color: #94A3B8;
-            border-right: 10px solid #334155;
+            border: 3px solid #334155;
         }
     """
 
@@ -2700,11 +2788,11 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            border: 1px solid rgba(148, 163, 184, 0.28); /* Replaced box-shadow with border for Qt compatibility */
+            border: 3px solid #313B4B; /* Replaced box-shadow with border for Qt compatibility */
         }
         QPushButton:pressed {
             background-color: #1E40AF;
-            border: 1px solid rgba(0, 255, 255, 0.3); /* Replaced box-shadow with border for Qt compatibility */
+            border: 3px solid #085963; /* Replaced box-shadow with border for Qt compatibility */
         }
         QPushButton:disabled {
             background-color: #64748B;
@@ -2720,7 +2808,7 @@ QToolTip {{
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #8B5CF6, stop:0.5 #6D28D9, stop:1 #3B82F6);
             color: #FFFFFF;
-            border: 2px solid #00FFFF;
+            border: 3px solid #00FFFF;
             border-radius: 8px;
             padding: 14px 28px;
             font-weight: 700;
@@ -2731,17 +2819,17 @@ QToolTip {{
         QPushButton:hover {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #A78BFA, stop:0.5 #8B5CF6, stop:1 #60A5FA);
-            border: 3px solid rgba(148, 163, 184, 0.28); /* Enhanced border to replace box-shadow effect */
+            border: 3px solid #313B4B; /* Enhanced border to replace box-shadow effect */
         }
         QPushButton:pressed {
             background: qlineargradient(x1:0, y1:0, x2:1, y2:1, 
                                       stop:0 #7C3AED, stop:0.5 #4C1D95, stop:1 #1E40AF);
-            border: 2px solid #80FFFF; /* Changed border color to replace box-shadow effect */
+            border: 3px solid #80FFFF; /* Changed border color to replace box-shadow effect */
         }
         QPushButton:disabled {
             background-color: #64748B;
             color: #94A3B8;
-            border: 2px solid #475569;
+            border: 3px solid #475569;
         }
     """
 
@@ -2750,7 +2838,7 @@ QToolTip {{
         QDateTimeEdit {
             background-color: #1E293B;
             color: #E2E8F0;
-            border: 1px solid #334155;
+            border: 3px solid #334155;
             border-radius: 4px;
             padding: 6px 8px;
             font-size: 12px;
@@ -2758,10 +2846,10 @@ QToolTip {{
             selection-background-color: #3B82F6;
         }
         QDateTimeEdit:hover {
-            border: 1px solid #475569;
+            border: 3px solid #475569;
         }
         QDateTimeEdit:focus {
-            border: 2px solid #00FFFF;
+            border: 3px solid #00FFFF;
             background-color: #0F172A;
         }
     """
@@ -2781,7 +2869,7 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #60A5FA;
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #1E40AF;
@@ -2797,7 +2885,7 @@ QToolTip {{
         QPushButton {
             background-color: #64748B;
             color: #FFFFFF;
-            border: 1px solid #475569;
+            border: 3px solid #475569;
             border-radius: 6px;
             padding: 10px 20px;
             font-weight: 600;
@@ -2807,7 +2895,7 @@ QToolTip {{
         }
         QPushButton:hover {
             background-color: #94A3B8;
-            border: 1px solid rgba(148, 163, 184, 0.28);
+            border: 3px solid #313B4B;
         }
         QPushButton:pressed {
             background-color: #334155;
@@ -2834,7 +2922,7 @@ QToolTip {{
     LOADING_DIALOG_BACKDROP = """
         QFrame#loadingCard {
             background-color: rgba(15, 23, 42, 0.97);
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            border: 3px solid #1F2532;
             border-radius: 20px;
         }
     """
@@ -2855,7 +2943,7 @@ QToolTip {{
     LOADING_DIALOG_ICON = """
         QLabel {
             background-color: rgba(99, 102, 241, 0.06);
-            border: 2px solid qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
+            border: 3px solid qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1,
                                               stop: 0 #6366F1, stop: 1 #22D3EE);
             border-radius: 24px;
             padding: 8px;
@@ -2892,7 +2980,7 @@ QToolTip {{
             background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                       stop: 0 rgba(0, 255, 255, 0.15),
                                       stop: 1 rgba(0, 255, 255, 0.05));
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 8px;
             margin: 5px;
         }
@@ -2922,7 +3010,7 @@ QToolTip {{
             color: #E2E8F0;
             font-family: 'JetBrains Mono';
             font-size: 12px;
-            border: 1px solid rgba(255, 255, 255, 0.08);
+            border: 3px solid #1F2532;
             border-radius: 12px;
             padding: 8px;
             selection-background-color: rgba(99, 102, 241, 0.45);
@@ -2935,7 +3023,7 @@ QToolTip {{
             color: #00ff00;
             font-family: 'Consolas', 'Courier New', monospace;
             font-size: 11px;
-            border: 2px solid #00ffff;
+            border: 3px solid #00ffff;
             border-radius: 8px;
             padding: 10px;
             line-height: 1.4;
@@ -3007,7 +3095,7 @@ QToolTip {{
             background: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1,
                                       stop: 0 rgba(255, 255, 0, 0.2),
                                       stop: 1 rgba(255, 255, 0, 0.1));
-            border: 2px solid #ffff00;
+            border: 3px solid #ffff00;
             border-radius: 8px;
         }
     """
@@ -3068,7 +3156,7 @@ QToolTip {{
         f"QTextEdit {{ "
         f"background-color: {Colors.BG_TABLES}; "
         f"color: {Colors.TEXT_PRIMARY}; "
-        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border: 3px solid {Colors.BORDER_SUBTLE}; "
         f"border-radius: 6px; "
         f"padding: 10px; "
         f"font-family: Consolas, 'Cascadia Mono', monospace; "
@@ -3082,7 +3170,7 @@ QToolTip {{
         f"QPushButton {{ "
         f"background-color: {Colors.BG_PANELS}; "
         f"color: {Colors.TEXT_PRIMARY}; "
-        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border: 3px solid {Colors.BORDER_SUBTLE}; "
         f"border-radius: 4px; "
         f"padding: 8px 14px; "
         f"font-weight: 600; "
@@ -3097,7 +3185,7 @@ QToolTip {{
         f"color: {Colors.BG_PRIMARY}; "
         f"}} "
         f"QPushButton:focus {{ "
-        f"border: 1px solid {Colors.ACCENT_CYAN}; "
+        f"border: 3px solid {Colors.ACCENT_CYAN}; "
         f"}}"
     )
 
@@ -3142,7 +3230,7 @@ QToolTip {{
     CROWCLAW_PROGRESS_BAR = (
         f"QProgressBar {{ "
         f"background-color: {Colors.BG_PANELS}; "
-        f"border: 1px solid {Colors.BORDER_SUBTLE}; "
+        f"border: 3px solid {Colors.BORDER_SUBTLE}; "
         f"border-radius: 6px; "
         f"text-align: center; "
         f"color: {Colors.TEXT_PRIMARY}; "

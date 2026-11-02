@@ -1,12 +1,13 @@
 {
   "config_name": "usb_removable_media_correlation",
-  "wing_name": "USB / Removable Media Correlation",
+  "wing_name": "USB / Removable Media Correlation (Identity)",
   "wing_id": "default_wing_usb_001",
+  "wing_category": "identity",
   "description": "Detects evidence that external storage (USB drives, removable media) was attached and used. Uses a tiered approach with LNK header evidence (Volume Serial Number + drive type = Removable) and ShellBags removable-folder navigation weighted highest, followed by recent-path MRUs and JumpLists, with file-system CREATE/RENAME on removable volumes as supporting context.",
   "proves": "External / removable media was attached and used on the host",
   "author": "Crow-Eye Team",
   "created_date": "2026-05-18T00:00:00Z",
-  "last_modified": "2026-08-22T00:00:00Z",
+  "last_modified": "2026-11-01T00:00:00Z",
   "version": "1.0",
   "feathers": [
     {
@@ -146,45 +147,52 @@
     },
     {
       "rule_id": "usb_shellbag_removable",
-      "name": "Folder Opened on Removable Drive",
-      "semantic_value": "Removable Folder Navigation",
-      "description": "ShellBags entry on a removable drive \u2014 user actually opened folders on the device",
+      "name": "Folder Opened on a Drive Other Than C:",
+      "semantic_value": "Non-System Drive Navigation",
+      "description": "A ShellBags drive entry for a letter other than C: - the user browsed that drive. ShellBags do not record a drive's type, so a second internal partition (D:) matches as well; the LNK drive type (Removable) is what proves removable media. C: and a drive entry with no letter never match.",
       "conditions": [
         {
           "feather_id": "shellbags",
           "field_name": "shell_item_type",
           "operator": "contains",
           "value": "Drive"
+        },
+        {
+          "feather_id": "shellbags",
+          "field_name": "drive_letter",
+          "operator": "regex",
+          "value": "^[A-BD-Z]:"
         }
       ],
       "logic_operator": "AND",
       "scope": "wing",
-      "category": "removable_media",
-      "severity": "medium"
+      "category": "non_system_drive",
+      "severity": "low"
     },
     {
       "rule_id": "usb_mru_drive_letter",
-      "name": "Recent File Save / Open on Non-System Drive (OR)",
-      "semantic_value": "MRU on Removable Drive",
-      "description": "OpenSaveMRU or LastSaveMRU references a drive letter outside C:",
+      "confidence": 0.5,
+      "name": "Recent File Save / Open on a Drive Other Than C: (OR)",
+      "semantic_value": "MRU on a Non-System Drive",
+      "description": "OpenSaveMRU or LastSaveMRU records a drive letter other than C:. An MRU does not record a drive's type, so a second internal partition matches as well; an entry on C: or with no drive letter never matches.",
       "conditions": [
         {
           "feather_id": "opensavemru",
-          "field_name": "file_path",
-          "operator": "wildcard",
-          "value": "*"
+          "field_name": "drive_letter",
+          "operator": "regex",
+          "value": "^[A-BD-Z]:"
         },
         {
           "feather_id": "lastsavemru",
-          "field_name": "file_path",
-          "operator": "wildcard",
-          "value": "*"
+          "field_name": "drive_letter",
+          "operator": "regex",
+          "value": "^[A-BD-Z]:"
         }
       ],
       "logic_operator": "OR",
       "scope": "wing",
-      "category": "removable_media",
-      "severity": "medium"
+      "category": "non_system_drive",
+      "severity": "low"
     },
     {
       "rule_id": "usb_confirmed_use",
@@ -218,6 +226,7 @@
     },
     {
       "rule_id": "usb_jumplist_path",
+      "confidence": 0.5,
       "name": "JumpList Entry on Removable Path",
       "semantic_value": "Recent Path on Removable",
       "description": "AutomaticJumplist recorded an open of a file on a non-system drive",

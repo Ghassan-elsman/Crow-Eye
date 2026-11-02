@@ -26,20 +26,20 @@ from dynamic_mapping.core.intelligence_engine import IntelligenceEngine
 from dynamic_mapping.core.run_stats import LinkRun, RuleResult, log_rule
 from styles import CrowEyeStyles, Colors
 try:
-    from ui import site_theme as _site
+    from ui import app_theme as _theme
 except Exception:                                   # pragma: no cover
-    _site = None
+    _theme = None
 
 
 def _cascade_sheet():
     """The database > table > column picker: an input-like button, mono and
     mixed-case (it shows table and column names, never uppercased)."""
-    if _site is None:
+    if _theme is None:
         return ""
-    return ("QPushButton { background-color: #0A0C10; color: #E2E8F0; border: 1px solid #1E293B;"
+    return ("QPushButton { background-color: #0A0C10; color: #E2E8F0; border: 3px solid #1E293B;"
             " border-radius: 10px; padding: 8px 12px; text-align: left; font-family: '%s';"
             " font-size: 12px; font-weight: 400; }"
-            " QPushButton:hover { border: 1px solid #6366F1; }" % _site.families()[1])
+            " QPushButton:hover { border: 3px solid #6366F1; }" % _theme.families()[1])
 from ui.Loading_dialog import LoadingDialog
 
 logger = logging.getLogger(__name__)
@@ -95,6 +95,86 @@ class CascadingSelectButton(QPushButton):
         self.setText(f"{db} > {table} > {col}")
         self.selectionChanged.emit(db, table, col)
 
+class _LoadingProxy:
+    """What the manual rule needs of the loading dialog, safe on a worker thread."""
+
+    def __init__(self, worker):
+        self._w = worker
+
+    def add_log_message(self, text):
+        self._w.log.emit(str(text))
+
+    def is_cancelled(self):
+        return self._w.cancelled
+
+
+class LinkGatherWorker(QtCore.QThread):
+    """Runs the link-gathering rules off the GUI thread, with its own engine and
+    connection (an SQLite connection belongs to the thread that opened it).
+
+    Every rule's full query, the per-row upserts of the manual rule and the run's
+    statistics used to run on the GUI thread, pumped with processEvents between rules,
+    so Crow-Eye froze for as long as one rule's query took (2026-11-01)."""
+    step = pyqtSignal(int, str)
+    log = pyqtSignal(str)
+    done = pyqtSignal(object)            # (total_found, cancelled, run)
+
+    def __init__(self, case_directory, rules, manual, run, parent=None):
+        super().__init__(parent)
+        self.case_directory = case_directory
+        self.rules = rules
+        self.manual = manual                 # dict of the manual selection, or None
+        self.run_obj = run
+        self.cancelled = False
+
+    def run(self):
+        engine = IntelligenceEngine(self.case_directory)
+        total, cancelled, run = 0, False, self.run_obj
+        try:
+            engine.ensure_db()
+            step_idx = 1
+            for rule_name in self.rules:
+                if self.cancelled:
+                    self.log.emit("[Aborted] Operation cancelled by user.")
+                    cancelled = True
+                    break
+                self.step.emit(step_idx, "Extracting %s..." % rule_name.replace('_', ' ').title())
+                step_idx += 1
+                self.log.emit("Running rule: %s" % rule_name)
+                res = engine.gather_intelligence([rule_name], custom_rules=False, run=run)
+                total += sum(res.values())
+                line = DynamicLinkingWindow._rule_line(run.rules[-1] if run.rules else None)
+                if line:
+                    self.log.emit(line)
+            if not cancelled and not self.cancelled:
+                self.step.emit(step_idx, "Executing custom intelligence pipelines...")
+                step_idx += 1
+                self.log.emit("Running custom rules...")
+                before = len(run.rules)
+                total += sum(engine.gather_intelligence([], custom_rules=True, run=run).values())
+                for result in run.rules[before:]:
+                    line = DynamicLinkingWindow._rule_line(result)
+                    if line:
+                        self.log.emit(line)
+                if len(run.rules) == before:
+                    self.log.emit("No custom rules are defined.")
+            if self.manual and not self.cancelled:
+                self.step.emit(step_idx, "Extracting manual relationship data...")
+                total += DynamicLinkingWindow._manual_rule_work(engine, self.manual, _LoadingProxy(self), run)
+            run.cancelled = cancelled or self.cancelled
+            engine.finish_run(run)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.log.emit("[Error] Link gathering stopped: %s" % e)
+        finally:
+            try:
+                engine.close()
+            except Exception:
+                pass
+        self.done.emit((total, run.cancelled, run))
+
+
 class DynamicLinkingWindow(QDialog):
     """
     Main GUI window for Dynamic Linking Intelligence Engine.
@@ -130,9 +210,9 @@ class DynamicLinkingWindow(QDialog):
         except Exception:
             pass
         
-        # The site look, set before the widgets exist (ui/site_theme.py)
-        if _site is not None:
-            _site.begin_site_theme(self)
+        # The site look, set before the widgets exist (ui/app_theme.py)
+        if _theme is not None:
+            _theme.begin_theme(self)
         else:
             self.setStyleSheet(CrowEyeStyles.DYNAMIC_LINKING_WINDOW_STYLE)
         
@@ -143,28 +223,28 @@ class DynamicLinkingWindow(QDialog):
             logger.error("Failed to initialize intelligence database.")
             
         self._init_ui()
-        self._apply_site_look()
+        self._apply_theme()
         self._load_schema_and_data()
 
-    def _apply_site_look(self):
+    def _apply_theme(self):
         """Roles for what the inline sheets said; the buttons in the role family:
         Run is the main action, Delete the destructive one, the rest everyday."""
-        if _site is None:
+        if _theme is None:
             return
         for w in (self.rules_display, self.ingest_log):
-            w.setStyleSheet(_site.log_view_sheet())
-            _site.keep_style(w)
+            w.setStyleSheet(_theme.log_view_sheet())
+            _theme.keep_style(w)
         for frame in (self.gathering_box, self.ingestion_box, self.mapping_box):
             frame.setStyleSheet("")
-            _site.set_card(frame)
-        _site.apply_site_theme(self)
-        _site.set_role(self._title_label, "title")
+            _theme.set_card(frame)
+        _theme.apply_theme(self)
+        _theme.set_role(self._title_label, "title")
         for lab in self._section_titles:
-            _site.set_role(lab, "section")
-        _site.set_variant(self._run_btn, "primary")
-        _site.set_variant(self._del_btn, "danger")
+            _theme.set_role(lab, "section")
+        _theme.set_variant(self._run_btn, "primary")
+        _theme.set_variant(self._del_btn, "danger")
         for b in self._ghost_btns:
-            _site.set_variant(b, "ghost")
+            _theme.set_variant(b, "ghost")
 
     def _init_ui(self):
         main_layout = QVBoxLayout(self)
@@ -232,7 +312,7 @@ class DynamicLinkingWindow(QDialog):
         frame.setStyleSheet(f"""
             QFrame {{
                 background-color: {Colors.BG_PANELS};
-                border: 1px solid {Colors.BORDER_SUBTLE};
+                border: 3px solid {Colors.BORDER_SUBTLE};
                 border-radius: 10px;
             }}
         """)
@@ -253,7 +333,7 @@ class DynamicLinkingWindow(QDialog):
             QTextEdit {{
                 background-color: {Colors.BG_TABLES};
                 background-image: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(0, 255, 255, 0.05), stop:1 rgba(0, 0, 0, 0));
-                border: 1px solid {Colors.ACCENT_CYAN};
+                border: 3px solid {Colors.ACCENT_CYAN};
                 border-radius: 5px;
                 padding: 10px;
                 color: {Colors.TEXT_PRIMARY};
@@ -527,73 +607,32 @@ class DynamicLinkingWindow(QDialog):
 
         loading.set_steps(steps)
 
-        # ---------------------  Work runs before exec_()  ---------------------
-        # We do the work while the dialog is visible (show()), keep the event
-        # loop alive via processEvents(), and then drive exec_() only for the
-        # 2-second completion pause so the timer-based accept() actually fires.
+        # The rules run on LinkGatherWorker; this thread only shows its progress and
+        # waits in a local event loop, so Crow-Eye stays responsive throughout.
         loading.show()
-        QApplication.processEvents()
-
         loading.update_step(0, "Scanning artifact directories...")
-        QApplication.processEvents()
 
-        # 1. Default Rules
-        total_found = 0
-        step_idx = 1
-
-        # Make sure the engine is ready for action
-        self.engine.ensure_db()
-
-        cancelled = False
-        for rule_name in rules:
-            if loading.is_cancelled():
-                loading.add_log_message("[Aborted] Operation cancelled by user.")
-                cancelled = True
-                break
-            
-            display_name = rule_name.replace('_', ' ').title()
-            loading.update_step(step_idx, f"Extracting {display_name}...")
-            step_idx += 1
-            
-            loading.add_log_message(f"Running rule: {rule_name}")
-            # Process Qt events so the loading dialog stays responsive
-            QApplication.processEvents()
-            # custom_rules=False: run only this default rule. Custom rules are run
-            # ONCE after the loop (below) instead of being re-executed on every
-            # default-rule iteration.
-            res = self.engine.gather_intelligence([rule_name], custom_rules=False, run=run)
-            found_for_rule = sum(res.values())
-            total_found += found_for_rule
-            self._report_rule(loading, run.rules[-1] if run.rules else None)
-            QApplication.processEvents()
-
-        # Custom rules: execute exactly once, after all default rules.
-        if not cancelled:
-            loading.update_step(step_idx, "Executing custom intelligence pipelines...")
-            step_idx += 1
-            
-            loading.add_log_message("Running custom rules...")
-            QApplication.processEvents()
-            before = len(run.rules)
-            custom_res = self.engine.gather_intelligence([], custom_rules=True, run=run)
-            custom_found = sum(custom_res.values())
-            total_found += custom_found
-            for result in run.rules[before:]:
-                self._report_rule(loading, result)
-            if len(run.rules) == before:
-                loading.add_log_message("No custom rules are defined.")
-            QApplication.processEvents()
-
-        # 2. Manual Rule
-        if has_manual and not loading.is_cancelled():
-            loading.update_step(step_idx, "Extracting manual relationship data...")
-            step_idx += 1
-            manual_count = self._process_manual_rule(loading, run)
-            total_found += manual_count
+        manual = None
+        if has_manual:
+            manual = {"val_db": self.value_selector.selected_db, "val_table": self.value_selector.selected_table,
+                      "val_col": self.value_selector.selected_column, "key_db": self.key_selector.selected_db,
+                      "key_table": self.key_selector.selected_table, "key_col": self.key_selector.selected_column}
+        worker = LinkGatherWorker(self.engine.case_directory, rules, manual, run, self)
+        worker.step.connect(loading.update_step)
+        worker.log.connect(loading.add_log_message)
+        loading.cancelled.connect(lambda: setattr(worker, "cancelled", True))
+        outcome = {}
+        wait = QtCore.QEventLoop()
+        worker.done.connect(lambda r: (outcome.__setitem__("r", r), wait.quit()))
+        worker.start()
+        if "r" not in outcome:
+            wait.exec_()
+        worker.wait(5000)
+        total_found, cancelled, run = outcome.get("r", (0, True, run))
+        self.link_run = run
+        self.engine.ensure_db()            # this thread's own connection, for the table below
 
         # Completion summary: what was ADDED, not every mapping seen again.
-        run.cancelled = cancelled or loading.is_cancelled()
-        self.engine.finish_run(run)
         t = run.totals()
         if _db_change is not None:
             try:
@@ -626,31 +665,38 @@ class DynamicLinkingWindow(QDialog):
             self._show_stats(run)
 
     @staticmethod
-    def _report_rule(loading, result):
-        """One honest line per rule in the loading dialog."""
+    def _rule_line(result):
+        """One honest line per rule, for the loading dialog."""
         if result is None:
-            return
+            return ""
         if result.status == "skipped":
-            loading.add_log_message(f"[Skipped] {result.rule}: {result.reason}")
-        elif result.status == "failed":
-            loading.add_log_message(f"[Error] {result.rule}: {result.reason}")
-        else:
-            loading.add_log_message(
-                f"[Success] {result.rule}: {result.rows_read} row(s) from "
+            return f"[Skipped] {result.rule}: {result.reason}"
+        if result.status == "failed":
+            return f"[Error] {result.rule}: {result.reason}"
+        return (f"[Success] {result.rule}: {result.rows_read} row(s) from "
                 f"{result.source_table or 'built-in list'} - {result.inserted} new, "
                 f"{result.merged} merged, {result.duplicate} already known")
 
+    @staticmethod
+    def _report_rule(loading, result):
+        line = DynamicLinkingWindow._rule_line(result)
+        if line:
+            loading.add_log_message(line)
+
     def _process_manual_rule(self, loading, run=None) -> int:
-        """Extract data for manual relationship definition."""
-        val_db = self.value_selector.selected_db
-        val_table = self.value_selector.selected_table
-        val_col = self.value_selector.selected_column
-        
-        key_db = self.key_selector.selected_db
-        key_table = self.key_selector.selected_table
-        key_col = self.key_selector.selected_column
-        
-        artifacts_dir = self.engine._find_artifacts_directory()
+        """Extract data for manual relationship definition (on this thread)."""
+        manual = {"val_db": self.value_selector.selected_db, "val_table": self.value_selector.selected_table,
+                  "val_col": self.value_selector.selected_column, "key_db": self.key_selector.selected_db,
+                  "key_table": self.key_selector.selected_table, "key_col": self.key_selector.selected_column}
+        return self._manual_rule_work(self.engine, manual, loading, run)
+
+    @staticmethod
+    def _manual_rule_work(engine, manual, loading, run=None) -> int:
+        """The manual rule: every (value, name) pair of the chosen table into the mappings.
+        Touches no widget - `loading` is the dialog or a worker's proxy."""
+        val_db, val_table, val_col = manual["val_db"], manual["val_table"], manual["val_col"]
+        key_db, key_table, key_col = manual["key_db"], manual["key_table"], manual["key_col"]
+        artifacts_dir = engine._find_artifacts_directory()
         if not artifacts_dir: return 0
 
         result = RuleResult("Manual relationship", "manual", category="Manual",
@@ -675,7 +721,7 @@ class DynamicLinkingWindow(QDialog):
                     if loading.is_cancelled(): break
                     v = row[val_col]
                     k = row[key_col]
-                    outcome = self.engine.upsert_mapping(str(v or ""), str(k or ""), "Manual Selection")
+                    outcome = engine.upsert_mapping(str(v or ""), str(k or ""), "Manual Selection")
                     result.count(outcome)
                     if outcome in ("inserted", "merged"):
                         count += 1
@@ -691,7 +737,7 @@ class DynamicLinkingWindow(QDialog):
         if run is not None:
             # Into GatherHistory like every other rule, so the run rebuilt
             # later (Statistics button, Run Dynamic Linking) still has it.
-            self.engine._log_gather_history(result, run)
+            engine._log_gather_history(result, run)
         return count
 
     def _run_final_linking(self):

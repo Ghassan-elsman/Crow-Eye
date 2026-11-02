@@ -1,0 +1,59 @@
+{
+  "config_name": "enumeration_runas_new_service_behaviour",
+  "wing_name": "Enumeration, Run-as, New Service (Behaviour)",
+  "wing_id": "default_behaviour_enum_runas_service_001",
+  "wing_category": "behaviour",
+  "description": "Account enumeration, then use of another account's credentials, then a new service, in that order within an hour. UBA rules: account_enumeration (Security 4798/4799, summarised per hour), explicit_credentials (Security 4648) and service_installed (System 7045). Windows records no account for 7045 - the Service Control Manager installs the service - so the third step is a machine step: it matches a service installed on this computer, and the hit says that step names no person.",
+  "proves": "An account looked up accounts and groups, used other credentials, and a service was installed soon after",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Account information looked up",
+      "rule_id": "account_enumeration"
+    },
+    {
+      "label": "Another account's credentials used",
+      "rule_id": "explicit_credentials"
+    },
+    {
+      "label": "New service installed (no account recorded)",
+      "rule_id": "service_installed",
+      "actor": "machine"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1087.001",
+      "T1078",
+      "T1543.003"
+    ],
+    "tactic": [
+      "discovery",
+      "privilege-escalation",
+      "persistence"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "discovery",
+    "privilege_escalation",
+    "persistence",
+    "default"
+  ],
+  "case_types": [
+    "intrusion",
+    "apt"
+  ]
+}

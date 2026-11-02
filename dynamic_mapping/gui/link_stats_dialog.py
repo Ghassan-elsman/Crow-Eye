@@ -25,7 +25,7 @@ try:
 except Exception:                                    # standalone use
     def _chip(text, color, parent=None):
         lbl = QtWidgets.QLabel(text, parent)
-        lbl.setStyleSheet("QLabel { color: %s; border: 1px solid %s; border-radius: 9px;"
+        lbl.setStyleSheet("QLabel { color: %s; border: 3px solid %s; border-radius: 9px;"
                           " padding: 4px 12px; font-size: 14px; font-weight: 700; }" % (color, color))
         return lbl
 
@@ -105,7 +105,7 @@ class LinkStatsDialog(QtWidgets.QDialog):
 
         heading = QtWidgets.QLabel("Dynamic Linking Statistics")
         try:
-            from ui.site_theme import set_role
+            from ui.app_theme import set_role
             set_role(heading, "title")
         except Exception:
             heading.setStyleSheet("QLabel { color: #E2E8F0; font-size: 22px; font-weight: 800; }")

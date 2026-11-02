@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional
 import logging
 import json
 
-from eye.backends.base import LLMBackend
+from eye.backends.base import LLMBackend, _get, _num
 
 
 class OpenAIBackend(LLMBackend):
@@ -36,8 +36,12 @@ class OpenAIBackend(LLMBackend):
                  base_url: Optional[str] = None,
                  credential_key: str = "openai_api_key",
                  provider_label: Optional[str] = None,
-                 default_headers: Optional[Dict[str, str]] = None):
+                 default_headers: Optional[Dict[str, str]] = None,
+                 effort: Optional[str] = None):
         self.model_name = model_name
+        # The Eye's effort setting (low | medium | high | xhigh | max), sent to OpenAI's
+        # reasoning models as reasoning_effort, which stops at high.
+        self.effort = effort
         self.credential_manager = credential_manager
         self.base_url = base_url                      # None → api.openai.com
         self.credential_key = credential_key          # keyring name for the API key
@@ -63,7 +67,8 @@ class OpenAIBackend(LLMBackend):
             if not api_key:
                 raise ValueError(f"{self.provider_label} API key not found. Please configure it in the Setup Wizard.")
 
-            kwargs = {"api_key": api_key}
+            # Bounded: the SDK default is 10 minutes with 2 retries.
+            kwargs = {"api_key": api_key, "timeout": 120.0, "max_retries": 1}
             if self.base_url:
                 kwargs["base_url"] = self.base_url
             if self.default_headers:
@@ -110,6 +115,8 @@ class OpenAIBackend(LLMBackend):
                 # Reasoning models renamed this parameter and reject the old name.
                 key = "max_completion_tokens" if reasoning else "max_tokens"
                 params[key] = gp["max_output_tokens"]
+            if reasoning and self.effort and not self.base_url:
+                params["reasoning_effort"] = {"xhigh": "high", "max": "high"}.get(self.effort, self.effort)
             if not reasoning:
                 # Reasoning models only accept their default sampling settings;
                 # sending temperature/top_p at all is a 400.
@@ -141,7 +148,13 @@ class OpenAIBackend(LLMBackend):
                     self.quota_stats = f"{rem} requests remaining"
                     if reset: self.quota_stats += f" (resets in {reset})"
 
-            choices = resp_raw.parse().choices
+            parsed = resp_raw.parse()
+            _u = getattr(parsed, "usage", None)
+            _cached = _num(_get(_u, "prompt_tokens_details", None), "cached_tokens")
+            usage = self.record_usage(max(0, (_num(_u, "prompt_tokens") or 0) - _cached),
+                                      _num(_u, "completion_tokens"), cache_read=_cached,
+                                      model=getattr(parsed, "model", None))
+            choices = parsed.choices
             if not choices:
                 raise RuntimeError("OpenAI returned no choices (the response may have been content-filtered or truncated).")
             msg = choices[0].message
@@ -152,18 +165,21 @@ class OpenAIBackend(LLMBackend):
                         "id": tc.id, "type": "function", 
                         "function": {"name": tc.function.name, "arguments": tc.function.arguments}
                     })
-            return {"content": msg.content or "", "tool_calls": tool_calls}
+            return {"content": msg.content or "", "tool_calls": tool_calls, "usage": usage}
         except Exception as e:
             self.logger.error(f"OpenAI API failure: {e}")
             raise
 
     def validate_connectivity(self):
         """Checks if the API key is valid and service is reachable."""
+        from eye.backends.base import describe_backend_error
+        self.last_error = ""
         try:
-            self.client.models.list()
+            self.client.with_options(timeout=20.0, max_retries=0).models.list()
             return True
         except Exception as e:
-            self.logger.error(f"OpenAI connectivity check failed: {e}")
+            self.last_error = describe_backend_error(e)
+            self.logger.error(f"OpenAI connectivity check failed: {self.last_error}")
             return False
 
     def list_models(self):

@@ -260,7 +260,23 @@ def initialize_default_wings_on_startup(user_config_dir: Path) -> List[WingConfi
     return wings
 
 
-def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path) -> int:
+def wing_belongs_to_engine(wing, engine_type) -> bool:
+    """Whether a case Wing is offered to a pipeline running ``engine_type``.
+
+    A Wing of the engine's own category is; so is an uncategorised one, so it
+    is listed under "Needs a category" rather than vanishing. A Wing of
+    another category is not.
+    """
+    from ..engine import engine_registry
+    from ..config.wing_config import normalize_wing_category
+    category = normalize_wing_category(getattr(wing, 'wing_category', None))
+    if category is None or not engine_type:
+        return True
+    return engine_registry.get_spec(engine_type).wing_category == category
+
+
+def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path,
+                                    engine_type: Optional[str] = None) -> int:
     """Sync newly-shipped default Wings into the case folder and augment the
     given pipeline_config.wing_configs with any Wings present on disk that
     aren't already in the pipeline. Also pulls in FeatherConfigs that the
@@ -268,6 +284,11 @@ def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path)
     `_detect_circular_dependencies` rejects the wing as having unresolved
     feather refs and the wing never executes. Returns the number of wings
     appended (feathers loaded as a side effect are not counted in the return).
+
+    Only Wings the pipeline's engine runs are added (``engine_type``, default
+    the pipeline's own): every case Wing used to be added to every pipeline,
+    and since each Wing now has one category, half of them could never run
+    there. Uncategorised Wings are added so they can be shown as needing one.
 
     Does NOT rewrite the pipeline JSON on disk — callers can save it later if
     they want the change persisted. Uses .append directly (not
@@ -278,6 +299,8 @@ def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path)
     case_wings_dir = case_correlation_dir / "wings"
     if not case_wings_dir.exists():
         return 0
+    if engine_type is None:
+        engine_type = getattr(pipeline_config, 'engine_type', None)
 
     existing_keys = {
         (getattr(w, 'config_name', '') or '', getattr(w, 'wing_id', '') or '')
@@ -293,6 +316,8 @@ def sync_and_augment_pipeline_wings(pipeline_config, case_correlation_dir: Path)
             continue
         key = (getattr(wing, 'config_name', '') or '', getattr(wing, 'wing_id', '') or '')
         if key in existing_keys:
+            continue
+        if not wing_belongs_to_engine(wing, engine_type):
             continue
         pipeline_config.wing_configs.append(wing)
         existing_keys.add(key)

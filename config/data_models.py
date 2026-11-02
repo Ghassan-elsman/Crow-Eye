@@ -105,6 +105,36 @@ class GlobalConfig:
     semantic_fts_skip_coverage: int = 50
     semantic_candidate_chunk_size: int = 20000
     semantic_debug_log: bool = False
+    # Settings -> Parsing -> "NTFS integrity checks" (read by the MFT parser
+    # through read_global_setting; the same keys as Sentinel's policy, and the
+    # list in Artifacts_Collectors/MFT and USN journal/ntfs_integrity.py
+    # SETTING_DEFAULTS). Everything on except timestamp steganography (D28).
+    # A check turned off is written to custody at every parse.
+    ntfs_integrity_enabled: bool = True             # the master switch
+    # Parse only the MFT records that changed since the last parse of the
+    # same volume in the same case. Separate from the master switch: turning
+    # the checks off does not change how the MFT is parsed.
+    mft_delta_parse: bool = True
+    ntfs_integrity_digest_map: bool = True          # D1  changes between parses
+    ntfs_integrity_lsn_checks: bool = True          # D2/D3
+    ntfs_integrity_usn_continuity: bool = True      # D4
+    ntfs_integrity_logfile_continuity: bool = True  # D5
+    ntfs_integrity_offline_detect: bool = True      # D6  (Sentinel)
+    ntfs_integrity_timestomp: bool = True           # D7/D8/D21/D24/D27
+    ntfs_integrity_wipe_detect: bool = True         # D9/D17
+    ntfs_integrity_structural: bool = True          # D10/D12/D13/D29
+    ntfs_integrity_usn_witness: bool = True         # D11 (later)
+    ntfs_integrity_ads_ea_reparse: bool = True      # D14-D16 (later)
+    ntfs_integrity_clock: bool = True               # D18 (later)
+    ntfs_integrity_vss_inventory: bool = True       # D19 (later)
+    ntfs_integrity_security_links: bool = True      # D20 (later)
+    ntfs_integrity_i30: bool = True                 # D22 (later)
+    ntfs_integrity_logfile_deep: bool = True        # D23 (later)
+    ntfs_integrity_txf_efs: bool = True             # D25/D26 (later)
+    ntfs_integrity_timestamp_stego: bool = False    # D28 - off by default
+    ntfs_integrity_weekly_full_parse: bool = True   # Sentinel only
+    # D11: an annotation until it is tuned in the lab, then 'alert'. Reserved.
+    ntfs_integrity_usn_witness_mode: str = 'annotation'
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -123,7 +153,28 @@ class GlobalConfig:
             'semantic_worker_count': self.semantic_worker_count,
             'semantic_fts_skip_coverage': self.semantic_fts_skip_coverage,
             'semantic_candidate_chunk_size': self.semantic_candidate_chunk_size,
-            'semantic_debug_log': self.semantic_debug_log
+            'semantic_debug_log': self.semantic_debug_log,
+            'ntfs_integrity_enabled': self.ntfs_integrity_enabled,
+            'mft_delta_parse': self.mft_delta_parse,
+            'ntfs_integrity_digest_map': self.ntfs_integrity_digest_map,
+            'ntfs_integrity_lsn_checks': self.ntfs_integrity_lsn_checks,
+            'ntfs_integrity_usn_continuity': self.ntfs_integrity_usn_continuity,
+            'ntfs_integrity_logfile_continuity': self.ntfs_integrity_logfile_continuity,
+            'ntfs_integrity_offline_detect': self.ntfs_integrity_offline_detect,
+            'ntfs_integrity_timestomp': self.ntfs_integrity_timestomp,
+            'ntfs_integrity_wipe_detect': self.ntfs_integrity_wipe_detect,
+            'ntfs_integrity_structural': self.ntfs_integrity_structural,
+            'ntfs_integrity_usn_witness': self.ntfs_integrity_usn_witness,
+            'ntfs_integrity_ads_ea_reparse': self.ntfs_integrity_ads_ea_reparse,
+            'ntfs_integrity_clock': self.ntfs_integrity_clock,
+            'ntfs_integrity_vss_inventory': self.ntfs_integrity_vss_inventory,
+            'ntfs_integrity_security_links': self.ntfs_integrity_security_links,
+            'ntfs_integrity_i30': self.ntfs_integrity_i30,
+            'ntfs_integrity_logfile_deep': self.ntfs_integrity_logfile_deep,
+            'ntfs_integrity_txf_efs': self.ntfs_integrity_txf_efs,
+            'ntfs_integrity_timestamp_stego': self.ntfs_integrity_timestamp_stego,
+            'ntfs_integrity_weekly_full_parse': self.ntfs_integrity_weekly_full_parse,
+            'ntfs_integrity_usn_witness_mode': self.ntfs_integrity_usn_witness_mode,
         }
     
     @classmethod
@@ -148,7 +199,28 @@ class GlobalConfig:
             semantic_worker_count=data.get('semantic_worker_count', 4),
             semantic_fts_skip_coverage=data.get('semantic_fts_skip_coverage', 50),
             semantic_candidate_chunk_size=data.get('semantic_candidate_chunk_size', 20000),
-            semantic_debug_log=data.get('semantic_debug_log', False)
+            semantic_debug_log=data.get('semantic_debug_log', False),
+            ntfs_integrity_enabled=data.get('ntfs_integrity_enabled', True),
+            mft_delta_parse=data.get('mft_delta_parse', True),
+            ntfs_integrity_digest_map=data.get('ntfs_integrity_digest_map', True),
+            ntfs_integrity_lsn_checks=data.get('ntfs_integrity_lsn_checks', True),
+            ntfs_integrity_usn_continuity=data.get('ntfs_integrity_usn_continuity', True),
+            ntfs_integrity_logfile_continuity=data.get('ntfs_integrity_logfile_continuity', True),
+            ntfs_integrity_offline_detect=data.get('ntfs_integrity_offline_detect', True),
+            ntfs_integrity_timestomp=data.get('ntfs_integrity_timestomp', True),
+            ntfs_integrity_wipe_detect=data.get('ntfs_integrity_wipe_detect', True),
+            ntfs_integrity_structural=data.get('ntfs_integrity_structural', True),
+            ntfs_integrity_usn_witness=data.get('ntfs_integrity_usn_witness', True),
+            ntfs_integrity_ads_ea_reparse=data.get('ntfs_integrity_ads_ea_reparse', True),
+            ntfs_integrity_clock=data.get('ntfs_integrity_clock', True),
+            ntfs_integrity_vss_inventory=data.get('ntfs_integrity_vss_inventory', True),
+            ntfs_integrity_security_links=data.get('ntfs_integrity_security_links', True),
+            ntfs_integrity_i30=data.get('ntfs_integrity_i30', True),
+            ntfs_integrity_logfile_deep=data.get('ntfs_integrity_logfile_deep', True),
+            ntfs_integrity_txf_efs=data.get('ntfs_integrity_txf_efs', True),
+            ntfs_integrity_timestamp_stego=data.get('ntfs_integrity_timestamp_stego', False),
+            ntfs_integrity_weekly_full_parse=data.get('ntfs_integrity_weekly_full_parse', True),
+            ntfs_integrity_usn_witness_mode=data.get('ntfs_integrity_usn_witness_mode', 'annotation'),
         )
     
     @classmethod
@@ -165,7 +237,28 @@ class GlobalConfig:
             wings_semantic_mapping_enabled=True,
             cascade_tree_expansion_enabled=True,
             parser_allow_snapshot_creation=True,
-            auto_parse_after_collection=True
+            auto_parse_after_collection=True,
+            ntfs_integrity_enabled=True,
+            mft_delta_parse=True,
+            ntfs_integrity_digest_map=True,
+            ntfs_integrity_lsn_checks=True,
+            ntfs_integrity_usn_continuity=True,
+            ntfs_integrity_logfile_continuity=True,
+            ntfs_integrity_offline_detect=True,
+            ntfs_integrity_timestomp=True,
+            ntfs_integrity_wipe_detect=True,
+            ntfs_integrity_structural=True,
+            ntfs_integrity_usn_witness=True,
+            ntfs_integrity_ads_ea_reparse=True,
+            ntfs_integrity_clock=True,
+            ntfs_integrity_vss_inventory=True,
+            ntfs_integrity_security_links=True,
+            ntfs_integrity_i30=True,
+            ntfs_integrity_logfile_deep=True,
+            ntfs_integrity_txf_efs=True,
+            ntfs_integrity_timestamp_stego=False,
+            ntfs_integrity_weekly_full_parse=True,
+            ntfs_integrity_usn_witness_mode='annotation'
         )
 
 

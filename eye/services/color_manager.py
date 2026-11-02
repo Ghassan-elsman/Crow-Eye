@@ -25,9 +25,11 @@ class ColorManager:
     
     # Built-in palettes with 12 colors each
     PALETTES = {
+        # Crow-Eye's chart palette (ui/app_theme.py CHART_PALETTE): no red,
+        # which is kept for urgent findings (it held #ff4d6a and #ef4444).
         "forensic": [
-            "#f97316", "#06b6d4", "#ec4899", "#10b981", "#ff4d6a", "#8b5cf6",
-            "#f59e0b", "#14b8a6", "#ef4444", "#3b82f6", "#a855f7", "#22c55e"
+            "#6366F1", "#22D3EE", "#A78BFA", "#2DD4BF", "#FBBF24", "#F472B6",
+            "#38BDF8", "#A3E635", "#FB923C", "#94A3B8", "#818CF8", "#34D399"
         ],
         "professional": [
             "#1e40af", "#475569", "#0891b2", "#64748b", "#0369a1", "#334155",

@@ -164,8 +164,8 @@ overlap is usually with a wing that already exists.
 
 | Wing | The question it answers |
 |---|---|
-| Execution Proof | What ran on this machine, corroborated across Prefetch, ShimCache, AmCache, LNK, jump lists and SRUM |
-| Execution Without Trace | What ran but left no Prefetch entry, and whether timestamps were tampered with |
+| Execution Proof | How strongly the evidence says a program ran, corroborated across Prefetch (strongest), ShimCache and AmCache (presence/compatibility indicators), LNK, jump lists and SRUM |
+| Execution Without Trace | Programs recorded by AmCache/ShimCache with no matching Prefetch entry (a gap to review, not proof of suppression), and $SI-before-$FN timestamp anomalies |
 | Persistence Mechanisms | What will run again - Run keys, services, scheduled tasks, Active Setup, Safe Mode, App Paths |
 | Account Logon | Who authenticated, and what they did in that session |
 | Brute Force / Spray | Repeated failed authentication |

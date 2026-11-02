@@ -1,8 +1,8 @@
 """
-EYE AI Window Manager - Standalone window orchestration for EYE AI Forensic Assistant.
+Eye AI Window Manager - Standalone window orchestration for Eye AI Forensic Assistant.
 
 This module provides the EyeWindowManager class, which handles the creation,
-display, and lifecycle of the standalone EYE AI Assistant window.
+display, and lifecycle of the standalone Eye AI Assistant window.
 """
 
 import os
@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 
 class EyeWindowManager(QtCore.QObject):
     """
-    Manages the standalone EYE AI Forensic Assistant window.
+    Manages the standalone Eye AI Forensic Assistant window.
     """
     
     def __init__(self, main_window):
         """
-        Initialize the EYE window manager.
+        Initialize the Eye window manager.
         
         Args:
             main_window: The main Crow Eye QMainWindow instance.
@@ -35,7 +35,7 @@ class EyeWindowManager(QtCore.QObject):
         
     def show_eye_assistant(self, artifacts_dir=None):
         """
-        Show the EYE AI Forensic Assistant in a standalone window.
+        Show the Eye AI Forensic Assistant in a standalone window.
         
         Args:
             artifacts_dir: Optional path to the forensic artifacts directory.
@@ -75,7 +75,7 @@ class EyeWindowManager(QtCore.QObject):
             )
             
             # Configure standalone window properties
-            self.eye_window.setWindowTitle("EYE AI Forensic Assistant")
+            self.eye_window.setWindowTitle("Eye AI Forensic Assistant")
             # Not ":/Icons/CrowEye.ico": the .qrc is never compiled, so that
             # path yields an empty icon while QIcon.isNull() reports False.
             try:
@@ -103,13 +103,13 @@ class EyeWindowManager(QtCore.QObject):
             return True
             
         except Exception as e:
-            error_msg = f"Failed to show EYE AI Assistant: {str(e)}"
+            error_msg = f"Failed to show Eye AI Assistant: {str(e)}"
             logger.error(error_msg, exc_info=True)
             traceback.print_exc()
             QtWidgets.QMessageBox.critical(
                 self.main_window,
-                "EYE AI Assistant Error",
-                f"An error occurred while launching the EYE AI window:\n{str(e)}"
+                "Eye AI Assistant Error",
+                f"An error occurred while launching the Eye AI window:\n{str(e)}"
             )
             return False
 

@@ -58,6 +58,10 @@ _MODEL_PREFERENCES = {
     # present but fails to load in LM Studio itself ("Error loading model"),
     # which is a local install problem, not an Eye one.
     "lm_studio": ("phi-4-reasoning", "instruct", "phi"),
+    # Claude Code on the analyst's sign-in: the fast model keeps the run cheap.
+    "claude_code": ("haiku", "sonnet"),
+    # Codex on the analyst's ChatGPT sign-in: its own default model.
+    "codex_cli": ("default",),
 }
 
 _LOCAL_ENDPOINTS = {
@@ -98,6 +102,9 @@ def backend_available(backend: str) -> bool:
         return False
     if backend in _LOCAL_ENDPOINTS:
         return _local_server_up(backend)
+    if backend in ("claude_code", "codex_cli"):
+        import shutil
+        return bool(shutil.which("claude" if backend == "claude_code" else "codex"))
     return bool(_credential_for(backend))
 
 
@@ -106,6 +113,8 @@ def _skip_reason(backend: str) -> str:
         return f"Set EYE_LIVE_BACKENDS={backend} to run live {backend} conformance"
     if backend in _LOCAL_ENDPOINTS:
         return f"{backend} server not reachable at {_LOCAL_ENDPOINTS[backend]}"
+    if backend in ("claude_code", "codex_cli"):
+        return "the %s command is not on PATH" % backend
     return f"No {backend} API key configured"
 
 
@@ -250,6 +259,13 @@ class LiveConformanceContract:
                 "model_name": "default",
                 "integration_type": "local_server",
                 "api_endpoint": _LOCAL_ENDPOINTS[cls.BACKEND],
+            }
+        if cls.BACKEND in ("claude_code", "codex_cli"):
+            return {
+                "backend": cls.BACKEND,
+                "model_name": "default",
+                "integration_type": "local_cli",
+                "executable_path": "",
             }
         return {
             "backend": cls.BACKEND,
@@ -513,6 +529,16 @@ class TestOpenAIConformance(LiveConformanceContract, unittest.TestCase):
 @unittest.skipUnless(backend_available("anthropic"), _skip_reason("anthropic"))
 class TestAnthropicConformance(LiveConformanceContract, unittest.TestCase):
     BACKEND = "anthropic"
+
+
+@unittest.skipUnless(backend_available("claude_code"), _skip_reason("claude_code"))
+class TestClaudeCodeConformance(LiveConformanceContract, unittest.TestCase):
+    BACKEND = "claude_code"
+
+
+@unittest.skipUnless(backend_available("codex_cli"), _skip_reason("codex_cli"))
+class TestCodexConformance(LiveConformanceContract, unittest.TestCase):
+    BACKEND = "codex_cli"
 
 
 @unittest.skipUnless(backend_available("lm_studio"), _skip_reason("lm_studio"))

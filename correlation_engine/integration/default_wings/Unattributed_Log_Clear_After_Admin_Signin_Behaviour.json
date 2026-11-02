@@ -1,0 +1,58 @@
+{
+  "config_name": "unattributed_log_clear_after_admin_signin_behaviour",
+  "wing_name": "Log Erased (No Account Recorded) After an Admin Sign-in (Behaviour)",
+  "wing_id": "default_behaviour_unattributed_log_clear_001",
+  "wing_category": "behaviour",
+  "description": "One person signs in with administrator rights and, within one hour, a Windows event log is erased by an account the log did not record (System log 104: the parsed record keeps no subject). UBA rules: privileged_logon then log_cleared (only clears with no account). An erase the Security log attributes (1102) is covered by 'Log Clearing After an Admin Sign-in'. Windows setup erases the logs too: a hit at the install time is expected.",
+  "proves": "A Windows event log was erased soon after a person signed in as an administrator",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Administrator sign-in",
+      "rule_id": "privileged_logon"
+    },
+    {
+      "label": "Event log erased (no account recorded)",
+      "rule_id": "log_cleared",
+      "actor": "any",
+      "conditions": [
+        {
+          "field_name": "actor_sid",
+          "operator": "wildcard",
+          "value": "*",
+          "negate": true
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1070.001"
+    ],
+    "tactic": [
+      "defense_evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "anti_forensics",
+    "event_logs",
+    "default"
+  ],
+  "case_types": [
+    "intrusion",
+    "insider"
+  ]
+}

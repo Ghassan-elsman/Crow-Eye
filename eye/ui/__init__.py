@@ -1,5 +1,5 @@
 """
-EYE UI Module
+Eye UI Module
 
-User interface components for the EYE AI Forensic Assistant.
+User interface components for the Eye AI Forensic Assistant.
 """

@@ -1,4 +1,4 @@
-import { Icon } from './icons.jsx'
+import { ActivityIcon } from './icons.jsx'
 import {
   END_BASIS_STYLE, END_BASIS_NOTE, logonTypeLabel, durationLabel,
 } from '../styles/tokens.js'
@@ -110,7 +110,7 @@ function SessionRow({ session: s, onFocusWindow }) {
   return (
     <tr className={s.is_open ? 'si-open' : ''}>
       <td>
-        <span className="si-user"><Icon name="logon" size={14} /> {s.username}</span>
+        <span className="si-user"><ActivityIcon activity="logon" size={16} /> {s.username}</span>
       </td>
       <td className="si-dim">{logonTypeLabel(s.logon_type)}</td>
       <td className="si-mono">{timeOf(s.start_ts)}</td>
@@ -232,7 +232,7 @@ function UptimeSection({ uptime }) {
       <div className="si-uptime">
         {shown.map((w, i) => (
           <div className="si-up-row" key={i}>
-            <Icon name="power" size={13} />
+            <ActivityIcon activity="boot_shutdown" size={15} />
             <span className="si-mono">{w.start_ts}</span>
             <span className="si-arrow">→</span>
             <span className="si-mono">

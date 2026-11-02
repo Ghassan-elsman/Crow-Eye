@@ -16,8 +16,9 @@ import os
 from PyQt5 import QtCore, QtGui, QtWidgets
 
 from utils.parse_status import (NOT_A_FAILURE, STATUS_INFO, ParseStatus,
-                                ParseStatusStore, status_color, status_label,
-                                status_severity)
+                                ParseStatusStore, disabled_on_host_tooltip,
+                                status_color, status_label, status_severity,
+                                status_verdict)
 
 _SEVERITY_ORDER = {"error": 0, "warning": 1, "info": 2}
 _SEVERITY_WORD = {"error": "Problem", "warning": "Warning", "info": "Note"}
@@ -42,7 +43,7 @@ def _color(status):
 def _chip(text, color, parent=None):
     lbl = QtWidgets.QLabel(text, parent)
     lbl.setStyleSheet(
-        "QLabel { color: %s; border: 1px solid %s; border-radius: 9px;"
+        "QLabel { color: %s; border: 3px solid %s; border-radius: 9px;"
         " padding: 4px 12px; background: transparent; font-size: 14px; font-weight: 700; }" % (color, color))
     return lbl
 
@@ -144,7 +145,7 @@ class IssuesPanel(QtWidgets.QWidget):
         card = QtWidgets.QFrame()
         card.setObjectName("issueCard")
         card.setStyleSheet(
-            "QFrame#issueCard { background: rgba(15, 23, 42, 0.85); border: 1px solid #1E293B;"
+            "QFrame#issueCard { background: rgba(15, 23, 42, 0.85); border: 3px solid #1E293B;"
             " border-left: 4px solid %s; border-radius: 8px; }" % issue.color)
         lay = QtWidgets.QVBoxLayout(card)
         lay.setContentsMargins(14, 10, 14, 10)
@@ -271,7 +272,7 @@ class ParseStatusDialog(QtWidgets.QDialog):
         heading = QtWidgets.QLabel("Parse Status Report")
         heading.setObjectName("headingLabel")
         try:
-            from ui.site_theme import set_role
+            from ui.app_theme import set_role
             set_role(heading, "title")
         except Exception:
             heading.setStyleSheet("QLabel { color: #E2E8F0; font-size: 22px; font-weight: 800; }")
@@ -386,7 +387,11 @@ class ParseStatusDialog(QtWidgets.QDialog):
             item.setToolTip(6, o.message)
             item.setToolTip(1, STATUS_INFO.get(o.status, ("", "", "", ""))[3])
             item.setTextAlignment(2, QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            if o.status in NOT_A_FAILURE:
+            if o.status == ParseStatus.FEATURE_DISABLED:
+                item.setToolTip(1, "%s - %s" % (
+                    status_verdict(o.status),
+                    disabled_on_host_tooltip(o.artifact, o.last_activity_utc)))
+            elif o.status in NOT_A_FAILURE:
                 item.setToolTip(1, "Not a failure - " + STATUS_INFO[o.status][3])
 
             for s in o.sources_checked:
@@ -494,7 +499,7 @@ class EmptyTableReasonDialog(QtWidgets.QDialog):
         heading = QtWidgets.QLabel(table_title or r.sqlite_table)
         heading.setObjectName("headingLabel")
         try:
-            from ui.site_theme import set_role
+            from ui.app_theme import set_role
             set_role(heading, "title")
         except Exception:
             heading.setStyleSheet("QLabel { color: #E2E8F0; font-size: 20px; font-weight: 800; }")
@@ -502,10 +507,10 @@ class EmptyTableReasonDialog(QtWidgets.QDialog):
 
         top = QtWidgets.QHBoxLayout()
         top.addWidget(_chip(_label(r.status), _color(r.status), self))
-        verdict = ("Not a failure" if r.status in NOT_A_FAILURE
-                   else "Not parsed yet" if r.status == ParseStatus.NOT_RUN
-                   else "Needs attention")
-        v = QtWidgets.QLabel(verdict)
+        v = QtWidgets.QLabel(status_verdict(r.status))
+        if r.status == ParseStatus.FEATURE_DISABLED:
+            v.setToolTip(disabled_on_host_tooltip(
+                r.artifact, r.outcome.last_activity_utc if r.outcome else None))
         v.setStyleSheet("QLabel { color: %s; font-size: 15px; font-weight: 700; }" % _color(r.status))
         top.addWidget(v)
         top.addStretch(1)

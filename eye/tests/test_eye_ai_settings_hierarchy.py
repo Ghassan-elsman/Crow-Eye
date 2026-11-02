@@ -27,8 +27,8 @@ class TestHierarchyCapsPersistence(unittest.TestCase):
 
     def test_defaults_present(self):
         self.assertEqual(DEFAULTS["enable_hierarchy"], True)
-        self.assertEqual(DEFAULTS["max_narratives"], 12)
-        self.assertEqual(DEFAULTS["max_sub_narratives"], 8)
+        self.assertEqual(DEFAULTS["max_narratives"], 4)
+        self.assertEqual(DEFAULTS["max_sub_narratives"], 3)
         self.assertEqual(DEFAULTS["max_iterations"], 300)
 
     def test_max_iterations_round_trip_clamped(self):
@@ -55,8 +55,8 @@ class TestHierarchyCapsPersistence(unittest.TestCase):
         # An empty config returns the new-key defaults (so the engine stays enabled).
         got = read_eye_ai_settings(path=self.path)
         self.assertTrue(got["enable_hierarchy"])
-        self.assertEqual(got["max_narratives"], 12)
-        self.assertEqual(got["max_sub_narratives"], 8)
+        self.assertEqual(got["max_narratives"], 4)
+        self.assertEqual(got["max_sub_narratives"], 3)
 
 
 if __name__ == "__main__":

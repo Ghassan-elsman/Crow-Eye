@@ -660,15 +660,17 @@ class ForensicHandlers:
     _UBA_MAX_ROWS = 300
 
     def _uba_engine(self):
-        """(engine, error, ran_now) - one BehaviorEngine run per case.
+        """(engine, error, ran_now) - the case's one stored behaviour analysis.
 
-        The run reads every artifact database once (a few seconds to a minute
-        on a large case) and keeps its BehaviorEvents in an in-memory store,
-        so every later call - any day, any user - is a query on that store.
-        Kept on the ContextManager; rebuilt when the case changes or when a
-        database in Target_Artifacts is newer than the run (a re-parse).
-        Eye's own instance: the UBA window runs its own, and the two never
-        share connections.
+        Reads <case>/UBA/uba_events.db - the same stored answer the User
+        Behavior window shows - through BehaviorEngine.run_or_load(): reused
+        while its stamp (rules file, engine code, every evidence database's
+        size and mtime, the rules turned off in Settings) still matches the
+        case, otherwise run once (a few seconds to a minute on a large case)
+        and stored for both. The loaded copy is kept on the ContextManager and
+        reused until the case changes or ``engine.is_current()`` says the
+        stamp moved (a re-parse, a rule switched). ``ran_now`` is true only
+        when this call ran the analysis rather than loading it.
         """
         import threading
         case = getattr(self.cm, "case_directory", None)
@@ -678,35 +680,31 @@ class ForensicHandlers:
         if not artifacts.is_dir():
             artifacts = Path(case)
 
-        def _stamp():
-            try:
-                return max((p.stat().st_mtime for p in artifacts.glob("*.db")), default=0.0)
-            except OSError:
-                return 0.0
-
         lock = getattr(self.cm, "_uba_lock", None)
         if lock is None:
             lock = self.cm._uba_lock = threading.Lock()
         with lock:
             cache = getattr(self.cm, "_uba_cache", None) or {}
-            stamp = _stamp()
-            if (cache.get("engine") is not None and cache.get("case") == str(artifacts)
-                    and cache.get("stamp", 0) >= stamp):
-                return cache["engine"], None, False
+            engine = cache.get("engine")
+            if engine is not None and cache.get("case") == str(artifacts):
+                try:
+                    if engine.is_current():
+                        return engine, None, False
+                except Exception:
+                    pass
             try:
                 from uba.engine.behavior_engine import BehaviorEngine
             except Exception as exc:                      # pragma: no cover
                 return None, "UBA is not available: %s" % exc, False
-            old = cache.get("engine")
-            if old is not None:
+            if engine is not None:
                 try:
-                    old.close()
+                    engine.close()
                 except Exception:
                     pass
             engine = BehaviorEngine(str(artifacts))
             try:
-                self.logger.info("Eye: running behaviour analysis on %s", artifacts)
-                engine.run()
+                self.logger.info("Eye: reading the behaviour analysis of %s", artifacts)
+                engine.run_or_load()
             except Exception as exc:
                 self.logger.error("Eye: behaviour analysis failed: %s", exc, exc_info=True)
                 return None, "The behaviour analysis failed: %s" % exc, False
@@ -718,9 +716,10 @@ class ForensicHandlers:
                     engine.db_pool.cleanup_thread_connections()
                 except Exception:
                     pass
-            self.cm._uba_cache = {"engine": engine, "case": str(artifacts), "stamp": stamp,
-                                  "ran_at": _utc_now_text()}
-            return engine, None, True
+            ran_now = not engine.loaded_from_store
+            self.cm._uba_cache = {"engine": engine, "case": str(artifacts),
+                                  "ran_at": engine.built_at_utc or _utc_now_text()}
+            return engine, None, ran_now
 
     def handle_query_user_behavior(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """What the people on this computer did - as behaviour, not rows.
@@ -792,6 +791,9 @@ class ForensicHandlers:
             "filters": {k: v for k, v in filters.items() if k not in ("start", "end")},
             "analysis": {"ran_now": ran_now,
                          "ran_at_utc": (getattr(self.cm, "_uba_cache", {}) or {}).get("ran_at"),
+                         "stored_analysis": getattr(engine, "store_path", None),
+                         "loaded_from_store": bool(getattr(engine, "loaded_from_store", False)),
+                         "computer": getattr(engine, "host", "") or None,
                          "events_in_case": engine.stats.get("total_events"),
                          "elapsed_seconds": engine.stats.get("elapsed_seconds")},
             "summary": {
@@ -812,6 +814,16 @@ class ForensicHandlers:
                              for r in unavailable[:8]],
                 "meaning": "These behaviours could not be looked for (their artifact was not "
                            "parsed): absence of such events is not evidence of absence."}
+        turned_off = [r for r in (engine.coverage_report or {}).get("rules", [])
+                      if r.get("status") == "off"]
+        if turned_off:
+            out["rules_turned_off"] = {
+                "count": len(turned_off),
+                "rules": [{"rule": r.get("rule_id"), "title": r.get("title")}
+                          for r in turned_off],
+                "meaning": "Turned off in Settings by an administrator, so never looked for: "
+                           "turned off - absence is not evidence. Do not report that any of "
+                           "these behaviours did not happen."}
         if params.get("summary_only"):
             out["note"] = ("Summary only. Ask again without summary_only (and with day / users / "
                            "activities) for the events themselves.")
@@ -841,11 +853,15 @@ class ForensicHandlers:
                 "what": e.get("description"), "activity": e.get("activity"),
                 "rule": e.get("rule_id"), "class": e.get("behavior_class"),
                 "actor": e.get("actor_name") or "(unattributed)",
+                "actor_sid": e.get("actor_sid") or None,
                 "actor_basis": e.get("actor_basis"),
                 "signed_in_user": e.get("session_user"),
                 "app": e.get("app_name"), "severity": e.get("severity"),
                 "confidence": e.get("confidence"), "caveat": e.get("caveat"),
                 "occurrences": e.get("aggregate_count"),
+                # An analyst-created behaviour rule (uba_user_rules.json), not a
+                # built-in one: say so when citing it.
+                **({"user_rule": True} if e.get("user_rule") else {}),
                 "evidence": [{"database": _db_file(ev.get("db")), "table": ev.get("table"),
                               "role": ev.get("role"),
                               "rowids": (ev.get("rowids") or [])[:10],

@@ -74,6 +74,17 @@ persistence queries see tasks beside the Run keys.
 The **Parse Registry** and **Parse All Artifacts** actions need no change — they already call the
 parser. It is the display path that does not know.
 
+**The MFT tab has its own four places**, not the registry ones: `data/mft_loader.py` →
+`mft_tables`; the sub-tab and its `QTableWidget` in `create_mft_usn_table_tabs`; the spec tuple in
+`load_mft_data` that swaps that widget for a virtual table; and the widget in
+`utils/table_sources.py`. `test_gui_tables_are_visible.py::MftTablesAreVisible` checks every
+`CREATE TABLE` in `MFT_Claw.py` against all four (`ntfs_integrity_findings` is the newest).
+
+**A column added to a table whose rows are deduplicated on every column** (the MFT child tables)
+must stay out of the identity, or every case parsed before it existed stores each row a second
+time on its next parse (old rows hold NULL there, new ones a value). `MFT_Claw._CHILD_EXTRA_COLUMNS`
+is the pattern: written, but not part of `insert_new`'s key.
+
 ### Parse status — why a table is empty
 Every parse records one outcome per artifact (`utils/parse_status.py` → `<case>/logs/parse_status.json`),
 and the **i** button above an empty table reads it through `utils/table_sources.py`.
@@ -191,6 +202,18 @@ count that matches the first run's length exactly. Read through `utils/ntfs_runs
 only resident sizes made every file over ~700 bytes read as empty.
 
 ---
+
+**The MFT parse is a delta parse on a re-parse.** `ntfs_integrity.IntegrityRun` digests every
+record and tells `MFT_Claw` / `offline_MFTClaw` which ones to parse; an unchanged record is not
+parsed again. A change to what a record stores must also change its SEMANTIC digest
+(`ntfs_digest_map.walk`), or a re-parse will never pick it up - and a change to how the digest is
+taken must bump `ntfs_integrity.PARSER_VERSION`, which forces one full parse
+(`parser_version_changed`). A new column filled from a field the digest leaves out (the access
+time, the SI's USN or quota) keeps its first value on a delta parse.
+
+**Record sizes come from the volume, never 1024.** The live parser takes it from the boot sector,
+a `$MFT` file from record 0's own header (`utils/ntfs_runs.record_size_from_header`), and the
+update-sequence stride from `fixup_stride()`.
 
 ## 5. Verify what reached the screen
 

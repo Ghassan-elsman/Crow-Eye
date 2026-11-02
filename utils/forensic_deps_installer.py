@@ -147,6 +147,11 @@ class ForensicDepsInstaller:
             
     def _install_via_pip(self, package: str) -> Tuple[bool, str]:
         """Install package via pip."""
+        if getattr(sys, "frozen", False):
+            # The EXE bundles its packages and sys.executable is CrowEye.exe:
+            # "-m pip" would start a second Crow-Eye, not pip.
+            return False, ("This build bundles its packages; install the newer "
+                           "Crow-Eye release instead of pip")
         try:
             print(f"  -> Installing {package} via pip...")
             
@@ -155,7 +160,7 @@ class ForensicDepsInstaller:
                 capture_output=True,
                 text=True,
                 timeout=300
-            )
+            , creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             
             if result.returncode == 0:
                 return True, "Installed successfully via pip"

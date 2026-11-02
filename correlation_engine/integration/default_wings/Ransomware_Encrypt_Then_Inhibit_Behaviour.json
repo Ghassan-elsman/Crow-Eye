@@ -1,0 +1,74 @@
+{
+  "config_name": "ransomware_encrypt_then_inhibit_behaviour",
+  "wing_name": "Mass Encryption With Recovery Inhibition (Behaviour)",
+  "wing_id": "default_behaviour_ransomware_inhibit_001",
+  "wing_category": "behaviour",
+  "description": "Rebuilt from the Identity Wing's rw_encrypt_then_inhibit, whose name and description required recovery-inhibition tooling but whose rule checked only a 50-write burst. Here both are required, in any order, within 10 minutes: at least 50 files changed or renamed in the user's document folders (file_edited / file_renamed, counting files) and a recovery-inhibition tool run (vssadmin, wbadmin, bcdedit, wmic, diskshadow) - program_run (Prefetch, no account) or process_created (Security 4688).",
+  "proves": "Files were changed in bulk and recovery was inhibited within minutes, a high-confidence ransomware pattern",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Files changed or renamed in bulk",
+      "rule_id": [
+        "file_edited",
+        "file_renamed"
+      ],
+      "actor": "any",
+      "min_count": 50,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    },
+    {
+      "label": "Recovery-inhibition tool ran",
+      "rule_id": [
+        "program_run",
+        "process_created"
+      ],
+      "actor": "any",
+      "conditions": [
+        {
+          "field_name": "app_name",
+          "operator": "regex",
+          "value": "(?i)\\b(?:vssadmin|wbadmin|bcdedit|wmic|diskshadow)\\b"
+        }
+      ]
+    }
+  ],
+  "ordered": false,
+  "within_minutes": 10,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "critical",
+    "technique_id": [
+      "T1486",
+      "T1490"
+    ],
+    "tactic": [
+      "impact"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "impact",
+    "ransomware",
+    "default",
+    "apt"
+  ],
+  "case_types": [
+    "intrusion",
+    "ransomware"
+  ]
+}

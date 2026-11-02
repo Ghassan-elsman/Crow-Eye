@@ -24,6 +24,46 @@ END_MARKER = 0xFFFFFFFF
 Run = Tuple[int, Optional[int], int]
 
 
+SEQUENCE_NUMBER_STRIDE = 512
+
+
+def fixup_stride(record_size: int, usa_count: int) -> int:
+    """The bytes each update-sequence entry protects, for one record.
+
+    NTFS protects a FILE / INDX / RCRD record in fixed strides and stores one
+    array entry per stride plus the sequence number itself, so the stride is
+    ``record_size / (usa_count - 1)``. That is 512 on every volume seen so
+    far (Windows' ``SEQUENCE_NUMBER_STRIDE``), 4Kn drives included: their
+    4096-byte records carry 9 entries, not 2. Derived rather than assumed, so a
+    record size other than 1024 (taken from the boot sector or the record's
+    own header) also gets the right count of fixups. Falls back to 512 when
+    the two do not divide evenly (a damaged header).
+    """
+    try:
+        strides = int(usa_count) - 1
+        if strides > 0 and record_size > 0 and record_size % strides == 0:
+            stride = record_size // strides
+            if stride >= 256 and stride & (stride - 1) == 0:
+                return stride
+    except (TypeError, ValueError):
+        pass
+    return SEQUENCE_NUMBER_STRIDE
+
+
+def record_size_from_header(raw: bytes, default: int = 1024) -> int:
+    """A FILE record's allocated size, from its own header (0x1C).
+
+    For a $MFT copied out as a file there is no boot sector to read the record
+    size from; record 0 says how big it is. 1024 on most volumes, 4096 on 4Kn
+    drives. ``default`` when the header is not a FILE record or the value is
+    not a plausible power of two."""
+    if len(raw) >= 0x20 and raw[:4] in (b'FILE', b'BAAD'):
+        size = struct.unpack_from('<I', raw, 0x1C)[0]
+        if 256 <= size <= 65536 and size & (size - 1) == 0:
+            return size
+    return default
+
+
 def apply_fixups(raw: bytes, stride: int = 512):
     """Undo NTFS's update-sequence protection on one FILE record.
 
@@ -149,6 +189,97 @@ def unnamed_data_runs(rec: bytes) -> Tuple[List[Run], Optional[dict], List[Tuple
                     more.append((ref, start_vcn))
                 p += e_len
     return runs, header, more
+
+
+def attribute_stream(rec: bytes, attr_type: int, name: str = ''):
+    """One attribute of a (fixed-up) FILE record, as where its bytes are.
+
+    Returns ``(resident_content, runs, header)``: the content for a resident
+    attribute (runs empty, header None), or the decoded runs and the
+    non-resident header of the segment that starts at VCN 0. ``(None, [], None)``
+    when the record has no such attribute. Used for the $MFT's own $BITMAP
+    (which record is allocated) and $LogFile's $DATA; a segment held in an
+    extension record is not followed - neither attribute is that fragmented
+    on any volume seen so far, and a short read is reported by the caller.
+    """
+    runs: List[Run] = []
+    header = None
+    for a_type, off, a_len, non_res, a_name in _attributes(rec):
+        if a_type != attr_type or a_name != name:
+            continue
+        if not non_res:
+            v_len, v_off = struct.unpack_from('<IH', rec, off + 0x10)
+            return bytes(rec[off + v_off:off + v_off + v_len]), [], None
+        h = nonresident_header(rec, off)
+        runs.extend(decode_runlist(rec[off:off + a_len], h['runlist_offset'], h['first_vcn']))
+        if h['first_vcn'] == 0:
+            header = h
+    if header is None and not runs:
+        return None, [], None
+    return None, runs, header
+
+
+def _attribute_list_entries(body: bytes):
+    """(type, name, start VCN, record number) for each $ATTRIBUTE_LIST entry."""
+    out = []
+    p = 0
+    while p + 26 <= len(body):
+        e_type, e_len = struct.unpack_from('<IH', body, p)
+        if e_len == 0 or e_type == END_MARKER:
+            break
+        n_len, n_off = body[p + 6], body[p + 7]
+        start_vcn = struct.unpack_from('<Q', body, p + 8)[0]
+        ref = struct.unpack_from('<Q', body, p + 16)[0] & 0xFFFFFFFFFFFF
+        name = body[p + n_off:p + n_off + 2 * n_len].decode('utf-16le', 'replace') if n_len else ''
+        out.append((e_type, name, start_vcn, ref))
+        p += e_len
+    return out
+
+
+def metadata_attribute(read_at: Callable[[int, int], bytes], mft_runmap: 'RunMap',
+                       record_size: int, cluster_size: int, number: int, attr_type: int,
+                       name: str = ''):
+    """attribute_stream() for record ``number`` of a live volume, following
+    its $ATTRIBUTE_LIST - resident or not - into the extension records that
+    hold the attribute. On a used volume the $MFT's own record 0 keeps its
+    $BITMAP in an extension record behind a non-resident attribute list, so
+    looking only in record 0 finds nothing."""
+
+    def fixed(n):
+        raw = read_stream(read_at, mft_runmap, n * record_size, record_size)
+        if raw[:4] != b'FILE':
+            return None
+        usa_count = struct.unpack_from('<H', raw, 6)[0]
+        return apply_fixups(raw, fixup_stride(record_size, usa_count))[0]
+
+    rec = fixed(number)
+    if rec is None:
+        raise ValueError("record %d is not a FILE record" % number)
+    content, runs, header = attribute_stream(rec, attr_type, name)
+    if content is not None or runs:
+        return content, runs, header
+    lst, lruns, lheader = attribute_stream(rec, ATTR_ATTRIBUTE_LIST)
+    if lst is None and lruns and lheader:
+        size = lheader['data_size']
+        lst = read_stream(read_at, RunMap(lruns, cluster_size), 0,
+                          size + (-size) % cluster_size)[:size]
+    if not lst:
+        return None, [], None
+    for e_type, e_name, _vcn, ref in sorted(_attribute_list_entries(lst), key=lambda e: e[2]):
+        if e_type != attr_type or e_name != name or ref == number:
+            continue
+        ext = fixed(ref)
+        if ext is None:
+            continue
+        c2, r2, h2 = attribute_stream(ext, attr_type, name)
+        if c2 is not None:
+            return c2, [], None
+        runs.extend(r2)
+        if h2 is not None and h2['first_vcn'] == 0:
+            header = h2
+    if not runs:
+        return None, [], None
+    return None, runs, header
 
 
 class RunMap:

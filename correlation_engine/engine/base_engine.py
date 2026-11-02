@@ -93,17 +93,47 @@ class BaseCorrelationEngine(ABC):
                 pass
     """
     
+    # The registered engine id (engine_registry); every concrete engine sets it.
+    ENGINE_TYPE: Optional[str] = None
+    # True when set_output_directory() makes the engine write matches to the
+    # results database while it runs (the executor then creates the execution
+    # row first).
+    SUPPORTS_STREAMING: bool = False
+
     def __init__(self, config: Any, filters: Optional[FilterConfig] = None):
         """
         Initialize correlation engine.
-        
+
         Args:
             config: Pipeline configuration object
             filters: Optional filter configuration
         """
         self.config = config
         self.filters = filters or FilterConfig()
-    
+
+    # ---- What PipelineExecutor calls on every engine. -----------------------
+    # These were duck-typed: the executor probed with hasattr and silently did
+    # without when a method was missing. The defaults below are the honest
+    # "nothing to do" for an engine that has no such capability.
+
+    def execute_wing(self, wing: Any, feather_paths: Dict[str, str]) -> Any:
+        """Run one Wing and return its CorrelationResult."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement execute_wing()")
+
+    def set_output_directory(self, output_dir: str, execution_id: int = None):
+        """Where (and under which execution) streamed matches are written."""
+
+    def register_progress_listener(self, listener):
+        """Receive progress events (callable or ProgressListener)."""
+
+    def request_cancellation(self, reason: Optional[str] = None):
+        """Ask a running Wing to stop at its next check."""
+        self._cancelled = True
+
+    def set_feather_cache(self, cache) -> None:
+        """Share one run's feather work across that run's Wings."""
+
     @abstractmethod
     def execute(self, wing_configs: List[Any]) -> Dict[str, Any]:
         """

@@ -58,11 +58,13 @@ except ModuleNotFoundError:                             # pragma: no cover
     from Artifacts_Collectors import registry_binary_parser
 
 try:
-    from utils.time_utils import format_forensic_timestamp, get_current_utc
+    from utils.time_utils import (filetime_to_datetime,
+                                  format_forensic_timestamp, get_current_utc)
 except ModuleNotFoundError:                             # pragma: no cover
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from utils.time_utils import format_forensic_timestamp, get_current_utc
+    from utils.time_utils import (filetime_to_datetime,
+                                  format_forensic_timestamp, get_current_utc)
 
 BS = chr(92)            # backslash, kept out of the f-strings below
 
@@ -187,6 +189,78 @@ def get_machine_sid(sam_hive):
     return ""
 
 
+def _sam_names_created(users):
+    """({rid: time}, {lower name: time}) from SAM\\...\\Users\\Names.
+
+    `account_created` is the last-write time of Users\\Names\\<username>. That
+    key is written once, when the account is created, and holds no data a
+    later logon or password change touches - the per-RID key next to it does
+    get rewritten (its F record carries the logon counters), so its time is
+    not a creation time. Names is the standard forensic source for when a local
+    account was made.
+
+    Caveat, and it is why the column is evidence to weigh, not a fact: a
+    RENAME creates a new Names\\<newname> key, so a renamed account shows the
+    rename time; and an in-place Windows upgrade rewrites the built-in
+    accounts' keys - on the machine this was proven on, Administrator, Guest,
+    DefaultAccount and WDAGUtilityAccount all read the feature-upgrade time
+    (InstallDate + 84 s), while the user account read 2 s before its profile
+    folder was created.
+
+    The key's default value carries the account's RID as its TYPE, so the
+    match is by RID; the name is the fallback for a hive where that does not
+    read back. The type is read raw (_names_rid): python-registry's
+    value_type() masks it to its low 12 bits, which turned RID 0x11F4 into
+    500 and gave Administrator another account's creation time.
+
+    A Names key whose last-write time is zero (anything at or before 1601) has
+    no creation time and reads as '' - not as 1601-01-01. Empty is '' rather
+    than NULL, as for every other time in UserAccounts (last_logon '' = never).
+    """
+    by_rid, by_name = {}, {}
+    try:
+        names = users.subkey("Names")
+    except Exception as e:
+        logger.debug("SAM Users\\Names unreadable: %s", e)
+        return by_rid, by_name
+    for key in names.subkeys():
+        try:
+            when = key.timestamp()
+            if when is None or when.year <= 1601:
+                continue
+            created = format_forensic_timestamp(when)
+        except Exception:
+            continue
+        if not created:
+            continue
+        by_name[key.name().lower()] = created
+        try:
+            for v in key.values():
+                if v.name() in ("", "(default)"):
+                    rid = _names_rid(v)
+                    if rid is not None:
+                        by_rid[rid] = created
+        except Exception as e:
+            logger.debug("SAM Names\\%s default value unreadable: %s", key.name(), e)
+    return by_rid, by_name
+
+
+def _names_rid(value):
+    """The RID a Names\\<user> default value carries as its TYPE, unmasked.
+
+    python-registry's value_type() returns `type & 0xFFF` (DEVPROP_MASK_TYPE),
+    so any RID of 0x1000 or above would collide with a low one - RIDs are never
+    reused, so a machine that has made and deleted many accounts gets there.
+    The VK record's type is the dword at offset 0x0C. If it cannot be read,
+    None: the name match still applies, and no masked RID that may belong to
+    another account is used.
+    """
+    try:
+        return int(value._vkrecord.unpack_dword(0xC))
+    except Exception:
+        return None
+
+
 def _sam_accounts(sam_hive):
     """[{rid, username, full_name, comment, ...}] from SAM, or []."""
     reg = _open(sam_hive)
@@ -198,6 +272,8 @@ def _sam_accounts(sam_hive):
     except Exception as e:
         logger.debug("SAM Users unreadable: %s", e)
         return []
+
+    created_by_rid, created_by_name = _sam_names_created(users)
 
     for key in users.subkeys():
         if key.name() == "Names":
@@ -240,6 +316,11 @@ def _sam_accounts(sam_hive):
             "bad_password_count": facts.get("bad_password_count", 0) if trusted else 0,
             "account_flags": facts.get("account_flags", "") if trusted else "",
             "account_enabled": facts.get("account_enabled", 0) if trusted else None,
+            # Names\<username> last-write - see _sam_names_created() for what
+            # it is and when it is not the creation time.
+            "account_created": (created_by_rid.get(key_rid)
+                                or created_by_name.get(
+                                    (strings.get("username") or "").lower(), "")),
         }
         out.append(acct)
     return out
@@ -450,6 +531,7 @@ def build_user_accounts(sam_hive=None, software_hive=None, system_hive=None,
             "last_logon": "", "password_last_set": "", "account_expires": "",
             "last_incorrect_password": "",
             "login_count": 0, "bad_password_count": 0,
+            "account_created": "",          # SAM-only; ProfileList has no such time
             "profile_path": path,
             "profile_loaded": 1 if path else 0,
             "source": "ProfileList",
@@ -657,19 +739,29 @@ CREATE TABLE IF NOT EXISTS UserAccounts (
     profile_path TEXT,
     profile_loaded INTEGER,
     source TEXT,
-    parsed_at TEXT
+    parsed_at TEXT,
+    account_created TEXT
 )"""
+# account_created sits AFTER parsed_at on purpose: a case parsed before the
+# column existed gets it by ALTER TABLE, which can only append, so a new
+# database and an upgraded one keep the same column order. Readers go by name
+# (uba/engine/attribution.py, behavior_engine.py), and parsed_at is excluded
+# from feathers by name, not by position.
 
 _COLUMNS = ["user_sid", "rid", "username", "display_name", "full_name", "comment",
             "account_type", "well_known", "account_enabled", "account_flags",
             "last_logon", "password_last_set", "account_expires",
             "last_incorrect_password", "login_count", "bad_password_count",
-            "profile_path", "profile_loaded", "source", "parsed_at"]
+            "profile_path", "profile_loaded", "source", "parsed_at",
+            "account_created"]
 
 
 def write_user_accounts(cursor, accounts):
     """Create UserAccounts and insert. Returns the number of rows written."""
     cursor.execute(CREATE_USER_ACCOUNTS_SQL)
+    # A case parsed before the column existed: CREATE IF NOT EXISTS leaves its
+    # table alone, so the column is added here. One column, one ALTER.
+    _ensure_column(cursor, "UserAccounts", "account_created")
     sql = ("INSERT OR REPLACE INTO UserAccounts (%s) VALUES (%s)"
            % (", ".join(_COLUMNS), ", ".join("?" * len(_COLUMNS))))
     n = 0
@@ -812,6 +904,78 @@ def _ensure_column(cursor, table, column, decl="TEXT"):
     return True
 
 
+def _dword(entry):
+    """A REG_DWORD from either parser's value map, or None.
+
+    Live (winreg) and offline (python-registry) both hand values over as
+    {name: (data, type)} and both decode a DWORD to an int; four raw bytes are
+    accepted too, for a value whose type had to be bypassed.
+    """
+    data = entry[0] if isinstance(entry, tuple) else entry
+    if isinstance(data, bool):
+        return None
+    if isinstance(data, int):
+        return data & 0xFFFFFFFF
+    if isinstance(data, (bytes, bytearray)) and len(data) == 4:
+        return struct.unpack("<I", bytes(data))[0]
+    return None
+
+
+def _profile_filetime(values, stem):
+    """<stem>High / <stem>Low combined into one naive-UTC time, or ''."""
+    lowered = {str(k).lower(): v for k, v in (values or {}).items()}
+    high = _dword(lowered.get((stem + "High").lower()))
+    low = _dword(lowered.get((stem + "Low").lower()))
+    if high is None or low is None:
+        return ""
+    filetime = (high << 32) | low
+    if not filetime:
+        return ""
+    try:
+        return format_forensic_timestamp(filetime_to_datetime(filetime))
+    except (ValueError, OverflowError):
+        return ""
+
+
+def profile_load_times(values):
+    """(profile_load_time, profile_unload_time) for one ProfileList\\<SID> key.
+
+    Windows stores each as a FILETIME split over two DWORDs:
+    LocalProfileLoadTimeHigh/Low and LocalProfileUnloadTimeHigh/Low. The load
+    time is the last time the User Profile Service loaded this profile's hive
+    - an interactive logon, but also RunAs, a scheduled task set to run
+    whether the user is logged on or not, or a service running as the user;
+    it is not by itself proof of an interactive logon. The unload time is when
+    the hive was last unloaded (logoff, shutdown, the end of that task).
+    Proven against the User Profile Service log: load matched event 5
+    ("ntuser.dat is loaded") to the second, unload matched the logoff within
+    one second.
+
+    A load time after the unload time means the profile was loaded when the
+    hive was captured, OR was never cleanly unloaded (a crash or power loss).
+    Service profiles (S-1-5-18/19/20) carry neither value, and get '' (empty
+    is '', not NULL, as in the table's other columns).
+
+    `values` is the {name: (data, type)} map both registry parsers already
+    build for a subkey; names are matched case-insensitively, since offline
+    matching is case-sensitive and winreg is not.
+    """
+    return (_profile_filetime(values, "LocalProfileLoadTime"),
+            _profile_filetime(values, "LocalProfileUnloadTime"))
+
+
+def ensure_user_profiles_columns(cursor):
+    """Add the profile load/unload columns to a UserProfiles made before them.
+
+    Called by both registry parsers right after their CREATE TABLE. The columns
+    are appended - after parsed_at - which is the only place ALTER TABLE can
+    put them, and is where the CREATE TABLE puts them too, so old and new
+    databases agree on order.
+    """
+    _ensure_column(cursor, "UserProfiles", "profile_load_time")
+    _ensure_column(cursor, "UserProfiles", "profile_unload_time")
+
+
 def describe_synthetic_sid(sid):
     """Name the SIDs Windows generates per-session rather than per-person."""
     if not sid:
@@ -890,6 +1054,7 @@ def apply_identity(cursor, sam_hive=None, software_hive=None, system_hive=None,
             "last_incorrect_password": "", "login_count": 0, "bad_password_count": 0,
             "profile_path": "", "profile_loaded": 0,
             "source": "Artifact", "parsed_at": stamp,
+            "account_created": "",
         })
 
     written = write_user_accounts(cursor, accounts)

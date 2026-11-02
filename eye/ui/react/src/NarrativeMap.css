@@ -41,7 +41,7 @@
 .nm-header-right { display: flex; align-items: center; gap: 12px; }
 .nm-zoom {
   display: flex; align-items: center; gap: 2px;
-  background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated); border: 3px solid var(--color-border-subtle);
   border-radius: var(--radius-full); padding: 3px;
 }
 .nm-zoom-val { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); width: 38px; text-align: center; }
@@ -55,7 +55,7 @@
 .nm-actor {
   display: flex; align-items: center; gap: 6px; cursor: pointer;
   padding: 6px 12px; border-radius: var(--radius-full); font-size: 12px; font-weight: 500;
-  border: 1px solid var(--color-border-muted); background: var(--color-bg-elevated);
+  border: 3px solid var(--color-border-muted); background: var(--color-bg-elevated);
   color: var(--color-text-primary); transition: all .15s;
 }
 .nm-actor.eye { border-color: var(--color-border-accent); color: var(--color-accent-bright); }
@@ -71,14 +71,14 @@
 .nm-search {
   display: flex; align-items: center; gap: 8px; flex: 0 0 280px;
   padding: 7px 12px; border-radius: var(--radius-full);
-  background: var(--color-bg-elevated); border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-elevated); border: 3px solid var(--color-border-subtle);
   color: var(--color-text-muted);
 }
 .nm-search input { flex: 1; background: none; border: none; outline: none; color: var(--color-text-primary); font-size: 13px; }
 .nm-chips { display: flex; gap: 7px; flex: 1; flex-wrap: wrap; }
 .nm-chip {
   padding: 5px 11px; border-radius: var(--radius-full); cursor: pointer; font-size: 12px;
-  background: transparent; border: 1px solid var(--color-border-muted);
+  background: transparent; border: 3px solid var(--color-border-muted);
   color: var(--color-text-muted); transition: all .15s;
 }
 .nm-chip:hover { color: var(--color-text-secondary); border-color: var(--color-text-muted); }
@@ -87,7 +87,7 @@
 .nm-btn {
   display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
   padding: 7px 13px; border-radius: var(--radius-md); font-size: 12px; font-weight: 500;
-  background: var(--color-bg-elevated); border: 1px solid var(--color-border-muted);
+  background: var(--color-bg-elevated); border: 3px solid var(--color-border-muted);
   color: var(--color-text-primary); transition: all .15s;
 }
 .nm-btn:hover { border-color: var(--color-border-accent); background: var(--color-bg-overlay); }
@@ -120,7 +120,7 @@
 .nm-card {
   position: absolute; width: 340px; z-index: 1; border-radius: var(--radius-lg);
   background: linear-gradient(180deg, var(--color-bg-elevated), var(--color-bg-surface));
-  border: 1px solid var(--color-border-subtle);
+  border: 3px solid var(--color-border-subtle);
   border-left: 3px solid var(--st, var(--color-text-muted));
   padding: 12px 14px 13px; cursor: grab;
   box-shadow: var(--shadow-sm);
@@ -176,7 +176,7 @@
 /* Evidence card */
 .nm-ev {
   position: relative; background: var(--color-bg-overlay);
-  border: 1px solid rgba(34,211,238,0.28); border-radius: var(--radius-md);
+  border: 3px solid rgba(34,211,238,0.28); border-radius: var(--radius-md);
   padding: 8px 10px; cursor: grab; transition: transform .12s, box-shadow .12s, border-color .12s;
 }
 .nm-ev:hover { border-color: rgba(34,211,238,0.6); box-shadow: 0 0 16px -8px var(--color-cyan); }
@@ -199,7 +199,7 @@
   width: 260px; padding: 16px 18px; cursor: grab;
   border-radius: var(--radius-xl);
   background: linear-gradient(160deg, color-mix(in srgb, var(--st) 14%, transparent), var(--color-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--st) 55%, transparent);
+  border: 3px solid color-mix(in srgb, var(--st) 55%, transparent);
   box-shadow: var(--shadow-md), inset 0 0 30px -18px var(--st);
   transition: box-shadow .15s;
   animation: fade-in .3s ease both;
@@ -251,14 +251,14 @@
 .nm-insp-kind { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; margin-bottom: 12px; }
 .nm-lbl { display: block; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--color-text-muted); margin: 12px 0 5px; }
 .nm-input {
-  width: 100%; background: var(--color-bg-elevated); border: 1px solid var(--color-border-muted);
+  width: 100%; background: var(--color-bg-elevated); border: 3px solid var(--color-border-muted);
   border-radius: var(--radius-sm); padding: 8px 10px; color: var(--color-text-primary);
   font-size: 13px; font-family: var(--font-sans); outline: none; transition: border-color .15s;
 }
 .nm-input:focus { border-color: var(--color-border-accent); }
 .nm-area { resize: vertical; line-height: 1.5; }
-.nm-seg { display: flex; gap: 4px; background: var(--color-bg-base); padding: 4px; border-radius: var(--radius-md); border: 1px solid var(--color-border-subtle); }
-.nm-seg button { flex: 1; display: grid; place-items: center; padding: 7px; background: none; border: 1px solid transparent; border-radius: var(--radius-sm); cursor: pointer; color: var(--color-text-muted); transition: all .15s; }
+.nm-seg { display: flex; gap: 4px; background: var(--color-bg-base); padding: 4px; border-radius: var(--radius-md); border: 3px solid var(--color-border-subtle); }
+.nm-seg button { flex: 1; display: grid; place-items: center; padding: 7px; background: none; border: 3px solid transparent; border-radius: var(--radius-sm); cursor: pointer; color: var(--color-text-muted); transition: all .15s; }
 .nm-seg button:hover { color: var(--color-text-secondary); background: var(--color-bg-overlay); }
 .nm-seg button.on { background: var(--color-bg-elevated); }
 
@@ -324,7 +324,7 @@
 .nm-menu {
   position: fixed; z-index: 100; min-width: 210px;
   background: var(--color-bg-surface);
-  border: 1px solid var(--color-border-accent);
+  border: 3px solid var(--color-border-accent);
   border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
   overflow: hidden; animation: fade-in-up .14s ease both;
 }
@@ -354,7 +354,7 @@
   width: 18px; height: 18px; display: grid; place-items: center;
   border-radius: 50%; cursor: crosshair; touch-action: none;
   background: var(--color-bg-elevated); color: #8b5cf6;
-  border: 1px solid color-mix(in srgb, #8b5cf6 55%, transparent);
+  border: 3px solid color-mix(in srgb, #8b5cf6 55%, transparent);
   opacity: 0; transition: opacity 0.12s;
 }
 .nm-card:hover .nm-linkout { opacity: 1; }
@@ -384,7 +384,7 @@
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.4px;
   color: var(--color-accent);
   background: color-mix(in srgb, var(--color-accent) 14%, var(--color-bg-elevated));
-  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
+  border: 3px solid color-mix(in srgb, var(--color-accent) 45%, transparent);
   border-radius: var(--radius-full); padding: 2px 7px;
 }
 /* "raised from: <question>" provenance line in the inspector */
@@ -400,7 +400,7 @@
 .nm-modal {
   width: min(760px, 94vw); max-height: 88vh; overflow: auto;
   background: var(--color-bg-elevated);
-  border: 1px solid var(--color-border-subtle);
+  border: 3px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   box-shadow: 0 18px 60px rgba(0,0,0,0.5);
 }
@@ -426,7 +426,7 @@
   margin: 0; padding: 8px 10px; max-height: 320px; overflow: auto;
   font-family: var(--font-mono); font-size: 11.5px; line-height: 1.45;
   color: var(--color-text); background: rgba(0,0,0,0.22);
-  border: 1px solid var(--color-border, rgba(255,255,255,0.08)); border-radius: 4px;
+  border: 3px solid var(--color-border, rgba(255,255,255,0.08)); border-radius: 4px;
   white-space: pre-wrap; word-break: break-word;
 }
 
@@ -459,7 +459,7 @@
   padding: 1px 5px; border-radius: 4px;
 }
 .nm-md pre {
-  background: var(--color-bg-base); border: 1px solid var(--color-border-subtle);
+  background: var(--color-bg-base); border: 3px solid var(--color-border-subtle);
   border-radius: 6px; padding: 10px; margin: 0 0 8px 0; overflow-x: auto;
 }
 .nm-md pre code { background: none; padding: 0; font-size: 12px; }

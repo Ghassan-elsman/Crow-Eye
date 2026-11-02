@@ -54,6 +54,117 @@ def _collect_feather_field_map(pipeline_config) -> Dict[str, Set[str]]:
     return by_id
 
 
+def _is_number(value, minimum=None, strict=False) -> bool:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return False
+    if minimum is None:
+        return True
+    return number > minimum if strict else number >= minimum
+
+
+def _cond_list(spec) -> List[Dict[str, Any]]:
+    if isinstance(spec, dict) and 'conditions' in spec:
+        return [c for c in spec.get('conditions') or [] if isinstance(c, dict)]
+    if isinstance(spec, dict) and 'feather_id' in spec:
+        return [spec]
+    return []
+
+
+def _advanced_block_conditions(rule: Dict[str, Any], flag):
+    """Check the absence / sequence / threshold / condition_groups blocks.
+
+    Reports a block that cannot work as written (and so would never fire, with
+    no error anywhere), and yields (block, conditions) so the caller checks the
+    conditions inside a block like any flat condition.
+    """
+    rule_type = str(rule.get('rule_type', 'match') or 'match').lower()
+    if rule_type not in ('match', 'absence', 'sequence', 'threshold'):
+        flag('invalid_rule_type',
+             f"rule_type '{rule_type}' is not match / absence / sequence / threshold; "
+             f"it is evaluated as a plain match rule")
+
+    def needs_fields(conds, where):
+        for c in conds:
+            missing = [k for k in ('feather_id', 'field_name', 'value') if k not in c]
+            if missing:
+                flag('invalid_condition',
+                     f"{where}: a condition is missing {', '.join(missing)}")
+
+    if rule_type == 'absence':
+        spec = rule.get('absence')
+        if not isinstance(spec, dict):
+            flag('invalid_absence', "rule_type is absence but there is no absence block")
+        else:
+            expect = [c for c in spec.get('expect_present') or [] if isinstance(c, dict)]
+            absent = [c for c in spec.get('require_absent') or [] if isinstance(c, dict)]
+            if not absent:
+                flag('invalid_absence', "absence.require_absent is empty; the rule can never fire")
+            if not expect:
+                flag('invalid_absence',
+                     "absence.expect_present is empty; with nothing expected the rule "
+                     "fires on every identity lacking the absent evidence")
+            if spec.get('within_minutes') is not None and not _is_number(spec['within_minutes'], 0, True):
+                flag('invalid_absence', "absence.within_minutes must be a number above 0")
+            needs_fields(expect + absent, 'absence')
+            yield 'absence', expect + absent
+
+    if rule_type == 'threshold':
+        spec = rule.get('threshold')
+        if not isinstance(spec, dict):
+            flag('invalid_threshold', "rule_type is threshold but there is no threshold block")
+        else:
+            conds = _cond_list(spec.get('condition')) or _cond_list(spec)
+            if not conds:
+                flag('invalid_threshold', "threshold has no condition; the rule can never fire")
+            if not _is_number(spec.get('min_count', 2), 1):
+                flag('invalid_threshold', "threshold.min_count must be a whole number of at least 1")
+            if spec.get('within_minutes') is not None and not _is_number(spec['within_minutes'], 0, True):
+                flag('invalid_threshold', "threshold.within_minutes must be a number above 0")
+            if spec.get('group_by') is not None and not isinstance(spec.get('group_by'), str):
+                flag('invalid_threshold', "threshold.group_by must be one field name")
+            needs_fields(conds, 'threshold')
+            yield 'threshold', conds
+
+    if rule_type == 'sequence':
+        spec = rule.get('sequence')
+        if not isinstance(spec, dict):
+            flag('invalid_sequence', "rule_type is sequence but there is no sequence block")
+        else:
+            steps = spec.get('steps') or []
+            if len(steps) < 2:
+                flag('invalid_sequence', "a sequence needs at least 2 steps; it can never fire")
+            conds = []
+            for i, step in enumerate(steps, 1):
+                step_conds = _cond_list(step)
+                if not step_conds:
+                    flag('invalid_sequence', f"sequence step {i} has no condition")
+                conds.extend(step_conds)
+            if spec.get('max_gap_minutes') is not None and not _is_number(spec['max_gap_minutes'], 0):
+                flag('invalid_sequence', "sequence.max_gap_minutes must be a number of 0 or more")
+            needs_fields(conds, 'sequence')
+            yield 'sequence', conds
+
+    groups = rule.get('condition_groups') or []
+    if groups and not isinstance(groups, list):
+        flag('invalid_condition_groups', "condition_groups must be a list of groups")
+        groups = []
+    for i, group in enumerate(groups, 1):
+        if not isinstance(group, dict):
+            flag('invalid_condition_groups', f"condition group {i} is not an object")
+            continue
+        op = str(group.get('logic_operator', 'AND')).upper()
+        if op not in ('AND', 'OR'):
+            flag('invalid_condition_groups',
+                 f"condition group {i} has logic_operator '{op}'; only AND / OR exist (read as AND)")
+        conds = _cond_list(group)
+        if not conds:
+            flag('invalid_condition_groups', f"condition group {i} has no conditions")
+        needs_fields(conds, f'condition group {i}')
+        yield 'condition_groups', conds
+
+
 def validate_semantic_rules(pipeline_config) -> List[Dict[str, Any]]:
     """Walk every wing's semantic_rules and report unsupported operators and
     field-not-on-feather issues. Returns a list of dicts:
@@ -67,6 +178,12 @@ def validate_semantic_rules(pipeline_config) -> List[Dict[str, Any]]:
     for wing in getattr(pipeline_config, 'wing_configs', []) or []:
         wing_name = getattr(wing, 'wing_name', '<unnamed wing>')
         rules = getattr(wing, 'semantic_rules', None) or []
+        wing_feather_ids = set()
+        for ref in getattr(wing, 'feathers', None) or []:
+            for key in ('feather_id', 'feather_config_name'):
+                value = ref.get(key) if isinstance(ref, dict) else getattr(ref, key, None)
+                if value:
+                    wing_feather_ids.add(value)
         for rule in rules:
             if not isinstance(rule, dict):
                 continue
@@ -76,7 +193,29 @@ def validate_semantic_rules(pipeline_config) -> List[Dict[str, Any]]:
                 or rule.get('semantic_value')
                 or '<unnamed rule>'
             )
-            for cond in rule.get('conditions', []) or []:
+
+            def flag(kind, detail):
+                issues.append({'wing': wing_name, 'rule_id': rule_id,
+                               'kind': kind, 'detail': detail})
+
+            conditions = [c for c in rule.get('conditions', []) or [] if isinstance(c, dict)]
+            for where, extra in _advanced_block_conditions(rule, flag):
+                conditions.extend(extra)
+
+            for cond in conditions:
+                feather_id = cond.get('feather_id', '') or ''
+                if (feather_id and feather_id != '_identity' and wing_feather_ids
+                        and feather_id not in wing_feather_ids):
+                    flag('unknown_feather',
+                         f"condition names feather '{feather_id}', which this Wing "
+                         f"does not declare; it can never match")
+                if cond.get('compare_to_feather') and wing_feather_ids \
+                        and cond['compare_to_feather'] not in wing_feather_ids:
+                    flag('unknown_feather',
+                         f"cross-feather compare names feather "
+                         f"'{cond['compare_to_feather']}', which this Wing does not declare")
+
+            for cond in conditions:
                 if not isinstance(cond, dict):
                     continue
                 op = cond.get('operator', 'equals')

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QColor, QFont
 from .ui_styling import CorrelationEngineStyles
-from ui.site_theme import font, set_card, set_role, set_status, keep_style
+from ui.app_theme import font, set_card, set_role, set_status, keep_style
 
 # interpretation kind -> label status (the site's meaning colours)
 _KIND_STATUS = {"high": "ok", "medium": "warn", "low": "bad"}
@@ -254,6 +254,8 @@ class ScoringBreakdownWidget(QWidget):
             
             # Feather name
             feather_item = QTableWidgetItem(feather_id)
+            from .crow_eye_icons import CrowEyeIcons
+            feather_item.setIcon(CrowEyeIcons.feather())
             if matched:
                 feather_item.setFont(font("ui", 12, QFont.Bold))
             self.breakdown_table.setItem(row, 0, feather_item)

@@ -1,7 +1,8 @@
 {
   "config_name": "account_logon_correlation",
-  "wing_name": "Account Logon & Privilege Use Correlation",
+  "wing_name": "Account Logon & Privilege Use Correlation (Identity)",
   "wing_id": "default_wing_logon_001",
+  "wing_category": "identity",
   "description": "Reconstructs account-level activity on the host: when a session opened (4624), how the account authenticated (4648 / 4776), whether elevated privileges were assigned (4672), and which logon failures preceded it (4625). Uses Security log events as the spine and ties them to the actual artefacts created under the session (UserAssist runs, RecentDocs/MRUs, file activity) so an investigator can attribute behaviour to a specific account.",
   "proves": "An account authenticated to the system and acted under that session",
   "author": "Crow-Eye Team",

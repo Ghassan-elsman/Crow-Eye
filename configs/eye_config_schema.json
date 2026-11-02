@@ -19,6 +19,7 @@
         "gemini_cli",
         "llama",
         "claude_code",
+        "codex_cli",
         "jules_cli",
         "gpt_cli",
         "ollama_cli",
@@ -336,6 +337,17 @@
           "default": 50
         }
       }
+    },
+    "effort": {
+      "type": ["string", "null"],
+      "enum": ["low", "medium", "high", "xhigh", "max", null],
+      "description": "How much the model thinks and works per reply, where the model takes it (Anthropic effort, OpenAI reasoning_effort, Claude Code --effort). Unset: the model's default."
+    },
+    "cli_timeout_s": {
+      "type": ["integer", "null"],
+      "minimum": 30,
+      "maximum": 3600,
+      "description": "Seconds one Claude Code call may take before it is stopped (default 600)."
     }
   },
   "allOf": [

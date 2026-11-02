@@ -1,0 +1,57 @@
+{
+  "config_name": "mass_file_deletion_behaviour",
+  "wing_name": "Mass File Deletion Burst (Behaviour)",
+  "wing_id": "default_behaviour_mass_delete_001",
+  "wing_category": "behaviour",
+  "description": "Rebuilt from the Anti-Forensics Identity Wing's af_mass_delete threshold, which counted USN FILE_DELETE rows of ONE file identity and so could not see a cleanup across many files. Here: at least 20 files permanently deleted (bypassing the Recycle Bin) within 5 minutes - UBA's file_deleted events, each counting its files. A burst lasting longer than 5 minutes is counted at its average rate, and the hit says so. Only the user's document folders count (Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive), as UBA labels each burst's folder: application caches, Program Files, ProgramData and Windows churn constantly and are left out.",
+  "proves": "Many files were permanently deleted within minutes, consistent with cleanup",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Files permanently deleted in bulk",
+      "rule_id": "file_deleted",
+      "actor": "any",
+      "min_count": 20,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 5,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1070.004",
+      "T1485"
+    ],
+    "tactic": [
+      "defense-evasion",
+      "impact"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "anti_forensics",
+    "threshold",
+    "default"
+  ],
+  "case_types": [
+    "intrusion",
+    "anti_forensics",
+    "insider"
+  ]
+}

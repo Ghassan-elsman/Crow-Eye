@@ -1,4 +1,4 @@
-import { Icon } from './icons.jsx'
+import { ActivityIcon } from './icons.jsx'
 import {
   ACTOR_STYLE, SEVERITY_STYLE, CONFIDENCE_TIER, CONFIDENCE_LABEL,
   activityLabel, isFlagged, displayUser, USER_BASIS_NOTE,
@@ -54,8 +54,8 @@ export default function ActivityCard({ event, isLast, expanded, onToggle, onOpen
         }}>
         {/* main row: icon · sentence · right meta cluster (uses the width) */}
         <div className="tl-main">
-          <span className="tl-icon" style={{ color: flagged ? '#ff3b56' : actor.color }}>
-            <Icon name={event.activity} size={19} />
+          <span className="tl-icon">
+            <ActivityIcon activity={event.activity} userRule={Boolean(event.user_rule)} size={22} />
           </span>
 
           <div className="tl-center">
@@ -64,6 +64,8 @@ export default function ActivityCard({ event, isLast, expanded, onToggle, onOpen
               <RenameChain names={event.details.rename_chain} flagged={flagged} />
             )}
             <div className="tl-chips">
+              {/* what kind of action, on the left beside the user, where the eye starts */}
+              <span className="pill cat">{activityLabel(event.activity)}</span>
               <span className="user-chip"
                 title={user.definitive ? 'User named by the evidence' : 'Signed-in user at this time — not proof they performed it'}>
                 {user.definitive ? '👤' : '🕓'} {user.text}{user.basis === 'session' ? ' · logged-in' : ''}
@@ -82,7 +84,9 @@ export default function ActivityCard({ event, isLast, expanded, onToggle, onOpen
           <div className="tl-meta">
             <span className="tl-time">{timeOf(event.ts_start)}</span>
             <span className="pill" style={{ color: actor.color, background: actor.bg }}>{actor.label}</span>
-            <span className="pill cat">{activityLabel(event.activity)}</span>
+            {event.user_rule && (
+              <span className="rule-badge" title="Found by a behaviour rule you created">Your rule</span>
+            )}
             {flagged && (
               <span className="pill" style={{ color: sev.color, background: sev.bg }}>Needs review</span>
             )}

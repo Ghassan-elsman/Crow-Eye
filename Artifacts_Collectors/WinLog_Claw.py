@@ -52,15 +52,76 @@ def prepare_event_tables(conn):
     return legacy
 
 
-def insert_event_rows(conn, table, rows, tally, legacy=False):
+def _drop_stored_under_alias(conn, table, cols, rows, aliases, tally):
+    """The rows not already stored under the other name of their provider.
+
+    One provider has two names: the classic EventLog API (the live parse)
+    reports its event source name ('DCOM', 'Software Protection Platform
+    Service'), an .evtx read offline its provider name
+    ('Microsoft-Windows-DistributedCOM', 'Microsoft-Windows-Security-SPP').
+    Source is part of the identity, so the same event parsed live and then
+    from Crow-Claw's collected .evtx (or the other way round) was stored a
+    second time - 74 of 300 System and 202 of 1,341 Application events of a
+    two-day export. ``aliases`` maps a row's Source to the provider's other
+    name; an event stored under that name, with the same record number, time
+    and ID, is already present. The row keeps the name its own source gives.
+    """
+    if not aliases or not rows:
+        return rows
+    i = {c: cols.index(c) for c in EVENT_IDENTITY}
+    sql = ('SELECT 1 FROM "%s" WHERE %s LIMIT 1'
+           % (table, " AND ".join("%s IS ?" % c for c in EVENT_IDENTITY)))
+    keep = []
+    for r in rows:
+        alt = aliases.get(r[i["Source"]])
+        if alt and alt != r[i["Source"]] and conn.execute(sql, tuple(
+                alt if c == "Source" else r[i[c]] for c in EVENT_IDENTITY)).fetchone():
+            continue
+        keep.append(r)
+    if tally is not None and len(keep) < len(rows):
+        tally.add(table, len(rows) - len(keep), 0)
+    return keep
+
+
+_PROVIDER_NAMES = {}
+
+
+def provider_name(log_type, source):
+    """The provider name behind a classic event source name, from this
+    machine's registry (EventLog\\<log>\\<source> ProviderGuid -> WINEVT
+    publisher), or None. 'DCOM' -> 'Microsoft-Windows-DistributedCOM'."""
+    key = (log_type, source)
+    if key not in _PROVIDER_NAMES:
+        name = None
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                "SYSTEM\\CurrentControlSet\\Services\\EventLog\\%s\\%s"
+                                % (log_type, source)) as k:
+                guid = winreg.QueryValueEx(k, "ProviderGuid")[0]
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WINEVT\\Publishers\\%s"
+                                % guid) as k:
+                name = winreg.QueryValueEx(k, "")[0] or None
+        except (OSError, ImportError, TypeError, ValueError):
+            name = None
+        _PROVIDER_NAMES[key] = name
+    return _PROVIDER_NAMES[key]
+
+
+def insert_event_rows(conn, table, rows, tally, legacy=False, aliases=None):
     """Insert the events not stored yet; returns the number inserted.
 
     ``legacy``: the table holds rows from before RecordNumber was recorded.
     Such a row cannot be matched by number, so an event is also skipped when a
     numberless row with the same time, provider, ID and text exists - the
     first re-parse of an older case does not store its events a second time.
+    ``aliases``: {Source: the provider's other name} (_drop_stored_under_alias).
     """
     cols = EVENT_TABLE_COLUMNS[table]
+    if not rows:
+        return 0
+    rows = _drop_stored_under_alias(conn, table, cols, rows, aliases, tally)
     if not rows:
         return 0
     if not legacy:
@@ -208,6 +269,7 @@ def read_event_logs(log_type, conn, tally=None, legacy=None):
     table = {"Security": "SecurityLogs", "Application": "ApplicationLogs"}.get(log_type, "SystemLogs")
     tally = tally if tally is not None else Tally()
     legacy = legacy or {}
+    aliases = {}
 
     while True:
         events = win32evtlog.ReadEventLog(log_handle, flags, 0)
@@ -251,7 +313,9 @@ def read_event_logs(log_type, conn, tally=None, legacy=None):
             except Exception as e:
                 print(f"Error processing event: {str(e)}")
                 continue
-        insert_event_rows(conn, table, rows, tally, legacy.get(table, False))
+        for source in {r[1] for r in rows} - set(aliases):
+            aliases[source] = provider_name(log_type, source)
+        insert_event_rows(conn, table, rows, tally, legacy.get(table, False), aliases)
 
     win32evtlog.CloseEventLog(log_handle)
     return tally

@@ -1,9 +1,9 @@
 """
-EYE Tab Stub for Context Window Settings Integration.
+Eye Tab Stub for Context Window Settings Integration.
 
-This module provides a stub implementation of the EYE Tab that demonstrates
+This module provides a stub implementation of the Eye Tab that demonstrates
 the integration pattern for the Context Window Settings Dialog. The full
-EYE Tab implementation will be completed in Task 17.
+Eye Tab implementation will be completed in Task 17.
 
 This stub shows:
 - How to add a "Context Settings" button to the chat toolbar
@@ -27,10 +27,10 @@ from eye.ui.settings_dialog import ContextWindowSettingsDialog
 
 class EYETabStub(QWidget):
     """
-    Stub implementation of EYE Tab for demonstrating Context Settings integration.
+    Stub implementation of Eye Tab for demonstrating Context Settings integration.
     
     This is a placeholder implementation that shows the integration pattern
-    for the Context Window Settings Dialog. The full EYE Tab with chat interface,
+    for the Context Window Settings Dialog. The full Eye Tab with chat interface,
     report builder, and QWebChannel bridge will be implemented in Task 17.
     
     Integration Pattern:
@@ -48,7 +48,7 @@ class EYETabStub(QWidget):
         parent=None
     ):
         """
-        Initialize EYE Tab stub.
+        Initialize Eye Tab stub.
         
         Args:
             context_manager: ContextManager instance for configuration updates
@@ -78,11 +78,11 @@ class EYETabStub(QWidget):
         content_layout.setAlignment(Qt.AlignCenter)
         
         placeholder_label = QLabel(
-            "EYE Tab Stub\n\n"
+            "Eye Tab Stub\n\n"
             "This is a placeholder implementation demonstrating\n"
             "Context Window Settings Dialog integration.\n\n"
             "Click 'Context Settings' in the toolbar above to test the integration.\n\n"
-            "Full EYE Tab implementation (Task 17) will include:\n"
+            "Full Eye Tab implementation (Task 17) will include:\n"
             "- Chat Interface (React SPA)\n"
             "- Report Builder Panel\n"
             "- QWebChannel Bridge\n"
@@ -128,14 +128,14 @@ class EYETabStub(QWidget):
             QPushButton {
                 background-color: #334155;
                 color: #E5E7EB;
-                border: 1px solid #475569;
+                border: 3px solid #475569;
                 border-radius: 4px;
                 padding: 6px 12px;
                 font-size: 10pt;
             }
             QPushButton:hover {
                 background-color: #475569;
-                border: 1px solid #00FFFF;
+                border: 3px solid #00FFFF;
             }
             QPushButton:pressed {
                 background-color: #1E293B;

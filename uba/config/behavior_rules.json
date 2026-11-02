@@ -1,5 +1,5 @@
 {
-  "version": "2",
+  "version": "3",
   "comment": "Master Behavioral Timeline Correlation Matrix \u2014 declarative rule metadata. Each rule names a Python extractor (uba/engine/extractors/*) that implements the query + correlation; rules added 2026-09-03 cover the artifacts the registry parsers collect but no rule read - scheduled tasks, Defender exclusions, UserChoice handlers, COM in-process servers and the per-user device and document MRUs.",
   "rules": [
     {

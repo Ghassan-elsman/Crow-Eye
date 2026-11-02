@@ -10,6 +10,9 @@ Statuses:
 - unavailable:          required artifact tables missing from the case
 - requires_collection:  master-matrix behaviors that need parsers/collections
                         Crow-Eye does not have yet (static list)
+- off:                  turned off in Settings (rule_switches). Not run, so
+                        no events - and that says nothing about the evidence.
+                        Never reported as "unavailable" or "found nothing".
 """
 
 import logging
@@ -141,11 +144,16 @@ def _rule_artifacts(rule: dict) -> List[str]:
     return out
 
 
+OFF_NOTE = ("Turned off in Settings. This behaviour was not looked for, so "
+            "having no events for it says nothing about the evidence.")
+
+
 class CoverageAnalyzer:
-    def __init__(self, db_pool, rules_config: dict):
+    def __init__(self, db_pool, rules_config: dict, disabled=None):
         self.db_pool = db_pool
         self.rules = rules_config["rules"]
         self.requires_collection = rules_config["requires_collection"]
+        self.disabled = set(disabled or ())
         self._eid_presence_cache: Dict[str, bool] = {}
 
     # ------------------------------------------------------------------ #
@@ -198,6 +206,9 @@ class CoverageAnalyzer:
             "note": rule.get("degrade_note", ""),
             "artifacts": _rule_artifacts(rule),
         }
+        if rule.get("user_rule"):
+            entry["user_rule"] = True
+            entry["user_kind"] = rule.get("user_kind", "")
         provider = _PROVIDER_LABEL.get(rule["id"])
         if provider:
             entry["artifacts"] = [
@@ -205,12 +216,32 @@ class CoverageAnalyzer:
                 for a in entry["artifacts"]]
         entry["how"] = _rule_how(rule, entry["artifacts"])
 
+        if rule["id"] in self.disabled:
+            # Checked first: an off rule is off whatever data the case holds.
+            entry["status"] = "off"
+            entry["note"] = OFF_NOTE
+            return entry
+
+        if rule.get("invalid"):
+            # An analyst's rule that fails validation is never run; say why
+            # here rather than letting it read as "found nothing".
+            entry["status"] = "unavailable"
+            entry["note"] = ("This rule of yours is not valid, so it was not run: "
+                             + " ".join(rule["invalid"]))
+            return entry
+
         tables_ok = self._has_tables(requires.get("tables"))
         any_tables = requires.get("any_tables")
         any_ok = self._has_tables(any_tables, mode_all=False) if any_tables else True
         if not (tables_ok and any_ok):
             entry["status"] = "unavailable"
             entry["note"] = entry["note"] or "Required artifact data was not parsed for this case."
+            return entry
+
+        refusal = self._user_rule_refusal(rule)
+        if refusal:
+            entry["status"] = "unavailable"
+            entry["note"] = refusal
             return entry
 
         mode = requires.get("log_eids_mode", "all")
@@ -230,8 +261,54 @@ class CoverageAnalyzer:
                 "entries are not present (auditing is typically disabled by default).")
         return entry
 
+    def _user_rule_refusal(self, rule: dict) -> str:
+        """Why an analyst's rule cannot run on this case ('' = it can): a table
+        rule naming a column the case's table lacks, or a derived rule naming
+        a field no behaviour event has. Refused, never run half-blind."""
+        if not rule.get("user_rule") or not rule.get("spec"):
+            return ""
+        from uba.engine.extractors import declarative
+        spec = rule["spec"]
+        if rule.get("user_kind") == "table":
+            problems = declarative.check_table_rule(self.db_pool, spec)
+        else:
+            problems = declarative.check_derived_rule(spec)
+        if not problems:
+            return ""
+        note = "Not run - " + " ".join(problems)
+        logger.warning("UBA: your rule %s was not run: %s", rule.get("id"), " ".join(problems))
+        return note
+
+    def _derived_bases(self, statuses: List[dict]):
+        """A derived rule whose base behaviours were all not run (off, or no
+        data) had nothing to look at: unavailable, with the reason - never a
+        quiet zero."""
+        by_id = {s["rule_id"]: s for s in statuses}
+        for rule in self.rules:
+            if rule.get("user_kind") != "derived":
+                continue
+            entry = by_id.get(rule["id"])
+            if entry is None or entry["status"] in ("off", "unavailable"):
+                continue
+            base = (rule.get("spec") or {}).get("base") or {}
+            ids = [str(x) for x in base.get("rule_ids") or []]
+            if base.get("activities"):
+                continue            # activities span rules; checked by events
+            dead = [i for i in ids if (by_id.get(i) or {}).get("status") in ("off", "unavailable")
+                    or i not in by_id]
+            if ids and len(dead) == len(ids):
+                why = []
+                for i in dead:
+                    st = (by_id.get(i) or {}).get("status")
+                    why.append("'%s' (%s)" % (i, "turned off in Settings" if st == "off"
+                                              else "no data" if st else "no such rule"))
+                entry["status"] = "unavailable"
+                entry["note"] = ("Not run - its base behaviour %s was not looked for, so this "
+                                 "rule had nothing to filter." % ", ".join(why))
+
     def report(self) -> dict:
         statuses = [self.rule_status(rule) for rule in self.rules]
+        self._derived_bases(statuses)
         return {
             "rules": statuses,
             "requires_collection": self.requires_collection,
@@ -239,6 +316,7 @@ class CoverageAnalyzer:
                 "active": sum(1 for s in statuses if s["status"] == "active"),
                 "degraded": sum(1 for s in statuses if s["status"] == "degraded"),
                 "unavailable": sum(1 for s in statuses if s["status"] == "unavailable"),
+                "off": sum(1 for s in statuses if s["status"] == "off"),
                 "requires_collection": len(self.requires_collection),
             },
         }

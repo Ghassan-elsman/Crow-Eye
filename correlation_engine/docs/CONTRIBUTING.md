@@ -47,7 +47,7 @@ Your contributions help make forensic investigation more accessible, efficient, 
 
 ## Getting Started
 
-The Crow-Eye Correlation Engine is a forensic artifact correlation system with a dual-engine architecture. Before contributing, please:
+The Crow-Eye Correlation Engine is a forensic artifact correlation system with three engines (Time-Window, Identity and Behavioural). Before contributing, please:
 
 1. **Read the Documentation**:
    - [Correlation Engine Overview](docs/CORRELATION_ENGINE_OVERVIEW.md)

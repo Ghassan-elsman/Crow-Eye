@@ -71,6 +71,16 @@ class BehaviorEvent:
     caveat: str = ""              # evidentiary limit of the artifact (e.g. can be app-generated)
     session_user: str = ""        # interactive user logged on at ts_start — labelled, NOT proof
     app_name: str = ""            # the specific program this activity concerns (for the app filter)
+    # The person key. The SID of the account the actor resolved to - set only
+    # when the evidence binds the actor to exactly one profile (or to a
+    # well-known system SID); '' otherwise, never a guess. actor_name is for
+    # reading, actor_sid is for grouping: one person can appear under several
+    # names (Alice, alice, PC\alice, a Microsoft-account e-mail).
+    actor_sid: str = ""
+    host: str = ""                # the case's computer name (ComputerName)
+    # True for an event an analyst-created rule produced (uba_user_rules.json);
+    # the window draws such events with the "Your rule" icon, and Eye says so.
+    user_rule: bool = False
     aggregate_count: int = 1
     details: dict = field(default_factory=dict)   # small extras for the card
     evidence: List[EvidenceRef] = field(default_factory=list)
@@ -104,6 +114,9 @@ class BehaviorEvent:
             "caveat": self.caveat,
             "session_user": self.session_user,
             "app_name": self.app_name,
+            "actor_sid": self.actor_sid,
+            "host": self.host,
+            "user_rule": 1 if self.user_rule else 0,
             "aggregate_count": self.aggregate_count,
             "details_json": json.dumps(self.details, default=str),
             "evidence_json": json.dumps([e.to_dict() for e in self.evidence]),

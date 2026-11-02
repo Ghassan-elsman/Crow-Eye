@@ -38,10 +38,10 @@ try:
 except ImportError:
     # Create a minimal placeholder for standalone testing
     class CrowEyeStyles:
-        LOADING_DIALOG_BACKDROP = "QFrame { background: #2d2d2d; border: 1px solid #666; }"
+        LOADING_DIALOG_BACKDROP = "QFrame { background: #2d2d2d; border: 3px solid #666; }"
         LOADING_DIALOG_TITLE = "QLabel { color: #fff; font-size: 24px; font-weight: bold; }"
-        LOADING_DIALOG_ICON = "QLabel { background: #444; border: 1px solid #666; }"
-        LOADING_DIALOG_PROGRESS = "QProgressBar { border: 1px solid #666; }"
+        LOADING_DIALOG_ICON = "QLabel { background: #444; border: 3px solid #666; }"
+        LOADING_DIALOG_PROGRESS = "QProgressBar { border: 3px solid #666; }"
         LOADING_DIALOG_STEP = "QLabel { color: #fff; }"
         LOADING_DIALOG_LOG_HEADER = "QLabel { color: #fff; }"
         LOADING_DIALOG_LOG_DISPLAY = "QTextEdit { background: #333; color: #fff; }"
@@ -101,9 +101,9 @@ def _paint_status_icon(state, size=14):
     return QtGui.QIcon(pm)
 
 
-# The site look's pieces live in ui/site_theme.py now (Settings, Eye AI's
+# The site look's pieces live in ui/app_theme.py now (Settings, Eye AI's
 # Advanced dialog and Database Search share them); the old names stay.
-from ui.site_theme import Card as _Card, Grip as _Grip, families as _fonts, font as _font
+from ui.app_theme import Card as _Card, Grip as _Grip, families as _fonts, font as _font
 
 
 # Parse Status statuses (utils.parse_status.ParseStatus values) -> row state.
@@ -453,7 +453,7 @@ class LoadingDialog(QtWidgets.QDialog):
         self.now_label.setFont(_font(mono_font, 12))
         self.now_label.setStyleSheet(
             "QLabel { color: #67E8F9; background: rgba(34, 211, 238, 0.06);"
-            " border: 1px solid rgba(34, 211, 238, 0.18); border-radius: 8px; padding: 6px 10px; }")
+            " border: 3px solid #0F3545; border-radius: 8px; padding: 6px 10px; }")
         self.now_label.hide()
         content_layout.addWidget(self.now_label)
 
@@ -529,7 +529,7 @@ class LoadingDialog(QtWidgets.QDialog):
         # No `color` on ::item: it would override the Note column's colours.
         self.checklist.setStyleSheet("""
             QTreeWidget { background: rgba(10, 12, 16, 0.55); color: #E2E8F0;
-                          border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
+                          border: 3px solid #1F2532; border-radius: 12px;
                           outline: 0; }
             QTreeWidget::item { padding: 5px 4px; border: none;
                                 border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
@@ -595,7 +595,7 @@ class LoadingDialog(QtWidgets.QDialog):
             QPushButton {
                 background: transparent;
                 color: #94A3B8;
-                border: 1px solid rgba(255, 255, 255, 0.14);
+                border: 3px solid #2D333F;
                 border-radius: 16px;
                 padding: 0 28px;
             }
@@ -611,7 +611,7 @@ class LoadingDialog(QtWidgets.QDialog):
             QPushButton:disabled {
                 color: #FDA4AF;
                 background: rgba(244, 63, 94, 0.08);
-                border-color: rgba(244, 63, 94, 0.35);
+                border-color: #5D2236;
             }
         """)
         self.cancel_button.clicked.connect(self.on_cancel_clicked)
@@ -981,7 +981,7 @@ class LoadingDialog(QtWidgets.QDialog):
                 QLabel {
                     color: #94A3B8;
                     background: rgba(99, 102, 241, 0.08);
-                    border: 1px solid rgba(255, 255, 255, 0.08);
+                    border: 3px solid #1F2532;
                     border-radius: 24px;
                     padding: 20px;
                 }
@@ -1709,7 +1709,7 @@ class LoadingDialog(QtWidgets.QDialog):
         ui_font, mono_font = _fonts()
         # Small pills, as on the website; a checked one fills with its colour.
         btn_qss = ("QPushButton { background: transparent; color: #94A3B8;"
-                   " border: 1px solid rgba(255,255,255,0.10); border-radius: 12px;"
+                   " border: 3px solid #232A36; border-radius: 12px;"
                    " padding: 0 13px; }"
                    " QPushButton:hover { color: #F8FAFC; border-color: %s; }"
                    " QPushButton:checked { color: %s; border-color: %s; background: %s; }")
@@ -1737,7 +1737,7 @@ class LoadingDialog(QtWidgets.QDialog):
         self._log_find.setFixedHeight(26)
         self._log_find.setStyleSheet(
             "QLineEdit { background: #0A0C10; color: #E2E8F0;"
-            " border: 1px solid rgba(255,255,255,0.10); border-radius: 12px; padding: 0 12px; }"
+            " border: 3px solid #232A36; border-radius: 12px; padding: 0 12px; }"
             " QLineEdit:focus { border-color: #6366F1; }")
         self._log_find.returnPressed.connect(self._find_in_log)
         bar.addWidget(self._log_find, 1)

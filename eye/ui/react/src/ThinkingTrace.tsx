@@ -22,7 +22,7 @@ const ThinkingTrace: React.FC<ThinkingTraceProps> = ({ steps }) => {
             className={`trace-step trace-step--${step.status} trace-step--${step.type}`}
           >
             <div className="trace-step-icon">
-              <StepIcon type={step.type} status={step.status} size={13} />
+              <StepIcon type={step.type} status={step.status} size={16} tool={step.tool} params={step.params} />
             </div>
             <div className="trace-step-body">
               <span className="trace-step-label">{step.label}</span>

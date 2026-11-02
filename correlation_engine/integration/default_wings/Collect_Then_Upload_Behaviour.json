@@ -1,0 +1,60 @@
+{
+  "config_name": "collect_then_upload_behaviour",
+  "wing_name": "Files Gathered, Then Uploaded (Behaviour)",
+  "wing_id": "default_behaviour_collect_then_upload_001",
+  "wing_category": "behaviour",
+  "description": "At least 10 files appear to have been copied into one person's own folders and, within two hours, the same person submits a form to a file-sharing site. UBA rules: file_copy_inferred ($MFT: created after last modified, in Desktop / Documents / Downloads / Pictures / Videos / Music / OneDrive; grouped per folder per day and timed at the first copy) then browser_upload_inferred (a form POSTed to a site in the file-sharing category). The upload rule infers an upload from the form submission; it does not see which file was sent. A cloud-sync client copying into OneDrive and the person then using OneDrive's web page is the common benign reading.",
+  "proves": "Files were gathered into a person's folders and the person then uploaded to a file-sharing site",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Files appear to have been copied in",
+      "rule_id": "file_copy_inferred",
+      "min_count": 10,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    },
+    {
+      "label": "Form submitted to a file-sharing site",
+      "rule_id": "browser_upload_inferred"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 120,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1074.001",
+      "T1567.002"
+    ],
+    "tactic": [
+      "collection",
+      "exfiltration"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "exfiltration",
+    "collection",
+    "browser",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "data_theft"
+  ]
+}

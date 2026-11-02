@@ -2,14 +2,14 @@
 Eye AI Window Manager
 =====================
 
-Centralized management for the EYE AI Forensic Assistant window.
+Centralized management for the Eye AI Forensic Assistant window.
 """
 
 import os
 from PyQt5 import QtCore, QtWidgets
 
 class EYESplashWindow(QtWidgets.QWidget):
-    """HTML-based splash screen for EYE Assistant."""
+    """HTML-based splash screen for Eye Assistant."""
     def __init__(self, parent=None):
         super().__init__(parent)
         from PyQt5.QtCore import Qt, QUrl
@@ -51,6 +51,15 @@ class EYEWindowManager:
     _splash = None
     
     @classmethod
+    def _step(cls, splash, text):
+        """Tell the caller's native splash the real step, if it can be told."""
+        try:
+            if splash is not None and hasattr(splash, "set_step"):
+                splash.set_step(text)
+        except Exception:
+            pass
+
+    @classmethod
     def show_assistant(cls, main_window, artifacts_dir, parent_splash=None):
         try:
             # Mandatory: Set WebEngine sharing attribute before ANY WebEngine-related imports
@@ -84,7 +93,10 @@ class EYEWindowManager:
                     show_splash = False
                 
                 # Show the HTML-based splash screen only if configured
-                if show_splash:
+                # The caller's native splash is already on screen: a second,
+                # HTML splash started a WebEngine view of its own just to show a
+                # spinner, on the same thread the Eye window is built on.
+                if show_splash and parent_splash is None:
                     cls._splash = EYESplashWindow()
 
                     # Handoff: as soon as the WebEngine splash's HTML has
@@ -128,10 +140,12 @@ class EYEWindowManager:
                     QtWidgets.QApplication.processEvents(
                         QtCore.QEventLoop.ExcludeUserInputEvents, 15
                     )
+                    cls._step(parent_splash, "Loading the Eye...")
                     from eye.ui.eye_window import EYEAssistantWindow, OnboardingCancelled
                     QtWidgets.QApplication.processEvents(
                         QtCore.QEventLoop.ExcludeUserInputEvents, 15
                     )
+                    cls._step(parent_splash, "Opening the case and building the window...")
                     try:
                         cls._instance = EYEAssistantWindow(case_directory=artifacts_dir, parent=main_window)
                     except OnboardingCancelled:

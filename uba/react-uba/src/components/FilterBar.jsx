@@ -19,7 +19,7 @@ function fromInput(val, endOfMinute) {
   return val.replace('T', ' ') + (endOfMinute ? ':59' : ':00')
 }
 
-export default function FilterBar({ filters, onChange, users, apps, rules, summary }) {
+export default function FilterBar({ filters, onChange, users, apps, rules, summary, origin, onClearOrigin }) {
   const [search, setSearch] = useState(filters.search)
 
   useEffect(() => {
@@ -31,9 +31,21 @@ export default function FilterBar({ filters, onChange, users, apps, rules, summa
   }, [search])
 
   const actorOptions = [
-    ...users.map((u) => ({ value: u.username, label: u.username })),
+    ...users.map((u) => ({ value: u.username, label: u.username, sid: u.sid })),
     { value: '', label: 'Unattributed' },
   ]
+  // A person is picked by name or, from an initial filter, by SID (the person
+  // key). Turning a SID-picked chip off drops both.
+  const sids = filters.actor_sids || []
+  const actorOn = (a) => filters.actors.includes(a.value) || (a.sid && sids.includes(a.sid))
+  const toggleActor = (a) => {
+    if (a.sid && sids.includes(a.sid)) {
+      onChange({ ...filters, actor_sids: sids.filter((s) => s !== a.sid),
+        actors: filters.actors.filter((n) => n !== a.value) })
+    } else {
+      onChange({ ...filters, actors: toggle(filters.actors, a.value) })
+    }
+  }
 
   const clearTime = () => onChange({ ...filters, start: '', end: '' })
 
@@ -62,6 +74,14 @@ export default function FilterBar({ filters, onChange, users, apps, rules, summa
 
   return (
     <div className="filterbar">
+      {origin && (
+        <span className="origin-chip"
+          title="This window was opened filtered to this person and time range. Clear to see the whole case.">
+          From {origin}
+          <span className="origin-clear" role="button" tabIndex={0} onClick={onClearOrigin}
+            onKeyDown={(e) => { if (e.key === 'Enter') onClearOrigin() }}>Clear</span>
+        </span>
+      )}
       <input type="search" placeholder="Search activities…" value={search}
         onChange={(e) => setSearch(e.target.value)} />
 
@@ -71,8 +91,9 @@ export default function FilterBar({ filters, onChange, users, apps, rules, summa
         <div className="chiprow">
           {actorOptions.map((a) => (
             <span key={a.value || 'none'}
-              className={'chip ' + (filters.actors.includes(a.value) ? 'on' : '')}
-              onClick={() => onChange({ ...filters, actors: toggle(filters.actors, a.value) })}>
+              className={'chip ' + (actorOn(a) ? 'on' : '')}
+              title={a.sid ? a.sid : undefined}
+              onClick={() => toggleActor(a)}>
               {a.label}
             </span>
           ))}

@@ -1,6 +1,9 @@
 import os
 import sys
 import sqlite3
+# LnkDB.db is closed, not only committed: an open handle kept the
+# case folder from being deleted (WinError 32; Sentinel bcd70538).
+from contextlib import closing
 from datetime import datetime, timezone, timedelta
 import shutil
 import struct
@@ -2400,7 +2403,7 @@ def create_database(case_path=None):
         os.makedirs(artifacts_dir, exist_ok=True)
         db_path = os.path.join(artifacts_dir, 'LnkDB.db')
     
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         C = conn.cursor()
         
         # Table 1: LNK_Files - for standalone .lnk files
@@ -3007,7 +3010,7 @@ def parse_artifacts_directly(source_path, db_path, user=None, progress_callback=
             progress_callback(counters['lnk'], counters['auto'], counters['custom'], 
                             f"Scanning: {os.path.basename(source_path) or source_path}")
         
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn, conn:
             C = conn.cursor()
             
             # Categorize files (NO progress updates during scanning per user request)
@@ -3261,7 +3264,7 @@ def process_lnk_and_jump_list_files(folder_path, db_path='LnkDB.db', progress_ca
     logger.info("LNK/Jump Lists: %d LNK, %d automatic, %d custom file(s) under %s",
                 len(lnk_files), len(automatic_jump_lists), len(custom_jump_lists), folder_path)
 
-    with sqlite3.connect(db_path) as conn:
+    with closing(sqlite3.connect(db_path)) as conn, conn:
         C = conn.cursor()
         for index, file in enumerate(all_files, 1):
             artifact_type = detect_artifact(file)

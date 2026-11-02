@@ -8,16 +8,16 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
 try:
-    from ui.site_theme import font as _site_font
+    from ui.app_theme import font as _theme_font
 except Exception:                       # standalone, without Crow-Eye's ui package
-    _site_font = None
+    _theme_font = None
 
 
 def _font(kind, pt, weight=QFont.Normal):
     """The site font (Barlow / JetBrains Mono) at the size it was, in px."""
-    if _site_font is None:
+    if _theme_font is None:
         return QFont("Consolas", pt, weight)
-    return _site_font(kind, round(pt * 4 / 3), weight)
+    return _theme_font(kind, round(pt * 4 / 3), weight)
 
 
 class ProgressWidget(QWidget):

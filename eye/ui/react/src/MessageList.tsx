@@ -60,9 +60,9 @@ const MessageList: React.FC<MessageListProps> = ({
       {messages.length === 0 && !isLoading && (
         <div className="message-list-empty">
           <div className="empty-icon-ring">
-            <img src={eyeIcon} alt="EYE" className="empty-eye-img" />
+            <img src={eyeIcon} alt="Eye" className="empty-eye-img" />
           </div>
-          <p className="empty-title">EYE Forensic Assistant</p>
+          <p className="empty-title">Eye Forensic Assistant</p>
           <p className="empty-subtitle">Ask about artifacts, timelines, or investigate a case.</p>
         </div>
       )}
@@ -75,12 +75,12 @@ const MessageList: React.FC<MessageListProps> = ({
           } ${message.metadata?.pinned ? 'message--pinned' : ''} ${
             message.metadata?.preserve_evidence ? 'message--evidence' : ''
           }`}
-          aria-label={message.role === 'user' ? 'Your message' : 'EYE response'}
+          aria-label={message.role === 'user' ? 'Your message' : 'Eye response'}
         >
           {message.role === 'assistant' && (
             <div className="message-avatar-col">
               <div className="message-avatar">
-                <img src={eyeIcon} alt="EYE" className="avatar-eye-img" />
+                <img src={eyeIcon} alt="Eye" className="avatar-eye-img" />
               </div>
             </div>
           )}
@@ -89,7 +89,7 @@ const MessageList: React.FC<MessageListProps> = ({
           <div className="message-body">
             <div className="message-meta">
               <span className="message-role-label">
-                {message.role === 'user' ? 'You' : 'EYE'}
+                {message.role === 'user' ? 'You' : 'Eye'}
               </span>
               <span className="message-time">
                 {new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -185,15 +185,15 @@ const MessageList: React.FC<MessageListProps> = ({
 
       {/* Live thinking trace for in-progress queries */}
       {isLoading && (
-        <div className="message message--assistant message--thinking" aria-label="EYE is processing">
+        <div className="message message--assistant message--thinking" aria-label="Eye is processing">
           <div className="message-avatar-col">
             <div className="message-avatar message-avatar--pulsing">
-              <img src={eyeIcon} alt="EYE" className="avatar-eye-img" />
+              <img src={eyeIcon} alt="Eye" className="avatar-eye-img" />
             </div>
           </div>
           <div className="message-body">
             <div className="message-meta">
-              <span className="message-role-label">EYE</span>
+              <span className="message-role-label">Eye</span>
             </div>
             <div className="message-bubble message-bubble--thinking">
               {thinkingSteps.length > 0 ? (

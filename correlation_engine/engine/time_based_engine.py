@@ -415,15 +415,17 @@ class OptimizedFeatherQuery:
                     except Exception:
                         pass
 
-                declared = _fs.all_timestamp_columns(table_name_m0) if table_name_m0 else []
+                # The table's columns first: a declared primary it does not
+                # have resolves through its fallbacks.
+                try:
+                    cur0 = connection.cursor()
+                    cur0.execute(f"PRAGMA table_info({table_name_m0})") if table_name_m0 else None
+                    existing_cols = {row[1] for row in cur0.fetchall()} if table_name_m0 else set()
+                except Exception:
+                    existing_cols = set()
+                declared = (_fs.all_timestamp_columns(table_name_m0, existing_cols or None)
+                            if table_name_m0 else [])
                 if declared:
-                    # Filter to columns that actually exist in the table.
-                    try:
-                        cur0 = connection.cursor()
-                        cur0.execute(f"PRAGMA table_info({table_name_m0})")
-                        existing_cols = {row[1] for row in cur0.fetchall()}
-                    except Exception:
-                        existing_cols = set()
 
                     present = [c for c in declared if c in existing_cols]
                     if present:
@@ -1379,13 +1381,21 @@ class OptimizedFeatherQuery:
             for c in self.timestamp_columns:
                 params.append(_col_param(c, start_time))
                 params.append(_col_param(c, end_time))
-            order_col = self.timestamp_columns[0]
+            order_col = '+%s, rowid' % self.timestamp_columns[0]
         else:
             col = self.timestamp_columns[0] if self.timestamp_columns else self.timestamp_column
             where = f"{col} >= ? AND {col} <= ?"
             params = [_col_param(col, start_time), _col_param(col, end_time)]
             order_col = col
 
+        # `+col, rowid`, not `col`: with a plain ORDER BY on the first column
+        # SQLite answers an OR over several timestamp columns by walking the
+        # whole table through that column's index, every window - 5 s a window
+        # on the 16-2-2026 case's 200,000-row MFT/USN feather. The unary plus
+        # keeps the index out of the ORDER BY, so each column's index is
+        # searched for its range (MULTI-INDEX OR) and the few rows found are
+        # sorted; `rowid` breaks ties as the index walk did, so the rows come
+        # back in the same order.
         query = f'SELECT * FROM {self.loader.current_table} WHERE {where} ORDER BY {order_col}'
 
         def _stream(connection):
@@ -1499,10 +1509,11 @@ class OptimizedFeatherQuery:
                         params.append(_col_param(ts_col, end_time))
                     where_clause = " OR ".join(where_conditions)
 
+                    # ORDER BY `+col, rowid`: see query_time_range_iter above.
                     query = f"""
                         SELECT * FROM {self.loader.current_table}
                         WHERE {where_clause}
-                        ORDER BY {self.timestamp_columns[0]}
+                        ORDER BY +{self.timestamp_columns[0]}, rowid
                     """
                 elif self.timestamp_columns and len(self.timestamp_columns) == 1:
                     # Single column in list
@@ -2441,6 +2452,9 @@ class WindowQueryManager:
         self.filters = filters
         self.debug_mode = debug_mode
         self.query_cache: Dict[str, List[Dict[str, Any]]] = {}
+        # The Wing's targets (wing_targets.WingTargets), set per Wing by the
+        # engine; None or inactive keeps every record.
+        self.targets = None
         self.cache_hits = 0
         self.cache_misses = 0
     
@@ -2740,6 +2754,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         )
         result = engine.execute([wing])
     """
+
+    ENGINE_TYPE = "time_window_scanning"
+    SUPPORTS_STREAMING = True
     
     # Performance Optimization Constants
     _RE_VERSION_NUMBERS = re.compile(r'\s*v?\d+[\d.]*')
@@ -3123,6 +3140,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         self.wing_id: Optional[str] = None
         self.pipeline_id: Optional[str] = None
         self.wing_semantic_rules: List[Dict] = []
+        # The Wing's own match rules, run on every match (see wing_rule_pass).
+        self._wing_rule_pass = None
+        self._wing_rule_passes: List[Any] = []
     
     def set_execution_context(self, wing_id: Optional[str] = None,
                               pipeline_id: Optional[str] = None,
@@ -3659,6 +3679,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             )
             if self.debug_mode:
                 logger.info(f"[Time-Window Engine] Semantic context: wing={wing.wing_id}, rules={len(wing_semantic_rules)}")
+            # The Wing's own match rules annotate each match as it is made.
+            # Annotation only: a hit never changes a score or a match count.
+            from .wing_rule_pass import WingRulePass
+            self._wing_rule_pass = WingRulePass(
+                wing, semantic_manager=getattr(self.semantic_integration, 'semantic_manager', None),
+                engine='time')
+            self._wing_rule_passes.append(self._wing_rule_pass)
             
             # Step 2: Initialize memory management and error coordination
             logger.info(f"[Time-Window Engine] Step 2: Initializing memory management...")
@@ -3802,6 +3829,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     filters=self.filters,
                     debug_mode=self.debug_mode
                 )
+                from .wing_targets import WingTargets
+                self.window_query_manager.targets = WingTargets(wing, CORE_IDENTITY_FIELDS)
+                if self.window_query_manager.targets.active:
+                    print(f"[Time-Window Engine] Wing narrowed to {self.window_query_manager.targets.describe()}")
                 
                 # Initialize empty window detector (Requirements 3.1, 3.2, 3.3, 3.4, 3.5)
                 # Task 21: Only initialize if enabled in performance config
@@ -4022,6 +4053,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             logger.info(f"[Time-Window Engine] Semantic matching will be applied in Identity Semantic Phase after 100%")
             logger.info(f"[Time-Window Engine] Weighted scoring was applied DURING correlation (fast operation)")
             
+            if self._wing_rule_pass is not None:
+                self._wing_rule_pass.log_summary()
+
             # Complete progress tracking
             self.progress_tracker.complete_scanning()
             
@@ -4055,6 +4089,16 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                             logger.info(f"[Time-Window Engine] [OK] Semantic mapping applied to {semantic_result.get('matches_updated', 0):,} matches")
                         else:
                             logger.info(f"[Time-Window Engine] [WARN] Semantic mapping skipped: {semantic_result.get('reason', 'unknown')}")
+                            if semantic_result.get('reason') == 'error':
+                                # Said on the run, not only logged: success
+                                # with no labels reads as nothing to label.
+                                warning = f"Semantic labels were not applied: {semantic_result.get('error')}"
+                                if warning not in result.warnings:
+                                    result.warnings.append(warning)
+
+                        # After the global rules: their mapper replaces
+                        # semantic_data on the matches it hits.
+                        self.write_wing_rule_annotations(str(db_path))
 
             
             if self.debug_mode:
@@ -4412,6 +4456,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         """Load all feather databases and create optimized query managers with comprehensive error handling"""
         import sys
         total_feathers = len(wing.feathers)
+
+        # The timeless-feather identity index belongs to this Wing's feathers.
+        # It was built once per engine and kept for every later Wing, so a
+        # Wing run after another was enriched from the first Wing's timeless
+        # feathers: Execution Proof run after Account Logon carried RecentDocs
+        # records it never names (8 of 2,357 matches on the 16-2-2026 case),
+        # and the same Wing gave different matches alone and in a pipeline.
+        self._timeless_identity_index = None
 
         # self.config may be a PipelineConfig (with feather_configs) or a
         # TimeWindowScanningConfig (without). getattr(...) returns [] for
@@ -5419,6 +5471,13 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     if self.debug_mode and not self.window_query_manager:
                         logger.debug(f"[Correlation Optimization] Skipping filtering for {feather_id} - window_query_manager not available")
                     filtered_records_by_feather[feather_id] = records
+                # The Wing's targets (application, path, Event IDs): here,
+                # where every window's rows pass whichever path loaded them.
+                targets = getattr(self.window_query_manager, 'targets', None) if self.window_query_manager else None
+                if targets is not None and targets.active:
+                    kept = [r for r in filtered_records_by_feather[feather_id] if targets.record_matches(r)]
+                    total_filtered += len(filtered_records_by_feather[feather_id]) - len(kept)
+                    filtered_records_by_feather[feather_id] = kept
             
             # Build identity index using hash map for O(1) lookups.
             # We KEEP duplicate records (they carry forensic signal — repeated
@@ -5509,9 +5568,14 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             # bit-identical matches list across runs. Insertion order
             # depends on DB cursor order which can vary; sorting kills
             # non-determinism without changing match counts.
+            # A Behaviour feather is context (engine/behaviour_context): its
+            # rows are derived from the artifacts, so they never make up the
+            # corroboration a match needs.
+            from .behaviour_context import context_feather_ids, corroborating_count
+            _context_ids = context_feather_ids(wing)
             for identity_value, feather_records in sorted(identity_groups.items()):
                 # Check if we have enough feathers
-                feather_count = len(feather_records)
+                feather_count = corroborating_count(feather_records, _context_ids)
 
                 if feather_count < minimum_feathers:
                     record_count = sum(len(records) for records in feather_records.values())
@@ -5536,8 +5600,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     # Otherwise fall through and emit as Low.
                     low_confidence_emitted += 1
                 
-                # Get timestamp from first record (use any feather)
-                first_feather_id = list(feather_records.keys())[0]
+                # The anchor: the Wing's priority, not dict order
+                # (anchor_choice.choose_anchor). Its first record gives the
+                # match's time.
+                from .anchor_choice import choose_anchor
+                first_feather_id = choose_anchor(list(feather_records.keys()), wing)
                 first_record = feather_records[first_feather_id][0]
                 
                 # Try to extract timestamp using fast lookup
@@ -5677,7 +5744,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 anchor_end = max(anchor_times).isoformat() if anchor_times else None
 
                 match = CorrelationMatch(
-                    match_id=str(uuid.uuid4()),
+                    match_id=self._next_match_id(),
                     timestamp=timestamp_str,
                     feather_records=match_feather_records,
                     match_score=confidence_score,
@@ -6334,6 +6401,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             
             # Add matches to result (handles streaming automatically)
             for match in window_matches:
+                self._annotate_with_wing_rules(match)
                 # Apply scoring DURING correlation (fast operation)
                 # Semantic mapping will be applied AFTER streaming completes (slow operation)
                 scored_match = self._apply_scoring_to_single_match(match, wing)
@@ -6477,6 +6545,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Add all matches to result
         for match in all_matches:
+            self._annotate_with_wing_rules(match)
             result.add_match(match)
         
         return all_matches
@@ -6550,6 +6619,7 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Add all matches to result
         for match in flattened_matches:
+            self._annotate_with_wing_rules(match)
             result.add_match(match)
         
         # Check for errors
@@ -6619,6 +6689,17 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             self.parallel_coordinator.reset_statistics()
             self.parallel_coordinator = None
     
+    def _next_match_id(self) -> str:
+        """A match id that is the same on a rerun of the same case: the
+        execution plus a counter in the engine's (deterministic) window order.
+        It was a random uuid4, so two runs could not be compared by id. A run
+        with no execution to scope the counter still gets a uuid4 (match_id is
+        the results database's primary key across every run of the case)."""
+        self._match_seq = getattr(self, '_match_seq', 0) + 1
+        if getattr(self, '_execution_id', None):
+            return f"tw_e{self._execution_id}_{self._match_seq:07d}"
+        return str(uuid.uuid4())
+
     def _emit_progress_event(self, event_type: str, data: Dict[str, Any]):
         """Emit progress event to registered listeners"""
         if self.progress_listener:
@@ -8347,11 +8428,43 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         return enhanced_matches
     
+    def _annotate_with_wing_rules(self, match: CorrelationMatch) -> None:
+        """Evaluate the running Wing's match rules on one match (annotation only)."""
+        rule_pass = self._wing_rule_pass
+        if rule_pass is not None and rule_pass.enabled:
+            rule_pass.annotate_match(match)
+
+    def write_wing_rule_annotations(self, database_path: str) -> int:
+        """Store the Wing-rule hits of this engine's runs in ``matches.semantic_data``.
+
+        Called after the global semantic mapping of a streamed run, and by the
+        pipeline after it saved a run that was not streamed (its matches are
+        not in the database before that). A match already stored is not
+        written twice. Returns the number of matches updated.
+        """
+        written = 0
+        for rule_pass in self._wing_rule_passes:
+            try:
+                written += rule_pass.write_back(database_path)
+            except Exception as e:
+                logger.warning(f"[Time-Window Engine] Could not store Wing rule hits "
+                               f"of '{rule_pass.wing_name}': {e}")
+        if written:
+            logger.info(f"[Time-Window Engine] Wing rule hits written to {written:,} matches")
+        return written
+
+    def wing_rule_summaries(self) -> List[Dict[str, Any]]:
+        """Per Wing: rules run, matches evaluated and annotated, hits per rule."""
+        return [p.summary() for p in self._wing_rule_passes]
+
     def _apply_semantic_rules_to_matches(self, 
                                         matches: List[CorrelationMatch], 
                                         wing: Any) -> List[CorrelationMatch]:
         """
         Apply advanced semantic rules to correlation matches.
+
+        NOT CALLED by any run. A Wing's own rules are evaluated per match by
+        ``_annotate_with_wing_rules`` (``engine/wing_rule_pass.py``).
         
         This evaluates semantic rules with AND/OR logic, wildcards, and multi-condition
         support against each match and stores the results in the match's semantic_data.

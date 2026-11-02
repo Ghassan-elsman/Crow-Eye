@@ -1,0 +1,50 @@
+{
+  "config_name": "hacking_resource_download_behaviour",
+  "wing_name": "Hacking Resource, Then a Program Download (Behaviour)",
+  "wing_id": "default_behaviour_hacking_resource_download_001",
+  "wing_category": "behaviour",
+  "description": "One person visits a site UBA classes as a hacking resource (exploit and tool repositories, cracking forums) and, within two hours, downloads a program. UBA rules: browser_visit_hacking_resource then browser_download_executable. Security staff do this as part of their work.",
+  "proves": "A person downloaded a program soon after visiting a hacking resource",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Hacking resource visited",
+      "rule_id": "browser_visit_hacking_resource"
+    },
+    {
+      "label": "Program downloaded",
+      "rule_id": "browser_download_executable"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 120,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1588.002"
+    ],
+    "tactic": [
+      "resource_development"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "tools",
+    "download",
+    "browser",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "intrusion"
+  ]
+}

@@ -1,0 +1,460 @@
+{
+  "config_name": "execution_proof_correlation_time",
+  "wing_name": "Execution Proof Correlation (Time)",
+  "wing_id": "default_wing_execution_001_time",
+  "wing_category": "time",
+  "description": "Scores execution likelihood by weighted corroboration across artifacts: Prefetch (strongest execution indicator), ShimCache/AmCache (presence/compatibility indicators that do not by themselves prove execution), user-triggered traces (LNK, Jumplists), and runtime behavior (SRUM).",
+  "proves": "Corroborated indicators that a program executed on the system",
+  "author": "Crow-Eye Team",
+  "created_date": "2024-12-23T00:00:00Z",
+  "last_modified": "2024-12-23T00:00:00Z",
+  "version": "1.0",
+  "feathers": [
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.4,
+      "tier": 1,
+      "tier_name": "Primary execution indicator"
+    },
+    {
+      "feather_config_name": "ShimCache_CrowEyeFeather",
+      "feather_database_path": "feathers/ShimCache_CrowEyeFeather.db",
+      "artifact_type": "ShimCache",
+      "feather_id": "shimcache",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "Presence / compatibility indicator"
+    },
+    {
+      "feather_config_name": "InventoryApplication_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplication_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_app",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Presence / inventory indicator (AmCache)"
+    },
+    {
+      "feather_config_name": "InventoryApplicationFile_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationFile_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_file",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Presence / inventory indicator (AmCache)"
+    },
+    {
+      "feather_config_name": "InventoryApplicationShortcut_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationShortcut_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_shortcut",
+      "weight": 0.15,
+      "tier": 2,
+      "tier_name": "Presence / inventory indicator (AmCache)"
+    },
+    {
+      "feather_config_name": "LNK_CrowEyeFeather",
+      "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
+      "artifact_type": "LNK",
+      "feather_id": "lnk",
+      "weight": 0.1,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "AutomaticJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/AutomaticJumplist_CrowEyeFeather.db",
+      "artifact_type": "Jumplists",
+      "feather_id": "jumplist_auto",
+      "weight": 0.1,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "CustomJumplist_CrowEyeFeather",
+      "feather_database_path": "feathers/CustomJumplist_CrowEyeFeather.db",
+      "artifact_type": "Jumplists",
+      "feather_id": "jumplist_custom",
+      "weight": 0.1,
+      "tier": 3,
+      "tier_name": "User-triggered execution traces"
+    },
+    {
+      "feather_config_name": "SRUM_ApplicationUsage_CrowEyeFeather",
+      "feather_database_path": "feathers/SRUM_ApplicationUsage_CrowEyeFeather.db",
+      "artifact_type": "SRUM",
+      "feather_id": "srum_app",
+      "weight": 0.1,
+      "tier": 4,
+      "tier_name": "Runtime + behavior correlation"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.1,
+      "tier": 4,
+      "tier_name": "File system evidence"
+    },
+    {
+      "feather_config_name": "SystemLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SystemLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "system_logs",
+      "weight": 0.05,
+      "tier": 4,
+      "tier_name": "System event logs"
+    },
+    {
+      "feather_config_name": "SRUM_NetworkDataUsage_CrowEyeFeather",
+      "feather_database_path": "feathers/SRUM_NetworkDataUsage_CrowEyeFeather.db",
+      "artifact_type": "SRUM",
+      "feather_id": "srum_network",
+      "weight": 0.08,
+      "tier": 4,
+      "tier_name": "Network activity evidence"
+    },
+    {
+      "feather_config_name": "ApplicationLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/ApplicationLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "app_logs",
+      "weight": 0.05,
+      "tier": 4,
+      "tier_name": "Application event logs"
+    },
+    {
+      "feather_config_name": "ShellBags_CrowEyeFeather",
+      "feather_database_path": "feathers/ShellBags_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "shellbags",
+      "weight": 0.07,
+      "tier": 3,
+      "tier_name": "User navigation evidence"
+    }
+  ],
+  "time_window_minutes": 180,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "Prefetch",
+    "ShimCache",
+    "AmCache",
+    "LNK",
+    "Jumplists",
+    "SRUM",
+    "MFT",
+    "Logs",
+    "Registry"
+  ],
+  "use_weighted_scoring": true,
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.7,
+        "label": "Strongly Corroborated Execution"
+      },
+      "probable": {
+        "min": 0.4,
+        "label": "Likely Execution"
+      },
+      "weak": {
+        "min": 0.2,
+        "label": "Weak / Partial"
+      },
+      "not_proven": {
+        "min": 0.0,
+        "label": "Insufficient Evidence"
+      }
+    }
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "exec_prefetch_run",
+      "confidence": 0.5,
+      "name": "Program Execution via Prefetch",
+      "semantic_value": "Program Executed",
+      "description": "Prefetch file indicates program was executed",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_shimcache_evidence",
+      "confidence": 0.5,
+      "name": "ShimCache Presence Indicator",
+      "semantic_value": "Application Compatibility Evidence",
+      "description": "ShimCache entry indicates the file was present/seen by the compatibility layer; not proof of execution on its own",
+      "conditions": [
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_user_launched",
+      "confidence": 0.5,
+      "technique_id": [
+        "T1204"
+      ],
+      "tactic": [
+        "execution"
+      ],
+      "name": "User-Launched Application (AND)",
+      "semantic_value": "User Launched Application",
+      "description": "LNK file AND Prefetch together indicate user-initiated execution",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "exec_any_evidence",
+      "confidence": 0.5,
+      "name": "Execution Indicators (OR)",
+      "semantic_value": "Execution Indicators Found",
+      "description": "Prefetch OR ShimCache OR AmCache provides execution-related indicators",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "amcache_app",
+          "field_name": "name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_user_interaction",
+      "confidence": 0.5,
+      "name": "User Interaction Evidence (OR)",
+      "semantic_value": "User Interaction Detected",
+      "description": "LNK OR Jumplist indicates user interacted with application",
+      "conditions": [
+        {
+          "feather_id": "lnk",
+          "field_name": "target_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "jumplist_auto",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "jumplist_custom",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_confirmed_run",
+      "confidence": 0.5,
+      "name": "Corroborated Execution (AND)",
+      "semantic_value": "Corroborated Program Execution",
+      "description": "Prefetch AND ShimCache together corroborate program execution. Severity is 'info' because corroborated execution is the baseline forensic finding the wing was built to surface \u2014 chrome.exe, notepad.exe, calc.exe etc. all match. Tagging this 'high' would drown the analyst in execution noise; the wing's weighted scoring escalates to the 'Strongly Corroborated Execution' label via score thresholds (>=0.70), which is the correct surface for analyst attention.",
+      "conditions": [
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shimcache",
+          "field_name": "path",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_runtime_evidence",
+      "confidence": 0.5,
+      "name": "Runtime Evidence (AND)",
+      "semantic_value": "Application Runtime Evidence",
+      "description": "SRUM AND MFT together indicate application runtime activity",
+      "conditions": [
+        {
+          "feather_id": "srum_app",
+          "field_name": "app_path",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "mft_usn",
+          "field_name": "fn_filename",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "medium"
+    },
+    {
+      "rule_id": "exec_network_activity",
+      "confidence": 0.5,
+      "name": "Network Activity Evidence",
+      "semantic_value": "Network Activity Detected",
+      "description": "SRUM network data indicates application network usage",
+      "conditions": [
+        {
+          "feather_id": "srum_network",
+          "field_name": "app_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "network_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_app_logs_evidence",
+      "confidence": 0.5,
+      "name": "Application Log Evidence",
+      "semantic_value": "Application Event Logged",
+      "description": "Application logs provide additional execution evidence",
+      "conditions": [
+        {
+          "feather_id": "app_logs",
+          "field_name": "EventID",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_folder_navigation",
+      "confidence": 0.5,
+      "name": "Folder Navigation Evidence",
+      "semantic_value": "User Navigated to Folder",
+      "description": "ShellBags indicate user navigated to application folder",
+      "conditions": [
+        {
+          "feather_id": "shellbags",
+          "field_name": "file_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "user_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "exec_comprehensive_evidence",
+      "confidence": 0.5,
+      "name": "Comprehensive Execution Evidence (OR)",
+      "semantic_value": "Multiple Evidence Sources",
+      "description": "Network activity OR Application logs OR ShellBags provide supporting execution evidence",
+      "conditions": [
+        {
+          "feather_id": "srum_network",
+          "field_name": "app_name",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "app_logs",
+          "field_name": "EventID",
+          "operator": "wildcard",
+          "value": "*"
+        },
+        {
+          "feather_id": "shellbags",
+          "field_name": "file_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "OR",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    }
+  ],
+  "tags": [
+    "execution",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "malware",
+    "intrusion",
+    "user_activity"
+  ]
+}

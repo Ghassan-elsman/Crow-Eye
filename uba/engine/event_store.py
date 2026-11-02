@@ -31,6 +31,9 @@ CREATE TABLE events (
     caveat TEXT,
     session_user TEXT,
     app_name TEXT,
+    actor_sid TEXT NOT NULL DEFAULT '',
+    host TEXT NOT NULL DEFAULT '',
+    user_rule INTEGER NOT NULL DEFAULT 0,
     aggregate_count INTEGER NOT NULL DEFAULT 1,
     details_json TEXT,
     evidence_json TEXT
@@ -43,21 +46,25 @@ CREATE INDEX idx_events_app ON events(app_name);
 CREATE INDEX idx_events_class ON events(behavior_class);
 CREATE INDEX idx_events_severity ON events(severity);
 CREATE INDEX idx_events_activity ON events(activity);
+CREATE INDEX idx_events_actor_sid ON events(actor_sid);
 """
 
 _COLUMNS = [
     "event_id", "rule_id", "behavior_class", "activity", "ts_start", "ts_end",
     "actor_type", "actor_name", "actor_basis", "description", "severity",
     "confidence", "session_context", "caveat", "session_user", "app_name",
-    "aggregate_count", "details_json", "evidence_json",
+    "actor_sid", "host", "user_rule", "aggregate_count", "details_json", "evidence_json",
 ]
 
 
 class UBAEventStore:
-    def __init__(self):
+    def __init__(self, create_schema: bool = True):
         self.conn = sqlite3.connect(":memory:", check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
-        self.conn.executescript(_SCHEMA)
+        if create_schema:
+            self.conn.executescript(_SCHEMA)
+        # create_schema=False is for persisted_store.load(), which copies a
+        # stored database (schema, rows and indexes) into this one.
 
     # ------------------------------------------------------------------ #
     def add_events(self, events: Iterable[BehaviorEvent]) -> int:
@@ -191,6 +198,10 @@ class UBAEventStore:
         _in("activity", filters.get("activities"))
         _in("confidence", filters.get("confidences"))
         _in("app_name", filters.get("apps"))
+        # The person key: one SID matches every name that person appeared
+        # under. "" is not accepted here - an unresolved SID is not a person.
+        _in("actor_sid", [s for s in (filters.get("actor_sids") or []) if s])
+        _in("host", filters.get("hosts"))
 
         actors = filters.get("actors")
         if actors:
@@ -221,6 +232,8 @@ class UBAEventStore:
     @staticmethod
     def _row_to_dict(row: sqlite3.Row) -> dict:
         d = dict(row)
+        # An analyst-created rule's event (the window's "Your rule" icon).
+        d["user_rule"] = bool(d.get("user_rule"))
         d["details"] = json.loads(d.pop("details_json") or "{}")
         evidence = json.loads(d.pop("evidence_json") or "[]")
         d["evidence_count"] = sum(e.get("count", 0) or len(e.get("rowids", []))

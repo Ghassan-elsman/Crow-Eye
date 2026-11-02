@@ -58,6 +58,7 @@ Part of: Crow Eye Digital Forensics Suite
 
 import os
 import re
+import hashlib
 import struct
 import datetime
 import sqlite3
@@ -124,7 +125,12 @@ def _custody_repair_note(path, before, ok):
 
 # Columns a run derives from another stored column rather than reads from
 # SRUDB.dat; never part of a row's identity (see insert_srum_rows).
-SRUM_DERIVED_COLUMNS = frozenset(("user_name",))
+#
+# pe_link_time and pe_checksum are split from the same AppId app_name comes
+# from, and a case parsed before they existed holds NULL in both: in the
+# identity, every timeline row of such a case would be stored a second time on
+# its next parse.
+SRUM_DERIVED_COLUMNS = frozenset(("user_name", "pe_link_time", "pe_checksum"))
 
 _INSERT_RE = re.compile(r"INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES", re.S | re.I)
 
@@ -170,6 +176,7 @@ def insert_srum_rows(conn, sql, rows, tally, state):
         else:
             changed = None
             insert_new(conn, table, cols, rows, ident_cols, tally)
+            _backfill_build(conn, table, cols, rows, ident_cols)
     except Exception:
         conn.execute("ROLLBACK TO srum_batch")
         conn.execute("RELEASE srum_batch")
@@ -177,6 +184,29 @@ def insert_srum_rows(conn, sql, rows, tally, state):
     conn.execute("RELEASE srum_batch")
     if changed is not None:
         tally.add(table, len(rows), changed)
+
+
+_BUILD_COLUMNS = ("pe_link_time", "pe_checksum")
+
+
+def _backfill_build(conn, table, cols, rows, ident_cols):
+    """Fill the build columns of rows stored before they existed.
+
+    A case parsed before pe_link_time / pe_checksum holds NULL in both, and
+    the re-parse finds every one of its rows already stored (the build is not
+    part of the identity), so without this the columns would stay empty on
+    every old row for the life of the case. The match is the same identity
+    insert_new used, compared with IS so a NULL column still matches; only a
+    NULL is ever overwritten, never a value.
+    """
+    if not all(c in cols for c in _BUILD_COLUMNS):
+        return
+    at = [cols.index(c) for c in _BUILD_COLUMNS]
+    where = [cols.index(c) for c in ident_cols]
+    sql = ("UPDATE %s SET pe_link_time = ?, pe_checksum = ? WHERE pe_link_time IS NULL AND %s"
+           % (table, " AND ".join("%s IS ?" % c for c in ident_cols)))
+    conn.executemany(sql, ([r[at[0]], r[at[1]]] + [r[i] for i in where]
+                           for r in rows if r[at[0]] or r[at[1]]))
 
 
 def dedupe_exact(rows):
@@ -199,6 +229,41 @@ def dedupe_exact(rows):
         seen.add(key)
         out.append(r)
     return out, len(rows) - len(out)
+
+
+def _exact_value(v):
+    # A tuple compares 1 == 1.0 == True; the fingerprint must too.
+    if type(v) is bool:
+        return int(v)
+    if type(v) is float and v.is_integer():
+        return int(v)
+    return v
+
+
+class ExactDeduper:
+    """dedupe_exact for rows that arrive one at a time.
+
+    Keeps a 16-byte fingerprint of each row seen instead of the row: a table
+    of 250,000 usage rows is a few MB of fingerprints, where the set of
+    tuples was the whole table a second time. The fingerprint is BLAKE2b
+    over the row's repr, with the numbers a tuple comparison treats as equal
+    (1, 1.0, True) written alike, so it drops exactly the rows dedupe_exact
+    drops.
+    """
+
+    def __init__(self):
+        self._seen = set()
+        self.removed = 0
+
+    def is_new(self, row):
+        key = hashlib.blake2b(
+            repr(tuple(_exact_value(v) for v in row)).encode('utf-8', 'surrogatepass'),
+            digest_size=16).digest()
+        if key in self._seen:
+            self.removed += 1
+            return False
+        self._seen.add(key)
+        return True
 
 
 def format_bytes(bytes_value):
@@ -430,11 +495,11 @@ def parse_srum_app_id(raw: str) -> dict:
       2. The service-host form, '!!'-prefixed, with a bracketed service list:
              !!svchost.exe!2054/02/06:15:19:25!1642e![netsvcs] [Winmgmt]
       3. The modern Store / timeline form - a '!'-delimited composite of the
-         package family name, the PRAID, the executable, a launch timestamp and
-         a sequence value, e.g.:
+         package family name, the PRAID, the executable, its PE link time and
+         its PE CheckSum, e.g.:
              MicrosoftWindows.Client.CBS_..._cw5n1h2txyewy!SoftLanding!SoftLandingTask.exe!2026/07/28:21:01:46!e276f!
 
-    The old parser ran os.path.basename over form 3. Because the launch
+    The old parser ran os.path.basename over form 3. Because the link
     timestamp is written 'YYYY/MM/DD:HH:MM:SS', basename split on those forward
     slashes and returned '28:21:01:46!e276f!' as the application name on ~18% of
     timeline rows - a timestamp fragment where an executable belongs. A real
@@ -442,8 +507,19 @@ def parse_srum_app_id(raw: str) -> dict:
     structurally instead: the token that ends in '.exe' is the executable, the
     bracketed tokens are the hosted service list, and the first token (the
     package family name) is the closest thing to a path the record carries.
+
+    The two tokens after the executable identify the BUILD that ran, and were
+    proven against this machine's own files (146 of 146 System32 and venv
+    executables whose link time matched): the 'YYYY/MM/DD:HH:MM:SS' token is
+    the PE header's TimeDateStamp (the link time, UTC) and the hex token is
+    the PE optional header's CheckSum - not the file size, which matched none.
+    They tell two builds of one name apart (python.exe from a venv, from the
+    Store, from python.org) where app_path is empty. Windows' own binaries
+    are linked reproducibly since Windows 10, so their link time is a hash
+    and reads as a year like 2054 or 1978: a build identifier, not a date.
     """
-    result = {"app_name": "", "app_path": "", "hosted_services": ""}
+    result = {"app_name": "", "app_path": "", "hosted_services": "",
+              "pe_link_time": "", "pe_checksum": ""}
     if not raw:
         return result
     raw = str(raw).rstrip("\x00").strip()
@@ -457,15 +533,24 @@ def parse_srum_app_id(raw: str) -> dict:
         # The bracketed tokens are the service list (form 2). Joined in order so
         # a multi-group host keeps every group, not just the last.
         services = " ".join(t.strip() for t in tokens if t.strip().startswith("["))
-        # The executable is the first token ending in '.exe'; failing that (a
-        # pure activity/GUID id, or the service-host form whose exe is token 0),
+        # The executable is the '.exe' token the link time follows. A Store
+        # app's PRAID can end in '.Exe' too ('...PythonManager_...!Py.Manager.Exe!
+        # py-manager.exe!2025/12/05:19:28:48!51354!'), and the first '.exe'
+        # token named the PRAID, never the program that ran. Failing that, the
+        # first token ending in '.exe'; failing that (a pure activity/GUID id),
         # the first token is the best identifier the record offers.
-        exe = next((t.strip() for t in tokens if t.strip().lower().endswith(".exe")), "")
+        stripped = [t.strip() for t in tokens]
+        exe = next((t for i, t in enumerate(stripped)
+                    if t.lower().endswith(".exe") and i + 1 < len(stripped)
+                    and _LINK_TIME_RE.match(stripped[i + 1])), "")
+        if not exe:
+            exe = next((t for t in stripped if t.lower().endswith(".exe")), "")
         pkg = tokens[0].strip()
         if not exe:
             exe = pkg
         result["app_name"] = exe
         result["hosted_services"] = services.strip()
+        result["pe_link_time"], result["pe_checksum"] = _app_id_build(tokens, exe)
         # The package family name is a real identity worth keeping; the
         # service-host form (pkg == exe, or a bracketed token 0) names no path,
         # and repeating the exe there would only pretend it did.
@@ -481,6 +566,44 @@ def parse_srum_app_id(raw: str) -> dict:
     base = re.sub(r"\s*\[[^\]]*\]\s*$", "", base).strip() or base
     result["app_name"] = base
     return result
+
+
+_LINK_TIME_RE = re.compile(r"^\d{4}/\d{2}/\d{2}:\d{2}:\d{2}:\d{2}$")
+
+
+def _app_id_build(tokens, exe):
+    """The PE link time and CheckSum that follow the executable's token.
+
+    Returns ('', '') when the AppId carries no build (a GUID-only identity, a
+    malformed token), never a guess: a value read from the wrong token would
+    look exactly like a real one.
+    """
+    try:
+        i = [t.strip() for t in tokens].index(exe)
+        when, checksum = tokens[i + 1].strip(), tokens[i + 2].strip()
+        stamp = datetime.datetime.strptime(when, "%Y/%m/%d:%H:%M:%S")
+        value = int(checksum, 16)
+    except (ValueError, IndexError):
+        return "", ""
+    return format_forensic_timestamp(stamp), "0x%08X" % value
+
+
+def ensure_timeline_build_columns(cursor) -> None:
+    """Add pe_link_time and pe_checksum to a timeline table that predates them.
+
+    Shared by the live and the offline parser. Written as two statements on
+    purpose: Sentinel's extract-schema.js reads a list of (name, type) pairs
+    in a parser as a table definition.
+    """
+    try:
+        cursor.execute("PRAGMA table_info(srum_app_timeline)")
+        present = {row[1] for row in cursor.fetchall()}
+        if "pe_link_time" not in present:
+            cursor.execute("ALTER TABLE srum_app_timeline ADD COLUMN pe_link_time TEXT")
+        if "pe_checksum" not in present:
+            cursor.execute("ALTER TABLE srum_app_timeline ADD COLUMN pe_checksum TEXT")
+    except sqlite3.Error as e:
+        logger.warning("Could not add the timeline build columns: %s", e)
 
 
 # These GUIDs identify specific tables in the SRUDB.dat ESE database
@@ -508,8 +631,8 @@ APP_TIMELINE_INSERT = """
         audio_out_timeline, cpu_timeline, disk_timeline, network_timeline,
         mbb_timeline, display_required_timeline, keyboard_input_timeline,
         cycles_breakdown, cycles_attr_breakdown, cycles_wob_breakdown,
-        mbb_tail_raw, mbb_bytes_raw
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        mbb_tail_raw, mbb_bytes_raw, pe_link_time, pe_checksum
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Named like APP_TIMELINE_INSERT so the batched and trailing inserts share one
@@ -529,6 +652,29 @@ ENERGY_INSERT = """
         designed_capacity, full_charged_capacity, battery_count,
         configuration_hash, battery_charge_limited
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+# The two inserts that were written inline in save_to_database, named beside
+# the others so every table's insert lives in one place (SAVE_TABLES).
+APP_USAGE_INSERT = """
+    INSERT INTO srum_application_usage (
+        timestamp, app_name, app_path, user_sid, user_name,
+        foreground_cycle_time, background_cycle_time, face_time,
+        foreground_context_switches, background_context_switches,
+        foreground_bytes_read, foreground_bytes_written,
+        foreground_num_read_operations, foreground_num_write_operations,
+        foreground_number_of_flushes, background_bytes_read,
+        background_bytes_written, background_num_read_operations,
+        background_num_write_operations, background_number_of_flushes
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+NET_CONN_INSERT = """
+    INSERT INTO srum_network_connectivity (
+        timestamp, app_name, app_path, user_sid, user_name,
+        interface_luid, l2_profile_id, l2_profile_flags,
+        connected_time, connect_start_time
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Special System IDs that don't have entries in SruDbIdMapTable
@@ -791,6 +937,8 @@ class SRUMAppTimelineRecord:
         app_name (str): Application executable name
         app_path (str): Full path to application, empty for the `!!` AppId form
         hosted_services (str): Service list for a shared host process
+        pe_link_time (str): The PE link time the AppId names (UTC), '' if none
+        pe_checksum (str): The PE header CheckSum the AppId names, '' if none
         user_sid (str): Windows Security Identifier
         user_name (str): Resolved username
         end_time (datetime): End of the measured window
@@ -828,6 +976,8 @@ class SRUMAppTimelineRecord:
     disk_raw: int = 0
     network_bytes_raw: int = 0
     network_tail_raw: int = 0
+    pe_link_time: str = ""
+    pe_checksum: str = ""
     extra: dict = field(default_factory=dict)
 
 
@@ -1149,6 +1299,7 @@ class SRUMParser:
         }
         self._recovery_files = []  # working-copy paths of the collected .jfm/.chk/logs
         self._file_accessor = None  # lazily-built FileAccessor (StandardCopy/VSS/RawDisk)
+        self._copy_failures = {}    # source path -> why each copy method failed
         
         # JET API handles
         self.instance = JET_INSTANCE()
@@ -1582,6 +1733,17 @@ class SRUMParser:
 
         # Not found - return descriptive text
         return (f"Unknown App (ID:{app_id})", f"Unknown (ID:{app_id})", "")
+
+    def resolve_app_build(self, app_id: int) -> Tuple[str, str]:
+        """(pe_link_time, pe_checksum) the AppId names, ('', '') when none.
+
+        Kept apart from resolve_app_identity so its three-value callers are
+        unchanged; only the timeline provider uses the composite AppId.
+        """
+        if app_id and app_id in self.id_lookup:
+            parts = parse_srum_app_id(self.id_lookup[app_id])
+            return (parts["pe_link_time"], parts["pe_checksum"])
+        return ("", "")
     
     def resolve_user_id(self, user_id: int) -> Tuple[str, str]:
         """Resolve user ID to SID and username.
@@ -1618,7 +1780,34 @@ class SRUMParser:
         locked files rather than through a hand-rolled path. Falls back to the
         raw backup-semantics copy and then a plain copy if FileAccessor is
         unavailable (e.g. a trimmed build) or declines the file.
+
+        Each copy goes into the open custody record (source times before the
+        copy, method, copy hash); why every method failed is kept in
+        ``self._copy_failures`` for the error the parse reports.
         """
+        reasons = []
+        self._copy_failures[src] = reasons
+        times = None
+        try:
+            from utils import custody as _custody
+            if _custody.active() is not None:
+                times = _custody.file_times(src)
+        except Exception:
+            _custody = None
+
+        def _record(method, result=None):
+            if times is None or _custody is None or _custody.active() is None:
+                return
+            try:
+                _custody.active().add_source(
+                    src, copy=dst, method=method, times=times,
+                    read_from=getattr(result, "read_path", None),
+                    shadow_copy_id=getattr(result, "vss_shadow_copy_id", None),
+                    shadow_copy_created_utc=getattr(result, "vss_shadow_copy_created", None),
+                    note="acquired for the live SRUM parse; the copy was temporary")
+            except Exception as exc:
+                logger.debug("custody entry for %s not written: %s", src, exc)
+
         try:
             if self._file_accessor is None:
                 from Artifacts_Collectors.crow_claw.core.file_accessor import FileAccessor
@@ -1632,20 +1821,38 @@ class SRUMParser:
                             strategy.allow_snapshot_creation = False
             result = self._file_accessor.access_file_with_retry(src, dst, "SRUM")
             if getattr(result, "success", False) and os.path.exists(dst):
+                _record((getattr(result, "strategy_used", "") or "standard").lower(), result)
                 return True
+            for attempt in getattr(result, "attempts", None) or []:
+                err = getattr(attempt, "error", None)
+                if not err:
+                    continue
+                name = getattr(attempt, "strategy_used", "") or "copy"
+                logger.info("SRUM copy of %s: %s failed: %s", os.path.basename(src), name, err)
+                if "standard" in name.lower():
+                    # Expected - the service holds the file - and its text
+                    # (WinError 32) would make the report read Access denied.
+                    err = "the file is in use by the SRUM service"
+                reasons.append("%s: %s" % (name, err))
         except Exception as e:
             logger.debug(f"FileAccessor copy unavailable for {os.path.basename(src)}: {e}")
+            reasons.append("file access: %s" % e)
         # Fallbacks: raw backup-semantics, then a plain copy.
         try:
             if copy_locked_file_raw(src, dst) and os.path.exists(dst):
+                _record("raw_disk")
                 return True
         except Exception:
             pass
         try:
             shutil.copy2(src, dst)
-            return os.path.exists(dst)
+            if os.path.exists(dst):
+                _record("standard")
+                return True
+            return False
         except Exception as e:
             logger.debug(f"All copy methods failed for {os.path.basename(src)}: {e}")
+            reasons.append("plain copy: %s" % e)
             return False
 
     @staticmethod
@@ -1721,8 +1928,10 @@ class SRUMParser:
         try:
             cmd = ('esentutl /r SRU /l"{d}" /s"{d}" /d"{d}" /i'
                    .format(d=self.temp_dir))
-            result = subprocess.run(cmd, shell=True, capture_output=True,
-                                    text=True, timeout=180)
+            # A plain string goes to CreateProcess as written (esentutl wants
+            # /l"dir" exactly), and no cmd.exe is started for it.
+            result = subprocess.run(cmd, capture_output=True,
+                                    text=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             ok = result.returncode == 0
             logger.info("esentutl soft recovery %s (rc=%s)",
                         "succeeded" if ok else "failed", result.returncode)
@@ -1747,7 +1956,7 @@ class SRUMParser:
             return (None, None)
         try:
             result = subprocess.run(["esentutl", "/mh", target],
-                                    capture_output=True, text=True, timeout=60)
+                                    capture_output=True, text=True, timeout=60, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             state = log_required = None
             for line in result.stdout.splitlines():
                 s = line.strip()
@@ -1771,7 +1980,7 @@ class SRUMParser:
         try:
             before = _custody_sha256(self.working_copy)
             result = subprocess.run(['esentutl', '/p', self.working_copy, '/o'],
-                                    capture_output=True, text=True, timeout=180)
+                                    capture_output=True, text=True, timeout=180, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             ok = result.returncode == 0
             logger.info("esentutl repair %s (rc=%s)",
                         "succeeded" if ok else "failed", result.returncode)
@@ -1814,12 +2023,22 @@ class SRUMParser:
             self._collect_recovery_set(source_path)
             return dest_path
 
+        # Say what actually failed. This used to end "may be locked by
+        # Windows ... Try running as Administrator" whatever happened, and
+        # Parse Status reads 'locked' / 'administrator' as Access denied - so an
+        # elevated run that only lacked a current shadow copy was reported as
+        # a permissions problem. Stopping the SRUM service, which it also
+        # advised, changes the machine under examination.
+        reasons = self._copy_failures.get(source_path) or []
+        detail = "; ".join(dict.fromkeys(reasons)) or "no method returned a copy"
+        if self._is_admin():
+            raise SRUMFileAccessError(
+                "SRUDB.dat could not be copied. It is held open by the SRUM "
+                "service, and no copy method succeeded: " + detail)
         raise SRUMFileAccessError(
-            "Failed to copy SRUDB.dat using all available access strategies "
-            "(standard copy, VSS and raw disk). The file may be locked by "
-            "Windows and no shadow copy was available. Try running as "
-            "Administrator or stopping the SRUM service."
-        )
+            "SRUDB.dat could not be copied: it is held open by the SRUM service, "
+            "and reading it without a shadow copy needs administrator rights. "
+            "Restart Crow-Eye as Administrator. (" + detail + ")")
     
     def export_table_to_csv(self, table_guid: str, table_name: str) -> Optional[str]:
         """Export a SRUM table to CSV using esentutl.exe.
@@ -1896,7 +2115,7 @@ class SRUMParser:
         logger.info("Using fallback: attempting to read from existing parsed data")
         return []
     
-    def parse_application_resource_usage(self, table=None) -> List[SRUMApplicationRecord]:
+    def iter_application_resource_usage(self, table=None):
         """Parse Application Resource Usage table.
         
         This is the primary SRUM table containing detailed application execution
@@ -1906,13 +2125,13 @@ class SRUMParser:
             table: ESE table object for Application Resource Usage
             
         Returns:
-            list: List of SRUMApplicationRecord objects
+            Yields SRUMApplicationRecord objects, one at a time
         """
-        records = []
+        count = 0
         
         if not table:
             logger.warning("Application Resource Usage table not found")
-            return records
+            return
         
         try:
             num_records = table.get_number_of_records()
@@ -1961,33 +2180,36 @@ class SRUMParser:
                         background_number_of_flushes=self._get_column_value(record, 'BackgroundNumberOfFlushes', 0) or 0,
                     )
                     
-                    records.append(srum_record)
+                    count += 1
+                    yield srum_record
                 
                 except Exception as e:
                     logger.debug(f"Error parsing application record {i}: {e}")
                     continue
             
-            logger.info(f"Successfully parsed {len(records)} application resource usage records")
+            logger.info(f"Successfully parsed {count} application resource usage records")
         
         except Exception as e:
             logger.error(f"Error parsing application resource usage table: {e}")
-        
-        return records
-    
-    def parse_network_connectivity(self, table) -> List[SRUMNetworkConnectivityRecord]:
+
+    def parse_application_resource_usage(self, table=None) -> List[SRUMApplicationRecord]:
+        """Every record of the table at once (see iter_application_resource_usage)."""
+        return list(self.iter_application_resource_usage(table))
+
+    def iter_network_connectivity(self, table):
         """Parse Network Connectivity table.
         
         Args:
             table: ESE table object for Network Connectivity
             
         Returns:
-            list: List of SRUMNetworkConnectivityRecord objects
+            Yields SRUMNetworkConnectivityRecord objects, one at a time
         """
-        records = []
+        count = 0
         
         if not table:
             logger.warning("Network Connectivity table not found")
-            return records
+            return
         
         try:
             num_records = table.get_number_of_records()
@@ -2028,33 +2250,36 @@ class SRUMParser:
                         connect_start_time=connect_start,
                     )
                     
-                    records.append(srum_record)
+                    count += 1
+                    yield srum_record
                 
                 except Exception as e:
                     logger.debug(f"Error parsing network connectivity record {i}: {e}")
                     continue
             
-            logger.info(f"Successfully parsed {len(records)} network connectivity records")
+            logger.info(f"Successfully parsed {count} network connectivity records")
         
         except Exception as e:
             logger.error(f"Error parsing network connectivity table: {e}")
-        
-        return records
-    
-    def parse_network_data_usage(self, table) -> List[SRUMNetworkDataRecord]:
+
+    def parse_network_connectivity(self, table=None) -> List[SRUMNetworkConnectivityRecord]:
+        """Every record of the table at once (see iter_network_connectivity)."""
+        return list(self.iter_network_connectivity(table))
+
+    def iter_network_data_usage(self, table):
         """Parse Network Data Usage table.
         
         Args:
             table: ESE table object for Network Data Usage
             
         Returns:
-            list: List of SRUMNetworkDataRecord objects
+            Yields SRUMNetworkDataRecord objects, one at a time
         """
-        records = []
+        count = 0
         
         if not table:
             logger.warning("Network Data Usage table not found")
-            return records
+            return
         
         try:
             num_records = table.get_number_of_records()
@@ -2092,33 +2317,36 @@ class SRUMParser:
                         extra=self._read_extra_columns(record, 'NETWORK_DATA_USAGE'),
                     )
 
-                    records.append(srum_record)
+                    count += 1
+                    yield srum_record
 
                 except Exception as e:
                     logger.debug(f"Error parsing network data record {i}: {e}")
                     continue
             
-            logger.info(f"Successfully parsed {len(records)} network data usage records")
+            logger.info(f"Successfully parsed {count} network data usage records")
         
         except Exception as e:
             logger.error(f"Error parsing network data usage table: {e}")
-        
-        return records
-    
-    def parse_energy_usage(self, table) -> List[SRUMEnergyRecord]:
+
+    def parse_network_data_usage(self, table=None) -> List[SRUMNetworkDataRecord]:
+        """Every record of the table at once (see iter_network_data_usage)."""
+        return list(self.iter_network_data_usage(table))
+
+    def iter_energy_usage(self, table):
         """Parse Energy Usage table.
         
         Args:
             table: ESE table object for Energy Usage
             
         Returns:
-            list: List of SRUMEnergyRecord objects
+            Yields SRUMEnergyRecord objects, one at a time
         """
-        records = []
+        count = 0
         
         if not table:
             logger.warning("Energy Usage table not found")
-            return records
+            return
         
         try:
             num_records = table.get_number_of_records()
@@ -2159,33 +2387,36 @@ class SRUMParser:
                         extra=self._read_extra_columns(record, 'ENERGY_USAGE'),
                     )
 
-                    records.append(srum_record)
+                    count += 1
+                    yield srum_record
                 
                 except Exception as e:
                     logger.debug(f"Error parsing energy record {i}: {e}")
                     continue
             
-            logger.info(f"Successfully parsed {len(records)} energy usage records")
+            logger.info(f"Successfully parsed {count} energy usage records")
 
         except Exception as e:
             logger.error(f"Error parsing energy usage table: {e}")
 
-        return records
+    def parse_energy_usage(self, table=None) -> List[SRUMEnergyRecord]:
+        """Every record of the table at once (see iter_energy_usage)."""
+        return list(self.iter_energy_usage(table))
 
-    def parse_app_timeline(self, table) -> List[SRUMAppTimelineRecord]:
+    def iter_app_timeline(self, table):
         """Parse Application Timeline table.
 
         Args:
             table: ESE table object for the application timeline provider
 
         Returns:
-            list: List of SRUMAppTimelineRecord objects
+            Yields SRUMAppTimelineRecord objects, one at a time
         """
-        records = []
+        count = 0
 
         if not table:
             logger.warning("Application Timeline table not found")
-            return records
+            return
 
         try:
             num_records = table.get_number_of_records()
@@ -2202,6 +2433,7 @@ class SRUMParser:
 
                     app_id = self._get_column_value(record, 'AppId', 0)
                     app_name, app_path, hosted_services = self.resolve_app_identity(app_id)
+                    pe_link_time, pe_checksum = self.resolve_app_build(app_id)
 
                     user_id = self._get_column_value(record, 'UserId', 0)
                     user_sid, user_name = self.resolve_user_id(user_id)
@@ -2214,6 +2446,8 @@ class SRUMParser:
                         app_name=app_name,
                         app_path=app_path,
                         hosted_services=hosted_services,
+                        pe_link_time=pe_link_time,
+                        pe_checksum=pe_checksum,
                         user_sid=user_sid,
                         user_name=user_name,
                         end_time=end_time,
@@ -2241,18 +2475,30 @@ class SRUMParser:
                         extra=self._read_extra_columns(record, 'APPLICATION_TIMELINE'),
                     )
 
-                    records.append(srum_record)
+                    count += 1
+                    yield srum_record
 
                 except Exception as e:
                     logger.debug(f"Error parsing application timeline record {i}: {e}")
                     continue
 
-            logger.info(f"Successfully parsed {len(records)} application timeline records")
+            logger.info(f"Successfully parsed {count} application timeline records")
 
         except Exception as e:
             logger.error(f"Error parsing application timeline table: {e}")
 
-        return records
+    def parse_app_timeline(self, table=None) -> List[SRUMAppTimelineRecord]:
+        """Every record of the table at once (see iter_app_timeline)."""
+        return list(self.iter_app_timeline(table))
+
+    # parsed_data key -> the generator that reads that table.
+    TABLE_READERS = {
+        'application_usage': iter_application_resource_usage,
+        'network_connectivity': iter_network_connectivity,
+        'network_data_usage': iter_network_data_usage,
+        'energy_usage': iter_energy_usage,
+        'app_timeline': iter_app_timeline,
+    }
 
     def create_database_schema(self):
         """Create SQLite database schema for SRUM data storage.
@@ -2382,7 +2628,9 @@ class SRUMParser:
                     cycles_wob INTEGER,
                     disk_raw INTEGER,
                     network_bytes_raw INTEGER,
-                    network_tail_raw INTEGER
+                    network_tail_raw INTEGER,
+                    pe_link_time TEXT,
+                    pe_checksum TEXT
                 )
             """)
 
@@ -2426,6 +2674,7 @@ class SRUMParser:
 
             self._drop_retired_columns(cursor)
             self._ensure_extra_columns(cursor)
+            ensure_timeline_build_columns(cursor)
 
             conn.commit()
             conn.close()
@@ -2527,267 +2776,244 @@ class SRUMParser:
                 except sqlite3.Error as e:
                     logger.warning("Could not add srum_metadata.%s: %s", column, e)
 
+    # The tables, in the order save_to_database has always written them:
+    # parsed_data key -> (what the log calls it, its INSERT).
+    SAVE_TABLES = (
+        ('application_usage', 'application usage', APP_USAGE_INSERT),
+        ('network_connectivity', 'network connectivity', NET_CONN_INSERT),
+        ('network_data_usage', 'network data usage', NET_DATA_INSERT),
+        ('energy_usage', 'energy usage', ENERGY_INSERT),
+        ('app_timeline', 'application timeline', APP_TIMELINE_INSERT),
+    )
+
+    @staticmethod
+    def _row(key, record):
+        """One parsed record as the tuple its table's INSERT takes."""
+        if key == 'application_usage':
+            return (
+                format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                record.app_name,
+                record.app_path,
+                record.user_sid,
+                record.user_name,
+                record.foreground_cycle_time,
+                record.background_cycle_time,
+                record.face_time,
+                record.foreground_context_switches,
+                record.background_context_switches,
+                record.foreground_bytes_read,
+                record.foreground_bytes_written,
+                record.foreground_num_read_operations,
+                record.foreground_num_write_operations,
+                record.foreground_number_of_flushes,
+                record.background_bytes_read,
+                record.background_bytes_written,
+                record.background_num_read_operations,
+                record.background_num_write_operations,
+                record.background_number_of_flushes,
+            )
+        if key == 'network_connectivity':
+            return (
+                format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                record.app_name,
+                record.app_path,
+                record.user_sid,
+                record.user_name,
+                record.interface_luid,
+                record.l2_profile_id,
+                record.l2_profile_flags,
+                record.connected_time,
+                format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
+            )
+        if key == 'network_data_usage':
+            return (
+                format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                record.app_name,
+                record.app_path,
+                record.user_sid,
+                record.user_name,
+                record.interface_luid,
+                record.l2_profile_id,
+                record.bytes_sent,
+                record.bytes_received,
+                record.extra.get('wake_count', 0),
+                record.extra.get('l2_profile_flags', 0),
+            )
+        if key == 'energy_usage':
+            return (
+                format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+                record.app_name,
+                record.app_path,
+                record.user_sid,
+                record.user_name,
+                format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
+                record.state_transition,
+                record.charge_level,
+                record.cycle_count,
+                record.extra.get('designed_capacity', 0),
+                record.extra.get('full_charged_capacity', 0),
+                record.extra.get('battery_count', 0),
+                record.extra.get('configuration_hash', 0),
+                record.extra.get('battery_charge_limited', 0),
+            )
+        # app_timeline - stored as raw integers, not through format_number. A
+        # comma makes the value TEXT, and SQLite sorts every TEXT above every
+        # INTEGER, so `duration_ms > 1000000` matches all 38359 formatted rows
+        # whatever the threshold - and a Wing filtering on one of these would
+        # be quietly wrong. Formatting belongs to the view.
+        return (
+            format_forensic_timestamp(record.timestamp) if record.timestamp else None,
+            record.app_name,
+            record.app_path,
+            record.hosted_services,
+            record.user_sid,
+            record.user_name,
+            format_forensic_timestamp(record.end_time) if record.end_time else None,
+            record.duration_ms,
+            record.span_ms,
+            record.timeline_end,
+            record.flags,
+            record.in_focus_s,
+            record.psm_foreground_s,
+            record.user_input_s,
+            record.keyboard_input_s,
+            record.mouse_input_s,
+            record.display_required_s,
+            record.comp_rendered_s,
+            record.comp_dirtied_s,
+            record.comp_propagated_s,
+            record.audio_in_s,
+            record.audio_out_s,
+            record.cycles,
+            record.cycles_attr,
+            record.cycles_wob,
+            record.disk_raw,
+            record.network_bytes_raw,
+            record.network_tail_raw,
+            record.extra.get('in_focus_timeline', 0),
+            record.extra.get('user_input_timeline', 0),
+            record.extra.get('comp_rendered_timeline', 0),
+            record.extra.get('comp_dirtied_timeline', 0),
+            record.extra.get('comp_propagated_timeline', 0),
+            record.extra.get('audio_in_timeline', 0),
+            record.extra.get('audio_out_timeline', 0),
+            record.extra.get('cpu_timeline', 0),
+            record.extra.get('disk_timeline', 0),
+            record.extra.get('network_timeline', 0),
+            record.extra.get('mbb_timeline', 0),
+            record.extra.get('display_required_timeline', 0),
+            record.extra.get('keyboard_input_timeline', 0),
+            record.extra.get('cycles_breakdown', 0),
+            record.extra.get('cycles_attr_breakdown', 0),
+            record.extra.get('cycles_wob_breakdown', 0),
+            record.extra.get('mbb_tail_raw', 0),
+            record.extra.get('mbb_bytes_raw', 0),
+            record.pe_link_time,
+            record.pe_checksum,
+        )
+
+    def _begin_save(self):
+        """A connection for one run's writes, and a fresh tally."""
+        # Rows written vs already in the database, per table (a re-parse adds
+        # only what is new).
+        self.tally = Tally()
+        self._empty_at_start = {}
+        return sqlite3.connect(self.output_db_path)
+
+    def _save_records(self, conn, key, records, batch_size=1000):
+        """Write one table's records as they come, 1000 rows per batch.
+
+        `records` may be any iterable - a generator straight off the ESE
+        table - so a table is never held whole: its rows were built into one
+        list beside the list of parsed records, and every table's records
+        were held until the last table had been read (422 MB on one desk
+        machine). Exact duplicates are still removed across the whole table,
+        in order (ExactDeduper), and the batches are the same 1000 rows
+        dedupe_exact + slicing made, so the stored rows are the same.
+
+        Returns the number of records read.
+        """
+        label, sql = next((lbl, s) for k, lbl, s in self.SAVE_TABLES if k == key)
+        dedupe = ExactDeduper()
+        read = 0
+        batch = []
+        for record in records:
+            read += 1
+            row = self._row(key, record)
+            if not dedupe.is_new(row):
+                continue
+            batch.append(row)
+            if len(batch) >= batch_size:
+                insert_srum_rows(conn, sql, batch, self.tally, self._empty_at_start)
+                conn.commit()
+                batch = []
+        if batch:
+            insert_srum_rows(conn, sql, batch, self.tally, self._empty_at_start)
+            conn.commit()
+        if dedupe.removed:
+            logger.info("[SRUM] %s: removed %d exact-duplicate rows", key, dedupe.removed)
+        logger.info(f"Saved {read} {label} records")
+        return read
+
+    def _save_metadata(self, conn, metadata, total_records):
+        """The srum_metadata row of one run."""
+        logger.info("Saving parsing metadata")
+        try:
+            conn.execute("""
+                INSERT INTO srum_metadata (
+                    parsed_at, srudb_path, total_records_parsed,
+                    parsing_duration_seconds, windows_version,
+                    jfm_collected, jfm_path, jfm_size, jfm_modified,
+                    log_files_collected, db_state, recovery_notes, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                metadata.get('parsed_at', get_current_forensic_timestamp()),
+                metadata.get('srudb_path', self.srudb_path),
+                metadata.get('total_records', total_records),
+                metadata.get('parsing_duration_seconds', 0.0),
+                metadata.get('windows_version', 'Unknown'),
+                self.recovery_info.get('jfm_collected', 0),
+                self.recovery_info.get('jfm_path', ''),
+                self.recovery_info.get('jfm_size', 0),
+                self.recovery_info.get('jfm_modified', ''),
+                self.recovery_info.get('log_files_collected', 0),
+                self.recovery_info.get('db_state', 'clean'),
+                self.recovery_info.get('recovery_notes', ''),
+                metadata.get('notes', 'Parsed by Crow Eye SRUM Parser')
+            ))
+            conn.commit()
+            logger.info("Metadata saved successfully")
+        except Exception as meta_error:
+            logger.warning(f"Could not save metadata: {meta_error}")
+            # Don't raise - metadata is non-critical
+
     def save_to_database(self, parsed_data: Dict[str, List], metadata: Optional[Dict[str, any]] = None) -> None:
         """Save parsed SRUM data to SQLite database.
-        
-        Uses batch insertion with transactions for performance.
-        Commits records in batches of 1000.
-        Stores parsing metadata including timestamp, duration, and record counts.
-        
+
+        Batches of 1000 rows, each committed (see _save_records). Stores
+        parsing metadata including timestamp, duration, and record counts.
+        The live parse does not come through here: parse_and_save writes each
+        table while it is read.
+
         Args:
-            parsed_data (dict): Dictionary containing parsed records by type
+            parsed_data (dict): parsed records by type (lists, or any iterables)
             metadata (dict, optional): Parsing metadata (timestamp, duration, record counts)
-        
+
         Raises:
             Exception: If database write operations fail
         """
+        conn = None
         try:
-            conn = sqlite3.connect(self.output_db_path)
-            cursor = conn.cursor()
-            
-            # Track total records for metadata
+            conn = self._begin_save()
             total_records = 0
-            # Rows written vs already in the database, per table (a re-parse
-            # adds only what is new).
-            self.tally = Tally()
-            empty_at_start = {}
-            
-            # Save application resource usage records
-            if 'application_usage' in parsed_data:
-                records = parsed_data['application_usage']
-                total_records += len(records)
-                logger.info(f"Saving {len(records)} application usage records")
-                
-                rows = [(
-                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                    record.app_name,
-                    record.app_path,
-                    record.user_sid,
-                    record.user_name,
-                    record.foreground_cycle_time,
-                    record.background_cycle_time,
-                    record.face_time,
-                    record.foreground_context_switches,
-                    record.background_context_switches,
-                    record.foreground_bytes_read,
-                    record.foreground_bytes_written,
-                    record.foreground_num_read_operations,
-                    record.foreground_num_write_operations,
-                    record.foreground_number_of_flushes,
-                    record.background_bytes_read,
-                    record.background_bytes_written,
-                    record.background_num_read_operations,
-                    record.background_num_write_operations,
-                    record.background_number_of_flushes,
-                ) for record in records]
-                rows, removed = dedupe_exact(rows)
-                if removed:
-                    logger.info("[SRUM] application_usage: removed %d exact-duplicate rows", removed)
-                sql = """
-                    INSERT INTO srum_application_usage (
-                        timestamp, app_name, app_path, user_sid, user_name,
-                        foreground_cycle_time, background_cycle_time, face_time,
-                        foreground_context_switches, background_context_switches,
-                        foreground_bytes_read, foreground_bytes_written,
-                        foreground_num_read_operations, foreground_num_write_operations,
-                        foreground_number_of_flushes, background_bytes_read,
-                        background_bytes_written, background_num_read_operations,
-                        background_num_write_operations, background_number_of_flushes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                for i in range(0, len(rows), 1000):
-                    insert_srum_rows(conn, sql, rows[i:i + 1000], self.tally, empty_at_start)
-                    conn.commit()
-
-            # Save network connectivity records
-            if 'network_connectivity' in parsed_data:
-                records = parsed_data['network_connectivity']
-                total_records += len(records)
-                logger.info(f"Saving {len(records)} network connectivity records")
-                
-                rows = [(
-                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                    record.app_name,
-                    record.app_path,
-                    record.user_sid,
-                    record.user_name,
-                    record.interface_luid,
-                    record.l2_profile_id,
-                    record.l2_profile_flags,
-                    record.connected_time,
-                    format_forensic_timestamp(record.connect_start_time) if record.connect_start_time else None,
-                ) for record in records]
-                rows, removed = dedupe_exact(rows)
-                if removed:
-                    logger.info("[SRUM] network_connectivity: removed %d exact-duplicate rows", removed)
-                sql = """
-                    INSERT INTO srum_network_connectivity (
-                        timestamp, app_name, app_path, user_sid, user_name,
-                        interface_luid, l2_profile_id, l2_profile_flags,
-                        connected_time, connect_start_time
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """
-                for i in range(0, len(rows), 1000):
-                    insert_srum_rows(conn, sql, rows[i:i + 1000], self.tally, empty_at_start)
-                    conn.commit()
-
-            # Save network data usage records
-            if 'network_data_usage' in parsed_data:
-                records = parsed_data['network_data_usage']
-                total_records += len(records)
-                logger.info(f"Saving {len(records)} network data usage records")
-                
-                rows = [(
-                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                    record.app_name,
-                    record.app_path,
-                    record.user_sid,
-                    record.user_name,
-                    record.interface_luid,
-                    record.l2_profile_id,
-                    record.bytes_sent,
-                    record.bytes_received,
-                    record.extra.get('wake_count', 0),
-                    record.extra.get('l2_profile_flags', 0),
-                ) for record in records]
-                rows, removed = dedupe_exact(rows)
-                if removed:
-                    logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
-                for i in range(0, len(rows), 1000):
-                    insert_srum_rows(conn, NET_DATA_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
-                    conn.commit()
-
-            # Save energy usage records
-            if 'energy_usage' in parsed_data:
-                records = parsed_data['energy_usage']
-                total_records += len(records)
-                logger.info(f"Saving {len(records)} energy usage records")
-                
-                rows = [(
-                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                    record.app_name,
-                    record.app_path,
-                    record.user_sid,
-                    record.user_name,
-                    format_forensic_timestamp(record.event_timestamp) if record.event_timestamp else None,
-                    record.state_transition,
-                    record.charge_level,
-                    record.cycle_count,
-                    record.extra.get('designed_capacity', 0),
-                    record.extra.get('full_charged_capacity', 0),
-                    record.extra.get('battery_count', 0),
-                    record.extra.get('configuration_hash', 0),
-                    record.extra.get('battery_charge_limited', 0),
-                ) for record in records]
-                rows, removed = dedupe_exact(rows)
-                if removed:
-                    logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
-                for i in range(0, len(rows), 1000):
-                    insert_srum_rows(conn, ENERGY_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
-                    conn.commit()
-
-            # Save application timeline records
-            #
-            # Stored as raw integers, not through format_number. A comma makes
-            # the value TEXT, and SQLite sorts every TEXT above every INTEGER,
-            # so `duration_ms > 1000000` matches all 38359 formatted rows
-            # whatever the threshold - and a Wing filtering on one of these
-            # would be quietly wrong. Formatting belongs to the view.
-            if 'app_timeline' in parsed_data:
-                records = parsed_data['app_timeline']
-                total_records += len(records)
-                logger.info(f"Saving {len(records)} application timeline records")
-
-                rows = [(
-                    format_forensic_timestamp(record.timestamp) if record.timestamp else None,
-                    record.app_name,
-                    record.app_path,
-                    record.hosted_services,
-                    record.user_sid,
-                    record.user_name,
-                    format_forensic_timestamp(record.end_time) if record.end_time else None,
-                    record.duration_ms,
-                    record.span_ms,
-                    record.timeline_end,
-                    record.flags,
-                    record.in_focus_s,
-                    record.psm_foreground_s,
-                    record.user_input_s,
-                    record.keyboard_input_s,
-                    record.mouse_input_s,
-                    record.display_required_s,
-                    record.comp_rendered_s,
-                    record.comp_dirtied_s,
-                    record.comp_propagated_s,
-                    record.audio_in_s,
-                    record.audio_out_s,
-                    record.cycles,
-                    record.cycles_attr,
-                    record.cycles_wob,
-                    record.disk_raw,
-                    record.network_bytes_raw,
-                    record.network_tail_raw,
-                    record.extra.get('in_focus_timeline', 0),
-                    record.extra.get('user_input_timeline', 0),
-                    record.extra.get('comp_rendered_timeline', 0),
-                    record.extra.get('comp_dirtied_timeline', 0),
-                    record.extra.get('comp_propagated_timeline', 0),
-                    record.extra.get('audio_in_timeline', 0),
-                    record.extra.get('audio_out_timeline', 0),
-                    record.extra.get('cpu_timeline', 0),
-                    record.extra.get('disk_timeline', 0),
-                    record.extra.get('network_timeline', 0),
-                    record.extra.get('mbb_timeline', 0),
-                    record.extra.get('display_required_timeline', 0),
-                    record.extra.get('keyboard_input_timeline', 0),
-                    record.extra.get('cycles_breakdown', 0),
-                    record.extra.get('cycles_attr_breakdown', 0),
-                    record.extra.get('cycles_wob_breakdown', 0),
-                    record.extra.get('mbb_tail_raw', 0),
-                    record.extra.get('mbb_bytes_raw', 0),
-                ) for record in records]
-                rows, removed = dedupe_exact(rows)
-                if removed:
-                    logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
-                for i in range(0, len(rows), 1000):
-                    insert_srum_rows(conn, APP_TIMELINE_INSERT, rows[i:i + 1000], self.tally, empty_at_start)
-                    conn.commit()
-
-            # Save parsing metadata
+            for key, _label, _sql in self.SAVE_TABLES:
+                if key in parsed_data:
+                    total_records += self._save_records(conn, key, parsed_data[key])
             if metadata:
-                logger.info("Saving parsing metadata")
-                try:
-                    cursor.execute("""
-                        INSERT INTO srum_metadata (
-                            parsed_at, srudb_path, total_records_parsed,
-                            parsing_duration_seconds, windows_version,
-                            jfm_collected, jfm_path, jfm_size, jfm_modified,
-                            log_files_collected, db_state, recovery_notes, notes
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        metadata.get('parsed_at', get_current_forensic_timestamp()),
-                        metadata.get('srudb_path', self.srudb_path),
-                        metadata.get('total_records', total_records),
-                        metadata.get('parsing_duration_seconds', 0.0),
-                        metadata.get('windows_version', 'Unknown'),
-                        self.recovery_info.get('jfm_collected', 0),
-                        self.recovery_info.get('jfm_path', ''),
-                        self.recovery_info.get('jfm_size', 0),
-                        self.recovery_info.get('jfm_modified', ''),
-                        self.recovery_info.get('log_files_collected', 0),
-                        self.recovery_info.get('db_state', 'clean'),
-                        self.recovery_info.get('recovery_notes', ''),
-                        metadata.get('notes', 'Parsed by Crow Eye SRUM Parser')
-                    ))
-                    conn.commit()
-                    logger.info("Metadata saved successfully")
-                except Exception as meta_error:
-                    logger.warning(f"Could not save metadata: {meta_error}")
-                    # Don't raise - metadata is non-critical
-            
+                self._save_metadata(conn, metadata, total_records)
             conn.close()
             logger.info(f"Successfully saved all SRUM data to database (Total: {total_records} records)")
-        
+
         except sqlite3.Error as db_error:
             logger.error(f"Database error while saving data: {db_error}")
             try:
@@ -2795,7 +3021,7 @@ class SRUMParser:
             except:
                 pass
             raise Exception(f"Failed to save SRUM data to database: {db_error}")
-        
+
         except Exception as e:
             logger.error(f"Error saving data to database: {e}")
             try:
@@ -2804,140 +3030,91 @@ class SRUMParser:
                 pass
             raise
 
-    def parse_srum_database(self, progress_callback: Optional[Callable] = None) -> Dict[str, any]:
-        """Parse SRUM database and extract all tables.
-        
-        Main parsing method that orchestrates the entire SRUM parsing process:
-        1. Opens the ESE database
-        2. Enumerates and identifies SRUM tables
-        3. Parses each table type
-        4. Returns parsed data organized by table type
-        
-        Args:
-            progress_callback (callable, optional): Callback function for progress updates
-                Should accept (current, total, table_name) parameters
-        
-        Returns:
-            dict: Dictionary containing parsed data organized by table type
-                Keys: 'application_usage', 'network_connectivity', 'network_data_usage',
-                      'energy_usage', 'app_timeline', 'warnings'
-                Values: Lists of corresponding record objects, and list of warning messages
+    def _walk_tables(self, consume, progress_callback: Optional[Callable] = None) -> List[str]:
+        """Open SRUDB.dat and hand each table's records to
+        ``consume(key, records) -> count`` as a generator, in turn.
+
+        One walk for both callers: parse_srum_database collects the records
+        into lists, parse_and_save writes them while they are read.
+
+        Returns the warnings of the walk.
         """
-        parsed_data = {
-            'application_usage': [],
-            'network_connectivity': [],
-            'network_data_usage': [],
-            'energy_usage': [],
-            'app_timeline': [],
-            'warnings': [],  # Track warnings during parsing
-        }
-        
+        warnings = []
         tables_to_close = []
-        
+
+        def one(key, table, label):
+            count = consume(key, self.TABLE_READERS[key](self, table))
+            if progress_callback:
+                progress_callback(count, count, label)
+
         try:
             # Open ESE database
             logger.info("Opening SRUDB.dat ESE database")
             self.open_ese_database()
-            
+
             # Load ID lookup table first (maps IDs to app paths and user SIDs)
             self.load_id_lookup_table()
-            
+
             # Parse Application Resource Usage table (primary table)
             logger.info("Parsing Application Resource Usage table")
             app_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['APPLICATION_RESOURCE_USAGE'])
             if app_table:
                 tables_to_close.append(app_table)
-                parsed_data['application_usage'] = self.parse_application_resource_usage(app_table)
-                if progress_callback:
-                    progress_callback(
-                        len(parsed_data['application_usage']),
-                        len(parsed_data['application_usage']),
-                        "Application Resource Usage"
-                    )
+                one('application_usage', app_table, "Application Resource Usage")
             else:
                 warning_msg = "Application Resource Usage table not found in SRUDB.dat"
                 logger.warning(warning_msg)
-                parsed_data['warnings'].append(warning_msg)
-            
+                warnings.append(warning_msg)
+
             # Parse Network Data Usage table
             logger.info("Parsing Network Data Usage table")
             net_data_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['NETWORK_DATA_USAGE'])
             if net_data_table:
                 tables_to_close.append(net_data_table)
-                parsed_data['network_data_usage'] = self.parse_network_data_usage(net_data_table)
-                if progress_callback:
-                    progress_callback(
-                        len(parsed_data['network_data_usage']),
-                        len(parsed_data['network_data_usage']),
-                        "Network Data Usage"
-                    )
+                one('network_data_usage', net_data_table, "Network Data Usage")
             else:
                 warning_msg = "Network Data Usage table not found in SRUDB.dat"
                 logger.warning(warning_msg)
-                parsed_data['warnings'].append(warning_msg)
-            
+                warnings.append(warning_msg)
+
             # Parse Network Connectivity table
             logger.info("Parsing Network Connectivity table")
             net_conn_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['NETWORK_CONNECTIVITY'])
             if net_conn_table:
                 tables_to_close.append(net_conn_table)
-                parsed_data['network_connectivity'] = self.parse_network_connectivity(net_conn_table)
-                if progress_callback:
-                    progress_callback(
-                        len(parsed_data['network_connectivity']),
-                        len(parsed_data['network_connectivity']),
-                        "Network Connectivity"
-                    )
+                one('network_connectivity', net_conn_table, "Network Connectivity")
             else:
                 warning_msg = "Network Connectivity table not found in SRUDB.dat"
                 logger.warning(warning_msg)
-                parsed_data['warnings'].append(warning_msg)
-            
+                warnings.append(warning_msg)
+
             # Parse Energy Usage table (may not exist on all systems)
             logger.info("Parsing Energy Usage table")
             energy_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['ENERGY_USAGE'])
             if energy_table:
                 tables_to_close.append(energy_table)
-                parsed_data['energy_usage'] = self.parse_energy_usage(energy_table)
-                if progress_callback:
-                    progress_callback(
-                        len(parsed_data['energy_usage']),
-                        len(parsed_data['energy_usage']),
-                        "Energy Usage"
-                    )
+                one('energy_usage', energy_table, "Energy Usage")
             else:
                 # Try long-term energy usage table (Windows 10+)
                 energy_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['ENERGY_USAGE_LONG_TERM'])
                 if energy_table:
                     tables_to_close.append(energy_table)
-                    parsed_data['energy_usage'] = self.parse_energy_usage(energy_table)
-                    if progress_callback:
-                        progress_callback(
-                            len(parsed_data['energy_usage']),
-                            len(parsed_data['energy_usage']),
-                            "Energy Usage (Long Term)"
-                        )
+                    one('energy_usage', energy_table, "Energy Usage (Long Term)")
                 else:
                     warning_msg = "Energy Usage tables not found (not available on Windows 8 or older systems)"
                     logger.info(warning_msg)
-                    parsed_data['warnings'].append(warning_msg)
+                    warnings.append(warning_msg)
 
             # Parse Application Timeline table (Windows 10+)
             logger.info("Parsing Application Timeline table")
             timeline_table = self.get_table_by_guid(SRUM_TABLE_GUIDS['APPLICATION_TIMELINE'])
             if timeline_table:
                 tables_to_close.append(timeline_table)
-                parsed_data['app_timeline'] = self.parse_app_timeline(timeline_table)
-                if progress_callback:
-                    progress_callback(
-                        len(parsed_data['app_timeline']),
-                        len(parsed_data['app_timeline']),
-                        "Application Timeline"
-                    )
+                one('app_timeline', timeline_table, "Application Timeline")
             else:
                 warning_msg = "Application Timeline table not found (not available on Windows 8 or older systems)"
                 logger.info(warning_msg)
-                parsed_data['warnings'].append(warning_msg)
+                warnings.append(warning_msg)
 
             # Close all opened tables
             for table in tables_to_close:
@@ -2945,7 +3122,7 @@ class SRUMParser:
                     table.close()
                 except Exception as e:
                     logger.debug(f"Error closing table: {e}")
-            
+
             # Close ESE database
             try:
                 if self.dbid:
@@ -2957,16 +3134,16 @@ class SRUMParser:
                 logger.info("Closed ESE database")
             except Exception as e:
                 logger.debug(f"Error closing database: {e}")
-            
+
             # Add SID resolution warnings if any SIDs could not be resolved
             if hasattr(self, '_sid_resolution_failures') and self._sid_resolution_failures:
                 num_failed = len(self._sid_resolution_failures)
                 warning_msg = f"Could not resolve {num_failed} user SID(s) to usernames. SIDs will be displayed instead."
                 logger.warning(warning_msg)
-                parsed_data['warnings'].append(warning_msg)
-            
+                warnings.append(warning_msg)
+
             logger.info("SRUM database parsing completed successfully")
-        
+
         except Exception as e:
             logger.error(f"Error parsing SRUM database: {e}")
             # Close all opened tables
@@ -2986,8 +3163,78 @@ class SRUMParser:
             except:
                 pass
             raise
-        
+
+        return warnings
+
+    def parse_srum_database(self, progress_callback: Optional[Callable] = None) -> Dict[str, any]:
+        """Parse SRUM database and extract all tables.
+
+        Main parsing method that orchestrates the entire SRUM parsing process:
+        1. Opens the ESE database
+        2. Enumerates and identifies SRUM tables
+        3. Parses each table type
+        4. Returns parsed data organized by table type
+
+        Holds every table's records at once; the live parse uses
+        parse_and_save, which writes each table as it is read.
+
+        Args:
+            progress_callback (callable, optional): Callback function for progress updates
+                Should accept (current, total, table_name) parameters
+
+        Returns:
+            dict: Dictionary containing parsed data organized by table type
+                Keys: 'application_usage', 'network_connectivity', 'network_data_usage',
+                      'energy_usage', 'app_timeline', 'warnings'
+                Values: Lists of corresponding record objects, and list of warning messages
+        """
+        parsed_data = {
+            'application_usage': [],
+            'network_connectivity': [],
+            'network_data_usage': [],
+            'energy_usage': [],
+            'app_timeline': [],
+            'warnings': [],  # Track warnings during parsing
+        }
+
+        def collect(key, records):
+            parsed_data[key] = list(records)
+            return len(parsed_data[key])
+
+        parsed_data['warnings'].extend(self._walk_tables(collect, progress_callback))
         return parsed_data
+
+    def parse_and_save(self, progress_callback: Optional[Callable] = None) -> Dict[str, any]:
+        """Parse SRUDB.dat and write each table while it is read.
+
+        The same rows as parse_srum_database + save_to_database, without
+        holding them: one record is in memory at a time, plus the 1000-row
+        batch being written and the exact-duplicate fingerprints of the
+        table being read. A table finished before a later one fails stays
+        written (a re-parse adds only what is new).
+
+        Returns {key: records read, ..., 'warnings': [...]}.
+        """
+        counts = {key: 0 for key, _l, _s in self.SAVE_TABLES}
+        conn = self._begin_save()
+        try:
+            def save(key, records):
+                counts[key] = self._save_records(conn, key, records)
+                return counts[key]
+
+            counts['warnings'] = self._walk_tables(save, progress_callback)
+        finally:
+            conn.close()
+        return counts
+
+    def save_metadata(self, metadata: Dict[str, any], total_records: int) -> None:
+        """Write the srum_metadata row after parse_and_save."""
+        conn = sqlite3.connect(self.output_db_path)
+        try:
+            self._save_metadata(conn, metadata, total_records)
+        finally:
+            conn.close()
+
 
 
 def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callable] = None, windows_partition: str = "C:") -> Dict[str, any]:
@@ -3060,40 +3307,47 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
             error_msg = f"Failed to copy SRUDB.dat: {str(copy_error)}"
             logger.error(error_msg)
             result['errors'].append(error_msg)
-            result['warnings'].append("SRUDB.dat is locked by Windows. Try stopping the SRUM service or running as Administrator.")
+            # Never "stop the SRUM service": that changes the machine under
+            # examination. Elevated, the error already says what failed.
+            if not SRUMParser._is_admin():
+                result['warnings'].append("Restart Crow-Eye as Administrator to read SRUDB.dat, "
+                                          "which the SRUM service holds open.")
             return result
         
         # Create database schema
         logger.info("Creating database schema")
         parser.create_database_schema()
         
-        # Parse SRUM database
-        logger.info("Parsing SRUM database")
-        parsed_data = parser.parse_srum_database(progress_callback)
+        # Parse SRUM database, writing each table while it is read: holding
+        # every table's records until the last one was read, and then each
+        # table's rows beside them, peaked at 422 MB on one desk machine.
+        logger.info("Parsing SRUM database (each table written as it is read)")
+        parsed_counts = parser.parse_and_save(progress_callback)
         
         # Propagate warnings from parsing
-        if 'warnings' in parsed_data and parsed_data['warnings']:
-            result['warnings'].extend(parsed_data['warnings'])
+        if parsed_counts.get('warnings'):
+            result['warnings'].extend(parsed_counts['warnings'])
         
-        # Calculate statistics
+        # Calculate statistics. The duration now includes the writes, which
+        # happen during the parse.
         end_time = get_current_utc()
         duration = (end_time - start_time).total_seconds()
         
         total_records = sum([
-            len(parsed_data.get('application_usage', [])),
-            len(parsed_data.get('network_connectivity', [])),
-            len(parsed_data.get('network_data_usage', [])),
-            len(parsed_data.get('energy_usage', [])),
-            len(parsed_data.get('app_timeline', [])),
+            parsed_counts.get('application_usage', 0),
+            parsed_counts.get('network_connectivity', 0),
+            parsed_counts.get('network_data_usage', 0),
+            parsed_counts.get('energy_usage', 0),
+            parsed_counts.get('app_timeline', 0),
         ])
 
         result['statistics'] = {
             'total_records': total_records,
-            'application_usage_records': len(parsed_data.get('application_usage', [])),
-            'network_connectivity_records': len(parsed_data.get('network_connectivity', [])),
-            'network_data_usage_records': len(parsed_data.get('network_data_usage', [])),
-            'energy_usage_records': len(parsed_data.get('energy_usage', [])),
-            'app_timeline_records': len(parsed_data.get('app_timeline', [])),
+            'application_usage_records': parsed_counts.get('application_usage', 0),
+            'network_connectivity_records': parsed_counts.get('network_connectivity', 0),
+            'network_data_usage_records': parsed_counts.get('network_data_usage', 0),
+            'energy_usage_records': parsed_counts.get('energy_usage', 0),
+            'app_timeline_records': parsed_counts.get('app_timeline', 0),
             'parsing_duration_seconds': duration,
             'srudb_path': srudb_path,
         }
@@ -3114,9 +3368,10 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
             'notes': 'Parsed by Crow Eye SRUM Parser v1.0'
         }
         
-        # Save to database with metadata
-        logger.info("Saving parsed data to database")
-        parser.save_to_database(parsed_data, metadata)
+        # The rows are already written; the run's metadata row follows them.
+        logger.info("Saving parsing metadata to database")
+        parser.save_metadata(metadata, total_records)
+        logger.info(f"Successfully saved all SRUM data to database (Total: {total_records} records)")
         
         result['success'] = True
         # What this run read, and of that what was new / already stored.

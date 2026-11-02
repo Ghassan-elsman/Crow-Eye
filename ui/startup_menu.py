@@ -54,12 +54,12 @@ class CaseCardWidget(QtWidgets.QWidget):
         shadow.setOffset(0, 5)
         self.setGraphicsEffect(shadow)
         
-        # The site card (ui/site_theme.py tones); an unavailable case keeps
+        # The site card (ui/app_theme.py tones); an unavailable case keeps
         # its rose edge - that is the warning.
         self.setAttribute(Qt.WA_StyledBackground, True)
         edge = "#1E293B" if self.is_available else "rgba(244, 63, 94, 0.65)"
         self.setStyleSheet(
-            "QWidget#option_card { background-color: #0F172A; border: 1px solid %s; border-radius: 14px; }"
+            "QWidget#option_card { background-color: #0F172A; border: 3px solid %s; border-radius: 14px; }"
             " QWidget#option_card:hover { background-color: #111A33; border-color: %s; }"
             " QWidget, QLabel { background-color: transparent; }"
             % (edge, "rgba(99, 102, 241, 0.60)" if self.is_available else edge))
@@ -179,8 +179,8 @@ class StartupMenuDialog(QtWidgets.QDialog):
         self.selected_case = None
         self.choice = None  # 'create', 'open', or case metadata
 
-        from ui.site_theme import begin_site_theme
-        begin_site_theme(self)                  # before the widgets exist
+        from ui.app_theme import begin_theme
+        begin_theme(self)                  # before the widgets exist
         self.setup_ui()
         self.apply_styles()
         self.load_recent_cases()
@@ -281,7 +281,7 @@ class StartupMenuDialog(QtWidgets.QDialog):
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll_area.setStyleSheet("""
             QScrollArea {
-                border: 1px solid #334155;
+                border: 3px solid #334155;
                 border-radius: 8px;
                 background-color: #0B1220;
             }
@@ -432,8 +432,8 @@ class StartupMenuDialog(QtWidgets.QDialog):
         msg_box.setWindowTitle("Case Directory Not Found")
         msg_box.setText(f"The case directory no longer exists at:\n{case_metadata.path}\n\nWhat would you like to do?")
         msg_box.setIcon(QMessageBox.Warning)
-        from ui.site_theme import apply_site_theme
-        apply_site_theme(msg_box)
+        from ui.app_theme import apply_theme
+        apply_theme(msg_box)
         
         # Add custom buttons
         browse_button = msg_box.addButton("Browse to New Location", QMessageBox.ActionRole)
@@ -485,10 +485,10 @@ class StartupMenuDialog(QtWidgets.QDialog):
         self.accept()
     
     def apply_styles(self):
-        """The site look (ui/site_theme.py): one sheet, roles for the labels,
+        """The site look (ui/app_theme.py): one sheet, roles for the labels,
         Create as the main action, Exit as the stop button."""
-        from ui.site_theme import apply_site_theme, set_role, set_variant
-        apply_site_theme(self)
+        from ui.app_theme import apply_theme, set_role, set_variant
+        apply_theme(self)
         title_widget = self.findChild(QtWidgets.QLabel, "dialog_title")
         if title_widget:
             set_role(title_widget, "title")

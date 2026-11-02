@@ -28,14 +28,16 @@ QMetaType.type("QTextCursor")
 
 from ..config import PipelineConfig
 from ..pipeline import PipelineExecutor
+from ..engine import engine_registry
+from ..config.wing_config import WING_CATEGORY_BEHAVIOUR, wing_category_label
 
 # Import styles for calendar widget
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from styles import CrowEyeStyles
-from .crow_eye_icons import CrowEyeIcons, apply_status_to_label
-from ui.site_theme import (set_variant, set_status, set_role, restyle, keep_style,
-                           log_view_sheet, font as site_font)
+from .crow_eye_icons import CrowEyeIcons, apply_status_to_label, engine_icon, pair_icon_size, wing_icon
+from ui.app_theme import (set_variant, set_status, set_role, restyle, keep_style,
+                           log_view_sheet, font as theme_font)
 
 
 # Crow-Eye's application-wide busy state (ui/busy_guard.py). The engine also
@@ -343,8 +345,12 @@ class CorrelationEngineWrapper(QObject):
             from ..engine.feather_record_cache import FeatherRecordCache
             feather_cache = FeatherRecordCache(
                 label=str(self.pipeline_config.pipeline_name or 'run'))
+            # Behaviour Wings read the case's UBA analysis instead; it is
+            # opened once and handed from one wing's executor to the next.
+            behaviour_cache = {}
 
             # Execute each wing sequentially
+            last_run_summary = {}
             for wing_index, wing_config in enumerate(self.selected_wings, start=1):
                 # Check for cancellation
                 if self._cancelled:
@@ -372,6 +378,7 @@ class CorrelationEngineWrapper(QObject):
 
                 # Let this wing reuse what earlier wings already read
                 self.executor.set_feather_cache(feather_cache)
+                self.executor.set_behaviour_cache(behaviour_cache)
 
                 # Register our progress handler to receive events
                 self.executor.engine.register_progress_listener(self.handle_engine_progress)
@@ -395,13 +402,22 @@ class CorrelationEngineWrapper(QObject):
                 summary['wing_name'] = wing_name
                 summary['wing_index'] = wing_index
                 summary['total_wings'] = total_wings
-                
+
                 # Store wing summary for aggregate statistics
                 self._wing_summaries.append(summary.copy())
-                
+
+                if summary.get('skipped_wings') and not summary.get('wings_executed'):
+                    # Not run by this engine: the executor has already written
+                    # the reason to the log and a SKIPPED row; there is no
+                    # result to show in a tab.
+                    for skip in summary['skipped_wings']:
+                        self.log_message.emit(f"[WARN] {skip.get('reason')}")
+                    continue
+                last_run_summary = summary
+
                 # Emit wing completion signal (for creating separate tab)
                 self.wing_completed.emit(summary)
-                
+
                 self.log_message.emit(f"\n[OK] Wing {wing_index} completed: {summary.get('total_matches', 0)} matches found")
 
                 # Surface pre-flight rule diagnostics so the analyst sees why a
@@ -437,6 +453,11 @@ class CorrelationEngineWrapper(QObject):
                 self.log_message.emit(f"[DEBUG] database_path from summary: {summary.get('database_path')}")
                 self.log_message.emit(f"[DEBUG] engine_type from summary: {summary.get('engine_type')}")
                 
+                # The Summary tab opens the last wing that actually ran.
+                summary = last_run_summary or summary
+                skipped_wings = [s for ws in self._wing_summaries
+                                 for s in (ws.get('skipped_wings') or [])]
+
                 # Aggregate statistics from all wings
                 total_matches_all_wings = sum(ws.get('total_matches', 0) for ws in self._wing_summaries)
                 execution_times = [ws.get('execution_time', 0) for ws in self._wing_summaries]
@@ -447,7 +468,9 @@ class CorrelationEngineWrapper(QObject):
                     'total_wings_executed': total_wings,
                     'total_matches_all_wings': total_matches_all_wings,
                     'execution_times': execution_times,
-                    'wing_summaries': self._wing_summaries,
+                    'wing_summaries': [ws for ws in self._wing_summaries
+                                       if not (ws.get('skipped_wings') and not ws.get('wings_executed'))],
+                    'skipped_wings': skipped_wings,
                     'execution_complete': True,
                     # Include last wing's execution info for Summary tab
                     'execution_id': summary.get('execution_id'),
@@ -531,6 +554,8 @@ class ExecutionControlWidget(QWidget):
     wing_completed = pyqtSignal(dict) # NEW: Signal for individual wing completion
     load_results_requested = pyqtSignal(dict) # Signal to request loading results
     progress_message = pyqtSignal(str) # Signal for thread-safe progress messages
+    # An uncategorised Wing the analyst asked to fix (main window opens it).
+    open_wing_in_creator_requested = pyqtSignal(object)
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -663,7 +688,7 @@ class ExecutionControlWidget(QWidget):
         layout = QFormLayout()
         
         self.pipeline_name_label = QLabel("No pipeline loaded")
-        self.pipeline_name_label.setFont(site_font("ui", 13, QFont.Bold))
+        self.pipeline_name_label.setFont(theme_font("ui", 13, QFont.Bold))
         layout.addRow("Pipeline:", self.pipeline_name_label)
         
         self.feather_count_label = QLabel("0")
@@ -690,11 +715,25 @@ class ExecutionControlWidget(QWidget):
         set_role(info_label, "muted")
         layout.addWidget(info_label)
         
-        # Wing list with checkboxes
+        # Wing list with checkboxes: only the Wings the selected engine runs
+        # are tickable. Uncategorised Wings are always listed (they cannot run
+        # until they have a category); Wings of other engines only with
+        # "Show all", greyed and naming the engine they need.
         self.wing_list = QListWidget()
-        self.wing_list.setMaximumHeight(120)
+        self.wing_list.setMaximumHeight(200)
+        # Each Wing shows two icons: the wing, then the engine that runs it.
+        self.wing_list.setIconSize(pair_icon_size(16))
         self.wing_list.itemChanged.connect(self._update_selected_count)
+        self.wing_list.currentItemChanged.connect(self._on_wing_item_selected)
+        self.wing_list.itemDoubleClicked.connect(self._on_wing_item_double_clicked)
         layout.addWidget(self.wing_list)
+
+        self.wing_category_note = QLabel("")
+        self.wing_category_note.setWordWrap(True)
+        set_role(self.wing_category_note, "note")
+        set_status(self.wing_category_note, "warn")
+        self.wing_category_note.setVisible(False)
+        layout.addWidget(self.wing_category_note)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -716,12 +755,28 @@ class ExecutionControlWidget(QWidget):
         for b in (select_all_btn, deselect_all_btn):
             b.setMaximumWidth(max(b.maximumWidth(), b.sizeHint().width()))
         button_layout.addWidget(deselect_all_btn)
-        
+
+        self.open_in_creator_btn = QPushButton("Open in Wing Creator")
+        self.open_in_creator_btn.setIcon(CrowEyeIcons.wing())
+        self.open_in_creator_btn.setToolTip(
+            "Choose this Wing's category in the Wing Creator; it cannot run without one")
+        set_variant(self.open_in_creator_btn, "warning")
+        self.open_in_creator_btn.clicked.connect(self._open_selected_in_creator)
+        self.open_in_creator_btn.setVisible(False)
+        button_layout.addWidget(self.open_in_creator_btn)
+
+        self.show_all_wings_cb = QCheckBox("Show all")
+        self.show_all_wings_cb.setChecked(False)
+        self.show_all_wings_cb.setToolTip(
+            "Also list Wings the selected engine does not run, greyed, with the engine each needs")
+        self.show_all_wings_cb.toggled.connect(lambda _on: self._populate_wing_list(keep_checked=True))
+        button_layout.addWidget(self.show_all_wings_cb)
+
         button_layout.addStretch()
-        
+
         # Selected count label
         self.selected_count_label = QLabel("0/0 selected")
-        self.selected_count_label.setFont(site_font("ui", 13, QFont.Bold))
+        self.selected_count_label.setFont(theme_font("ui", 13, QFont.Bold))
         set_status(self.selected_count_label, "info")
         button_layout.addWidget(self.selected_count_label)
         
@@ -812,7 +867,7 @@ class ExecutionControlWidget(QWidget):
         self.status_label = QLabel("Ready to execute")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.status_label.setMaximumHeight(20) # Compact status
-        self.status_label.setFont(site_font("ui", 13, QFont.Bold))
+        self.status_label.setFont(theme_font("ui", 13, QFont.Bold))
         set_status(self.status_label, "info")
         layout.addWidget(self.status_label)
         
@@ -821,7 +876,7 @@ class ExecutionControlWidget(QWidget):
         self.log_output = QTextEdit()
         self.log_output.setReadOnly(True)
         self.log_output.setMinimumHeight(300)
-        self.log_output.setFont(site_font("mono", 12))
+        self.log_output.setFont(theme_font("mono", 12))
         self.log_output.setStyleSheet(log_view_sheet()
                                       + " QTextEdit { padding: 5px 5px 30px 5px; }")
         keep_style(self.log_output)
@@ -841,7 +896,7 @@ class ExecutionControlWidget(QWidget):
         diag_layout.setSpacing(4)
 
         self.diagnostics_list = QListWidget()
-        self.diagnostics_list.setFont(site_font("mono", 12))
+        self.diagnostics_list.setFont(theme_font("mono", 12))
         self.diagnostics_list.setMaximumHeight(140)
         self.diagnostics_list.setAlternatingRowColors(True)
         diag_layout.addWidget(self.diagnostics_list)
@@ -873,24 +928,42 @@ class ExecutionControlWidget(QWidget):
         diag_list = getattr(self, 'diagnostics_list', None)
         if diag_list is None or not message:
             return
-        added_any = False
-        for line in str(message).splitlines():
-            stripped = line.strip()
-            if any(stripped.startswith(marker) for marker in self._DIAGNOSTIC_MARKERS):
-                diag_list.addItem(stripped)
-                added_any = True
-        if added_any:
-            diag_group = getattr(self, 'diagnostics_group', None)
-            if diag_group is not None and not diag_group.isVisible():
-                diag_group.setVisible(True)
-            # Auto-scroll to latest so the newest diagnostic is visible
-            # without the analyst having to scroll.
-            diag_list.scrollToBottom()
+        lines = [ln.strip() for ln in str(message).splitlines()
+                 if any(ln.strip().startswith(m) for m in self._DIAGNOSTIC_MARKERS)]
+        if not lines:
+            return
+        # Collected and added in one go every 300 ms (an addItem and a scroll per line
+        # competed with the progress bar during a run), and the list is capped.
+        pending = getattr(self, '_diag_pending', None)
+        if pending is None:
+            pending = self._diag_pending = []
+        pending.extend(lines)
+        if not getattr(self, '_diag_flush_queued', False):
+            self._diag_flush_queued = True
+            QTimer.singleShot(300, self._flush_diagnostics)
+
+    _DIAGNOSTICS_CAP = 500
+
+    def _flush_diagnostics(self):
+        self._diag_flush_queued = False
+        diag_list = getattr(self, 'diagnostics_list', None)
+        pending, self._diag_pending = getattr(self, '_diag_pending', None) or [], []
+        if diag_list is None or not pending:
+            return
+        diag_list.addItems(pending[-self._DIAGNOSTICS_CAP:])
+        extra = diag_list.count() - self._DIAGNOSTICS_CAP
+        for _ in range(max(0, extra)):
+            diag_list.takeItem(0)
+        diag_group = getattr(self, 'diagnostics_group', None)
+        if diag_group is not None and not diag_group.isVisible():
+            diag_group.setVisible(True)
+        diag_list.scrollToBottom()
 
     def clear_diagnostics_panel(self):
         """Reset the diagnostics list — called when a new pipeline run begins.
         Also re-hides the group so it stays out of the way until the next
         diagnostic arrives."""
+        self._diag_pending = []                  # nothing from the last run arrives late
         diag_list = getattr(self, 'diagnostics_list', None)
         if diag_list is not None:
             diag_list.clear()
@@ -921,21 +994,15 @@ class ExecutionControlWidget(QWidget):
                 engine_type, name, desc, complexity, use_cases, supports_id_filter = engine_data
                 integration_features = {}
             
-            # Skip the legacy time_based engine - only show the modern engines
-            if engine_type == "time_based":
-                continue # Skip legacy engine
-            
-            # Map engine types to proper display names
-            if engine_type == "time_window_scanning":
-                display_name = "Time Engine"
-            elif engine_type == "identity_based":
-                display_name = "Identity-Based"
-            else:
-                display_name = name # Fallback to full name for unknown types
-            
+            spec = engine_registry.get_spec(engine_type)
+            if not spec.available:
+                continue
+            display_name = spec.selector_name
+
             # Add integration feature count to display
             feature_count = len(integration_features)
-            self.engine_combo.addItem(f"{display_name} ({complexity}) - {feature_count} features", engine_type)
+            self.engine_combo.addItem(engine_icon(engine_type),
+                                      f"{display_name} ({complexity}) - {feature_count} features", engine_type)
         
         # Identity-Based is the default, resolved by NAME.
         #
@@ -1106,6 +1173,9 @@ class ExecutionControlWidget(QWidget):
         # RUN silently ran the identity engine instead: the selector always
         # said Identity-Based, and the selector wins.
         engine_type = getattr(pipeline_config, 'engine_type', None)
+        if engine_type and engine_registry.is_known_engine_type(engine_type):
+            # Saved pipelines may still say 'time_based'.
+            engine_type = engine_registry.normalize_engine_type(engine_type)
         if engine_type and hasattr(self, 'engine_combo'):
             index = self.engine_combo.findData(engine_type)
             if index >= 0:
@@ -1127,12 +1197,12 @@ class ExecutionControlWidget(QWidget):
 
         # Populate wing list
         self.wing_list.clear()
-        
+
         if not pipeline_config.wing_configs:
             # No wings in pipeline - show message
             info_item = QListWidgetItem("[WARN] No Wings configured in this pipeline")
             info_item.setFlags(Qt.ItemIsEnabled) # Not selectable
-            from ui.site_theme import STATUS_COLORS
+            from ui.app_theme import STATUS_COLORS
             from PyQt5.QtGui import QColor
             info_item.setForeground(QColor(STATUS_COLORS["warn"]))
             self.wing_list.addItem(info_item)
@@ -1143,44 +1213,8 @@ class ExecutionControlWidget(QWidget):
             self._batched_log.append_text("\n[WARN] Warning: No Wings configured in pipeline")
             self._batched_log.append_text("Please add Wings to the pipeline before executing.")
         else:
-            # Exactly one wing starts ticked - the widest one.
-            #
-            # Every wing used to arrive checked, so pressing Execute on a
-            # freshly loaded pipeline ran all eleven shipped Wings, which is
-            # around forty-five minutes of work nobody asked for. The widest
-            # wing is the useful default because it draws on the most
-            # artifacts: Execution Proof, with 14 feathers, against 12 for
-            # Persistence Mechanisms and 3 for Brute Force.
-            default_index = self._widest_wing_index(pipeline_config.wing_configs)
+            self._populate_wing_list(keep_checked=False)
 
-            # Populate wings
-            for wing_index, wing_config in enumerate(pipeline_config.wing_configs):
-                wing_name = getattr(wing_config, 'wing_name', 'Unknown Wing')
-                feather_count = len(getattr(wing_config, 'feathers', []))
-
-                # Advanced wings run on the Identity-Based engine only — badge
-                # them with the bolt icon (descriptive SVG, no emoji).
-                is_advanced = self._wing_is_advanced(wing_config)
-                label = f"{wing_name} ({feather_count} feathers)"
-                if is_advanced:
-                    label += "  —  Identity engine only"
-
-                item = QListWidgetItem(label)
-                item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-                item.setCheckState(Qt.Checked if wing_index == default_index
-                                   else Qt.Unchecked)
-                item.setData(Qt.UserRole, wing_config)
-                if is_advanced:
-                    item.setIcon(CrowEyeIcons.bolt())
-                    item.setToolTip(
-                        "Uses advanced rules (absence / sequence / threshold / nested / "
-                        "cross-feather). Supported by the Identity-Based engine only."
-                    )
-                self.wing_list.addItem(item)
-            
-            # Enable execute button
-            self.execute_btn.setEnabled(True)
-        
         # Update count once now that the list is populated (signal already
         # wired in _create_wing_selection_section, connected once at construction).
         if pipeline_config.wing_configs:
@@ -1246,12 +1280,9 @@ class ExecutionControlWidget(QWidget):
                 )
                 return
 
-            # Guard: advanced wings (absence / sequence / threshold / nested /
-            # cross-feather) are supported by the Identity-Based engine only.
-            # Running them on the Time-Window Scanning engine would silently
-            # under-evaluate, so prompt the user to switch engines.
-            if not self._guard_advanced_wings_engine(selected_wings):
-                return  # user cancelled
+            # Every listed tickable Wing is one this engine runs (see
+            # _populate_wing_list); the executor still records a SKIPPED row
+            # with its reason for any Wing it will not run.
 
             # Get output directory
             output_dir = self.output_dir_input.text().strip()
@@ -1289,6 +1320,10 @@ class ExecutionControlWidget(QWidget):
             # logger.info("[ExecutionControl] Creating execution pipeline copy...")
             execution_pipeline = deepcopy(self.current_pipeline)
             execution_pipeline.wing_configs = selected_wings
+            # The case folder, for engines that read the case rather than
+            # feathers (the Behavioural engine opens <case>/UBA). Not saved
+            # with the pipeline.
+            execution_pipeline.case_directory = getattr(self, 'case_directory', None)
             # logger.info(f"[ExecutionControl] Execution pipeline created with {len(selected_wings)} wings")
             
             # NEW: Apply engine selection and filters
@@ -1343,6 +1378,8 @@ class ExecutionControlWidget(QWidget):
             
             # Reset progress bar to indeterminate mode
             self.progress_bar.setMaximum(0) # Indeterminate - shows activity
+            self._overall_fraction = 0.0           # the run's bar starts again (never moves back)
+            self._run_wing = (1, 1)
             self.progress_bar.setFormat("Correlation Engine Working...")
             self._last_progress_time = None # Reset throttling for new execution
             self.status_label.setText("Initializing...")
@@ -1688,7 +1725,10 @@ class ExecutionControlWidget(QWidget):
                 logger.error(f"Invalid status type: {type(status)}")
                 status = str(status) # Try to convert
             
-            # Just update status, progress bar stays in indeterminate mode
+            # The run's place: wing N of M. The bar shows the whole run (see
+            # _update_anchor_progress), so a new wing starts where the last one ended.
+            self._run_wing = (max(1, int(wing_index)), max(1, int(total_wings)))
+            self._advance_overall((self._run_wing[0] - 1) / self._run_wing[1])
             self.status_label.setText(status)
             # Use the improved _append_to_log method for consistent scrolling
             self._append_to_log(f"[{wing_index}/{total_wings}] {status}")
@@ -1706,6 +1746,27 @@ class ExecutionControlWidget(QWidget):
         except Exception as e:
             logger.error(f"Error showing phase progress: {e}", exc_info=True)
 
+    _OVERALL_SCALE = 1000
+
+    def _advance_overall(self, fraction):
+        """Move the run's bar forward to `fraction` of the whole run (0-1); never back."""
+        try:
+            fraction = min(max(float(fraction), 0.0), 1.0)
+            if fraction < getattr(self, '_overall_fraction', 0.0):
+                return
+            self._overall_fraction = fraction
+            if self.progress_bar.maximum() != self._OVERALL_SCALE:
+                self.progress_bar.setRange(0, self._OVERALL_SCALE)
+                self.progress_bar.setValue(0)
+            target = int(fraction * self._OVERALL_SCALE)
+            if self._progress_anim.state() == self._progress_anim.Running:
+                self._progress_anim.stop()
+            self._progress_anim.setStartValue(self.progress_bar.value())
+            self._progress_anim.setEndValue(target)
+            self._progress_anim.start()
+        except Exception as e:
+            logger.error(f"Error moving the run's progress bar: {e}", exc_info=True)
+
     def _update_anchor_progress(self, anchor_index: int, total_anchors: int):
         """
         Update progress bar based on anchor processing.
@@ -1719,29 +1780,18 @@ class ExecutionControlWidget(QWidget):
                 return
 
             if total_anchors > 0:
-                # Switch to determinate mode if not already
-                if self.progress_bar.maximum() != total_anchors:
-                    # Capture current fill position relative to the OLD max
-                    # so the animation has a sensible "from" value after the
-                    # rescale. Otherwise the bar would snap to 0 first.
-                    old_max = self.progress_bar.maximum() or 1
-                    old_val = self.progress_bar.value()
-                    rescaled = int(old_val / old_max * total_anchors) if old_max > 0 else 0
-                    self.progress_bar.setMaximum(total_anchors)
-                    self.progress_bar.setValue(rescaled)
+                # One scale for the whole run. The bar's maximum used to follow each
+                # phase's own total, so it rescaled and dropped back for every feather
+                # and phase, and stood still between them (2026-11-01: "the loading bar
+                # freezes or lags"). Now: finished wings + this wing's fraction, never
+                # backwards; the phase and its counts are in the text.
+                wi, tw = getattr(self, '_run_wing', (1, 1))
+                frac = min(max(anchor_index / total_anchors, 0.0), 1.0)
+                self._advance_overall(((wi - 1) + 0.97 * frac) / tw)
 
-                # Smoothly interpolate the bar fill to the new target.
-                # Without this the engine's ~every-100-windows throttle
-                # causes visible chunked jumps.
-                target = int(anchor_index)
-                if self._progress_anim.state() == self._progress_anim.Running:
-                    self._progress_anim.stop()
-                self._progress_anim.setStartValue(self.progress_bar.value())
-                self._progress_anim.setEndValue(target)
-                self._progress_anim.start()
-
-                percentage = (anchor_index / total_anchors * 100)
-                base = f"{anchor_index:,}/{total_anchors:,} ({percentage:.1f}%)"
+                percentage = frac * 100
+                base = (f"Wing {wi} of {tw} - " if tw > 1 else "") + \
+                       f"{anchor_index:,}/{total_anchors:,} ({percentage:.0f}%)"
                 # Heartbeat owns the format string so the spinner suffix
                 # keeps animating between progress events; setting the
                 # base here updates immediately without overwriting the
@@ -1805,12 +1855,19 @@ class ExecutionControlWidget(QWidget):
             stopped = bool(summary.get('cancelled'))
 
             # Set to determinate mode and show complete
+            if self._progress_anim.state() == self._progress_anim.Running:
+                self._progress_anim.stop()
             self.progress_bar.setMaximum(100)
             self.progress_bar.setValue(100)
             self.progress_bar.setFormat("Stopped" if stopped else "Complete")
+            skipped = summary.get('skipped_wings') or []
             if stopped:
                 apply_status_to_label(self.status_label, "WARN",
                                       "Stopped - the saved results are loading, marked CANCELLED")
+            elif skipped:
+                more = f" (+{len(skipped) - 1} more, see log)" if len(skipped) > 1 else ""
+                apply_status_to_label(self.status_label, "WARN",
+                                      f"{skipped[0].get('reason', '')}{more}")
             else:
                 apply_status_to_label(self.status_label, "OK", "All wings executed successfully")
             
@@ -1824,6 +1881,8 @@ class ExecutionControlWidget(QWidget):
                 self._batched_log.append_text("=" * 60)
                 self._batched_log.append_text(f"Pipeline: {summary.get('pipeline_name', 'Unknown')}")
                 self._batched_log.append_text(f"Total Wings Executed: {summary.get('total_wings_executed', 0)}")
+                for skip in summary.get('skipped_wings') or []:
+                    self._batched_log.append_text(f"[WARN] Not run: {skip.get('reason', '')}")
                 self._batched_log.flush() # Force immediate display
             
             # Show the completion notice WITHOUT blocking, then start the
@@ -2082,14 +2141,18 @@ class ExecutionControlWidget(QWidget):
             if hasattr(self, '_progress_message_buffer'):
                 self._progress_message_buffer.add_message(message)
             
-            # Use cursor-based insertion for better control over scrolling
+            # Through the batched log: an insert, a repaint() and a 10 ms timer for
+            # EVERY progress line kept the GUI thread too busy to move the progress
+            # bar during a run (2026-11-01).
+            batched = getattr(self, '_batched_log', None)
+            if batched is not None:
+                batched.append_text(message)
+                return
             cursor = self.log_output.textCursor()
             cursor.movePosition(cursor.End)
             cursor.insertText(message + '\n')
             self.log_output.setTextCursor(cursor)
-            
-            # Force scroll to bottom immediately
-            self._scroll_to_bottom()
+            self.log_output.ensureCursorVisible()
     
     def _scroll_to_bottom(self):
         """Scroll the log output to the bottom"""
@@ -2241,30 +2304,187 @@ class ExecutionControlWidget(QWidget):
                 widest_index, widest_count = index, count
         return widest_index
 
+    _KIND_ROLE = Qt.UserRole + 1
+
+    def _runnable_items(self):
+        return [self.wing_list.item(i) for i in range(self.wing_list.count())
+                if self.wing_list.item(i).data(self._KIND_ROLE) == 'run']
+
     def _select_all_wings(self):
-        """Select all wings"""
-        for i in range(self.wing_list.count()):
-            item = self.wing_list.item(i)
+        """Select every Wing the selected engine runs"""
+        for item in self._runnable_items():
             item.setCheckState(Qt.Checked)
         self._update_selected_count()
-    
+
     def _deselect_all_wings(self):
         """Deselect all wings"""
-        for i in range(self.wing_list.count()):
-            item = self.wing_list.item(i)
+        for item in self._runnable_items():
             item.setCheckState(Qt.Unchecked)
         self._update_selected_count()
-    
+
     def _update_selected_count(self):
-        """Update the selected count label"""
-        selected_count = 0
-        for i in range(self.wing_list.count()):
-            item = self.wing_list.item(i)
-            if item.checkState() == Qt.Checked:
-                selected_count += 1
-        
-        total_count = self.wing_list.count()
-        self.selected_count_label.setText(f"{selected_count}/{total_count} selected")
+        """Update the selected count label (of the Wings this engine runs)"""
+        runnable = self._runnable_items()
+        selected_count = sum(1 for item in runnable if item.checkState() == Qt.Checked)
+        self.selected_count_label.setText(f"{selected_count}/{len(runnable)} selected")
+
+    def _current_engine_type(self):
+        engine_type = self.engine_combo.currentData() if hasattr(self, 'engine_combo') else None
+        return engine_type or engine_registry.IDENTITY_BASED
+
+    def _populate_wing_list(self, keep_checked=True):
+        """Fill the wing list for the selected engine.
+
+        Tickable: the Wings this engine runs. Always listed, not tickable: Wings
+        of this engine's category it still refuses (a Time Wing carrying
+        advanced rules) and uncategorised Wings, under "Needs a category".
+        With Show all: every other Wing, greyed, naming the engine it needs.
+        The tooltip of a Wing that will not run is engine_registry's reason,
+        the same text the run log and the SKIPPED row carry.
+        """
+        pipeline = self.current_pipeline
+        if pipeline is None or not hasattr(self, 'wing_list'):
+            return
+        from PyQt5.QtGui import QColor
+        from ui.app_theme import STATUS_COLORS
+
+        previously_checked = None
+        if keep_checked:
+            previously_checked = {
+                getattr(item.data(Qt.UserRole), 'wing_id', None)
+                for item in self._runnable_items() if item.checkState() == Qt.Checked}
+
+        engine_type = self._current_engine_type()
+        spec = engine_registry.get_spec(engine_type)
+        runnable, refused, uncategorised, others = [], [], [], []
+        for wing_config in pipeline.wing_configs or []:
+            ok, reason = engine_registry.check_wing(wing_config, engine_type)
+            category = engine_registry.wing_category_of(wing_config)
+            if ok:
+                runnable.append(wing_config)
+            elif category is None:
+                uncategorised.append((wing_config, reason))
+            elif category == spec.wing_category:
+                refused.append((wing_config, reason))
+            else:
+                others.append((wing_config, reason))
+
+        blocked = self.wing_list.blockSignals(True)
+        self.wing_list.clear()
+        muted = QColor("#64748B")
+
+        def header(text):
+            item = QListWidgetItem(text)
+            item.setFlags(Qt.ItemIsEnabled)
+            item.setData(self._KIND_ROLE, 'header')
+            font = item.font()
+            font.setBold(True)
+            item.setFont(font)
+            item.setForeground(QColor(STATUS_COLORS["warn"]) if 'category' in text
+                               else muted)
+            self.wing_list.addItem(item)
+
+        def feather_text(wing_config):
+            if engine_registry.wing_category_of(wing_config) == WING_CATEGORY_BEHAVIOUR:
+                # A Behaviour Wing names no feathers: say what it watches for.
+                n = len(getattr(wing_config, 'steps', None) or [])
+                if n < 2:
+                    return f"{n} step{'s' if n != 1 else ''}"
+                order = "in order" if getattr(wing_config, 'ordered', True) else "any order"
+                return f"{n} steps, {order}"
+            n = len(getattr(wing_config, 'feathers', None) or [])
+            return f"{n} feather{'s' if n != 1 else ''}"
+
+        default_index = self._widest_wing_index(runnable)
+        if previously_checked is not None and not any(
+                getattr(w, 'wing_id', None) in previously_checked for w in runnable):
+            # Another engine was chosen: none of the ticked Wings is offered
+            # any more, so start again from the widest one.
+            previously_checked = None
+        for index, wing_config in enumerate(runnable):
+            item = QListWidgetItem(f"{engine_registry.wing_display_name(wing_config)} "
+                                   f"({feather_text(wing_config)})")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            if previously_checked is not None:
+                checked = getattr(wing_config, 'wing_id', None) in previously_checked
+            else:
+                checked = index == default_index
+            item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+            item.setData(Qt.UserRole, wing_config)
+            item.setData(self._KIND_ROLE, 'run')
+            item.setIcon(wing_icon(wing_config))
+            item.setToolTip(f"{wing_category_label(getattr(wing_config, 'wing_category', None))} - "
+                            f"runs on the {spec.display_name}")
+            self.wing_list.addItem(item)
+
+        for wing_config, reason in refused:
+            item = QListWidgetItem(f"{engine_registry.wing_display_name(wing_config)}  -  "
+                                   f"cannot run: has advanced rules")
+            item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            item.setForeground(QColor(STATUS_COLORS["warn"]))
+            item.setData(Qt.UserRole, wing_config)
+            item.setData(self._KIND_ROLE, 'refused')
+            item.setIcon(wing_icon(wing_config))
+            item.setToolTip(reason)
+            self.wing_list.addItem(item)
+
+        if uncategorised:
+            header(f"Needs a category ({len(uncategorised)})")
+            for wing_config, reason in uncategorised:
+                item = QListWidgetItem(f"{engine_registry.wing_display_name(wing_config)}  -  "
+                                       f"open in the Wing Creator to choose a category")
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setForeground(QColor(STATUS_COLORS["warn"]))
+                item.setIcon(wing_icon(None))  # the wing alone: no engine yet
+                item.setData(Qt.UserRole, wing_config)
+                item.setData(self._KIND_ROLE, 'needs_category')
+                item.setToolTip(reason)
+                self.wing_list.addItem(item)
+
+        if others and self.show_all_wings_cb.isChecked():
+            header(f"Other engines ({len(others)})")
+            for wing_config, reason in others:
+                item = QListWidgetItem(f"{engine_registry.wing_display_name(wing_config)}  -  "
+                                       f"{engine_registry.needed_engine_label(wing_config)}")
+                item.setFlags(Qt.ItemIsSelectable)  # greyed: not enabled, not tickable
+                item.setForeground(muted)
+                item.setData(Qt.UserRole, wing_config)
+                item.setData(self._KIND_ROLE, 'other')
+                item.setIcon(wing_icon(wing_config))  # greyed with the row
+                item.setToolTip(reason)
+                self.wing_list.addItem(item)
+        self.wing_list.blockSignals(blocked)
+
+        notes = []
+        if uncategorised:
+            notes.append(f"{len(uncategorised)} Wing{'s' if len(uncategorised) != 1 else ''} "
+                         f"need{'s' if len(uncategorised) == 1 else ''} a category and will not run: "
+                         f"select one and Open in Wing Creator.")
+        if refused:
+            notes.append(f"{len(refused)} Time Wing{'s' if len(refused) != 1 else ''} carr"
+                         f"{'ies' if len(refused) == 1 else 'y'} advanced rules and will not run "
+                         f"on the {spec.display_name}.")
+        if others and not self.show_all_wings_cb.isChecked():
+            notes.append(f"{len(others)} Wing{'s' if len(others) != 1 else ''} of other engines "
+                         f"hidden (Show all).")
+        self.wing_category_note.setText(" ".join(notes))
+        self.wing_category_note.setVisible(bool(notes))
+        self.execute_btn.setEnabled(bool(runnable))
+        self._update_selected_count()
+        self._on_wing_item_selected(self.wing_list.currentItem(), None)
+
+    def _on_wing_item_selected(self, current, _previous=None):
+        kind = current.data(self._KIND_ROLE) if current is not None else None
+        self.open_in_creator_btn.setVisible(kind in ('needs_category', 'refused'))
+
+    def _on_wing_item_double_clicked(self, item):
+        if item is not None and item.data(self._KIND_ROLE) in ('needs_category', 'refused'):
+            self.open_wing_in_creator_requested.emit(item.data(Qt.UserRole))
+
+    def _open_selected_in_creator(self):
+        item = self.wing_list.currentItem()
+        if item is not None and item.data(self._KIND_ROLE) in ('needs_category', 'refused'):
+            self.open_wing_in_creator_requested.emit(item.data(Qt.UserRole))
     
     def _on_engine_changed(self, index: int):
         """Handle engine selection change with integration features"""
@@ -2287,13 +2507,22 @@ class ExecutionControlWidget(QWidget):
                 # engine_recommendations and integration_features_label are hidden
                 
                 # Show/hide identity filter based on engine support
-                if hasattr(self, 'identity_filter_group'):
-                    self.identity_filter_group.setVisible(supports_id_filter)
+                if hasattr(self, 'identity_filter_section'):
+                    self.identity_filter_section.setVisible(supports_id_filter)
                 break
         
         # Update pipeline config if loaded
         if self.current_pipeline:
             self.current_pipeline.engine_type = engine_type
+            augment = getattr(self, 'augment_wings_for_engine', None)
+            if callable(augment) and engine_type:
+                try:
+                    augment(self.current_pipeline, engine_type)
+                except Exception as e:
+                    logger.warning("[ExecutionControl] Could not add the case Wings "
+                                   "for %s: %s", engine_type, e)
+            if hasattr(self, 'wing_list') and self.wing_list.count():
+                self._populate_wing_list(keep_checked=True)
     
     def _show_integration_features(self):
         """Show integration features dialog for selected engine"""
@@ -2545,56 +2774,6 @@ class ExecutionControlWidget(QWidget):
         if isinstance(wing, dict):
             return wing.get('wing_name') or wing.get('config_name') or 'Unnamed Wing'
         return getattr(wing, 'wing_name', None) or getattr(wing, 'config_name', None) or 'Unnamed Wing'
-
-    def _guard_advanced_wings_engine(self, selected_wings) -> bool:
-        """
-        If the Time-Window engine is selected but any selected wing uses advanced
-        (Identity-engine-only) rules, warn and offer to switch to the Identity
-        engine. Returns True to proceed, False if the user cancelled.
-        """
-        if not hasattr(self, 'engine_combo'):
-            return True
-        engine_type = self.engine_combo.currentData()
-        if engine_type != 'time_window_scanning':
-            return True
-
-        advanced_names = [self._wing_display_name(w) for w in selected_wings
-                          if self._wing_is_advanced(w)]
-        if not advanced_names:
-            return True
-
-        names = '\n  • '.join(advanced_names)
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Warning)
-        box.setWindowTitle("Advanced Wing — Identity Engine Required")
-        box.setText(
-            "The following wing(s) use advanced rules (absence / sequence / "
-            "threshold / nested / cross-feather) that are supported by the "
-            f"Identity-Based engine only:\n\n  • {names}"
-        )
-        box.setInformativeText(
-            "The Time-Window Scanning engine evaluates one row per feather and "
-            "cannot run these rules. Switch to the Identity-Based engine to continue?"
-        )
-        switch_btn = box.addButton("Switch to Identity engine && continue",
-                                   QMessageBox.AcceptRole)
-        box.addButton("Cancel", QMessageBox.RejectRole)
-        box.setDefaultButton(switch_btn)
-        box.exec_()
-
-        if box.clickedButton() is switch_btn:
-            idx = self.engine_combo.findData('identity_based')
-            if idx >= 0:
-                self.engine_combo.setCurrentIndex(idx)
-                logger.info("[ExecutionControl] Switched to Identity engine for advanced wing(s)")
-                return True
-            QMessageBox.critical(
-                self, "Identity Engine Unavailable",
-                "Could not switch to the Identity-Based engine. Please select it manually."
-            )
-            return False
-        return False
-    
 
     def _handle_progress_event(self, event):
         """

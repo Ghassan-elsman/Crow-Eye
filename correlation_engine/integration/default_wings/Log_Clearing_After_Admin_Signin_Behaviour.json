@@ -1,0 +1,50 @@
+{
+  "config_name": "log_clearing_after_admin_signin_behaviour",
+  "wing_name": "Log Clearing After an Admin Sign-in (Behaviour)",
+  "wing_id": "default_behaviour_log_clear_after_admin_001",
+  "wing_category": "behaviour",
+  "description": "One person signs in with administrator rights and then erases an event log within the hour. UBA rules: privileged_logon (Security 4672, the account's own SID; summarised per hour and timed at the first sign-in of that hour) then log_cleared (Security 1102, SubjectUserSid). System 104 erasures name no account, so they are machine events and cannot complete a person's set.",
+  "proves": "The same account signed in with administrator rights and then erased an event log",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-26T00:00:00Z",
+  "last_modified": "2026-10-26T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Signed in with administrator rights",
+      "rule_id": "privileged_logon"
+    },
+    {
+      "label": "Event log erased",
+      "rule_id": "log_cleared"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "critical",
+    "technique_id": [
+      "T1070.001"
+    ],
+    "tactic": [
+      "defense-evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "anti_forensics",
+    "log_clearing",
+    "default"
+  ],
+  "case_types": [
+    "intrusion",
+    "insider",
+    "anti_forensics"
+  ]
+}

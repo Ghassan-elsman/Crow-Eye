@@ -1,4 +1,4 @@
-// TypeScript interfaces for EYE AI Chat Interface
+// TypeScript interfaces for Eye AI Chat Interface
 
 export interface ThinkingStep {
   step_id: string;
@@ -82,6 +82,15 @@ export interface ContextStats {
   max_total_tokens: number;
   backend?: string;
   model_name?: string;
+  /** Session totals the provider reported (Claude Code). */
+  provider_usage?: {
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    cost_usd: number;
+  };
 }
 
 export interface ActionChip {
@@ -243,8 +252,11 @@ export interface EYEBridge {
   get_dropped_payload_full: (sha256: string) => Promise<string>;
   // Full sent payload (system prompt + history + tools) for one seal, decompressed on demand
   get_sealed_payload_full: (sha256: string) => Promise<string>;
-  // Backend connectivity check for EYE Synchronization
+  // Backend connectivity check for Eye Synchronization
   get_backend_status: () => Promise<string>;
+  start_backend_check: () => Promise<string>;
+  run_backend_doctor?: () => Promise<string>;
+  apply_backend_fix?: (fixJson: string) => Promise<string>;
 }
 
 declare global {

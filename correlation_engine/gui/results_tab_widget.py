@@ -5,7 +5,7 @@ Multi-tab result management with semantic mapping and scoring support.
 Ensures semantic mapping information and scoring data are preserved across tabs.
 
 Provides engine-specific column configurations for time-window and identity-based engines.
-Styled by the window's site look (ui/site_theme.py); pages built after the
+Styled by the window's site look (ui/app_theme.py); pages built after the
 window was themed are re-themed with retheme_page().
 """
 
@@ -27,23 +27,23 @@ from PyQt5.QtGui import QColor, QContextMenuEvent
 from ..engine.correlation_result import CorrelationResult, CorrelationMatch
 from .scoring_breakdown_widget import ScoringBreakdownWidget
 from .semantic_info_display_widget import SemanticInfoDisplayWidget
-from .crow_eye_icons import CrowEyeIcons
-from ui.site_theme import set_card, set_role, set_status, set_variant, STATUS_COLORS
+from .crow_eye_icons import CrowEyeIcons, engine_icon, engine_icon_name, engine_wing_icon, icon_table_item, pair_icon_size
+from ui.app_theme import set_card, set_role, set_status, set_variant, STATUS_COLORS
 
 
 def retheme_page(owner, page):
     """The site look on ``page``, built after ``owner``'s window was themed
     (result tabs are rebuilt on every run and every load). Walks only the
-    page: the engine window's _apply_site_look(root=page), or the site theme
+    page: the engine window's _apply_theme(root=page), or the app theme
     directly on any other themed window."""
     try:
         win = owner.window()
-        look = getattr(win, "_apply_site_look", None)
+        look = getattr(win, "_apply_theme", None)
         if look is not None:
             look(root=page)
         elif win.property("siteTheme"):
-            from ui.site_theme import apply_site_theme
-            apply_site_theme(win, root=page)
+            from ui.app_theme import apply_theme
+            apply_theme(win, root=page)
     except Exception as e:
         print(f"[Results] site look not applied to the page: {e}")
 
@@ -52,6 +52,17 @@ def retheme_page(owner, page):
 # Results Table Widget
 # ============================================================================
 
+
+def _is_identity(engine_type) -> bool:
+    from ..engine import engine_registry
+    return engine_registry.results_view_or_none(engine_type) == 'identity'
+
+
+def _engine_label(engine_type) -> str:
+    from ..engine import engine_registry
+    view = engine_registry.results_view_or_none(engine_type)
+    return {'identity': 'Identity-Based', 'timebased': 'Time-Based'}.get(
+        view, engine_registry.display_name_or_raw(engine_type))
 
 class SimpleResultsTableWidget(QTableWidget):
     """Engine-aware results table widget with semantic value and scoring support."""
@@ -99,7 +110,7 @@ class SimpleResultsTableWidget(QTableWidget):
     
     def _configure_columns(self):
         """Configure columns based on engine type."""
-        columns = self.IDENTITY_COLUMNS if self.engine_type == "identity_based" else self.TIME_WINDOW_COLUMNS
+        columns = self.IDENTITY_COLUMNS if _is_identity(self.engine_type) else self.TIME_WINDOW_COLUMNS
         self.setColumnCount(len(columns))
         self.setHorizontalHeaderLabels([col["name"] for col in columns])
         
@@ -223,7 +234,7 @@ class SimpleResultsTableWidget(QTableWidget):
         semantic_value = self._get_semantic_value(match)
         score_value, interpretation = self._get_score_display(match)
         
-        if self.engine_type == "identity_based":
+        if _is_identity(self.engine_type):
             self._populate_identity_row(row, match, semantic_value, score_value, interpretation)
         else:
             self._populate_time_window_row(row, match, semantic_value, score_value, interpretation)
@@ -986,6 +997,7 @@ class ResultsTabWidget(QWidget):
         self.breakdown_table.setHorizontalHeaderLabels([
             "Tab", "Wing", "Matches", "Avg Score", "Semantic", "Last Accessed"
         ])
+        self.breakdown_table.setIconSize(pair_icon_size(16))  # Wing + engine pair
         self.breakdown_table.setVisible(False)
     
     def _create_summary_tab(self) -> QWidget:
@@ -1044,6 +1056,7 @@ class ResultsTabWidget(QWidget):
         self.breakdown_table.setHorizontalHeaderLabels([
             "Tab", "Wing", "Matches", "Avg Score", "Semantic", "Last Accessed"
         ])
+        self.breakdown_table.setIconSize(pair_icon_size(16))  # Wing + engine pair
         self.breakdown_table.setVisible(False)
         layout.addWidget(self.breakdown_table)
         
@@ -1058,11 +1071,8 @@ class ResultsTabWidget(QWidget):
         old_engine_type = self.engine_type
         self.engine_type = engine_type
         self.configure_for_engine(engine_type)
-        
-        if engine_type == "identity_based":
-            self.engine_type_label.setText("Identity-Based")
-        else:
-            self.engine_type_label.setText("Time-Based")
+
+        self.engine_type_label.setText(_engine_label(engine_type))
         
         # Reconfigure all existing tabs if engine type changed
         if old_engine_type != engine_type:
@@ -1092,15 +1102,16 @@ class ResultsTabWidget(QWidget):
         Args:
             engine_type: Either "time_based", "time_window_scanning", or "identity_based"
         """
-        if engine_type == "identity_based":
+        from ..engine import engine_registry
+        view = engine_registry.results_view_or_none(engine_type)
+        if view == 'identity':
             self._current_columns = self.IDENTITY_COLUMNS
             self._configure_identity_display()
         else:
-            # Default to time_window for any unrecognized type
+            # Only the Time-Window view has these columns; an unregistered
+            # type was logged as an error by results_view_or_none.
             self._current_columns = self.TIME_WINDOW_COLUMNS
             self._configure_time_window_display()
-            if engine_type not in ("time_based", "time_window_scanning"):
-                print(f"[ResultsTabWidget] Warning: Unrecognized engine type '{engine_type}', defaulting to time_window_scanning")
     
     def _configure_time_window_display(self):
         """Configure display for time-window scanning engine."""
@@ -1230,6 +1241,22 @@ class ResultsTabWidget(QWidget):
         
         print(f"[ResultsTabWidget] Updated feather stats: {len(sorted_feathers)} feathers, {total_matches:,} matches, {total_identities:,} identities, {total_records:,} records, {total_invalid:,} invalid")
     
+    def _result_engine(self, result) -> str:
+        """The engine that produced ``result``, for its tab and row icons.
+
+        A CorrelationResult has no engine_type attribute: the identity engine
+        records its engine in feather_metadata['_engine_metadata'] and a
+        results file in feather_metadata['engine_type']. This view's own
+        engine (Time-based until set_engine_type) is only the fallback, so an
+        Identity result added before set_engine_type still shows Identity."""
+        meta = getattr(result, 'feather_metadata', None) or {}
+        engine_meta = meta.get('_engine_metadata')
+        for name in (getattr(result, 'engine_type', None), meta.get('engine_type'),
+                     engine_meta.get('engine_type') if isinstance(engine_meta, dict) else None):
+            if isinstance(name, str) and engine_icon_name(name):
+                return name
+        return self.engine_type
+
     def update_summary_from_result(self, result: 'CorrelationResult', engine_type: str = "identity_based"):
         """
         Update all summary statistics from a single CorrelationResult.
@@ -1241,10 +1268,7 @@ class ResultsTabWidget(QWidget):
             engine_type: Engine type for display
         """
         # Update engine type
-        if engine_type == "identity_based":
-            self.engine_type_label.setText("Identity-Based")
-        else:
-            self.engine_type_label.setText("Time-Based")
+        self.engine_type_label.setText(_engine_label(engine_type))
         
         # Update total matches
         total_matches = result.total_matches if hasattr(result, 'total_matches') else len(result.matches)
@@ -1272,7 +1296,8 @@ class ResultsTabWidget(QWidget):
         wing_name = result.wing_name if hasattr(result, 'wing_name') and result.wing_name else "Correlation"
         
         self.breakdown_table.setItem(row, 0, QTableWidgetItem("Result"))
-        self.breakdown_table.setItem(row, 1, QTableWidgetItem(wing_name))
+        self.breakdown_table.setItem(row, 1, icon_table_item(
+            engine_wing_icon(self._result_engine(result)), wing_name))
         self.breakdown_table.setItem(row, 2, QTableWidgetItem(f"{total_matches:,}"))
         
         if result.matches:
@@ -1335,6 +1360,9 @@ class ResultsTabWidget(QWidget):
         # Add to tab widget
         tab_label = self._generate_tab_label(wing_name, result)
         tab_index = self.tab_widget.addTab(tab_widget, tab_label)
+        # A Results tab carries its engine's icon alone (a pair breaks QTabBar layout).
+        self.tab_widget.setTabIcon(tab_index, engine_icon(
+            self._result_engine(result)))
         
         # Store tab state
         self.tab_states[tab_id] = tab_state
@@ -1350,10 +1378,7 @@ class ResultsTabWidget(QWidget):
     def _generate_tab_label(self, wing_name: str, result: CorrelationResult) -> str:
         """Generate a descriptive tab label."""
         # Choose icon based on engine type
-        if self.engine_type == "identity_based":
-            icon = ""
-        else:
-            icon = ""
+        icon = ""
         
         # Include match count
         match_count = len(result.matches)
@@ -1521,7 +1546,8 @@ class ResultsTabWidget(QWidget):
             self.breakdown_table.setItem(row, 0, QTableWidgetItem(short_id))
             
             # Wing name
-            self.breakdown_table.setItem(row, 1, QTableWidgetItem(tab_state.wing_name))
+            self.breakdown_table.setItem(row, 1, icon_table_item(engine_wing_icon(
+                self._result_engine(tab_state.result)), tab_state.wing_name))
             
             # Match count
             match_count = len(tab_state.result.matches)
@@ -1569,7 +1595,9 @@ class ResultsTabWidget(QWidget):
                 
                 # Add to tab widget
                 tab_label = self._generate_tab_label(wing_name, result)
-                self.tab_widget.addTab(tab_widget, tab_label)
+                restored_index = self.tab_widget.addTab(tab_widget, tab_label)
+                self.tab_widget.setTabIcon(restored_index, engine_icon(
+                    self._result_engine(result)))
                 
                 # Store tab state
                 self.tab_states[tab_id] = tab_state

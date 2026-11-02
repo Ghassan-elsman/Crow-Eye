@@ -13,9 +13,10 @@
     "mft": {
       "parser_file": "Artifacts_Collectors/MFT and USN journal/MFT_Claw.py",
       "offline_parser": "Artifacts_Collectors/offline_parsers/offline_MFTClaw.py",
-      "database": "mft_data.db",
-      "table": "mft_data",
-      "description": "Master File Table parser for NTFS file system metadata",
+      "database": "mft_claw_analysis.db",
+      "table": "mft_records",
+      "tables": ["mft_records", "mft_standard_info", "mft_file_names", "mft_data_attributes", "ntfs_integrity_findings"],
+      "description": "Master File Table parser for NTFS file system metadata. Each parse also runs the NTFS integrity checks (ntfs_integrity.py: timestomping D7, wiped records D9, record structure D10, the $MFT bitmap D29, LSNs against $LogFile D3, USN journal and $LogFile state D4/D5) into ntfs_integrity_findings, and a re-parse of the same volume in the same case parses only the records that changed (the sealed digest map in <case>/state).",
       "anatomy_url": "https://crow-eye.com/eye-describe/mft_anatomy.html",
       "anatomy_summary": "Byte-level walk of an MFT record: FILE0/FILE* signature, fixup array, sequence number, hard-link count, attribute list ($STANDARD_INFORMATION, $FILE_NAME, $DATA), MACB timestamps in $SIA vs $FNA streams, resident vs non-resident attributes, data runs."
     },
@@ -185,8 +186,8 @@
   "github_base_url": "https://github.com/crow-eye/crow-eye",
   "website_base_url": "https://crow-eye.com",
   "eye_describe_base_url": "https://crow-eye.com/eye-describe",
-  "version": "3.10",
-  "last_updated": "2026-10-07",
+  "version": "3.13",
+  "last_updated": "2026-11-01",
   "shared_modules": {
     "registry_transaction_log.py": "Replays a dirty hive's .LOG1/.LOG2 into a working copy before parsing. Used by every hive reader: offline_RegClaw, amcacheparser, offline_ShimCacheClaw, offline_SRUM_Claw, security_hive, user_identity. Amcache.hve has its own logs and is collected with them.",
     "registry_hive_walk.py": "Walks a hive's allocator rather than its tree, recovering class names, shared security descriptors, and keys and values still present in freed cells. Offline only: all three need the hive file."

@@ -319,6 +319,7 @@ class ArtifactTypeRegistry:
             ("USN", "USN Journal", 0.05, 4, 9, "background_evidence", "low"),
             ("Registry", "Registry", 0.1, 3, 10, "contextual_evidence", "medium"),
             ("Browser", "Browser History", 0.1, 3, 11, "contextual_evidence", "low"),
+            ("Behaviour", "Behaviour (UBA)", 0.15, 2, 12, "supporting_evidence", "medium"),
         ]
 
         self._artifacts.clear()

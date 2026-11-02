@@ -1,0 +1,57 @@
+{
+  "config_name": "share_access_then_mass_copy_behaviour",
+  "wing_name": "Network Share Opened, Then Mass Copy (Behaviour)",
+  "wing_id": "default_behaviour_share_mass_copy_001",
+  "wing_category": "behaviour",
+  "description": "One person opens a network share and, within one hour, at least 20 files appear to have been copied into their own folders. UBA rules: network_share_access (ShellBags / LNK records of a \\\\server\\share path) then file_copy_inferred (in Desktop / Documents / Downloads / Pictures / Videos / Music / OneDrive). The copy rule sees files arriving on this disk; it does not record where they came from.",
+  "proves": "Files appear to have been copied into a person's folders soon after a network share was opened",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-10-31T00:00:00Z",
+  "last_modified": "2026-10-31T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "Network share opened",
+      "rule_id": "network_share_access"
+    },
+    {
+      "label": "Files appear to have been copied in",
+      "rule_id": "file_copy_inferred",
+      "min_count": 20,
+      "conditions": [
+        {
+          "field_name": "details.folder",
+          "operator": "regex",
+          "value": "^(?:the Desktop|the Documents folder|the Downloads folder|the Pictures folder|the Videos folder|the Music folder|the OneDrive folder)$"
+        }
+      ]
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 60,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "medium",
+    "technique_id": [
+      "T1039"
+    ],
+    "tactic": [
+      "collection"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "behaviour",
+    "collection",
+    "network_share",
+    "default"
+  ],
+  "case_types": [
+    "insider",
+    "data_theft"
+  ]
+}

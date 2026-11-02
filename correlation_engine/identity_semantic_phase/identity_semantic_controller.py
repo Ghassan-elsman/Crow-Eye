@@ -77,6 +77,15 @@ class IdentitySemanticStatistics:
     average_time_per_identity_ms: float = 0.0
 
 
+def _warn_run(correlation_results, text: str) -> None:
+    """Put `text` among the run's warnings (shown on the Execution tab and in
+    the summary), once."""
+    warnings = getattr(correlation_results, 'warnings', None)
+    if isinstance(warnings, list) and text not in warnings:
+        warnings.append(text)
+    print(f"[Identity Semantic Phase] WARNING: {text}")
+
+
 class IdentitySemanticController:
     """
     Controller for Identity Semantic Phase that orchestrates identity-level semantic mapping.
@@ -227,6 +236,9 @@ class IdentitySemanticController:
                 logger.info(f"[Identity Semantic Phase] Execution ID: {correlation_results.execution_id}")
                 
                 enhancement_stats = self._apply_semantic_mapping_to_database(correlation_results)
+                if enhancement_stats.get('error'):
+                    _warn_run(correlation_results,
+                              f"Semantic labels were not applied: {enhancement_stats['error']}")
                 
                 self.statistics.unique_identities_processed = enhancement_stats['identities_processed']
                 self.statistics.semantic_mappings_applied = enhancement_stats['mappings_applied']
@@ -279,6 +291,9 @@ class IdentitySemanticController:
             if self.config.fallback_to_per_record:
                 self.statistics.fallback_used = True
                 logger.warning("[Identity Semantic Phase] Falling back to original results")
+                # Said, not only logged: a run that reports success with no
+                # labels looks like a case with nothing to label.
+                _warn_run(correlation_results, f"Semantic labels were not applied: {type(e).__name__}: {e}")
                 return correlation_results
             else:
                 raise
@@ -512,6 +527,7 @@ class IdentitySemanticController:
             import traceback
             traceback.print_exc()
             stats['processing_time'] = time.time() - start_time
+            stats['error'] = f"{type(e).__name__}: {e}"
             return stats
     
     def _propagate_semantic_data(self, identity_registry, correlation_results):
@@ -981,6 +997,8 @@ class IdentitySemanticController:
             if self.config.fallback_to_per_record:
                 self.statistics.fallback_used = True
                 logger.warning("[Identity Semantic Phase] Falling back to original results")
+                for one in correlation_results_list or []:
+                    _warn_run(one, f"Semantic labels were not applied: {type(e).__name__}: {e}")
                 return correlation_results_list
             else:
                 raise

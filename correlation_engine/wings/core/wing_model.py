@@ -298,10 +298,30 @@ class Wing:
         'enabled': True,
         'score_interpretation': CentralizedScoreConfig.get_default().thresholds
     })
-    
+    # "time" / "identity" / "behaviour"; None = uncategorised (cannot run).
+    # See config.wing_config.normalize_wing_category.
+    wing_category: Optional[str] = None
+    # The analyst changed a shipped Wing's rules (config.wing_config.
+    # rules_differ_from_shipped): a reload keeps them instead of the shipped ones.
+    rules_edited: bool = False
+    # Behaviour Wings only - the same fields and meaning as WingConfig's
+    # (config.wing_config.BEHAVIOUR_FIELDS): steps, in order or not, the span
+    # the set must fit in, the gap between ordered steps, whom it watches and
+    # the alert it raises.
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    ordered: bool = True
+    within_minutes: Optional[float] = None
+    max_gap_minutes: Optional[float] = None
+    subject: Dict[str, Any] = field(default_factory=dict)
+    alert: Dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self):
+        from correlation_engine.config.wing_config import normalize_wing_category
+        self.wing_category = normalize_wing_category(self.wing_category)
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
-        return {
+        data = {
             'wing_id': self.wing_id,
             'wing_name': self.wing_name,
             'version': self.version,
@@ -315,8 +335,22 @@ class Wing:
             'semantic_mappings': self.semantic_mappings,
             'semantic_rules': self.semantic_rules,
             'use_weighted_scoring': self.use_weighted_scoring,
-            'scoring': self.scoring
+            'scoring': self.scoring,
+            'wing_category': self.wing_category
         }
+        if self.rules_edited:
+            data['rules_edited'] = True
+        # Behaviour fields: always for a Behaviour Wing, otherwise only when
+        # set, so a Time or Identity Wing saves exactly as it did.
+        from correlation_engine.config.wing_config import (
+            WING_CATEGORY_BEHAVIOUR, BEHAVIOUR_FIELDS)
+        defaults = {'steps': [], 'ordered': True, 'within_minutes': None,
+                    'max_gap_minutes': None, 'subject': {}, 'alert': {}}
+        for key in BEHAVIOUR_FIELDS:
+            value = getattr(self, key)
+            if self.wing_category == WING_CATEGORY_BEHAVIOUR or value != defaults[key]:
+                data[key] = value
+        return data
     
     def to_json(self, indent: int = 2) -> str:
         """Convert to JSON string"""
@@ -326,6 +360,11 @@ class Wing:
         """Save wing to JSON file"""
         with open(file_path, 'w') as f:
             f.write(self.to_json())
+        try:
+            from utils import custody
+            custody.record_config(file_path, 'wing')
+        except Exception:
+            pass
     
     @classmethod
     def from_dict(cls, data: dict) -> 'Wing':
@@ -399,7 +438,15 @@ class Wing:
             semantic_mappings=semantic_mappings,
             semantic_rules=semantic_rules,
             use_weighted_scoring=use_weighted_scoring,
-            scoring=scoring
+            scoring=scoring,
+            wing_category=data.get('wing_category'),
+            rules_edited=bool(data.get('rules_edited', False)),
+            steps=list(data.get('steps') or []),
+            ordered=data.get('ordered', True) if data.get('ordered') is not None else True,
+            within_minutes=data.get('within_minutes'),
+            max_gap_minutes=data.get('max_gap_minutes'),
+            subject=dict(data.get('subject') or {}),
+            alert=dict(data.get('alert') or {}),
         )
         
         logger.info(f"[Wing.from_dict] Created wing '{wing.wing_name}' with {len(wing.feathers)} feathers")
@@ -433,8 +480,14 @@ class Wing:
         if not self.wing_id:
             errors.append("Wing ID is required")
         
-        # Check feathers
-        if len(self.feathers) < 2:
+        # Check feathers. A Behaviour Wing names none: it reads UBA's
+        # behaviour events, so demanding two would refuse every one of them.
+        from correlation_engine.config.wing_config import (
+            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of)
+        errors.extend(category_problems(self.wing_category, self.semantic_rules,
+                                        self.feathers,
+                                        behaviour=behaviour_fields_of(self)))
+        if self.wing_category != WING_CATEGORY_BEHAVIOUR and len(self.feathers) < 2:
             errors.append("Wing must have at least 2 feathers")
         
         for i, feather in enumerate(self.feathers):
