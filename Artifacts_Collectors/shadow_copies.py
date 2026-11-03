@@ -30,6 +30,7 @@ import os
 import re
 import struct
 import subprocess
+import sys
 import uuid
 from typing import Dict, List, Optional
 from Artifacts_Collectors import vss_reader
@@ -436,7 +437,23 @@ def crow_eye_created() -> Dict[str, dict]:
     here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     out = {}
     pattern = re.compile(r'\{[^{}]*"shadow_copy_id"\s*:\s*"(\{[0-9A-Fa-f-]{36}\})"[^{}]*\}')
-    for cfg in glob.glob(os.path.join(here, "config", "case_*.json")):
+    # Case configs sit in <app>/config from source. The EXE writes them beside
+    # CrowEye.exe (or under %APPDATA%\CrowEye when that is not writable), never in
+    # _internal, so look in each place the app may have written them.
+    config_dirs = [os.path.join(here, "config")]
+    if getattr(sys, "frozen", False):
+        config_dirs.append(os.path.join(os.path.dirname(sys.executable), "config"))
+        if os.environ.get("APPDATA"):
+            config_dirs.append(os.path.join(os.environ["APPDATA"], "CrowEye", "config"))
+    seen = set()
+    configs = []
+    for d in config_dirs:
+        for cfg in glob.glob(os.path.join(d, "case_*.json")):
+            key = os.path.normcase(os.path.abspath(cfg))
+            if key not in seen:
+                seen.add(key)
+                configs.append(cfg)
+    for cfg in configs:
         try:
             with open(cfg, encoding="utf-8") as f:
                 root = (json.load(f).get("paths") or {}).get("case_root") or ""

@@ -170,7 +170,15 @@ class RAGService:
             embedding_client: Optional embedding client for vector search
         """
         self.logger = logging.getLogger(__name__)
-        self.knowledge_base_dir = Path(knowledge_base_dir)
+        kb = Path(knowledge_base_dir)
+        if not kb.is_absolute() and not kb.is_dir():
+            # A relative default was resolved against the working folder, which in
+            # the EXE is the install folder, not _internal\configs: anchor it to the
+            # app's own configs folder so the knowledge base is always found.
+            from eye.services.config_manager import _default_config_dir
+            parts = kb.parts[1:] if kb.parts and kb.parts[0] == "configs" else kb.parts
+            kb = _default_config_dir().joinpath(*parts)
+        self.knowledge_base_dir = kb
         self.keyword_mapping = self._load_keyword_mapping()
         self.cache: Dict[str, str] = {}
         self.parser_mappings = self._load_parser_mappings()

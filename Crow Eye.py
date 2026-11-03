@@ -78,6 +78,13 @@ CORRELATION_ENGINE_RECENT_CHANGES = [
 import os as _boot_os
 import sys as _boot_sys
 import multiprocessing as _boot_mp
+# A windowed EXE starts with sys.stdout/sys.stderr = None, and a frozen pool
+# worker runs its task INSIDE freeze_support() below - before any later fix -
+# so a parser's sys.stdout.flush() or tqdm bar would raise in the worker.
+if _boot_sys.stdout is None:
+    _boot_sys.stdout = open(_boot_os.devnull, "w", encoding="utf-8", errors="ignore")
+if _boot_sys.stderr is None:
+    _boot_sys.stderr = open(_boot_os.devnull, "w", encoding="utf-8", errors="ignore")
 _boot_mp.freeze_support()
 _MP_CHILD = (__name__ == "__mp_main__") or ("--multiprocessing-fork" in _boot_sys.argv)
 # CROWEYE_NO_BOOTSTRAP=1: import this file without the start-up side effects
