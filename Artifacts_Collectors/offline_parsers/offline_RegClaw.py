@@ -1163,7 +1163,10 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
     # ========================================================================
 
     conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    # A case parsed by an older Crow-Eye keeps its old tables: each
+    # CREATE TABLE IF NOT EXISTS below also adds the columns they lack.
+    from utils.schema_upgrade import UpgradingCursor
+    cursor = UpgradingCursor(conn.cursor())
     print(f"[Database] Using: {db_path}")
     print("[Database] Creating 40+ forensic tables...\n")
 

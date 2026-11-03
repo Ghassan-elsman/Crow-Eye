@@ -924,7 +924,10 @@ def main_live_reg(db_filename='registry_data.db'):
 
         # Connect to SQLite database (or create it if it doesn't exist)
         with sqlite3.connect(db_filename) as conn:
-            cursor = conn.cursor()
+            # A case parsed by an older Crow-Eye keeps its old tables: each
+            # CREATE TABLE IF NOT EXISTS below also adds the columns they lack.
+            from utils.schema_upgrade import UpgradingCursor
+            cursor = UpgradingCursor(conn.cursor())
 
             # The expansion environment, read from the machine being parsed.
             # `%SystemRoot%\system32\...` is stored unexpanded in dozens of
@@ -1515,34 +1518,35 @@ def main_live_reg(db_filename='registry_data.db'):
             cursor.execute('ALTER TABLE Shellbags_new RENAME TO Shellbags')
             
             logger.info("Shellbags table migration completed")
-        elif not columns:
-            # No existing table, create new schema
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS Shellbags (
-                file_name TEXT,
-                short_name TEXT,
-                shell_item_type TEXT,
-                mru_position TEXT,
-                created_date TEXT,
-                modified_date TEXT,
-                accessed_date TEXT,
-                attributes TEXT,
-                file_size INTEGER DEFAULT 0,
-                special_folder TEXT,
-                network_share TEXT,
-                server_name TEXT,
-                share_name TEXT,
-                drive_letter TEXT,
-                mft_record_number INTEGER,
-                registry_path TEXT,
-                parent_path TEXT,
-        last_written TEXT, time_basis TEXT,
-                node_slot INTEGER,
-                bag_views TEXT,
-                parsed_at TEXT,
-                user_name TEXT,
-                value_name TEXT
-            )''')
+        # Always run: it creates the table when absent, and on an existing (or
+        # just migrated) one the UpgradingCursor adds the columns it lacks -
+        # a case parsed before user_name/value_name existed failed every row.
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS Shellbags (
+            file_name TEXT,
+            short_name TEXT,
+            shell_item_type TEXT,
+            mru_position TEXT,
+            created_date TEXT,
+            modified_date TEXT,
+            accessed_date TEXT,
+            attributes TEXT,
+            file_size INTEGER DEFAULT 0,
+            special_folder TEXT,
+            network_share TEXT,
+            server_name TEXT,
+            share_name TEXT,
+            drive_letter TEXT,
+            mft_record_number INTEGER,
+            registry_path TEXT,
+            parent_path TEXT,
+    last_written TEXT, time_basis TEXT,
+            node_slot INTEGER,
+            bag_views TEXT,
+            parsed_at TEXT,
+            user_name TEXT,
+            value_name TEXT
+        )''')
         # Create indexes for performance
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_file_name ON Shellbags(file_name)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_shellbags_mru_position ON Shellbags(mru_position)')

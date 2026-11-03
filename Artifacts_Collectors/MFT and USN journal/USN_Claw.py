@@ -760,6 +760,17 @@ def init_db(db_path=OUTPUT_DB):
         )
     ''')
     
+    # A case parsed before 2026-07-31 has these tables without parsed_at (its
+    # journal_events kept inserted_at), and CREATE TABLE IF NOT EXISTS leaves
+    # them as they are: every insert then failed and the volume was lost. Add
+    # the column; the old one and its rows stay untouched.
+    journal_cols = {r[1] for r in cur.execute("PRAGMA table_info(journal_events)")}
+    if "parsed_at" not in journal_cols:
+        cur.execute("ALTER TABLE journal_events ADD COLUMN parsed_at TEXT")
+    deleted_cols = {r[1] for r in cur.execute("PRAGMA table_info(deleted_entries)")}
+    if "parsed_at" not in deleted_cols:
+        cur.execute("ALTER TABLE deleted_entries ADD COLUMN parsed_at TEXT")
+
     # Commit table creation before creating indexes
     conn.commit()
     
@@ -1175,13 +1186,14 @@ def read_journal_events(volume_letter, cursor, conn):
                                     if record[1] not in existing_usns:  # USN is at index 1
                                         new_records.append(record)
                                 
-                                # Insert only new records
-                                _count_batch(len(batch_records), len(new_records))
+                                # Insert only new records; count them only once the
+                                # insert went through (a rolled-back batch is not "new")
                                 if new_records:
                                     cursor.executemany(
                                         "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                                         new_records
                                     )
+                                _count_batch(len(batch_records), len(new_records))
                                 
                                 batch_records.clear()
                                 
@@ -1228,13 +1240,13 @@ def read_journal_events(volume_letter, cursor, conn):
                         if record[1] not in existing_usns:  # USN is at index 1
                             new_records.append(record)
                     
-                    # Insert only new records
-                    _count_batch(len(batch_records), len(new_records))
+                    # Insert only new records, counted once the insert went through
                     if new_records:
                         cursor.executemany(
                             "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                             new_records
                         )
+                    _count_batch(len(batch_records), len(new_records))
                     
                     logger.info(f"Final batch: {len(new_records)} new records inserted")
 
@@ -1386,6 +1398,11 @@ def _main():
                    "duplicates": _RUN_COUNTS["duplicates"]}
     logger.info("Journal records read: %d - new: %d, already in the database: %d",
                 _RUN_COUNTS["read"], _RUN_COUNTS["inserted"], _RUN_COUNTS["duplicates"])
+    if processed_count == 0:
+        # Every volume raised (a volume without a journal still returns a result),
+        # so nothing was stored: report a failure, not "Parsed".
+        logger.error("USN Journal: no volume could be stored - see the errors above.")
+        return 1
     logger.info("Done.")
     return 0  # Success
 

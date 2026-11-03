@@ -2298,6 +2298,23 @@ def detect_artifact(file_path):
 def is_important_path(source_path):
     return any(p in source_path for p in ["Recent", "Desktop", "Start Menu", "Explorer"])
 
+_IO_REPARSE_TAG_MOUNT_POINT = 0xA0000003   # a junction
+_IO_REPARSE_TAG_SYMLINK = 0xA000000C
+
+
+def _is_link_dir(entry):
+    """True for a directory symlink or junction (DirEntry.is_junction is 3.12+)."""
+    try:
+        if entry.is_symlink():
+            return True
+        if hasattr(entry, "is_junction"):
+            return entry.is_junction()
+        tag = getattr(entry.stat(follow_symlinks=False), "st_reparse_tag", 0)
+        return tag in (_IO_REPARSE_TAG_MOUNT_POINT, _IO_REPARSE_TAG_SYMLINK)
+    except OSError:
+        return False
+
+
 def _find_link_files(folder_path, workers=8):
     """Every file whose NAME makes it an LNK / Jump List, under folder_path.
 
@@ -2328,6 +2345,15 @@ def _find_link_files(folder_path, workers=8):
                     try:
                         names.add(e.name.lower())
                         if e.is_dir(follow_symlinks=False):
+                            # Never descend through a junction or symlink: the
+                            # profile's legacy junctions ("Local Settings",
+                            # "Application Data") point back into themselves, so
+                            # following one listed Application Data\Application
+                            # Data\... for ever. What they point to is walked by
+                            # its real path anyway. OneDrive's cloud folders are
+                            # other reparse tags and are still walked.
+                            if _is_link_dir(e):
+                                continue
                             subdirs.append(e.path)
                         elif detect_artifact(e.name):
                             found.append(e.path)
