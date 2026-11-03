@@ -79,9 +79,10 @@ CLOUD_ORDER = ("openrouter", "gemini", "nvidia", "openai", "anthropic",
 
 INTEGRATIONS = (
     ("local_cli", "Local command-line agent",
-     "A model run on this machine through a command-line tool. Nothing leaves "
-     "the machine - suitable for air-gapped work.",
-     "Ollama, local LLaMA, Gemini CLI"),
+     "A command-line agent on this machine. A local model (Ollama, LLaMA) keeps "
+     "everything here and suits air-gapped work; Claude Code, Codex and Gemini CLI "
+     "run on your own sign-in and send the conversation to their provider.",
+     "Ollama, local LLaMA, Claude Code, Codex, Gemini CLI"),
     ("local_api", "Local API server",
      "A model served over HTTP on this machine or your local network.",
      "LM Studio, vLLM, Ollama server"),
@@ -496,7 +497,8 @@ class OnboardingWizard(QDialog):
             "&bull; Reads the case read-only - the evidence databases are never changed.<br>"
             "&bull; Records what was sent to the model, for the chain of custody.<br><br>"
             "<b style='color:#A5B4FC'>Three ways to connect</b><br>"
-            "&bull; <b>Local command-line agent</b> - everything stays on this machine.<br>"
+            "&bull; <b>Local command-line agent</b> - a local model keeps everything on this "
+            "machine; Claude Code and Codex use your own sign-in.<br>"
             "&bull; <b>Local API server</b> - LM Studio, vLLM or Ollama on this machine or the LAN.<br>"
             "&bull; <b>Cloud API</b> - a hosted model, reached with an API key.</div>")
         points.setWordWrap(True)
