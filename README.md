@@ -145,8 +145,9 @@ flowchart TB
     RES[("correlation_results.db")]
     INTEL[("Crow_Intelligence.db")]
 
-    EYE{{"⑤ EYE<br/>GEP-governed assistant<br/>reads every case database"}}
+    EYE{{"⑤ EYE<br/>GEP-governed assistant<br/>local · CLI agent · cloud<br/>reads every case database"}}
     KB["KNOWLEDGE BASE<br/>guides · schema"]
+    CHK["CLAIM CHECK<br/>answer values vs evidence"]
     NM["NARRATIVE MAP<br/>case memory"]
     COMP["COMPLIANCE<br/>EvidenceSeal audit"]
 
@@ -179,6 +180,7 @@ flowchart TB
     KB --> EYE
     EYE <== "verdict · narrative" ==> NM
     EYE -- "every tool call" --> COMP
+    EYE -- "every answer" --> CHK
     EYE == "report_* tools" ==> OUT
     COMP -. "audit_trail.json" .-> OUT
 
@@ -196,7 +198,7 @@ flowchart TB
     class PARSERS hub
     class CASE,PSTAT,CUST,RES,INTEL store
     class TAB,VIZ,SRCH,TL,UBA,CE,DL ana
-    class KB,NM,COMP ai
+    class KB,NM,COMP,CHK ai
     class EYE eye
     class OUT out
 
@@ -214,7 +216,7 @@ flowchart TB
 
 | Stage | What matters |
 |---|---|
-| ① → ② | **Five independent doors into a case.** Parse a live system directly, acquire it with Crow-Claw, read a forensic image without mounting it, bring a Velociraptor / KAPE / EDR folder through the Offline Importer, or import third-party CSV / JSON / SQLite with Import Evidence. Crow-Eye's own collector is never required. |
+| ① → ② | **Six independent doors into a case.** Parse a live system directly, acquire it with Crow-Claw, read a forensic image without mounting it, bring a Velociraptor / KAPE / EDR folder through the Offline Importer, import third-party CSV / JSON / SQLite with Import Evidence, or take files themselves into the case with the recovery tools: the File Browser, Shadow Copies, App Acquisition, and deleted files carved from their MFT records. Crow-Eye's own collector is never required. |
 | ② | **The parsers read evidence, never write to it.** Registry hives are read as files from a working copy with their transaction logs replayed, so a dirty hive is seen in the state Windows had not finished writing, and free space is carved for deleted keys. SRUM is soft-recovered from its ESE logs the same way. Browsers are read from copies that keep their `-wal` files, and stored secrets are kept but never decrypted. |
 | ② | **Every run leaves a chain of custody, and every case keeps a ledger.** Crow-Claw, live Parse All, each single-artifact parse, Offline Importer collections and scans, offline parses and image parsing each write `logs/custody_<run>.json` with a `.sha256` beside it. A record holds who ran it, where and when (UTC), the time zone and decoding-library versions, and every source file: its times read before the copy, how it was read (in place, copied, shadow copy, raw volume, `NtSaveKeyEx` hive export), and the SHA-256 of the source and of the copy. A live Parse All takes each file's size and times before it parses, and hashes the files from its own shadow copy, the bytes the parsers read, while they run. It also holds each artifact's outcome, the SHA-256 of every database the run wrote, and every change made to the target: processes, services, and shadow copies created, used, deleted or evicted by Windows. Shadow copies Crow-Eye creates are deleted when the run ends, by the ID `Create()` returned. Temporary work goes under the case, not the target's `%TEMP%`. **`logs/custody_ledger.jsonl`** records everything done to the case: opened, runs started and ended (with each record's hash), exports, evidence imports, settings changes, and correlation and Dynamic Linking database rewrites (hash before and after). It is a hash chain, so an edited, removed or moved line, a rewritten or deleted record, and a ledger cut short all show. **Case → Chain of Custody…** opens a record: every source with its verdict, the artifacts, the outputs, the footprint, the shadow copies, and the case ledger with its chain check. |
 | ② | **The MFT is checked as it is parsed, and re-parsed by difference.** Every `$MFT` record is digested (keyed BLAKE2b over its fixed-up bytes, LSN and update sequence left out) into a sealed map in `<case>/state/`; a second parse of the same volume parses only the records whose stored fields changed, and records deleted or reused in between are written as findings. The USN journal is not trusted for this. The same pass runs the single-image integrity checks - timestomping, wiped records, record structure, the `$MFT` bitmap, record LSNs against `$LogFile`, USN journal and `$LogFile` state - into `ntfs_integrity_findings`, and writes one integrity manifest per volume to the custody ledger. Every check is on by default and can be turned off in Settings → Parsing; a check that is off is written to the ledger at every parse. |
@@ -224,7 +226,8 @@ flowchart TB
 | ③ → ④ | **Nothing reads half-written data.** While a parse or load runs, the readers in stage ④ and the Eye are held — each offers *Open when ready* — so no view opens against tables still being filled. |
 | ③ → ④ | **Every reader is independent and read-only.** The artifact tables carry **Anatomy** (how the artifact is read, byte by byte), **Charts** (the dashboard for that table) and **Why empty?**. The Timeline, UBA, Database Search and the dashboards read the case databases directly — none requires a correlation run. The Correlation Engine is an *additional* layer, not a prerequisite. |
 | ③ → ④ | **Dynamic Linking** gathers identity mappings (SID → username, MAC → network, hash/GUID → app) into a per-case `Crow_Intelligence.db`, then overlays that context **inline in the artifact tables** through a non-destructive `ATTACH` and a per-row lookup. It changes how records *read*, never the evidence. |
-| ③ → ⑤ | The **Eye** queries the case databases directly, pulls correlation results **on demand**, and is grounded in a knowledge base of artifact guides and the live schema reference. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. |
+| ③ → ⑤ | The **Eye** queries the case databases directly, pulls correlation results **on demand**, and is grounded in a knowledge base of artifact guides and the live schema reference. It never touches evidence itself — it emits tool calls that Crow-Eye executes and logs. It runs on a local model, a command-line agent (Claude Code and Codex on your own sign-in) or a cloud API. |
+| ⑤ ✓ | **Every answer is checked against the evidence.** The times, paths, SIDs, hashes and device IDs in an answer are looked up in the tool results the Eye read; any it could not find are listed under the answer, and a time found only after a whole-hour shift is flagged as a time-zone conversion to verify. |
 | ⑤ ↔ | The **Narrative Map is bidirectional**: the Eye writes to it, the analyst writes to it, and its contents are injected into the Eye's prompt every turn. |
 | ⑤ ⟳ | **Compliance audits the Eye.** Every tool call is anchored to the **EvidenceSeal** hash chain; the page renders live per-rule **GEP** status (10 principles) verified from that chain and `EYE_Logs/`, exportable as `audit_trail.json`. |
 | ⑤ → ⑥ | The **Living Report is built by the Eye alone**, through its `report_*` tools. The Timeline, UBA and the dashboards are analysis surfaces — they do not write to the report. Case-level findings can still be exported separately via [Search & Export](#-search--export). |
@@ -239,17 +242,18 @@ flowchart TB
 
 The overview above is the shape. The four sections below open each stage: what runs, which module runs it, what it reads, what it writes, and what it guarantees. Every path is relative to the repository root; every case path is relative to the case folder.
 
-#### ② Ingest — five doors, one set of parsers
+#### ② Ingest — six doors, one set of parsers
 
 ```mermaid
 %%{init: {"flowchart": {"nodeSpacing": 28, "rankSpacing": 46, "curve": "basis", "padding": 14}, "themeVariables": {"fontSize": "14px"}} }%%
 flowchart TB
-    subgraph DOORS["② INGEST · five doors"]
+    subgraph DOORS["② INGEST · six doors"]
         L1["CROW-CLAW<br/>crow_claw/<br/>copy · VSS · raw disk"]
         L3["OFFLINE IMPORTER<br/>Offline_Importer/<br/>SCAN → COLLECT → PARSE"]
         L2["IMAGE PARSING<br/>Forensics_Image_parsing/<br/>dissect.target · no mounting"]
         L0["LIVE PARSE<br/>Parse All Artifacts<br/>admin · up to 4 workers"]
         L4["IMPORT EVIDENCE<br/>FeatherImporter"]
+        L5["RECOVERY TOOLS<br/>app_acquisition/<br/>File Browser · Shadow Copies<br/>App Acquisition · MFT carve"]
     end
 
     ACQ[("live_acquisition/<br/>copied files · SHA-256")]
@@ -258,8 +262,11 @@ flowchart TB
     IE[("Imported_Evidence/<br/>verbatim · converted · documents")]
 
     REP["REPAIRED BEFORE READING<br/>dirty hives: LOG1/LOG2 replayed into a copy<br/>SRUM: ESE soft recovery"]
+    NTFS["NTFS INTEGRITY<br/>digest of every MFT record<br/>delta parse · findings"]
     TA[("Target_Artifacts/<br/>one database per family")]
     PS[("logs/parse_status.json<br/>one outcome per artifact")]
+    AQ[("app_acquisition/ · Restores/<br/>files · SHA-256 · manifest")]
+    CU[("logs/custody_*.json<br/>custody_ledger.jsonl")]
 
     L1 --> ACQ
     L3 -- "COLLECT" --> ACQ
@@ -267,19 +274,23 @@ flowchart TB
     L2 -- "read out of the image" --> INV
     L0 --> LIVE
     L4 --> IE
+    L5 -- "recovered · collected" --> AQ
 
     INV & LIVE -.-> REP
+    INV & LIVE -. "MFT" .-> NTFS
+    NTFS -- "ntfs_integrity_findings" --> TA
     INV & LIVE ==> TA
     INV & LIVE -.-> PS
+    L0 & L1 & L2 & L3 & L4 & L5 -. "custody" .-> CU
 
     classDef door  fill:#0f766e,stroke:#2dd4bf,stroke-width:2px,color:#f0fdfa
     classDef run   fill:#115e59,stroke:#5eead4,stroke-width:3px,color:#f0fdfa
     classDef help  fill:#134e4a,stroke:#99f6e4,stroke-width:1px,stroke-dasharray:4 3,color:#f0fdfa
     classDef store fill:#92400e,stroke:#fbbf24,stroke-width:2px,color:#fffbeb
-    class L0,L1,L2,L3,L4 door
+    class L0,L1,L2,L3,L4,L5 door
     class INV,LIVE run
-    class REP help
-    class ACQ,TA,IE,PS store
+    class REP,NTFS help
+    class ACQ,TA,IE,PS,AQ,CU store
     style DOORS fill:#042f2e,stroke:#2dd4bf,stroke-width:2px,color:#ccfbf1
     linkStyle default stroke-width:2px
 ```
@@ -291,6 +302,7 @@ flowchart TB
 | **Image parsing** | `Artifacts_Collectors/Forensics_Image_parsing/` | Reads E01/Ex01, VHDX/VHD, VMDK, ISO and raw (`dd`/`img`/`001`, multi-part sets included) through `dissect.target` — nothing is mounted. Reuses the Offline Importer's collector and coordinator, then parses in `image` mode. | `Target_Artifacts/*.db` |
 | **Offline Importer** | `Artifacts_Collectors/Offline_Importer/` | **SCAN** detects artifact types by name and extension into `.artifact_scan_index.json`; **COLLECT** copies what was found into `live_acquisition/` with a SHA-256 of each file; **PARSE** hands each artifact to `ParserInvoker`, which calls the matching `offline_parsers/offline_*.py`. Works on any Velociraptor, KAPE or EDR collection. | `Target_Artifacts/*.db` |
 | **Import Evidence** | `correlation_engine/feather/importer.py` (`FeatherImporter`) | Brings in third-party output: SQLite is copied verbatim; CSV and JSON are converted to a feather-shaped SQLite with its own `feather_metadata`; documents (PDF, HTML, text, mail) are copied as they are. | `Target_Artifacts/Imported_Evidence/` and `imported_evidence_manifest.json` (SHA-256 of source and copy) |
+| **Recovery tools** | `Artifacts_Collectors/app_acquisition/` (`collector.py`, `deleted_recovery.py`, `restore.py`), `shadow_copies.py`, `vss_reader.py`, `shadow_compare.py` | Takes files themselves into the case: ticked in the File Browser from this machine, an image or a shadow copy; recovered from the shadow copy that still holds a deleted or changed file (Shadow Copies → *What changed*); a program with everything that belongs to it (App Acquisition); or a deleted file carved from its MFT record, refused when the record was reused and saved with its overwrite risk when some of its clusters are in use again. Each run is logged and written to the chain of custody. Listed under **Case → Recovered & Collected Files**. | `app_acquisition/<run>/` with `app_manifest.json` (SHA-256 of each file); `Restores/restore_*.json` for files put back on the machine |
 
 **Every parser family, and where its output lands** (all under `Target_Artifacts/`):
 
@@ -301,7 +313,7 @@ flowchart TB
 | Prefetch | `Prefetch_claw.py` | `offline_PrefetchClaw.py` | `prefetch_data.db` | prefetch_data |
 | AmCache | `amcacheparser.py` | `offline_AmCacheClaw.py` | `amcache.db` | InventoryApplication, InventoryApplicationFile, InventoryDriver … |
 | ShimCache | `shimcash_claw.py` | `offline_ShimCacheClaw.py` | `shimcache.db` | shimcache_entries |
-| SRUM | `SRUM_Claw.py` | `offline_SRUM_Claw.py` | `srum_data.db` | application usage, network usage and connectivity, energy, app timeline, metadata |
+| SRUM | `SRUM_Claw.py` | `offline_SRUM_Claw.py` | `srum_data.db` | application usage, network usage and connectivity, energy, app timeline (with the PE link time and CheckSum of the build that ran), metadata |
 | Event logs | `WinLog_Claw.py` | `offline_WinLog_Claw.py` | `Log_Claw.db` | SystemLogs, SecurityLogs, ApplicationLogs |
 | Recycle Bin | `recyclebin_claw.py` | `offline_RecycleBinClaw.py` | `recyclebin_analysis.db` | recycle_bin_entries |
 | $MFT | `MFT_Claw.py` (+ `ntfs_integrity.py`, `ntfs_digest_map.py`, `logfile_restart.py`) | `offline_MFTClaw.py` | `mft_claw_analysis.db` | mft_records, mft_standard_info, mft_file_names, mft_data_attributes, ntfs_integrity_findings |
@@ -321,8 +333,15 @@ flowchart TB
 ├── Target_Artifacts/              one SQLite database per artifact family (table above)
 │   └── Imported_Evidence/         third-party data, found automatically by every reader
 ├── live_acquisition/              artifacts copied by Crow-Claw or the Offline Importer
+├── app_acquisition/               files collected or recovered into the case, one folder per run
+│   └── <run>/app_manifest.json   each file's source and SHA-256; a carved file's overwrite risk
+├── Restores/                      restore_*.json for files put back on the machine
+├── state/                         sealed NTFS digest maps (ntfs_map_<volume>.bin) for delta MFT parses
 ├── logs/
-│   └── parse_status.json          one outcome per artifact for every parse
+│   ├── parse_status.json          one outcome per artifact for every parse
+│   ├── custody_<run>.json         one chain-of-custody record per run, .sha256 beside it
+│   ├── custody_ledger.jsonl       hash-chained ledger of everything done to the case
+│   └── crow_eye.log …             per-component logs (Settings → Logs)
 ├── Correlation/
 │   ├── feathers/ wings/ pipelines/
 │   └── results/correlation_results.db
@@ -346,7 +365,7 @@ flowchart TB
     TL["TIMELINE<br/>timeline/ · artifact_map.py"]
     UBA["USER BEHAVIOR ANALYTICS<br/>uba/ · 81 rules · Ctrl+Shift+B"]
     DL["DYNAMIC LINKING<br/>dynamic_mapping/ · 22 rules"]
-    CE["CORRELATION ENGINE<br/>correlation_engine/"]
+    CE["CORRELATION ENGINE<br/>correlation_engine/<br/>Time · Identity · Behaviour"]
 
     INTEL[("Crow_Intelligence.db<br/>value → name")]
     TAB["ARTIFACT TABLES<br/>names shown beside raw values"]
@@ -354,6 +373,7 @@ flowchart TB
     RES[("correlation_results.db")]
 
     CASE ==> VIZ & SRCH & TL & UBA & DL & CE
+    UBA -- "behaviours → Behaviour Wings" --> CE
     DL -- "ATTACH · gather" --> INTEL
     INTEL -. "ATTACH · per-row lookup" .-> TAB
     CE -- "auto-generated feathers" --> F
@@ -375,7 +395,7 @@ None of these requires another. Each opens the case databases **read-only**, and
 | **Timeline** | `timeline/` | Heat map (per day), week and lane views. `data/artifact_map.py` is the one map of what it plots: 18 artifact types and their time columns. Registry key write times are bounded (*no later than*) and drawn hollow, so they cannot pass for an exact event time. Applies its own lightweight grouping — no correlation run needed. |
 | **User Behavior Analytics** | `uba/` | Replays the case through 81 declarative rules in `uba/config/behavior_rules.json` (44 routine, 33 notable, 3 suspicious, 1 critical) into a plain-English activity story. Sign-in sessions are built from Security events 4624/4634/4647, paired by LogonId. Every statement opens its backing record. |
 | **Dynamic Linking** | `dynamic_mapping/` | 22 rules gather identity mappings — SID → user, MAC → network, hash → file name, USB serial → device, volume GUID → volume name and more — into `Crow_Intelligence.db` by `ATTACH`ing each case database read-only. The artifact tables then show the resolved name beside the raw value through a per-row lookup on the attached database. It changes how a record *reads*, never the record. After each run a statistics window (and `dynamic_linking.log`) shows what every rule read and added, from which database and table, and how many rows of each artifact table now carry a linked name. |
-| **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Time-Window, Identity or Behavioural engine (each Wing's category picks the engine), and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
+| **Correlation Engine** | `correlation_engine/` | Turns artifacts into feathers, applies Wings with the Time-Window, Identity or Behavioural engine (each Wing's category picks the engine; 35 Wings ship: 11 Identity, 6 Time, 18 Behaviour), and runs them as Pipelines into `correlation_results.db`. Detailed in [Correlation Engine](#-correlation-engine). |
 
 #### ⑤ AI layer — how a question travels
 
@@ -397,7 +417,8 @@ sequenceDiagram
     B->>W: run off the UI thread
     W->>CM: process_query
     CM->>CM: history · Narrative Map · knowledge base (RAG)
-    CM->>QP: prompt + 31 tool definitions
+    CM->>CM: older tool results compacted (recall_result brings one back)
+    CM->>QP: prompt + 33 tool definitions
     loop until an answer or the iteration limit
         QP->>MR: generate (EvidenceSeal seals the exact prompt bytes)
         MR->>M: request
@@ -406,7 +427,8 @@ sequenceDiagram
         QP->>T: tool call — case DBs read-only, correlation results, report_*
         T-->>QP: result
     end
-    QP-->>UI: answer · reasoning trace · evidence
+    QP->>QP: claim check: every time, path, SID and hash against the tool results
+    QP-->>UI: answer · reasoning trace · evidence · values not found
 ```
 
 | Component | Module | Role |
@@ -414,9 +436,11 @@ sequenceDiagram
 | **Bridge & worker** | `eye/bridge/eye_bridge.py` | The React window talks to Python over `QWebChannel`; a `QueryWorker` thread keeps the interface responsive. |
 | **ContextManager** | `eye/services/context_manager.py` | Builds each turn: conversation history, the Narrative Map, retrieved knowledge, and the tool catalogue. |
 | **QueryProcessor** | `eye/services/query_processor.py` | The agentic loop: ask the model, run the tool it calls, feed the result back, until it answers. |
-| **ModelRouter & backends** | `eye/services/model_router.py`, `eye/backends/` | Local command-line agents (Gemini CLI, Claude Code, Ollama CLI and others), local servers (Ollama, LM Studio, vLLM) or cloud APIs (OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Groq and more). Local backends keep the whole loop on the machine. |
+| **ModelRouter & backends** | `eye/services/model_router.py`, `eye/backends/` | Command-line agents (Claude Code and Codex on your own sign-in, Gemini CLI, Ollama CLI and others), local servers (Ollama, LM Studio, vLLM) or cloud APIs (OpenAI, Anthropic, Gemini, OpenRouter, Mistral, Groq and more). A local model keeps the whole loop on the machine; a command-line agent or cloud API sends the conversation to its provider. |
 | **Backend doctor** | `eye/services/backend_doctor.py` | Checks the model setup in order: provider, model name, API key, command-line tool or local server, connection, one tiny real request, tool use and effort. Each problem comes with its fix; results are kept in `EYE_Logs/eye_backend_doctor.jsonl`. |
-| **Tools** | `configs/llm_config.json` | 31 tools: database queries and schema, artifact and semantic search, the timeline sweep, correlation results and wing authoring, imported evidence, threat intelligence, and the ten `report_*` tools. |
+| **Tools** | `configs/llm_config.json` | 33 tools: database queries and schema, artifact and semantic search, the timeline sweep, user behaviour, correlation results and wing authoring, imported evidence, threat intelligence, recalling an earlier result, and the ten `report_*` tools. |
+| **Result compaction** | `eye/services/result_compaction.py` | Once the raw tool output in a request passes a threshold, older results go to the model as short digests; the newest stay whole. The full results stay in the sealed history, one `recall_result` call away. |
+| **Claim check** | `eye/services/claim_check.py` | Looks up every specific value in an answer (times to the minute, paths, SIDs, hashes, USB VID/PID) in the tool results the Eye read, and lists under the answer the ones it could not find. A time found only after a whole-hour shift is listed apart, as a time-zone conversion to verify. The answer itself is not changed. |
 | **Knowledge base** | `configs/knowledge_base/` | Artifact guides and the live schema reference, retrieved per question — by embeddings when a model is configured, by a built-in BM25 index when not. |
 | **Narrative Map** | `eye/services/narrative_map_service.py` | Verdict → narrative → evidence, written by the Eye and the analyst alike, hash-chained in `EYE_Logs/narrative_map_audit.jsonl` and injected into every prompt. |
 | **EvidenceSeal** | `eye/services/evidence_seal.py` | Seals the SHA-256 of the exact bytes of every prompt in a hash-chained `EYE_Logs/eye_payload_seal.jsonl`. |
