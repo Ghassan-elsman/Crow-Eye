@@ -866,7 +866,10 @@ class FileBrowserDialog(QtWidgets.QDialog):
         self._copies = []
         self.setWindowTitle("Live File Browser" if self.mode == self.LIVE else "Offline File Browser")
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowMinMaxButtonsHint)
-        self.resize(1240, 780)
+        if _theme is not None:
+            _theme.fit_to_screen(self, 1560, 1120)
+        else:
+            self.resize(1240, 780)
         self.case_root = case_root
         self._source = None
         self._worker = None

@@ -106,6 +106,8 @@ MagicMock/
 configs/eye_config.json
 config/last_case.json
 config/case_*.json
+configs/eye_tool_capability.json
+utils/forensic_deps_status.json
 .env
 
 # =============================================================================

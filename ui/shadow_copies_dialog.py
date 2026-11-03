@@ -156,7 +156,7 @@ class VolumeMap(QtWidgets.QWidget):
         self.selected = -1
         self._hits = []
         self.setMouseTracking(True)
-        self.setMinimumHeight(300)
+        self.setMinimumHeight(316)
         self.cap_font, self.body_font, self.small_font = _font(11, True, True), _font(13), _font(12)
 
     def set_data(self, copies, layout_data, removals, volume_size, used):
@@ -407,9 +407,13 @@ class VolumeMap(QtWidgets.QWidget):
         if earlier:
             g.setFont(self.small_font)
             g.setPen(muted)
-            g.drawText(QtCore.QRectF(x0, ly, w, 17), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter,
-                       "%d earlier removal%s since %s, before the oldest copy: not drawn" % (
-                           earlier, "" if earlier == 1 else "s", min(r["at"] for r in self.removals)[:10]))
+            note = "%d earlier removal%s since %s, before the oldest copy: not drawn" % (
+                earlier, "" if earlier == 1 else "s", min(r["at"] for r in self.removals)[:10])
+            nw = QtGui.QFontMetrics(self.small_font, self).horizontalAdvance(note)
+            if lx + nw > x1:                # no room beside the legend: the line below it
+                g.drawText(QtCore.QRectF(x0, ly + 20, w, 17), QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter, note)
+            else:
+                g.drawText(QtCore.QRectF(x0, ly, w, 17), QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter, note)
         g.end()
 
     def mouseMoveEvent(self, event):
@@ -434,7 +438,10 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Shadow Copies")
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowMinMaxButtonsHint)
-        self.resize(1480, 980)
+        if _theme is not None:
+            _theme.fit_to_screen(self, 1500, 1260)
+        else:
+            self.resize(1480, 980)
         self.case_root = case_root
         self.copies: List[dict] = []
         self._worker = None
@@ -544,6 +551,7 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
                                               "Triggered by", "Requester command line", "Shadow copy ID"])
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(34)
+        self.table.setMinimumHeight(34 * 3 + 44)      # the header and three copies, whatever the window
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
@@ -559,7 +567,7 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
         hdr.setSectionResizeMode(5, QtWidgets.QHeaderView.Stretch)
         self.why = QtWidgets.QTextBrowser()
         self.why.setOpenExternalLinks(False)
-        self.why.setMinimumHeight(110)
+        self.why.setMinimumHeight(90)
         self.why.setHtml("<p style='color:#94a3b8'>Select a copy: what made it, and every record that says so, "
                          "is listed here.</p>")
         tsplit = QtWidgets.QSplitter(QtCore.Qt.Vertical)

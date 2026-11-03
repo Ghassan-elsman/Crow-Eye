@@ -1063,7 +1063,7 @@ class ExecutionControlWidget(QWidget):
         layout.setSpacing(4)
         
         # Info label at top
-        info_label = QLabel("Tip: Filter correlation to specific time period")
+        info_label = QLabel("Every event is correlated. Tick Enable to limit the period.")
         set_role(info_label, "muted")
         layout.addWidget(info_label)
         
@@ -1078,9 +1078,10 @@ class ExecutionControlWidget(QWidget):
         start_layout.addWidget(self.start_datetime, stretch=1)
         
         self.start_enabled = QCheckBox("Enable")
-        self.start_enabled.setChecked(True)
+        # Off by default: a filter switched on silently drops every older event.
+        self.start_enabled.setChecked(False)
         self.start_enabled.stateChanged.connect(lambda: self.start_datetime.setEnabled(self.start_enabled.isChecked()))
-        self.start_datetime.setEnabled(True)
+        self.start_datetime.setEnabled(False)
         start_layout.addWidget(self.start_enabled)
         
         layout.addLayout(start_layout)
@@ -1096,9 +1097,9 @@ class ExecutionControlWidget(QWidget):
         end_layout.addWidget(self.end_datetime, stretch=1)
         
         self.end_enabled = QCheckBox("Enable")
-        self.end_enabled.setChecked(True)
+        self.end_enabled.setChecked(False)
         self.end_enabled.stateChanged.connect(lambda: self.end_datetime.setEnabled(self.end_enabled.isChecked()))
-        self.end_datetime.setEnabled(True)
+        self.end_datetime.setEnabled(False)
         end_layout.addWidget(self.end_enabled)
         
         layout.addLayout(end_layout)

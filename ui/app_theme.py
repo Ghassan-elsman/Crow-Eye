@@ -957,6 +957,23 @@ def scrollable_tabs(tabs):
     return tabs
 
 
+def fit_to_screen(window, width, height, share=0.9):
+    """Open ``window`` at ``width`` x ``height``, but never past ``share`` of the
+    screen it opens on, so a list keeps room for its rows on a large screen and
+    the window still fits a small one."""
+    screen = None
+    parent = window.parentWidget()
+    if parent is not None and parent.window().windowHandle() is not None:
+        screen = parent.window().windowHandle().screen()
+    screen = screen or QtWidgets.QApplication.primaryScreen()
+    if screen is None:
+        window.resize(width, height)
+        return window
+    geo = screen.availableGeometry()
+    window.resize(min(width, int(geo.width() * share)), min(height, int(geo.height() * share)))
+    return window
+
+
 def begin_theme(window, extra=""):
     """Put the site font and sheet on ``window`` BEFORE its children exist.
 

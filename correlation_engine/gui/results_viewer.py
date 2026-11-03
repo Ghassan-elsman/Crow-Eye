@@ -4386,13 +4386,17 @@ class DynamicResultsTabWidget(QWidget):
                         
                         # Create compact card for each feather
                         card = QFrame()
-                        # Color border based on PRIMARY extraction percentage
-                        if extraction_percentage >= 50:
+                        # Colour by the extraction rate. A low rate is not urgent (some
+                        # artifacts name few identities), so it never takes the red
+                        # that means urgent; a feather with no records stays neutral.
+                        if records == 0:
+                            rate_status = "neutral"
+                        elif extraction_percentage >= 50:
                             rate_status = "ok"      # green
                         elif extraction_percentage >= 20:
                             rate_status = "warn"    # amber
                         else:
-                            rate_status = "bad"     # rose
+                            rate_status = "info"
 
                         set_card(card)
                         set_status(card, rate_status)
