@@ -31,6 +31,53 @@ from ..pipeline import PipelineExecutor
 from ..engine import engine_registry
 from ..config.wing_config import WING_CATEGORY_BEHAVIOUR, wing_category_label
 
+# A styled indeterminate QProgressBar renders static (looks frozen); this
+# animated drop-in sweeps instead. It eases value changes itself, so the old
+# QPropertyAnimation on the bar's value is replaced by the shim below.
+from ui.animated_progress_bar import AnimatedProgressBar
+
+
+class _EasedValueAnim:
+    """Stand-in for the QPropertyAnimation that used to smooth the bar's value.
+
+    AnimatedProgressBar eases value changes on its own, and a QPropertyAnimation
+    writing the C++ value directly would fight that easing. This forwards the
+    target to the bar's (eased) setValue and leaves every former call site
+    (setStartValue/setEndValue/start/stop/state) unchanged.
+    """
+    Running = 1
+
+    def __init__(self, bar):
+        self._bar = bar
+        self._end = 0
+
+    def setStartValue(self, v):
+        pass
+
+    def setEndValue(self, v):
+        try:
+            self._end = int(v)
+        except (TypeError, ValueError):
+            self._end = 0
+
+    def setDuration(self, ms):
+        pass
+
+    def setEasingCurve(self, curve):
+        pass
+
+    def start(self):
+        try:
+            self._bar.setValue(self._end)
+        except RuntimeError:
+            pass
+
+    def stop(self):
+        pass
+
+    def state(self):
+        return 0  # never Running
+
 # Import styles for calendar widget
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -605,10 +652,10 @@ class ExecutionControlWidget(QWidget):
         # the bar fill jumps in chunks even though work is steady.
         # We animate the QProgressBar.value property between events so the
         # fill smoothly walks from the previous value to the new target.
-        from PyQt5.QtCore import QPropertyAnimation, QEasingCurve
-        self._progress_anim = QPropertyAnimation(self.progress_bar, b"value", self)
-        self._progress_anim.setDuration(300)
-        self._progress_anim.setEasingCurve(QEasingCurve.OutCubic)
+        # AnimatedProgressBar eases value changes itself; this shim forwards the
+        # target to its (eased) setValue so the former QPropertyAnimation call
+        # sites stay unchanged and the two easings don't fight.
+        self._progress_anim = _EasedValueAnim(self.progress_bar)
         
         # Setup output redirection after UI is initialized
         self._setup_output_redirection()
@@ -849,8 +896,9 @@ class ExecutionControlWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0) # No margins for maximum space
         layout.setSpacing(4)
         
-        # Progress bar with enhanced styling
-        self.progress_bar = QProgressBar()
+        # Progress bar with enhanced styling. AnimatedProgressBar so the
+        # indeterminate run-start phase sweeps instead of sitting static.
+        self.progress_bar = AnimatedProgressBar(accent="#A5B4FC")
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(100) # Start in determinate mode (not animated)
         self.progress_bar.setValue(0) # Empty bar

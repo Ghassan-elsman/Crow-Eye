@@ -525,9 +525,25 @@ class SearchWorker(QObject):
                 return
 
             self.logger.info(f"Search completed: {len(results)} results in {search_time:.2f}s")
-            print(f"[WORKER] Emitting search_complete signal with {len(results)} SearchResults objects")
+
+            # Flatten on THIS worker thread, not the GUI thread. A broad term in
+            # a large case can match hundreds of thousands of rows; building the
+            # UISearchResult list used to happen in _on_search_complete and froze
+            # the window (and the progress bar) until it finished. Previews stay
+            # lazy, so only the rows actually shown/exported cost anything.
+            flat_results = _flatten_search_results(results)
+
+            if self.search_engine.is_search_cancelled():
+                self.logger.info("Search was cancelled during flatten")
+                try:
+                    self.search_cancelled.emit()
+                except RuntimeError:
+                    pass
+                return
+
+            print(f"[WORKER] Emitting search_complete with {len(flat_results)} flattened rows")
             try:
-                self.search_complete.emit(results, search_time)
+                self.search_complete.emit(flat_results, search_time)
             except RuntimeError:
                 self.logger.warning("Could not emit search_complete - object deleted")
 
@@ -583,6 +599,94 @@ class UISearchResult:
     def match_preview(self, value):
         self._match_preview = value
         self._preview_fn = None
+
+
+def _preview_from_row(row_data, matched_columns) -> str:
+    """Build a one-line preview from a row's data and its matched columns.
+
+    Module-level twin of ``DatabaseSearchDialog._create_preview_from_data`` so
+    the flatten step can run on the search worker thread (no ``self``). Called
+    lazily by ``UISearchResult.match_preview`` only for the rows actually shown
+    or exported.
+    """
+    try:
+        if not row_data:
+            if matched_columns:
+                cols = ", ".join(str(col) for col in matched_columns[:3])
+                if len(matched_columns) > 3:
+                    cols += " (+%d more)" % (len(matched_columns) - 3)
+                return "Matched in: %s" % cols
+            return "No data available"
+
+        columns_to_show = matched_columns if matched_columns else list(row_data.keys())
+        preview_parts = []
+        for col in columns_to_show[:3]:
+            if col in row_data and row_data[col] is not None:
+                value = str(row_data[col])
+                if len(value) > 100:
+                    value = value[:97] + "..."
+                preview_parts.append("%s: %s" % (col, value))
+
+        if preview_parts:
+            return " | ".join(preview_parts)
+        if matched_columns:
+            cols = ", ".join(str(col) for col in matched_columns[:3])
+            if len(matched_columns) > 3:
+                cols += " (+%d more)" % (len(matched_columns) - 3)
+            return "Matched in: %s" % cols
+        return "No preview available"
+    except Exception:
+        return "Preview unavailable"
+
+
+def _flatten_search_results(results):
+    """Flatten ``List[SearchResults]`` into ``List[UISearchResult]``.
+
+    Runs on the search worker thread (see ``SearchWorker.run``) so the GUI
+    thread never blocks materialising a broad search's rows -- the old
+    end-of-search freeze. Previews stay lazy: each ``UISearchResult`` carries a
+    ``preview_fn`` that is only called when the row is drawn or exported.
+    """
+    flat_results = []
+    for search_results in results:
+        database_name = getattr(search_results, 'database_name', 'Unknown')
+
+        individual_results = []
+        if hasattr(search_results, 'get_all_results'):
+            individual_results = search_results.get_all_results()
+        elif hasattr(search_results, 'results'):
+            for _table_name, table_results in search_results.results.items():
+                individual_results.extend(table_results)
+
+        for result in individual_results:
+            row_data = getattr(result, 'record_data', None)
+            if not row_data:
+                row_data = getattr(result, 'row_data', {})
+
+            row_id = getattr(result, 'row_id', None)
+            if row_id is None and row_data:
+                for id_col in ('id', 'ID', 'rowid', 'ROWID', '_rowid_', 'Id', 'row_id', 'ROW_ID'):
+                    if row_data.get(id_col) is not None:
+                        row_id = row_data[id_col]
+                        break
+
+            matched_columns = getattr(result, 'matched_columns', [])
+            table_name = getattr(result, 'table', None)
+            if not table_name:
+                table_name = getattr(result, 'table_name', 'Unknown')
+            matched_timestamps = getattr(result, 'matched_timestamps', None)
+
+            flat_results.append(UISearchResult(
+                database=database_name,
+                table=table_name,
+                row_id=row_id,
+                matched_columns=matched_columns,
+                row_data=row_data,
+                match_preview=None,
+                matched_timestamps=matched_timestamps,
+                preview_fn=(lambda rd=row_data, mc=matched_columns: _preview_from_row(rd, mc)),
+            ))
+    return flat_results
 
 
 class DatabaseSearchDialog(QtWidgets.QDialog):
@@ -901,8 +1005,13 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         # Progress bar (initially hidden)
         self.progress_bar = QtWidgets.QProgressBar()
+        # Determinate (0-100), driven by the engine's per-task progress. A
+        # styled (QSS ::chunk) indeterminate bar does NOT animate -- it renders
+        # static and reads as "frozen" through a 10 s search. A determinate bar
+        # visibly advances, so the analyst sees it working.
         self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(0)  # Indeterminate
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setValue(0)
         self.progress_bar.setTextVisible(True)
         self.progress_bar.setFormat("Searching databases...")
         self.progress_bar.setVisible(False)
@@ -2158,8 +2267,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
     # Results Display (Task 4.3)
     # ========================================================================
     
-    # Rows the results table draws; Export writes every result.
-    RESULTS_SHOWN = 5000
+    # Rows the results table draws; Export writes every result. Kept modest so
+    # the final GUI-thread table fill stays well under half a second (5000 rows
+    # took ~1 s and briefly froze the window at the end of a broad search).
+    RESULTS_SHOWN = 2000
 
     def _populate_results_table(self, results: List[SearchResult], search_time: float, truncated: bool = False, time_filter_active: bool = False, start_time=None, end_time=None):
         """
@@ -2555,8 +2666,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.search_button.setVisible(False)
         self.cancel_button.setVisible(True)
         self.search_input.setEnabled(False)
+        self.progress_bar.setValue(0)
         self.progress_bar.setVisible(True)
-        
+
         # Update progress message based on time filtering
         if time_filter_enabled:
             self.progress_bar.setFormat(f"Searching for '{search_term}' with time filter...")
@@ -2573,7 +2685,10 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             case_sensitive=case_sensitive,
             exact_match=exact_match,
             use_regex=use_regex,
-            max_results_per_table=999999,  # Effectively unlimited
+            # Bounded so a broad term in a large case stays responsive. The
+            # display caps at RESULTS_SHOWN and Export writes current_results in
+            # full, so this is also the Export ceiling (per database).
+            max_results_per_table=50000,
             start_time=start_time,
             end_time=end_time,
             timeout_seconds=60.0
@@ -2609,10 +2724,23 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
     def _on_search_progress(self, message: str):
         """
         Handle progress updates from the search worker.
-        
+
+        The engine prefixes each message with "[NN%] ...". Drive the determinate
+        bar from that so it visibly advances instead of sitting static (a styled
+        indeterminate bar does not animate and looks frozen).
+
         Args:
             message: Progress message to display
         """
+        try:
+            m = re.match(r"\s*\[(\d+)%\]", message)
+            if m:
+                pct = max(0, min(100, int(m.group(1))))
+                # Never jump backwards (parallel tasks can report out of order).
+                if pct >= self.progress_bar.value():
+                    self.progress_bar.setValue(pct)
+        except Exception:
+            pass
         self.progress_bar.setFormat(message)
         self.logger.debug(f"Search progress: {message}")
     
@@ -2627,43 +2755,8 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         Returns:
             Preview string showing matched column values or column names
         """
-        try:
-            if not row_data:
-                if matched_columns:
-                    # Show column names if no data available
-                    cols = ", ".join(str(col) for col in matched_columns[:3])
-                    if len(matched_columns) > 3:
-                        cols += f" (+{len(matched_columns) - 3} more)"
-                    return f"Matched in: {cols}"
-                return "No data available"
-            
-            # If matched_columns is empty, show first few columns with data
-            columns_to_show = matched_columns if matched_columns else list(row_data.keys())
-            
-            # Create preview from first few columns with data
-            preview_parts = []
-            for col in columns_to_show[:3]:  # Limit to first 3 columns
-                if col in row_data and row_data[col] is not None:
-                    value = str(row_data[col])
-                    # Truncate long values
-                    if len(value) > 100:
-                        value = value[:97] + "..."
-                    preview_parts.append(f"{col}: {value}")
-            
-            if preview_parts:
-                return " | ".join(preview_parts)
-            else:
-                # Data exists but no values in columns
-                if matched_columns:
-                    cols = ", ".join(str(col) for col in matched_columns[:3])
-                    if len(matched_columns) > 3:
-                        cols += f" (+{len(matched_columns) - 3} more)"
-                    return f"Matched in: {cols}"
-                return "No preview available"
-            
-        except Exception as e:
-            self.logger.error(f"Error creating preview from data: {e}")
-            return "Preview unavailable"
+        # Single source of truth: the module-level helper the worker also uses.
+        return _preview_from_row(row_data, matched_columns)
     
     def _create_preview(self, result) -> str:
         """
@@ -2689,87 +2782,23 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             self.logger.error(f"Error creating preview: {e}")
             return "Preview unavailable"
     
-    def _on_search_complete(self, results, search_time: float):
+    def _on_search_complete(self, flat_results, search_time: float):
         """
         Handle search completion from the worker thread.
-        
+
         Args:
-            results: List of SearchResults objects (one per database)
+            flat_results: List[UISearchResult] already flattened on the worker
+                thread (see SearchWorker.run / _flatten_search_results). The GUI
+                thread only stores it and draws the first RESULTS_SHOWN rows, so
+                a broad search no longer freezes the window here.
             search_time: Time taken for search in seconds
         """
         try:
-            self.logger.info(f"Search completed: {len(results)} SearchResults objects in {search_time:.2f}s")
-            
-            # Flatten results from List[SearchResults] to List[SearchResult]
-            # and convert to the format expected by the UI
-            flat_results = []
-            for idx, search_results in enumerate(results):
-                # Get database name from the SearchResults container
-                database_name = getattr(search_results, 'database_name', 'Unknown')
-                
-                # Get all individual results
-                individual_results = []
-                if hasattr(search_results, 'get_all_results'):
-                    individual_results = search_results.get_all_results()
-                elif hasattr(search_results, 'results'):
-                    # Fallback: manually flatten the results dict
-                    for table_name, table_results in search_results.results.items():
-                        individual_results.extend(table_results)
-                
-                # Convert each result to include database info and create preview
-                for result_idx, result in enumerate(individual_results):
-                    # Get row data from result
-                    row_data = getattr(result, 'record_data', None)
-                    if not row_data:
-                        row_data = getattr(result, 'row_data', {})
-                    
-                    # Try to extract row_id if not already set
-                    row_id = getattr(result, 'row_id', None)
-                    if row_id is None and row_data:
-                        # Try common ID column names
-                        for id_col in ['id', 'ID', 'rowid', 'ROWID', '_rowid_', 'Id', 'row_id', 'ROW_ID']:
-                            if id_col in row_data and row_data[id_col] is not None:
-                                row_id = row_data[id_col]
-                                break
-                    
-                    # Get matched columns
-                    matched_columns = getattr(result, 'matched_columns', [])
-                    
-                    # The preview is built when first read (UISearchResult.match_preview)
-                    preview_fn = (lambda rd=row_data, mc=matched_columns:
-                                  self._create_preview_from_data(rd, mc))
-                    
-                    # Get table name - handle both 'table' and 'table_name' attributes
-                    table_name = getattr(result, 'table', None)
-                    if not table_name:
-                        table_name = getattr(result, 'table_name', 'Unknown')
-                    
-                    # Get matched timestamps
-                    matched_timestamps = getattr(result, 'matched_timestamps', None)
-                    
-                    if result_idx < 3:  # Log first 3 results for debugging
-                        print(f"[UI]   Converting result {result_idx}: table={table_name}, row_id={row_id}, "
-                              f"matched_cols={len(matched_columns)}, timestamps={len(matched_timestamps) if matched_timestamps else 0}")
-                    
-                    # Create a converted result with the expected structure using static class
-                    converted_result = UISearchResult(
-                        database=database_name,
-                        table=table_name,
-                        row_id=row_id,
-                        matched_columns=matched_columns,
-                        row_data=row_data,
-                        match_preview=None,
-                        matched_timestamps=matched_timestamps,
-                        preview_fn=preview_fn
-                    )
-                    flat_results.append(converted_result)
-            
-            print(f"[UI] Flattened to {len(flat_results)} individual results")
-            self.logger.info(f"Flattened to {len(flat_results)} individual results")
-            
+            self.logger.info(f"Search completed: {len(flat_results)} rows in {search_time:.2f}s")
+
             # Store and display results
             self.current_results = flat_results
-            truncated = len(flat_results) >= 1000  # Simple truncation check
+            truncated = len(flat_results) >= self.RESULTS_SHOWN
             
             # Check if time filtering was active
             time_filter_active = False

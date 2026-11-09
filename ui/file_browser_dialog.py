@@ -28,6 +28,7 @@ import os
 from typing import Dict, List, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from ui.animated_progress_bar import AnimatedProgressBar
 
 try:
     from ui import app_theme as _theme
@@ -1065,7 +1066,7 @@ class FileBrowserDialog(QtWidgets.QDialog):
         names.addWidget(self.related_path)
         head.addLayout(names, 1)
         rv.addLayout(head)
-        self.related_busy = QtWidgets.QProgressBar()
+        self.related_busy = AnimatedProgressBar(accent="#FACC15")
         self.related_busy.setRange(0, 0)
         self.related_busy.setTextVisible(False)
         self.related_busy.setMaximumHeight(4)
@@ -1094,7 +1095,7 @@ class FileBrowserDialog(QtWidgets.QDialog):
                                        "case's saved listing, and Open it.")
         if _theme is not None:
             _theme.set_role(self.status, "muted")
-        self.progress = QtWidgets.QProgressBar()
+        self.progress = AnimatedProgressBar(accent="#FACC15")
         self.progress.setTextVisible(False)
         self.progress.setMaximumHeight(6)
         self.progress.hide()

@@ -25,6 +25,7 @@ import sqlite3
 from typing import List, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from ui.animated_progress_bar import AnimatedProgressBar
 
 try:
     from ui import app_theme as _theme
@@ -615,7 +616,7 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
         kv = QtWidgets.QVBoxLayout(changes_page)
         kv.setContentsMargins(0, 6, 0, 0)
         kv.setSpacing(10)
-        self.progress = QtWidgets.QProgressBar()
+        self.progress = AnimatedProgressBar(accent="#22D3EE")
         self.progress.setMaximumHeight(6)
         self.progress.setTextVisible(False)
         self.progress.hide()

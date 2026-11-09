@@ -12,6 +12,7 @@ import subprocess
 from typing import Callable, Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets
+from ui.animated_progress_bar import AnimatedProgressBar
 
 try:
     from ui import app_theme as _theme
@@ -269,7 +270,7 @@ class AppAcquisitionDialog(QtWidgets.QDialog):
         names.addWidget(self.fp_sub)
         top.addLayout(names, 1)
         rv.addLayout(top)
-        self.fp_busy = QtWidgets.QProgressBar()
+        self.fp_busy = AnimatedProgressBar(accent="#22D3EE")
         self.fp_busy.setRange(0, 0)
         self.fp_busy.setTextVisible(False)
         self.fp_busy.setMaximumHeight(4)
@@ -305,7 +306,7 @@ class AppAcquisitionDialog(QtWidgets.QDialog):
 
         # Progress and actions.
         self.status = self._role(QtWidgets.QLabel("Choose a source and load its programs."), "muted")
-        self.progress = QtWidgets.QProgressBar()
+        self.progress = AnimatedProgressBar(accent="#22D3EE")
         self.progress.setTextVisible(False)
         self.progress.setMaximumHeight(6)
         self.progress.hide()
