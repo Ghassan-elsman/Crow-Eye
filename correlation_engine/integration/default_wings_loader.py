@@ -72,7 +72,9 @@ class DefaultWingsLoader:
             with open(wing_path, 'r') as f:
                 wing_data = json.load(f)
             
-            wing_config = WingConfig.from_dict(wing_data)
+            # Strict: a built-in Wing that declares no host scope is refused,
+            # never defaulted (Sentinel 14.2).
+            wing_config = WingConfig.from_dict(wing_data, strict=True)
             logger.info(f"Loaded default Wing: {wing_config.wing_name}")
             return wing_config
             

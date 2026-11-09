@@ -140,7 +140,7 @@
     .ese-node:hover { border-color: var(--accent); }
     .ese-node.on { border-color: var(--accent); background: var(--accent-dim); box-shadow: 0 0 16px var(--accent-dim); }
     .ese-node .nn { font-weight: 700; color: var(--tx); font-size: 13.5px; }
-    .ese-node .ns { font-family: 'Space Mono', monospace; font-size: 11.5px; color: var(--tx2); margin-top: 3px; word-break: break-all; }
+    .ese-node .ns { font-family: 'Space Mono', monospace; font-size: 11.5px; color: var(--tx2); margin-top: 3px; word-break: normal; overflow-wrap: break-word; }
     .ese-node.idmap { border-left: 3px solid var(--identity-color); }
     .ese-node.sys { border-left: 3px solid var(--tx3); opacity: 0.85; }
     /* sticky inspector */
@@ -251,10 +251,30 @@
 }
   </script>
   <link rel="stylesheet" href="anatomy.css">
+  <!-- Eye-Describe centrepiece: takes the galaxy's place, same fixed full-viewport layer as #particles-canvas -->
+  <style>
+    .cp-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100lvh;
+      z-index: -1;
+      pointer-events: none;
+      display: block;
+    }
+    @media print {
+      .cp-canvas {
+        display: none;
+      }
+    }
+  </style>
 </head>
 
 <body>
-  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <canvas id="particles-canvas" data-no-galaxy aria-hidden="true"></canvas>
+  <canvas class="cp-canvas" data-centerpiece data-cp-artifact="srum" data-cp-x="0.86" data-cp-y="0.3" data-cp-s="0.55" aria-hidden="true"></canvas>
   <div id="scroll-progress"></div>
 
   <!-- NAV -->
@@ -263,10 +283,11 @@
     <div class="nav-links-wrap">
       <a href="https://crow-eye.com/">Home</a>
       <a href="https://crow-eye.com/sentinel">Sentinel</a>
-      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye-Describe</a>
       <a href="https://crow-eye.com/eye-ai">Eye AI</a>
       <a href="https://crow-eye.com/user-guide">User Guide</a>
       <a href="https://crow-eye.com/documentation">Docs</a>
+      <a href="https://crow-eye.com/#support">Support</a>
       <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
     </div>
     <button class="nav-toggle" aria-label="Toggle Menu"><i class="fas fa-bars"></i></button>
@@ -274,7 +295,7 @@
 
   <div class="wrap" style="padding-top: 100px;">
     <header>
-      <div class="kicker">Eye Describe Anatomy</div>
+      <div class="kicker">Eye-Describe Anatomy</div>
       <h1>SRUM: the System Resource Usage Monitor, table by table</h1>
       <p class="header-sub">The quiet ESE database that records what ran, for how long, and how much it moved over the network &mdash; per application, per user, per hour, for weeks. How <code>SRUDB.dat</code> is built, what each of its five provider tables holds, when it overwrites itself, and how Crow-Eye decodes it.</p>
     </header>
@@ -988,6 +1009,7 @@
     showProvider('app');
   </script>
   <script src="../main.js"></script>
+  <script src="../cp-describe.js"></script>
 </body>
 
 </html>

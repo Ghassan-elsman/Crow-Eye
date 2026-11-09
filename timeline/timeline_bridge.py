@@ -25,9 +25,31 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
 
 from timeline.utils.value_parser import parsable_num_adapter
+from timeline import case_cache, day_index
 from utils.time_utils import get_current_utc, format_forensic_timestamp
 
 logger = logging.getLogger(__name__)
+
+# A lane query that reads one table and selects `rowid AS id` names its
+# source row; _query_db stamps each row with it so the event's detail can
+# open that row in the main window ("Show in table"). The artifacts lane
+# overwrites `id` with its own mark id, so the rowid travels under its own key.
+_ROWID_AS_ID = re.compile(r"\browid\s+as\s+id\b", re.I)
+_FROM_TABLE = re.compile(r"\bFROM\s+\[?([A-Za-z_][A-Za-z0-9_]*)\]?", re.I)
+_JOINED = re.compile(r"\b(JOIN|UNION)\b", re.I)
+_ANY_FROM = re.compile(r"\bFROM\b", re.I)
+SOURCE_KEYS = ("_src_db", "_src_table", "_src_rowid")
+
+
+def _single_source_table(sql):
+    """The table a `SELECT rowid AS id ... FROM t` query reads, else None."""
+    if not _ROWID_AS_ID.search(sql) or _JOINED.search(sql):
+        return None
+    tables = _FROM_TABLE.findall(sql)
+    # one FROM in the whole statement: `FROM (SELECT ...)` numbers its own rows
+    if len(tables) != 1 or len(_ANY_FROM.findall(sql)) != 1:
+        return None
+    return tables[0]
 
 
 class UniversalTimestampParser:
@@ -79,7 +101,18 @@ class UniversalTimestampParser:
         """
         if value is None or value == '' or value == 'N/A':
             return None
-        
+        # The stored form already is the answer ('YYYY-MM-DD HH:MM:SS'):
+        # checked by fromisoformat and the year bounds, returned as it is.
+        # Formatting it again cost 1 s of a 2.4 s parse over 192,000 values.
+        if (isinstance(value, str) and len(value) == 19 and value[10] == ' '
+                and value[4] == '-'):
+            try:
+                year = datetime.fromisoformat(value).year
+            except ValueError:
+                pass
+            else:
+                return value if cls.MIN_VALID_YEAR <= year <= cls.MAX_VALID_YEAR else None
+
         dt = None
         
         # If already a datetime
@@ -232,6 +265,7 @@ class TimelineBridge(AsyncBridge):
     # Signal emitted when data is ready (for async loading)
     dataReady = pyqtSignal(str, str)  # (method_name, json_data)
     show_event_detail = pyqtSignal(str) # (event_json)
+    show_in_table = pyqtSignal(str, str, str)  # (db, table, rowid)
 
     def __init__(self, case_directory: str, parent=None):
         """
@@ -301,6 +335,13 @@ class TimelineBridge(AsyncBridge):
                 cursor.execute(sql, params)
                 rows = [dict(row) for row in cursor.fetchall()]
                 conn.close()
+                table = _single_source_table(sql)
+                if table:
+                    for row in rows:
+                        if row.get("id") is not None:
+                            row["_src_db"] = db_name
+                            row["_src_table"] = table
+                            row["_src_rowid"] = row["id"]
                 return rows
             except sqlite3.OperationalError as e:
                 # Handle busy/locked errors with backoff
@@ -620,11 +661,28 @@ class TimelineBridge(AsyncBridge):
         ("browser_analysis.db", "browser_cookies", "creation_time"),
         ("browser_analysis.db", "browser_cache", "response_time"),
         ("browser_analysis.db", "browser_gecko_history", "visit_time"),
+        # AI agent steps. A case holding only agent sessions otherwise opens
+        # on "No forensic data". MIN/MAX over `datetime(ts)` reads the covering
+        # index `ix_ai_agent_steps_ts`, not the table.
+        ("ai_agents.db", "ai_agent_steps", "ts"),
     ]
 
     @pyqtSlot(result=str)
     def getTimeBounds(self) -> str:
-        """The earliest and latest EXACT times anywhere in the case."""
+        """The earliest and latest EXACT times anywhere in the case, kept
+        beside the case until a database changes (timeline/case_cache.py)."""
+        return self._cached_answer("bounds", self._compute_time_bounds)
+
+    def _cached_answer(self, key, compute):
+        sig = case_cache.signature(self.case_dir)
+        held = case_cache.get(self.case_dir, key)
+        if held is not None:
+            return held
+        answer = compute()
+        case_cache.put(self.case_dir, key, answer, sig=sig)
+        return answer
+
+    def _compute_time_bounds(self) -> str:
         all_timestamps = []
 
         for db_name, table, column in self._BOUNDS_SOURCES:
@@ -1046,13 +1104,14 @@ class TimelineBridge(AsyncBridge):
     @pyqtSlot(str, str, result=str)
     def getSrumAppData(self, start: str, end: str) -> str:
         """Get SRUM application usage data with time-sliced coverage."""
-        base_sql = """
+        # Triple-quoted, as every query here: test_bridge_and_map_agree
+        # finds the columns a lane reads in these strings.
+        select_from = """
             SELECT id, timestamp, app_name,
                    foreground_cycle_time, background_cycle_time, face_time
             FROM srum_application_usage
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
         """
-        rows = self._query_time_sliced("srum_data.db", base_sql, (start, end), "timestamp", 1000)
+        rows = self._sliced_rows("srum_data.db", select_from, "timestamp", start, end, 1000)
         rows = self._parse_timestamps_in_rows(rows, ['timestamp'])
         
         # Parse durations
@@ -1071,14 +1130,18 @@ class TimelineBridge(AsyncBridge):
     def getSrumNetData(self, start: str, end: str) -> str:
         """Get SRUM network connectivity and data usage."""
         # Network connectivity
+        where, params = self._ts_range("timestamp", start, end)
+        if not where:
+            return json.dumps({'connectivity': [], 'data_usage': []})
+        order = self._ts_order("timestamp")
         conn_sql = """
             SELECT id, timestamp, app_name, connected_time
             FROM srum_network_connectivity
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY timestamp
+            WHERE {where}
+            ORDER BY {order}
             LIMIT 5000
-        """
-        connectivity = self._query_db("srum_data.db", conn_sql, (start, end))
+        """.format(where=where, order=order)
+        connectivity = self._query_db("srum_data.db", conn_sql, params)
         connectivity = self._parse_timestamps_in_rows(connectivity, ['timestamp'])
         
         for c in connectivity:
@@ -1088,11 +1151,11 @@ class TimelineBridge(AsyncBridge):
         data_sql = """
             SELECT id, timestamp, app_name, bytes_sent, bytes_received
             FROM srum_network_data_usage
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY timestamp
+            WHERE {where}
+            ORDER BY {order}
             LIMIT 5000
-        """
-        data_usage = self._query_db("srum_data.db", data_sql, (start, end))
+        """.format(where=where, order=order)
+        data_usage = self._query_db("srum_data.db", data_sql, params)
         data_usage = self._parse_timestamps_in_rows(data_usage, ['timestamp'])
         
         return json.dumps({
@@ -1149,8 +1212,66 @@ class TimelineBridge(AsyncBridge):
             when += _dt.timedelta(seconds=1)
         return when.strftime("%Y-%m-%d %H:%M:%S")
 
+    def _ts_range(self, col, start, end):
+        """(sql, params): `col` inside [start, end] as raw text, so its index
+        serves the range. Both stored shapes are covered: one SRUM table
+        holds 258,296 rows written 'YYYY-MM-DD HH:MM:SS' and 30,190 written
+        'YYYY-MM-DDTHH:MM:SS', and ' ' sorts below 'T', so a single range
+        would silently drop one of them. `datetime(col) BETWEEN` matched
+        both and scanned the whole table on every day click (2.5 s of the
+        SRUM lane's 2.8 s). (None, ()) for a window that is not a time."""
+        lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+        if not lo or not hi:
+            return None, ()
+        return self._ts_range_sql(col), self._ts_range_params(lo, hi)
+
+    @staticmethod
+    def _ts_range_sql(col):
+        # Each range keeps to its own shape: '2026-10-31 00:04:00' sorts below
+        # '2026-10-31T00:00:00', so the 'T' range alone took the next day's
+        # first rows (98 of one day's 161 energy rows were the next day's).
+        return ("((\"{c}\" >= ? AND \"{c}\" < ? AND substr(\"{c}\", 11, 1) = ' ')"
+                " OR (\"{c}\" >= ? AND \"{c}\" < ? AND substr(\"{c}\", 11, 1) = 'T'))").format(c=col)
+
+    @staticmethod
+    def _ts_range_params(lo, hi):
+        return (lo, hi, lo.replace(" ", "T"), hi.replace(" ", "T"))
+
+    @staticmethod
+    def _ts_order(col):
+        """An ORDER BY over both stored shapes, as time order."""
+        return "replace(\"%s\", 'T', ' ')" % col
+
+    def _sliced_rows(self, db_name, select_from, col, start, end, per_slice=1000,
+                     slices=10, where_extra=""):
+        """Up to `per_slice` rows from each of `slices` equal parts of the
+        window, each part an indexed range (_ts_range), so a busy hour cannot
+        crowd the rest of the day out of the lane."""
+        lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+        if not lo or not hi:
+            return []
+        s_dt, e_dt = datetime.fromisoformat(lo), datetime.fromisoformat(hi)
+        step = (e_dt - s_dt) / max(1, slices)
+        out, seen = [], set()
+        for i in range(max(1, slices)):
+            a = (s_dt + step * i).strftime("%Y-%m-%d %H:%M:%S")
+            b = (s_dt + step * (i + 1)).strftime("%Y-%m-%d %H:%M:%S")
+            if a >= b:
+                continue
+            # the slice ends are exact text bounds already, end exclusive
+            where, params = self._ts_range_sql(col), self._ts_range_params(a, b)
+            sql = "%s WHERE %s%s ORDER BY %s LIMIT %d" % (
+                select_from, where, (" AND (%s)" % where_extra) if where_extra else "",
+                self._ts_order(col), per_slice)
+            for r in self._query_db(db_name, sql, params):
+                key = r.get("id")
+                if key is None or key not in seen:
+                    seen.add(key)
+                    out.append(r)
+        return out
+
     def _window_rows_by_column(self, db_name, table, ts_cols, extra_cols, start, end,
-                               budget=24000):
+                               budget=24000, where_extra=""):
         """Records with ANY of their time columns in [start, end], evenly sampled.
 
         The window used to be one query ORing `datetime(col) BETWEEN ...` over
@@ -1164,13 +1285,31 @@ class TimelineBridge(AsyncBridge):
         lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
         if not lo or not hi:
             return []
-        # One pass with every column compared as raw text: 1.6 s over 3.8 M
-        # rows, against 8.4 s for a query per column (six of the nine have no
-        # index) and 42 s for the datetime()-wrapped slices.
-        where = " OR ".join('("%s" >= ? AND "%s" < ?)' % (c, c) for c in ts_cols)
-        ids = sorted(r["i"] for r in self._query_db(
-            db_name, "SELECT rowid AS i FROM %s WHERE %s" % (table, where),
-            tuple(v for _c in ts_cols for v in (lo, hi))))
+        source = self._get_db_path(db_name)
+        # The day map (timeline/day_index.py): the rows of the window's days
+        # by lookup, once it is built for this case. Without it, one pass
+        # with every column compared as raw text: 12-14 s over the 3.9 M
+        # correlated rows of a real case on every day click.
+        # Whole days only (the timeline loads a day at a time): the map
+        # answers days, and narrowing a sampled day to part of it would drop
+        # rows the scan keeps.
+        whole_days = lo[11:] == "00:00:00" and hi[11:] == "00:00:00"
+        mapped = bool(source and not where_extra and whole_days and
+                      day_index.ready(self.case_dir, source, table, ts_cols))
+        if mapped:
+            ids = day_index.rowids(self.case_dir, table, day_index.day_number(lo),
+                                   day_index.day_number(self._text_bound(end)))
+        else:
+            where = " OR ".join('("%s" >= ? AND "%s" < ?)' % (c, c) for c in ts_cols)
+            if where_extra:
+                # `artifact_map.ROW_FILTERS`: which rows of the table are drawn.
+                where = "(%s) AND (%s)" % (where, where_extra)
+            ids = sorted(r["i"] for r in self._query_db(
+                db_name, "SELECT rowid AS i FROM %s WHERE %s" % (table, where),
+                tuple(v for _c in ts_cols for v in (lo, hi))))
+            if source and not where_extra:
+                # After this scan, not beside it: the two would share the disk.
+                day_index.build_in_background(self.case_dir, source, table, ts_cols)
         if len(ids) > budget:
             step = len(ids) / float(budget)
             ids = [ids[int(k * step)] for k in range(budget)]
@@ -1608,9 +1747,54 @@ class TimelineBridge(AsyncBridge):
 
         # Every remaining registry table whose only time is its key's write
         # time. One query shape, so a table added later is one line here.
-        result['key_times'] = self._registry_key_time_rows(start, end)
+        result['key_times'] = (self._registry_key_time_rows(start, end)
+                               + self._amcache_key_time_rows(start, end))
 
         return json.dumps(result)
+
+    # What names an AmCache row, and where it lives, in the order tried: the
+    # first column the table has wins.
+    _AMCACHE_NAME_COLS = ("name", "shortcut_path", "driver_name", "model",
+                          "friendly_name", "inf", "program_id", "driver_id")
+    _AMCACHE_PATH_COLS = ("lower_case_long_path", "shortcut_path", "inf")
+
+    def _amcache_key_time_rows(self, start: str, end: str) -> list:
+        """AmCache's key write times, as bounded rows beside the registry's.
+
+        AmCache is a registry hive, and `artifact_map` maps every Inventory
+        table's `key_last_write` as a key time - but the key-time query read
+        registry_data.db alone, so all of them were mapped and none was ever
+        drawn (9,521 on InventoryApplicationFile in the test case). They join
+        the same `key_times` list, so the Key times pill shows and hides them
+        with the rest, drawn hollow as the upper bounds they are.
+        """
+        from timeline.data import artifact_map as _am
+
+        rows = []
+        for entry in _am.TIMESTAMP_MAPPINGS.get("Amcache", []):
+            table, column = entry[0], entry[1]
+            if not _am.is_key_time(entry) or not self._table_exists("amcache.db", table):
+                continue
+            cols = self._table_columns("amcache.db", table)
+            if column not in cols:
+                continue
+            name = next((c for c in self._AMCACHE_NAME_COLS if c in cols), None)
+            path = next((c for c in self._AMCACHE_PATH_COLS if c in cols), None)
+            sql = """
+                SELECT rowid as id, {name} as filename, {path} as path,
+                       {time} as access_date, 'key upper bound' as time_basis,
+                       1 as bounded_time, 'AmCache {table}' as subType,
+                       'keytime' as tsType, '{table}' as source_table
+                FROM "{table}"
+                WHERE {time} IS NOT NULL AND trim({time}) <> ''
+                  AND datetime({time}) BETWEEN datetime(?) AND datetime(?)
+            """.format(name='"%s"' % name if name else "'%s'" % table,
+                       path='"%s"' % path if path else "''",
+                       time='"%s"' % column, table=table)
+            got = self._query_db("amcache.db", sql, (start, end))
+            if got:
+                rows.extend(self._parse_timestamps_in_rows(got, ['access_date']))
+        return rows
 
     # Per table: the analyst-facing label, the column naming what the row is
     # about, and the column holding the key path (None where the table has
@@ -1738,6 +1922,35 @@ class TimelineBridge(AsyncBridge):
         cache[key] = verdict
         return verdict
 
+    _PLAIN_TS = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(\.\d+)?Z?$")
+
+    def _plain_text_times(self, db_name: str, table: str, column: str) -> bool:
+        """Does this column hold only plain UTC times ('YYYY-MM-DD HH:MM:SS',
+        a 'T' or not, fractions, a Z), so a raw text range answers the same
+        rows as `datetime()` and an index on it is used? Sampled from both
+        ends of the table and cached. A value with an offset or any other
+        shape keeps the column on `datetime()`, which converts it: a text
+        range would read '23:30-02:00' as the wrong day."""
+        key = (db_name, table, column)
+        cache = self.__dict__.setdefault("_plain_probe", {})
+        if key in cache:
+            return cache[key]
+        verdict = False
+        try:
+            seen = []
+            for order in ("ASC", "DESC"):
+                seen += [r.get("v") for r in self._query_db(
+                    db_name,
+                    'SELECT "{c}" AS v FROM "{t}" WHERE "{c}" IS NOT NULL AND '
+                    'trim("{c}") <> \'\' ORDER BY rowid {o} LIMIT 200'.format(
+                        c=column, t=table, o=order))]
+            verdict = bool(seen) and all(
+                isinstance(v, str) and self._PLAIN_TS.match(v) for v in seen)
+        except Exception:
+            verdict = False
+        cache[key] = verdict
+        return verdict
+
     def _mapped_time_columns(self, artifact: str, table: str) -> list:
         """The RECORD time columns `artifact_map` plots for one table.
 
@@ -1758,7 +1971,7 @@ class TimelineBridge(AsyncBridge):
 
     def _mapped_query(self, artifact: str, table: str, extra_cols: str = "",
                       order_by: str = "", where_extra: str = "",
-                      normalise: tuple = ()):
+                      normalise: tuple = (), plain: tuple = ()):
         """(sql, params_needed, time_columns) for one mapped table.
 
         One row per RECORD carrying all of its times, not one row per time -
@@ -1766,22 +1979,32 @@ class TimelineBridge(AsyncBridge):
         `getForensicTimestamps`, and the other shape would turn 202,729
         correlated records into 1.6 million points.
 
-        `params_needed` is how many (start, end) pairs the caller must supply:
-        the WHERE is an OR across every mapped time column, because a record
-        whose only in-window time is its third one still belongs on screen.
+        `params_needed` is how many (start, end) pairs the caller must supply
+        when no column is `plain`: the WHERE is an OR across every mapped
+        time column, because a record whose only in-window time is its third
+        one still belongs on screen. Columns in `plain` (_plain_text_times)
+        are indexed text ranges instead, with their params from
+        _window_params: a browser day click was 67 full scans under
+        datetime(), 1.2 s.
         """
         cols = self._mapped_time_columns(artifact, table)
         if not cols:
             return None, 0, []
         selected = ", ".join('"%s"' % c for c in cols)
 
-        def _expr(c):
-            # NORM_TS only where SQLite cannot read the stored format itself.
-            return ('datetime(NORM_TS("%s"))' % c if c in normalise
-                    else 'datetime("%s")' % c)
+        plain = tuple(plain or ())
 
-        window = "\n               OR ".join(
-            '%s BETWEEN datetime(?) AND datetime(?)' % _expr(c) for c in cols)
+        def _term(c):
+            # A plain text column is an indexed range on its own shape
+            # (_ts_range_sql, four params); NORM_TS only where SQLite cannot
+            # read the stored format itself; datetime() for the rest.
+            if c in plain:
+                return self._ts_range_sql(c)
+            expr = ('datetime(NORM_TS("%s"))' % c if c in normalise
+                    else 'datetime("%s")' % c)
+            return '%s BETWEEN datetime(?) AND datetime(?)' % expr
+
+        window = "\n               OR ".join(_term(c) for c in cols)
         sql = """
             SELECT rowid as id, {extra}{selected}
             FROM {table}
@@ -1795,6 +2018,17 @@ class TimelineBridge(AsyncBridge):
         )
         return sql, len(cols), cols
 
+    def _window_params(self, columns, start, end, plain):
+        """The WHERE params of _mapped_query for these columns, in order."""
+        lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+        out = []
+        for c in columns:
+            if c in plain and lo and hi:
+                out.extend(self._ts_range_params(lo, hi))
+            else:
+                out.extend((start, end))
+        return tuple(out)
+
     def _mapped_rows(self, db_name: str, artifact: str, table: str,
                      start: str, end: str, extra_cols: str = "",
                      order_by: str = "", where_extra: str = "",
@@ -1803,11 +2037,14 @@ class TimelineBridge(AsyncBridge):
         cols_all = self._mapped_time_columns(artifact, table)
         normalise = tuple(c for c in cols_all
                           if self._needs_normalising(db_name, table, c))
-        sql, n_pairs, cols = self._mapped_query(
-            artifact, table, extra_cols, order_by, where_extra, normalise)
+        lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+        plain = tuple(c for c in cols_all if lo and hi and c not in normalise
+                      and self._plain_text_times(db_name, table, c))
+        sql, _n_pairs, cols = self._mapped_query(
+            artifact, table, extra_cols, order_by, where_extra, normalise, plain)
         if not sql:
             return []
-        params = tuple([start, end] * n_pairs) + tuple(params_extra)
+        params = self._window_params(cols, start, end, plain) + tuple(params_extra)
         return self._parse_timestamps_in_rows(
             self._query_db(db_name, sql, params), cols)
 
@@ -1994,20 +2231,177 @@ class TimelineBridge(AsyncBridge):
         return json.dumps(rows)
 
     # ──────────────────────────────────────────────
+    # SLOT: AI agents lane
+    # ──────────────────────────────────────────────
+
+    # What each kind of step is, in words. Keyed (role, kind): a command with
+    # role `user` is one the PERSON typed into the session with `!`, which is
+    # a different actor from the agent running one.
+    _AI_STEP_MEANING = {
+        ("assistant", "command"): "Agent ran a command",
+        ("user", "command"): "Person ran a command (!)",
+        ("assistant", "file_write"): "Agent wrote a file",
+        ("assistant", "file_edit"): "Agent edited a file",
+        ("user", "prompt"): "Person's prompt",
+        ("system", "prompt"): "Prompt not from the person",
+        ("agent", "prompt"): "Another agent session's message",
+        ("assistant", "browser"): "Agent drove the browser",
+        ("assistant", "computer"): "Agent drove the screen",
+        ("assistant", "screenshot"): "Agent's screenshot of a page",
+    }
+
+    # `cd "<project>" && <the command>` - 72,000 of 88,000 agent commands on
+    # one machine open this way, so a label taken from the front read "cd"
+    # on four marks in five. The label skips it; `command` keeps it whole.
+    _CD_PREFIX = re.compile(
+        r"""^\s*(?:cd|pushd|Set-Location|sl)\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*""",
+        re.I)
+
+    @staticmethod
+    def _one_line(value, limit):
+        """First non-empty line of `value`, cut to `limit` characters."""
+        text = str(value or "").strip()
+        for line in text.splitlines():
+            if line.strip():
+                text = line.strip()
+                break
+        return text if len(text) <= limit else text[:limit - 3] + "..."
+
+    @staticmethod
+    def _ai_origin_words(origin: str) -> str:
+        """A prompt the person did not type, named by who sent it."""
+        o = origin.lower()
+        if o.startswith("scheduled task"):
+            return "Scheduled task's prompt"
+        if o.startswith("another agent session"):
+            return "Another agent session's message"
+        if o.startswith("a program"):
+            return "Prompt from a program (claude -p)"
+        if o.startswith("automatic continuation"):
+            return "Agent resumed on its own"
+        return "Prompt not from the person"
+
+    def _table_columns(self, db: str, table: str) -> set:
+        """The columns `table` has in the case's `db` (empty when unreadable)."""
+        path = self._get_db_path(db)
+        if not path:
+            return set()
+        try:
+            conn = sqlite3.connect(path)          # PRAGMA only: nothing is written
+            try:
+                return {r[1] for r in conn.execute("PRAGMA table_info(%s)" % table)}
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return set()
+
+    @pyqtSlot(str, str, result=str)
+    def getAiAgentData(self, start: str, end: str) -> str:
+        """Steps AI agents took in the window: commands, file writes and edits,
+        and the person's prompts.
+
+        The time column comes from `artifact_map` and the row filter from
+        `artifact_map.ROW_FILTERS` - the same filter Eye's `query_timeline`
+        applies - so a machine's ~265,000 steps are cut to the ~103,000 that
+        place an actor at a moment IN SQL, and the 122,000 tool results never
+        leave the database. The window is a plain range on the raw `ts` text,
+        which `ix_ai_agent_steps_ts` serves; `datetime(ts)` would read all of a
+        560 MB database on every day click.
+
+        Each row carries `db`, `table` and `row_id`, so "Open Original" can
+        read the full step - its whole `text` - which the lane does not ship.
+        """
+        from timeline.data import artifact_map as _am
+
+        artifact, table = "AIAgents", "ai_agent_steps"
+        db = _am.ARTIFACT_DB_MAPPING.get(artifact, "ai_agents.db")
+        if not self._get_db_path(db):
+            return json.dumps([])
+        # Named literally, not through `artifact, table`: the map/bridge check
+        # finds a map-driven table by this call.
+        ts_cols = self._mapped_time_columns("AIAgents", "ai_agent_steps")
+        if not ts_cols:
+            return json.dumps([])
+        # What the agent's own record adds to each step, when the case's
+        # database is new enough to hold it: the programs a command started,
+        # its exit code and duration, the head of what it answered, who let it
+        # run and who sent the prompt. A case parsed by an older release has
+        # none of these columns and its lane still loads.
+        have = self._table_columns(db, table)
+        extra = "".join(", " + c for c in ("program", "exit_code", "duration_ms", "approval", "origin",
+                                           "seq", "turn", "ordered_by", "session_name")
+                        if c in have)
+        if "instruction" in have:
+            # The instruction this step answers: the order behind the command.
+            extra += ", substr(instruction, 1, 300) AS instruction"
+        if "output" in have:
+            extra += ", substr(output, 1, 600) AS output, length(output) AS output_length"
+        rows = self._window_rows_by_column(
+            db, table, ts_cols,
+            # A command is cut at 1,000 characters here (the longest is
+            # 27,000); `command_length` says when it was, and "Open Original"
+            # reads it whole.
+            "agent, user_name, session_id, step_id, role, kind, tool, "
+            "substr(command, 1, 1000) AS command, length(command) AS command_length, "
+            "target, cwd, status, is_sidechain, text_length, "
+            # The prompt's opening words for the tooltip; a command's or a
+            # file's `text` is the tool call's arguments and is left in the
+            # database.
+            "CASE WHEN kind = 'prompt' THEN substr(text, 1, 300) END "
+            "AS prompt_preview" + extra,
+            start, end, where_extra=_am.ROW_FILTERS.get(table, ""))
+        for r in rows:
+            role, kind = r.get("role") or "", r.get("kind") or ""
+            r["db"], r["table"], r["row_id"] = db, table, r.get("id")
+            r["ai_what"] = self._AI_STEP_MEANING.get(
+                (role, kind), "%s %s" % (role, kind.replace("_", " ")))
+            origin = str(r.get("origin") or "")
+            if kind == "prompt" and role != "user" and origin:
+                # Who sent it, in words: "Scheduled task's prompt" ...
+                r["ai_what"] = self._ai_origin_words(origin)
+            # The marker's label: what was run, the file written, or what
+            # the person asked. (The front end shows the same subject in full
+            # from these columns; it is not shipped a second time.)
+            if kind == "command":
+                subject = r.get("command") or ""
+            elif kind == "prompt":
+                subject = r.get("prompt_preview") or ""
+            else:
+                subject = r.get("target") or ""
+            if kind in ("file_write", "file_edit"):
+                label = re.split(r"[\\/]", subject.rstrip("\\/"))[-1] or subject
+            elif kind == "command":
+                label = subject
+                while True:
+                    m = self._CD_PREFIX.match(label)
+                    if not m or not label[m.end():].strip():
+                        break
+                    label = label[m.end():]
+            else:
+                label = subject
+            r["ai_label"] = self._one_line(label, 40) or r["ai_what"]
+        rows = self._parse_timestamps_in_rows(rows, ts_cols)
+        rows.sort(key=lambda r: r.get(ts_cols[0]) or "")
+        return json.dumps(rows)
+
+    # ──────────────────────────────────────────────
     # SLOT: SRUM Energy (supplementary)
     # ──────────────────────────────────────────────
     
     @pyqtSlot(str, str, result=str)
     def getSrumEnergyData(self, start: str, end: str) -> str:
         """Get SRUM energy usage data."""
+        where, params = self._ts_range("timestamp", start, end)
+        if not where:
+            return json.dumps([])
         sql = """
             SELECT id, timestamp, app_name, user_name,
                    event_timestamp, state_transition, charge_level, cycle_count
             FROM srum_energy_usage
-            WHERE datetime(timestamp) BETWEEN datetime(?) AND datetime(?)
-            ORDER BY timestamp
-        """
-        rows = self._query_db("srum_data.db", sql, (start, end))
+            WHERE {where}
+            ORDER BY {order}
+        """.format(where=where, order=self._ts_order("timestamp"))
+        rows = self._query_db("srum_data.db", sql, params)
         rows = self._parse_timestamps_in_rows(rows, ['timestamp', 'event_timestamp'])
         return json.dumps(rows)
     
@@ -2072,6 +2466,12 @@ class TimelineBridge(AsyncBridge):
     
     @pyqtSlot(str, str, result=str)
     def getAggregatedCounts(self, start: str, end: str) -> str:
+        """Activity per day in [start, end], kept beside the case until a
+        database changes (timeline/case_cache.py)."""
+        return self._cached_answer("counts|%s|%s" % (start, end),
+                                   lambda: self._compute_aggregated_counts(start, end))
+
+    def _compute_aggregated_counts(self, start: str, end: str) -> str:
         """
         Get per-day event counts for each data source.
         Used by WeekView and HeatmapView for aggregated rendering.
@@ -2256,6 +2656,35 @@ class TimelineBridge(AsyncBridge):
             union_sql = f"SELECT day, hour, SUM(c) as count FROM ({' UNION ALL '.join(query_parts)}) WHERE day BETWEEN DATE(?) AND DATE(?) GROUP BY day, hour ORDER BY day"
             return self._query_db(db, union_sql, (start, end))
 
+        def fetch_ai_agents():
+            """Per-day AI agent steps, the same rows the lane draws.
+
+            The row filter is `artifact_map.ROW_FILTERS`, so the heatmap and
+            the week view count commands, file writes and edits and the
+            person's prompts - not the 122,000 tool results beside them.
+            """
+            from timeline.data import artifact_map as _am
+
+            db = _am.ARTIFACT_DB_MAPPING.get("AIAgents", "ai_agents.db")
+            if not self._get_db_path(db):
+                return []
+            lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+            if not lo or not hi:
+                return []
+            row_filter = _am.ROW_FILTERS.get("ai_agent_steps") or "1"
+            # `+ts` keeps SQLite off `ix_ai_agent_steps_ts` on purpose. This is
+            # the whole case's range, and the row filter needs `kind` and
+            # `role`, so the index turns every one of ~265,000 entries into a
+            # random page read of a 560 MB file: 8.0 s, against 1.0-2.5 s for
+            # one sequential pass. (The lane's one-day window is the opposite
+            # case and does use the index.)
+            return self._query_db(db, f"""
+                SELECT DATE(ts) as day, STRFTIME('%H', ts) as hour, COUNT(*) as count
+                FROM ai_agent_steps
+                WHERE +ts >= ? AND +ts < ? AND {row_filter}
+                GROUP BY day, hour ORDER BY day
+            """, (lo, hi))
+
         with ThreadPoolExecutor(max_workers=12) as executor:
             fut_sys = executor.submit(fetch_system)
             fut_app = executor.submit(fetch_app)
@@ -2270,6 +2699,7 @@ class TimelineBridge(AsyncBridge):
             fut_lnk = executor.submit(fetch_lnk)
             fut_reg = executor.submit(fetch_artifacts_registry)
             fut_brow = executor.submit(fetch_browser)
+            fut_ai = executor.submit(fetch_ai_agents)
             
             # Consolidate results
             result['SystemLogs'] = fut_sys.result()
@@ -2287,6 +2717,7 @@ class TimelineBridge(AsyncBridge):
             result['lnk'] = fut_lnk.result()
             result['registry_others'] = fut_reg.result()
             result['browser'] = fut_brow.result()
+            result['ai_agents'] = fut_ai.result()
         
         return json.dumps(result)
     
@@ -2299,6 +2730,36 @@ class TimelineBridge(AsyncBridge):
         """Slot to open the native Python QDialog for event details."""
         self.show_event_detail.emit(event_json)
 
+    # ──────────────────────────────────────────────
+    # SLOT: what Windows recorded of what an AI agent did
+    # ──────────────────────────────────────────────
+    @pyqtSlot(str, str, result=str)
+    def getAiLinks(self, start: str, end: str) -> str:
+        """Each AI step in the window beside the Windows records of the same
+        act (data/ai_agent_links: Prefetch, BAM, 4688, SRUM, USN, browser
+        history), each link naming its rule. The lane marks a Windows mark
+        that has one with the AI badge."""
+        try:
+            from data.ai_agent_links import AiLinks
+            links = AiLinks(self.case_dir)
+            lo, hi = self._text_bound(start), self._text_bound(end, upper=True)
+            if not lo or not hi:
+                return "[]"
+            steps = links.steps("ts >= ? AND ts < ?", (lo, hi), limit=20000)
+            out = links.links_for(steps)
+            text_of = {s["rowid"]: (s.get("command") or s.get("target") or "") for s in steps}
+            for l in out:
+                l["ai_text"] = self._one_line(text_of.get(l["ai_rowid"], ""), 160)
+            return json.dumps(out, default=str)
+        except Exception as e:
+            logger.error("AI links failed: %s", e)
+            return "[]"
+
+    @pyqtSlot(str, str, str)
+    def showInTable(self, db_name: str, table: str, row_id: str):
+        """Open a row in its main-window tab (the dialog's show_in_table)."""
+        self.show_in_table.emit(db_name, table, row_id)
+
     @pyqtSlot(result=str)
     def getAvailableDatabases(self) -> str:
         """Check which databases exist in the case directory."""
@@ -2307,7 +2768,7 @@ class TimelineBridge(AsyncBridge):
             'mft_claw_analysis.db', 'prefetch_data.db', 'LnkDB.db',
             'registry_data.db', 'shimcache.db', 'amcache.db',
             'recyclebin_analysis.db', 'USN_journal.db',
-            'browser_analysis.db'
+            'browser_analysis.db', 'ai_agents.db'
         ]
         available = {}
         for db in dbs:

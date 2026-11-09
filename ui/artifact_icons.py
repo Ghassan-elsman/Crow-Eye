@@ -58,6 +58,8 @@ DRAWINGS = {
                  '<path d="M6.5 12h5"/>',
     "part_recovery": '<path d="M4.6 12a7.4 7.4 0 1 0 2.2-5.3"/><path d="M4.5 3.8v4.3h4.3"/>',
     "part_linux": '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/>',
+    # AI Agents (desktop only): the agent's terminal - the same prompt drawing as part_linux.
+    "ai_agents": '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M7 9.5l3 2.5-3 2.5M12.5 15h4.5"/>',
     "part_swap": '<path d="M5 8.5h13l-3.5-3.5"/><path d="M19 15.5H6l3.5 3.5"/>',
     "part_unknown": '<circle cx="12" cy="12" r="8.5"/><path d="M9.6 9.7a2.5 2.5 0 1 1 3.5 2.3c-0.6 0.3 -1 0.8 -1 1.5v0.5"/>'
                     '<circle cx="12" cy="16.9" r="0.7" fill="{c}"/>',
@@ -132,6 +134,7 @@ MAIN_BUTTONS = {
     "RecycleBinButton": "recycle_bin",
     "SRUMButton": "srum",
     "BrowserButton": "browser",
+    "AIAgentsButton": "ai_agents",
     "PartitionButton": "disks",
     "CrowClawButton": "register",
     "AppAcquisitionButton": "app_acquisition",
@@ -159,6 +162,7 @@ MAIN_TABS = {
     "RecycleBin_main_tab": "recycle_bin",
     "SRUM_main_tab": "srum",
     "Browser_main_tab": "browser",
+    "AIAgents_main_tab": "ai_agents",
 }
 
 _cache = {}

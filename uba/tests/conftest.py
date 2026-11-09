@@ -816,6 +816,14 @@ def artifacts_dir(tmp_path):
              "use_count": 1, "use_date": "2026-06-10 09:30:00"}],
     })
 
+    # ai_agents.db ---------------------------------------------------------
+    # Written by the real parser from session records shaped like the
+    # agents' own (Artifacts_Collectors/tests/ai_agent_transcripts.py), so the
+    # rules read exactly the rows a profile produces.
+    from Artifacts_Collectors.AI_Agent_Claw import parse_users_root
+    from Artifacts_Collectors.tests.ai_agent_transcripts import write_users
+    parse_users_root(write_users(str(tmp_path / "agent_profiles")), str(d / "ai_agents.db"))
+
     return str(d)
 
 

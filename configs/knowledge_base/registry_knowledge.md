@@ -324,6 +324,11 @@ are listener-to-target forwards - a common pivot mechanism.
 **`MountPoints2`** is per-user: `##server#share` entries prove that user mounted that remote share.
 
 **`RDPClientMRU`** is **outbound** RDP - servers this user connected TO, with the username hint.
+A `Server` row names its own key (`...\Terminal Server Client\Servers\<server>`), so its
+`last_written` is **that server's key** last-write time: when the client last saved that server -
+its first connection, or a later one that changed the saved hint or certificate. Every server has its
+own time; an older case dated all of them by the `Servers` container (the last server added) until
+re-parsed. `MRU` rows share the `Default` key's time: the most recent connection's.
 
 **`OfficeDocuments`** merges File MRU and TrustRecords under `kind`. A TrustRecord is where the user
 clicked "Enable Content" on a document - the usual macro-execution step.

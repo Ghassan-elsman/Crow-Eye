@@ -150,6 +150,9 @@ class DatabaseDiscoveryManager:
         # Browser forensics
         'browser_analysis.db': 'Browser',
         'Browser': 'Browser',
+
+        # AI agents
+        'ai_agents.db': 'AI Agents',
     }
     
     def __init__(self, case_directory: Union[str, Path]):
@@ -366,13 +369,24 @@ class DatabaseDiscoveryManager:
                     )
                 )
         
-        # Get row count (optional, can be slow for large tables)
+        # Row count for the discovery list. MAX(rowid) is an index seek (O(log n)),
+        # so it is instant even on the millions-row MFT/USN/correlated tables,
+        # where COUNT(*) read EVERY row and made opening Database Search slow.
+        # It is an estimate (an upper bound once rows have been deleted), which
+        # is all this list needs; WITHOUT ROWID tables have no rowid, so those
+        # fall back to COUNT(*) (they are small). Read-only, so a mere open of
+        # Database Search never writes to the evidence databases.
         row_count = None
         try:
-            conn = sqlite3.connect(str(db_path))
+            conn = sqlite3.connect(
+                'file:%s?mode=ro' % str(db_path).replace('\\', '/'), uri=True)
             cursor = conn.cursor()
-            cursor.execute(f'SELECT COUNT(*) FROM "{table_name}"')
-            row_count = cursor.fetchone()[0]
+            try:
+                cursor.execute(f'SELECT MAX(rowid) FROM "{table_name}"')
+                row_count = cursor.fetchone()[0] or 0
+            except sqlite3.Error:
+                cursor.execute(f'SELECT COUNT(*) FROM "{table_name}"')
+                row_count = cursor.fetchone()[0]
             conn.close()
         except Exception:
             pass

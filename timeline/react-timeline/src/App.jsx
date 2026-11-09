@@ -40,7 +40,7 @@ export default function App() {
     sessions: null, srum_app: null, srum_net: null, mft_usn: null,
     prefetch: null, lnk: null, bam: null, dam: null, registry: null,
     amcache: null, shimcache: null, recyclebin: null, imported: null,
-    event_logs: null, browser: null, aggregated: null,
+    event_logs: null, browser: null, ai_agents: null, ai_links: null, aggregated: null,
   });
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState('Initializing forensic engine...');
@@ -105,7 +105,9 @@ export default function App() {
           'date_last_used', 'date_added', 'date_last_opened', 'install_time',
           'last_updated', 'last_accessed', 'time_created', 'time_last_used',
           'last_used', 'use_date', 'last_seen', 'mtime',
-          'last_user_interaction_time'
+          'last_user_interaction_time',
+          // AI agent steps.
+          'ts'
         ];
         // Case-insensitive manifest field lookup. Prefer a field that actually
         // holds a value: a browser cache row carries an empty request_time
@@ -169,6 +171,7 @@ export default function App() {
     merged.bam = mergeArray(existingData.bam, deduplicateBatch(newData.bam, 'bam'), 'bam');
     merged.dam = mergeArray(existingData.dam, deduplicateBatch(newData.dam, 'dam'), 'dam');
     merged.browser = mergeArray(existingData.browser, deduplicateBatch(newData.browser, 'browser'), 'browser');
+    merged.ai_agents = mergeArray(existingData.ai_agents, deduplicateBatch(newData.ai_agents, 'ai_agent'), 'ai_agent');
 
     if (newData.registry) {
       const mergedRegistry = { ...(existingData.registry || {}) };
@@ -282,7 +285,7 @@ export default function App() {
           sessions: null, srum_app: null, srum_net: null, mft_usn: null,
           prefetch: null, lnk: null, bam: null, dam: null, registry: null,
           amcache: null, shimcache: null, recyclebin: null, imported: null,
-          event_logs: null, browser: null, aggregated: data.aggregated,
+          event_logs: null, browser: null, ai_agents: null, aggregated: data.aggregated,
         });
       }
     }
@@ -358,6 +361,13 @@ export default function App() {
         // Browser. Appended last on purpose: the val(n) unpack below is
         // positional, so anything inserted above renumbers every one of them.
         callBridge('getBrowserData', start, end),
+        // AI agent steps - commands, file writes and edits, the person's
+        // prompts. Last again, for the same positional reason.
+        callBridge('getAiAgentData', start, end),
+        // What Windows recorded of each AI step (Prefetch, BAM, 4688, SRUM,
+        // USN, browser history): the marks it names carry the AI badge.
+        // Last, for the same positional reason.
+        callBridge('getAiLinks', start, end),
       ]);
 
       if (currentFetchId !== lastFetchId.current) return;
@@ -381,6 +391,8 @@ export default function App() {
       const rawImported = val(11);
       const rawEventLogs = val(12);
       const rawBrowser = val(13);
+      const rawAiAgents = val(14);
+      const rawAiLinks = val(15);
 
       // DIAGNOSTIC LOGGING: Backend Response
       console.log('[DIAG] Bridge Responses:', {
@@ -427,6 +439,8 @@ export default function App() {
         imported: heuristicFlatten(rawImported),
         event_logs: heuristicFlatten(rawEventLogs),
         browser: heuristicFlatten(rawBrowser),
+        ai_agents: heuristicFlatten(rawAiAgents),
+        ai_links: Array.isArray(rawAiLinks) ? rawAiLinks : [],
       };
 
       // Registry table normalization (case-insensitive keys for easier discovery)
@@ -493,7 +507,7 @@ export default function App() {
     };
 
     Object.entries(data).forEach(([key, laneData]) => {
-      if (!laneData || key === 'aggregated') return;
+      if (!laneData || key === 'aggregated' || key === 'ai_links') return;
       
       let items = [];
       if (key === 'registry') {

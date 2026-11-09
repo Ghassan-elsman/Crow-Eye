@@ -82,7 +82,7 @@
     .dynamic-side { position: sticky; top: 100px; box-shadow: 0 8px 30px rgba(0,0,0,0.5); min-height: 500px; overflow-y: auto; max-height: 80vh; z-index: 100; }  /* card look -> anatomy.css */
     .panel-label { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; margin-bottom: 16px; border-bottom: 1px solid var(--border); padding-bottom: 8px; display: block; }
     .field-name { font-family: 'Barlow Semi Condensed', 'Bahnschrift', 'DIN', sans-serif; font-size: 24px; font-weight: 800; margin-bottom: 12px; color: var(--accent); }
-    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: break-all; overflow-wrap: anywhere; letter-spacing: 1px; line-height: 1.4; }
+    .field-val { font-family: 'Space Mono', monospace; color: var(--tx); background: var(--bg); padding: 12px; border-radius: 8px; margin-bottom: 20px; font-size: 14px; border: 1px solid var(--border); word-break: normal; overflow-wrap: break-word; letter-spacing: 1px; line-height: 1.4; }
     .meta-box { background: var(--bg); padding: 12px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px; overflow: hidden; }
     .meta-lbl { font-size: 10px; color: var(--tx3); text-transform: uppercase; display: block; margin-bottom: 2px; }
     .meta-v { font-weight: 600; color: var(--identity-color); font-size: 14px; }
@@ -317,9 +317,29 @@
 }
   </script>
   <link rel="stylesheet" href="anatomy.css">
+  <!-- Eye-Describe centrepiece: takes the galaxy's place, same fixed full-viewport layer as #particles-canvas -->
+  <style>
+    .cp-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100lvh;
+      z-index: -1;
+      pointer-events: none;
+      display: block;
+    }
+    @media print {
+      .cp-canvas {
+        display: none;
+      }
+    }
+  </style>
 </head>
 <body>
-  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <canvas id="particles-canvas" data-no-galaxy aria-hidden="true"></canvas>
+  <canvas class="cp-canvas" data-centerpiece data-cp-artifact="shellbags" data-cp-x="0.8" data-cp-y="0.45" data-cp-s="0.55" aria-hidden="true"></canvas>
   <div id="scroll-progress"></div>
 
   <!-- NAV -->
@@ -328,10 +348,11 @@
     <div class="nav-links-wrap">
       <a href="https://crow-eye.com/">Home</a>
       <a href="https://crow-eye.com/sentinel">Sentinel</a>
-      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye-Describe</a>
       <a href="https://crow-eye.com/eye-ai">Eye AI</a>
       <a href="https://crow-eye.com/user-guide">User Guide</a>
       <a href="https://crow-eye.com/documentation">Docs</a>
+      <a href="https://crow-eye.com/#support">Support</a>
       
       <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
       
@@ -343,7 +364,7 @@
 
   <div class="wrap" style="padding-top: 100px;">
     <header>
-      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye-Describe Anatomy</div>
       <h1>Shell items and shellbags: structure, contents and evidential limits</h1>
       <p class="header-sub">The shell item is the unit Windows uses to remember a place, and the registry keeps it in more than one family of keys - Shellbags, RecentDocs, the OpenSave and LastVisited MRUs, TypedPaths, RunMRU and the search box. This page takes the item apart byte by byte, then sets out what each family can and cannot prove. A shell view is not the same thing as a person.</p>
     </header>
@@ -392,10 +413,10 @@
       .myth h4 { color: #f87171; margin: 0 0 8px; font-size: 15px; }
       /* overview tables: long key paths wrap instead of pushing columns off-screen */
       .ref-table.wrap-code { table-layout: fixed; width: 100%; min-width: 760px; }
-      .ref-table.wrap-code code { white-space: normal; overflow-wrap: anywhere; }
+      .ref-table.wrap-code code { white-space: normal; overflow-wrap: break-word; }
       .ref-table.wrap-code td { white-space: normal; }
-      .ref-table.wrap-code th:nth-child(1) { width: 17%; }
-      .ref-table.wrap-code th:nth-child(2) { width: 25%; }
+      .ref-table.wrap-code th:nth-child(1) { width: 23%; }
+      .ref-table.wrap-code th:nth-child(2) { width: 22%; }
       .overview-list { margin: 10px 0 16px 22px; line-height: 1.7; }
       .overview-list li { margin-bottom: 6px; }
     </style>
@@ -3544,5 +3565,6 @@
     <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
   </footer>
   <script src="../main.js"></script>
+  <script src="../cp-describe.js"></script>
 </body>
 </html>

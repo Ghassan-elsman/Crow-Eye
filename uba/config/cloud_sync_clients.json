@@ -1,0 +1,15 @@
+{
+  "comment": "Cloud sync apps the Activity Story names (rule cloud_sync_client). 'match' is compared, lower case, with the installed program's name; 'folders' are the sync folders' usual names. Crow-Eye Sentinel's Drift reads the same list for new_sync_client.",
+  "clients": [
+    {"name": "OneDrive", "match": ["onedrive"], "folders": ["OneDrive"]},
+    {"name": "Dropbox", "match": ["dropbox"], "folders": ["Dropbox"]},
+    {"name": "Google Drive", "match": ["google drive", "googledrive", "drive file stream"], "folders": ["My Drive", "Google Drive"]},
+    {"name": "Box", "match": ["box drive", "box sync"], "folders": ["Box"]},
+    {"name": "iCloud", "match": ["icloud"], "folders": ["iCloudDrive", "iCloud Drive"]},
+    {"name": "MEGA", "match": ["megasync", "mega desktop"], "folders": ["MEGA"]},
+    {"name": "pCloud", "match": ["pcloud"], "folders": ["pCloudDrive"]},
+    {"name": "Sync.com", "match": ["sync.com", "sync desktop"], "folders": ["Sync"]},
+    {"name": "Nextcloud", "match": ["nextcloud"], "folders": ["Nextcloud"]},
+    {"name": "Tresorit", "match": ["tresorit"], "folders": ["Tresors"]}
+  ]
+}

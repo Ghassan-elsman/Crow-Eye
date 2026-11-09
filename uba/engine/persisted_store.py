@@ -14,8 +14,10 @@ the case as it is now:
 - ``format``          this module's layout version (bump with the schema)
 - ``rules_version`` / ``rules_sha256`` / ``rules_count``  behavior_rules.json
 - ``engine_code``     SHA-256 of the engine's own source, where readable
-- ``sources``         every evidence database's size and mtime (and its
-                      -wal file's): a re-parse changes them
+- ``sources``         every evidence database's size (a re-parse is
+                      append-only, so it grows the file). mtime and the -wal
+                      file are excluded: they churn when a loader merely reads
+                      the case, which used to force a rebuild on every open
 - ``disabled_hash``   the rules turned off in Settings (rule_switches)
 - ``user_rules_hash`` analyst-created rules (uba_user_rules.json, as loaded):
                       adding, editing or deleting one rebuilds. '' when there
@@ -48,7 +50,10 @@ from uba.utils.db_access import DB_CANDIDATES, resolve_db_path
 logger = logging.getLogger(__name__)
 
 # 2: events carry user_rule (analyst-created rules).
-FORMAT_VERSION = 2
+# 4 is NOT bumped for the size-only source signature: stamp_matches compares
+# sources by size, tolerant of an older stamp whose values also carried mtime
+# and -wal - so reading a case built by an older build does not force a rebuild.
+FORMAT_VERSION = 4   # 3: operator columns (who_drove.py); 4: app_state (foreground/background)
 STORE_DIRNAME = "UBA"
 STORE_FILENAME = "uba_events.db"
 
@@ -134,25 +139,28 @@ def engine_code_hash() -> str:
 
 
 def _file_sig(path: str) -> Optional[list]:
+    # Size only. A re-parse is append-only (dedupe_insert), so it grows the
+    # file; merely reading the case never changes its size. mtime and the -wal
+    # file churn when a loader opens the DB read-write and its connection
+    # checkpoints the WAL on close - keying on them rebuilt the whole store
+    # (~1 min) on every open with no new data.
     try:
-        st = os.stat(path)
-        return [st.st_size, round(st.st_mtime, 3)]
+        return [os.stat(path).st_size]
     except OSError:
         return None
 
 
 def source_signatures(artifacts_dir: str, extra=()) -> dict:
-    """{logical db: [size, mtime, wal size, wal mtime]} for every evidence
-    database present. A database that appears or disappears changes it too.
+    """{logical db: [relpath, size]} for every evidence database present. A
+    database that appears or disappears changes it too; a re-parse grows it.
     ``extra``: databases named by path that a user rule reads."""
     out = {}
     for logical in sorted(set(DB_CANDIDATES) | set(extra or ())):
         path = resolve_db_path(artifacts_dir, logical)
         if not path:
             continue
-        sig = _file_sig(path) or [None, None]
-        wal = _file_sig(path + "-wal") or [0, None]
-        out[logical] = [os.path.relpath(path, artifacts_dir).replace("\\", "/")] + sig + wal
+        sig = _file_sig(path) or [None]
+        out[logical] = [os.path.relpath(path, artifacts_dir).replace("\\", "/")] + sig
     return out
 
 
@@ -176,10 +184,27 @@ def compute_stamp(artifacts_dir: str, rules_config: dict, disabled_ids=(),
     }
 
 
+def _source_sizes(sources) -> dict:
+    """{logical: size} from a sources dict in any version. The value is
+    [relpath, size, ...]; older builds appended mtime and the -wal file. Keyed
+    by size only, so a mere read (which bumps mtime) never looks like a change,
+    while a re-parse (which grows the file) does."""
+    out = {}
+    for logical, val in (sources or {}).items():
+        out[logical] = val[1] if isinstance(val, (list, tuple)) and len(val) > 1 else None
+    return out
+
+
 def stamp_matches(stored: Optional[dict], current: dict) -> bool:
     if not stored:
         return False
-    return all(_jsonable(stored.get(k)) == _jsonable(current.get(k)) for k in _STAMP_KEYS)
+    for k in _STAMP_KEYS:
+        if k == "sources":
+            if _source_sizes(stored.get(k)) != _source_sizes(current.get(k)):
+                return False
+        elif _jsonable(stored.get(k)) != _jsonable(current.get(k)):
+            return False
+    return True
 
 
 def stamp_differences(stored: Optional[dict], current: dict) -> list:
@@ -247,6 +272,7 @@ class PersistedStore:
                 src.close()
             store.conn.execute("DROP TABLE IF EXISTS meta")
             store.conn.commit()
+            store.ensure_indexes()
         except sqlite3.Error as e:
             logger.warning("UBA: stored analysis could not be loaded (%s): %s", self.path, e)
             store.conn.close()

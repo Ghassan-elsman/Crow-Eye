@@ -299,6 +299,7 @@ _FILTER_MAP = {
     "LNK & Jump Lists": "link_jumplist", "$MFT": "MFT", "USN journal": "USN",
     "Recycle Bin": "RecycleBin", "Event logs": "EVTX", "AmCache": "AmCache",
     "ShimCache": "ShimCache", "SRUM": "SRUM", "Browsers": "Browser",
+    "AI agents": "AIAgents",
 }
 
 
@@ -837,7 +838,8 @@ class ImageParsingDialog(QMainWindow):
         self.results_type_filter.setObjectName("ipCombo")
         self.results_type_filter.addItems([
             "All types", "Registry", "Prefetch", "link_jumplist", "MFT", "USN",
-            "RecycleBin", "AmCache", "ShimCache", "EVTX", "SRUM", "Browser", "Failed only"])
+            "RecycleBin", "AmCache", "ShimCache", "EVTX", "SRUM", "Browser", "AIAgents",
+            "Failed only"])
         self.results_type_filter.currentTextChanged.connect(self._apply_results_filters)
         fr.addWidget(self.results_type_filter)
         fr.addStretch(1)
@@ -863,6 +865,9 @@ class ImageParsingDialog(QMainWindow):
 
         # Log
         self.log_text_area = QTextEdit()
+        # A long scan logs without end; the oldest lines go, as in the
+        # parse dialog (Loading_dialog), or every append grows the cost.
+        self.log_text_area.document().setMaximumBlockCount(5000)
         self.log_text_area.setObjectName("ipLog")
         self.log_text_area.setReadOnly(True)
         self.tabs.addTab(self.log_text_area, "Log")
@@ -1607,6 +1612,22 @@ class ImageParsingDialog(QMainWindow):
             if self._passes_filter(a):
                 self._add_result_row(a)
 
+    # Rows arrive one by one as a scan finds them. Turning sorting back on
+    # after each one re-sorted the whole table every row; it is turned on
+    # once, a moment after the last row of a burst.
+    def _resort_later(self):
+        if getattr(self, "_resort_pending", False):
+            return
+        self._resort_pending = True
+        QTimer.singleShot(150, self._resort_now)
+
+    def _resort_now(self):
+        self._resort_pending = False
+        try:
+            self.results_table.setSortingEnabled(True)
+        except RuntimeError:
+            pass  # the window closed meanwhile
+
     def _add_result_row(self, artifact: dict):
         try:
             self.results_table.setSortingEnabled(False)
@@ -1629,7 +1650,7 @@ class ImageParsingDialog(QMainWindow):
             hi = QTableWidgetItem(hv[:16] + "..." if len(hv) > 16 else hv)
             hi.setToolTip(hv)
             self.results_table.setItem(row, 4, hi)
-            self.results_table.setSortingEnabled(True)
+            self._resort_later()
         except Exception as e:
             logger.error("Failed to add a result row: %s", e)
 

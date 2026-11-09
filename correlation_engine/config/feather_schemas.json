@@ -323,5 +323,19 @@
     "secondary_timestamp_columns": ["ts_end"],
     "identity_columns_preferred": ["executable_name", "file_path"],
     "table_kind": "behaviour_events"
+  },
+  "ai_agent_steps": {
+    "artifact_type": "AIAgents",
+    "_comment": "AI agent activity steps (ai_agents.db). ts is the step time; the feather mapping derives executable_name (the first program a command ran) and file_path (a file step's target).",
+    "primary_timestamp_column": "ts",
+    "identity_columns_preferred": ["program", "target", "session_id"],
+    "table_kind": "user_activity"
+  },
+  "ai_agent_file_versions": {
+    "artifact_type": "AIAgents",
+    "_comment": "Saved file versions an AI agent kept (ai_agents.db). saved_at is when the version was written; file_name is derived from file_path by the feather mapping.",
+    "primary_timestamp_column": "saved_at",
+    "identity_columns_preferred": ["file_path", "sha1", "session_id"],
+    "table_kind": "filesystem_metadata"
   }
 }

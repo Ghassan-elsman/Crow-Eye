@@ -75,6 +75,9 @@ OTHER_PARSERS = {
     # Without this entry the Browser check passes vacuously - the schema
     # lookup returns nothing and the loop skips every mapped column.
     "browser_analysis.db": [_p("Browser_Claw.py")],
+    # AI agent sessions. One parser for live and offline: it reads the
+    # profile folders under a Users root, either this machine's or an image's.
+    "ai_agents.db": [_p("AI_Agent_Claw.py")],
 }
 
 BRIDGE = os.path.join(REPO, "timeline", "timeline_bridge.py")

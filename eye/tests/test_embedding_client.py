@@ -73,20 +73,28 @@ class TestVectorPathAndCache(unittest.TestCase):
         emb.embed_text.side_effect = embed
         emb.model_name = "nomic-embed-text"
 
-        rag = RAGService(knowledge_base_dir=str(kb), embedding_client=emb)
-        rag._build_vector_index()
-        self.assertTrue(rag.vector_index)
-        first_calls = calls["n"]
-        self.assertGreater(first_calls, 0)
-        # Cache file written, namespaced by model.
-        cache_file = kb / ".embcache" / "nomic-embed-text.json"
-        self.assertTrue(cache_file.exists())
+        # The cache is per user (user_config_dir()/eye_embcache), not in the
+        # knowledge base folder, which ships inside the app and an upgrade
+        # replaces. Pointed at a scratch folder: the test must never put its
+        # fake vectors into the real user's cache.
+        from unittest.mock import patch
+        user_dir = Path(tempfile.mkdtemp())
+        with patch("eye.services.config_manager.user_config_dir", return_value=user_dir):
+            rag = RAGService(knowledge_base_dir=str(kb), embedding_client=emb)
+            rag._build_vector_index()
+            self.assertTrue(rag.vector_index)
+            first_calls = calls["n"]
+            self.assertGreater(first_calls, 0)
+            # Cache file written, namespaced by model, beside the user's settings.
+            cache_file = user_dir / "eye_embcache" / "nomic-embed-text.json"
+            self.assertTrue(cache_file.exists())
+            self.assertFalse((kb / ".embcache").exists())
 
-        # A fresh service over the same KB reuses the cache: no new embed calls.
-        rag2 = RAGService(knowledge_base_dir=str(kb), embedding_client=emb)
-        rag2._build_vector_index()
-        self.assertEqual(calls["n"], first_calls, "embeddings should be served from disk cache")
-        self.assertTrue(rag2.vector_index)
+            # A fresh service over the same KB reuses the cache: no new embed calls.
+            rag2 = RAGService(knowledge_base_dir=str(kb), embedding_client=emb)
+            rag2._build_vector_index()
+            self.assertEqual(calls["n"], first_calls, "embeddings should be served from disk cache")
+            self.assertTrue(rag2.vector_index)
 
 
 if __name__ == "__main__":

@@ -23,8 +23,14 @@ except Exception:
 @unittest.skipUnless(HAS_SEARCH, "data.search_engine unavailable")
 class TestSearchArtifactsHandler(unittest.TestCase):
     def _handler_with_results(self, results):
+        # The search goes through the case's data source (17.1): the real
+        # SqliteCaseDataSource.text_search, over a stubbed search service.
+        from eye.services.database_service import SqliteCaseDataSource
+        ds = SqliteCaseDataSource.__new__(SqliteCaseDataSource)
+        ds.search_service = MagicMock()
+        ds.search_service.search.return_value = results
         cm = MagicMock()
-        cm.search_service.search.return_value = results
+        cm.database_service = ds
         return ForensicHandlers(cm)
 
     def test_results_are_json_serializable_and_real_fields(self):

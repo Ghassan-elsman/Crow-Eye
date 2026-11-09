@@ -220,6 +220,29 @@ JOIN AmcacheCarvedKeys k ON k.cell_offset = v.parent_cell_offset
 WHERE v.value_name IN ('LowerCaseLongPath', 'FileId', 'ProgramId');
 ```
 
+## How the hive was read: `AmcacheHiveState`
+
+Amcache.hve is a hive like any other. Windows keeps it open, and its
+outstanding changes sit in `Amcache.hve.LOG1`/`.LOG2` beside it. Every parse
+writes one `AmcacheHiveState` row, with the same columns as the registry
+parser's `registry_hive_state`:
+
+- **`acquisition_route` `file:collected`** (offline): the collected file was
+  checked, and its logs were replayed into a working copy if it was dirty.
+  `was_dirty = 1` with `replayed = 0` means the AmCache rows may not be the
+  hive's final state; `reason` says why (for example, no log was collected).
+  `source_sha256` is the evidence file's hash as found.
+- **`acquisition_route` `export:ntsavekeyex`** (live): the kernel's snapshot
+  of the hive, which already includes what the logs would apply. `was_dirty`
+  is NULL there because it does not apply. It is never 0.
+- **`reorganized_at`**: when Windows last compacted the hive. A recent date
+  means an empty `AmcacheCarvedKeys` is not evidence that nothing was deleted.
+
+```sql
+SELECT acquisition_route, was_dirty, replayed, logs_found, reorganized_at, reason
+FROM AmcacheHiveState ORDER BY parsed_at DESC;
+```
+
 ## Associated and unassociated file entries
 
 `program_association` on `InventoryApplicationFile`:

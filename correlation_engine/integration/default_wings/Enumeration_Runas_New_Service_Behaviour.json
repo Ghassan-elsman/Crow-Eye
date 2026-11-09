@@ -3,6 +3,7 @@
   "wing_name": "Enumeration, Run-as, New Service (Behaviour)",
   "wing_id": "default_behaviour_enum_runas_service_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "Account enumeration, then use of another account's credentials, then a new service, in that order within an hour. UBA rules: account_enumeration (Security 4798/4799, summarised per hour), explicit_credentials (Security 4648) and service_installed (System 7045). Windows records no account for 7045 - the Service Control Manager installs the service - so the third step is a machine step: it matches a service installed on this computer, and the hit says that step names no person.",
   "proves": "An account looked up accounts and groups, used other credentials, and a service was installed soon after",
   "author": "Crow-Eye Team",

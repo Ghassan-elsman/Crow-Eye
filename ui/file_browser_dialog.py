@@ -784,6 +784,8 @@ class FileBrowserWidget(QtWidgets.QWidget):
         self._shown = shown
         self._row_of = {}
         self.table.blockSignals(True)
+        was_sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(shown))
         folder_icon = self.style().standardIcon(QtWidgets.QStyle.SP_DirIcon)
         file_icon = self.style().standardIcon(QtWidgets.QStyle.SP_FileIcon)
@@ -812,6 +814,7 @@ class FileBrowserWidget(QtWidgets.QWidget):
                     font.setItalic(True)
                     cell.setFont(font)
                 self.table.setItem(r, c, cell)
+        self.table.setSortingEnabled(was_sorting)
         self.table.blockSignals(False)
         self._refresh_shares()
         folders = sum(1 for e in rows if e["is_dir"])

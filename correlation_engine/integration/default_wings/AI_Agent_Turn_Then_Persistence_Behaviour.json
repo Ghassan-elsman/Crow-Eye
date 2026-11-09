@@ -1,0 +1,62 @@
+{
+  "config_name": "ai_agent_turn_then_persistence_behaviour",
+  "wing_name": "AI Agent Turn, Then Something Set to Start (Behaviour)",
+  "wing_id": "default_behaviour_ai_persistence_001",
+  "wing_category": "behaviour",
+  "host_scope": "same_host",
+  "description": "An AI agent worked on a request, and within 30 minutes a service was installed, an autostart entry or scheduled task registered, or a Defender exclusion added. The agent's own record lists the commands it ran in that turn; the persistence comes from the registry, the service list and the event logs.",
+  "proves": "Something was set to start on its own, or protection was lowered, while an AI agent was working",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-11-04T00:00:00Z",
+  "last_modified": "2026-11-04T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "An AI agent worked on a request",
+      "rule_id": "ai_agent_turn",
+      "actor": "any"
+    },
+    {
+      "label": "Something set to start on its own, or a Defender exclusion",
+      "rule_id": [
+        "service_installed",
+        "autostart_service",
+        "scheduled_task_registered",
+        "autostart_persistence",
+        "defender_exclusion"
+      ],
+      "actor": "any"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 30,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1543.003",
+      "T1053.005",
+      "T1547.001",
+      "T1562.001"
+    ],
+    "tactic": [
+      "persistence",
+      "defense_evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "ai_agent",
+    "persistence",
+    "behaviour"
+  ],
+  "case_types": [
+    "ai_agent",
+    "insider",
+    "intrusion"
+  ]
+}

@@ -6,6 +6,7 @@ databases with advanced query construction, result aggregation, and search
 history management.
 """
 
+import os
 import re
 import logging
 import threading
@@ -22,7 +23,48 @@ from .search_history_manager import SearchHistoryManager, SearchHistoryEntry, Sa
 from .database_discovery_manager import DatabaseDiscoveryManager, EnhancedDatabaseInfo, TimestampColumnInfo
 from .timestamp_parser import TimestampParser
 from data.search_engine import DatabaseSearchEngine, SearchResults
-from data.base_loader import BaseDataLoader
+from data.base_loader import BaseDataLoader, value_matcher
+
+# Tables (and slices of tables) searched at once. sqlite3 releases the GIL
+# while a query runs, so a LIKE scan of one table proceeds beside another's.
+# One per core, at least the six this started with and at most sixteen.
+# Measured on a live parse of this machine (3.9 M MFT/USN rows, 32 cores):
+# 54 s table by table, 19.2 s on six threads (the largest table 16.6 s of
+# it), 8.2 s with the slices below on sixteen, the same hits each time.
+SEARCH_THREADS = min(16, max(6, os.cpu_count() or 6))
+
+# A table of at least twice this many rowids is searched in slices of about
+# this size, each its own task on the pool, so the largest table no longer
+# bounds the whole search alone. The LIKE over the 43 columns of
+# mft_usn_correlated is CPU (9 to 10 s warm against 1.6 s to read the rows),
+# and a narrow row count is not a small table: 265,000 AI agent steps of
+# prompt and output text took 13.6 s read whole. At most SEARCH_SLICES of one
+# table, so one table cannot queue thousands of tasks.
+SLICE_ROWS = 50000
+SEARCH_SLICES = 12
+_ROWID_MIN = -(2 ** 63)
+_ROWID_MAX = 2 ** 63 - 1
+
+
+def rowid_slices(lo, hi, slice_rows=SLICE_ROWS, most=SEARCH_SLICES):
+    """[(lo, hi), ...] covering every rowid of a table whose rowids run from
+    `lo` to `hi`, or None when it is small enough to read as one. The first
+    slice starts at the smallest rowid there can be and the last ends at the
+    largest, so a row written while the search runs is in a slice exactly as
+    it would be in one scan."""
+    if lo is None or hi is None:
+        return None
+    span = int(hi) - int(lo) + 1
+    if span < slice_rows * 2:
+        return None
+    n = min(most, -(-span // slice_rows))
+    step = -(-span // n)
+    out = []
+    for i in range(n):
+        a = int(lo) + i * step
+        b = min(int(hi), a + step - 1)
+        out.append((_ROWID_MIN if i == 0 else a, _ROWID_MAX if i == n - 1 else b))
+    return out
 
 
 @dataclass
@@ -383,7 +425,8 @@ class UnifiedDatabaseSearchEngine:
         start_time: Optional[datetime.datetime] = None,
         end_time: Optional[datetime.datetime] = None,
         progress_callback: Optional[Callable[[str], None]] = None,
-        completion_callback: Optional[Callable[[List[SearchResults]], None]] = None
+        completion_callback: Optional[Callable[[List[SearchResults]], None]] = None,
+        record_history: bool = True
     ) -> List[SearchResults]:
         """
         Perform a unified search across multiple databases with optional time filtering.
@@ -401,10 +444,18 @@ class UnifiedDatabaseSearchEngine:
             end_time: Optional end datetime for time filtering
             progress_callback: Optional callback for progress updates
             completion_callback: Optional callback when search completes
-            
+            record_history: Save the search to history here. The dialog
+                passes False: it saves its own entry, with the time filter,
+                and each search was listed twice
+
         Returns:
             List of SearchResults objects
         """
+        if use_regex:
+            try:
+                re.compile(search_term)
+            except re.error as e:
+                raise ValueError("not a valid regular expression: %s" % e)
         self._cancel_event.clear()
         self.reset_for_search()
         try:
@@ -501,47 +552,20 @@ class UnifiedDatabaseSearchEngine:
                         max_results=max_results_per_table,
                         timeout_seconds=timeout_seconds,
                         start_time=start_time,
-                        end_time=end_time
+                        end_time=end_time,
+                        use_regex=use_regex
                     )
                     if results:
                         all_results.append(results)
                 except Exception as e:
                     self.logger.error(f"Error searching database {enhanced_db_info.name}: {e}", exc_info=True)
         else:
-            # Standard search without time filtering
-            for i, db_info in enumerate(db_infos):
-                if self._cancel_event.is_set():
-                    self.logger.info("Search was cancelled.")
-                    break
+            # Standard search without time filtering: every table at once.
+            all_results.extend(self._search_tables_in_parallel(
+                db_infos, tables, search_term, case_sensitive, exact_match,
+                max_results_per_table, timeout_seconds, progress_callback,
+                use_regex=use_regex))
 
-                # Progress indicator with percentage 
-                progress_pct = int((i / len(db_infos)) * 100)
-                if progress_callback:
-                    progress_callback(
-                        f"[{progress_pct}%] Searching database {i+1}/{len(db_infos)}: "
-                        f"{db_info.display_name or db_info.name}..."
-                    )
-
-                try:
-                    # Get tables for this specific database
-                    db_tables = None
-                    if tables and db_info.name in tables:
-                        db_tables = tables[db_info.name]
-                    db_tables = self._tables_or_all(db_tables, db_info)
-                    
-                    results = self._search_database(
-                        db_info=db_info,
-                        search_term=search_term,
-                        tables=db_tables,
-                        case_sensitive=case_sensitive,
-                        exact_match=exact_match,
-                        max_results=max_results_per_table,
-                        timeout_seconds=timeout_seconds
-                    )
-                    if results:
-                        all_results.append(results)
-                except Exception as e:
-                    self.logger.error(f"Error searching database {db_info.name}: {e}", exc_info=True)
 
         elapsed_time = time.time() - start_search_time
         total_matches = sum(res.total_matches for res in all_results)
@@ -554,15 +578,15 @@ class UnifiedDatabaseSearchEngine:
         else:
             self.logger.info(f"Unified search completed in {elapsed_time:.2f}s with {total_matches} total matches.")
 
-        # Add to history
-        self.history_manager.save_history(
-            term=search_term,
-            databases=databases or [],
-            tables=tables or {},
-            case_sensitive=case_sensitive,
-            exact_match=exact_match,
-            use_regex=use_regex
-        )
+        if record_history:
+            self.history_manager.save_history(
+                term=search_term,
+                databases=databases or [],
+                tables=tables or {},
+                case_sensitive=case_sensitive,
+                exact_match=exact_match,
+                use_regex=use_regex
+            )
 
         print(f"[SEARCH] Returning {len(all_results)} SearchResults objects to caller")
         for idx, sr in enumerate(all_results):
@@ -572,6 +596,258 @@ class UnifiedDatabaseSearchEngine:
             completion_callback(all_results)
 
         return all_results
+
+    def _search_tables_in_parallel(self, db_infos, tables, search_term, case_sensitive,
+                                   exact_match, max_results, timeout_seconds,
+                                   progress_callback=None, use_regex=False):
+        """Search every table of every database on SEARCH_THREADS threads.
+
+        Returns one SearchResults per database, in the databases' order, with
+        exactly what the table-by-table search returned: each table capped at
+        max(100, max_results // its database's table count), and a database's
+        results cut at max_results in table order. Each task opens its own
+        connection (a sqlite3 connection belongs to its thread).
+        """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import os
+
+        plans = []          # (database info, [tables], per-table cap)
+        for info in db_infos:
+            db_tables = tables.get(info.name) if tables and info.name in tables else None
+            db_tables = self._tables_or_all(db_tables, info)
+            if db_tables is None:
+                loader = BaseDataLoader(info.path)
+                if not loader.connect():
+                    self.logger.error(f"Failed to connect to database: {info.path}")
+                    continue
+                try:
+                    db_tables = loader.get_table_names()
+                finally:
+                    loader.disconnect()
+            shadow = self._shadow_tables(info.path)
+            db_tables = [t for t in (db_tables or []) if t not in shadow]
+            plans.append((info, db_tables, max(100, max_results // max(1, len(db_tables)))))
+
+        # (database, table, rowid slice or None for the whole table)
+        tasks = []
+        slices = {}
+        for p, (info, ts, _c) in enumerate(plans):
+            spans = self._rowid_spans(info.path, ts)
+            for t in ts:
+                parts = rowid_slices(*spans[t]) if t in spans else None
+                slices[(p, t)] = parts or [None]
+                tasks.extend((p, t, r) for r in slices[(p, t)])
+
+        # ONCE THE FIRST SLICES HOLD THE CAP, THE REST ARE STOPPED. One scan
+        # of a table stops at its cap; its slices each ran to their own, so a
+        # common term read a sliced table a dozen times over (3.6 s -> 5.0 s
+        # for "chrome" on this case). When slices 0..k of a table have all
+        # answered and together hold its cap, rows past slice k can never be
+        # kept (_join_slices keeps the first cap rows in rowid order), so a
+        # slice after k that is running is interrupted (BaseDataLoader.interrupt:
+        # sqlite3_interrupt may be called from another thread, and the loader
+        # then logs its "interrupted" errors at debug) and one not started is
+        # skipped.
+        cut_lock = threading.Lock()
+        cuts = {key: {"done": {}, "conns": {}, "upto": None}
+                for key, parts in slices.items() if len(parts) > 1}
+
+        def _past_the_cut(state, i):
+            return state["upto"] is not None and i > state["upto"]
+
+        def _answered(state, i, matches, cap):
+            state["done"][i] = matches
+            if state["upto"] is not None:
+                return
+            total, k = 0, 0
+            while k in state["done"]:
+                total += state["done"][k]
+                if total >= cap:
+                    state["upto"] = k
+                    for j, running in list(state["conns"].items()):
+                        if j > k:
+                            running.interrupt()
+                    return
+                k += 1
+
+        def size(info):
+            try:
+                return os.path.getsize(info.path)
+            except OSError:
+                return 0
+
+        def run(task):
+            p, table, rowid_range = task
+            if self._cancel_event.is_set():
+                return None
+            info, _ts, cap = plans[p]
+            state = cuts.get((p, table))
+            i = slices[(p, table)].index(rowid_range) if state else 0
+            if state:
+                with cut_lock:
+                    if _past_the_cut(state, i):
+                        return None
+            loader = BaseDataLoader(info.path)
+            if not loader.connect():
+                return None
+            try:
+                if state:
+                    with cut_lock:
+                        if _past_the_cut(state, i):
+                            return None
+                        state["conns"][i] = loader
+                found_here = DatabaseSearchEngine(loader, enable_cache=False).search(
+                    search_term=search_term, tables=[table],
+                    case_sensitive=case_sensitive, exact_match=exact_match,
+                    max_results=cap, timeout_seconds=timeout_seconds,
+                    rowid_range=rowid_range, use_regex=use_regex)
+                if state:
+                    with cut_lock:
+                        state["conns"].pop(i, None)
+                        if _past_the_cut(state, i):
+                            return None      # interrupted: its rows are never kept
+                        _answered(state, i, found_here.total_matches, cap)
+                return found_here
+            except Exception as e:
+                self.logger.error(f"Error searching {info.name}/{table}: {e}", exc_info=True)
+                return None
+            finally:
+                if state:
+                    with cut_lock:
+                        state["conns"].pop(i, None)
+                loader.disconnect()
+
+        found = {}
+        if tasks:
+            # Every table's first slice before any table's second, and within
+            # a round the largest files first, so the long scans start at
+            # once. A common term fills a table's cap in its first slice and
+            # cuts the table before its later slices are taken from the queue.
+            def slice_no(tk):
+                return slices[(tk[0], tk[1])].index(tk[2])
+            order = sorted(tasks, key=lambda tk: (slice_no(tk), -size(plans[tk[0]][0])))
+            with ThreadPoolExecutor(max_workers=min(SEARCH_THREADS, len(tasks))) as pool:
+                futures = {pool.submit(run, tk): tk for tk in order}
+                done = 0
+                for future in as_completed(futures):
+                    tk = futures[future]
+                    done += 1
+                    try:
+                        found[tk] = future.result()
+                    except Exception as e:                  # pragma: no cover
+                        self.logger.error(f"Search task failed: {e}")
+                    if progress_callback:
+                        info = plans[tk[0]][0]
+                        progress_callback(
+                            f"[{int(done * 100 / len(tasks))}%] Searched {done}/{len(tasks)} "
+                            f"tables: {info.display_name or info.name} / {tk[1]}...")
+                    if self._cancel_event.is_set():
+                        self.logger.info("Search was cancelled.")
+                        for f in futures:
+                            f.cancel()
+                        break
+
+        out = []
+        for p, (info, ts, _cap) in enumerate(plans):
+            merged = SearchResults(search_term=search_term)
+            merged.database_name = info.name
+            merged.tables_searched = len(ts)
+            for table in ts:
+                part = self._join_slices(search_term, table, _cap,
+                                         [found.get((p, table, r)) for r in slices[(p, table)]])
+                if part is None or not part.total_matches:
+                    continue
+                merged.tables_with_results += 1
+                merged.search_time = max(merged.search_time, part.search_time)
+                for result in part.get_results_by_table(table):
+                    merged.add_result(result)
+                    if merged.total_matches >= max_results:
+                        merged.truncated = True
+                        break
+                if merged.truncated:
+                    break
+            merged.sort_by_relevance()
+            out.append(merged)
+        return out
+
+    # The tables SQLite itself keeps behind a virtual table (FTS3/4/5's index
+    # pages and settings, R*Tree's nodes): the index's internals, never
+    # evidence. A search of them errored or matched index bytes; the virtual
+    # table itself (matches_fts) is still searched.
+    _SHADOW_SUFFIXES = ("_data", "_idx", "_content", "_docsize", "_config",
+                        "_segments", "_segdir", "_stat", "_node", "_rowid", "_parent")
+
+    @classmethod
+    def _shadow_tables(cls, path):
+        """Names of the shadow tables of every virtual table in one database."""
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % Path(path).as_posix(), uri=True,
+                                   timeout=5)
+        except sqlite3.Error:
+            return set()
+        try:
+            rows = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table'").fetchall()
+        except sqlite3.Error:
+            return set()
+        finally:
+            conn.close()
+        names = {n for n, _sql in rows}
+        virtual = [n for n, sql in rows
+                   if sql and sql.lstrip().upper().startswith("CREATE VIRTUAL TABLE")]
+        return {v + s for v in virtual for s in cls._SHADOW_SUFFIXES if v + s in names}
+
+    def _rowid_spans(self, path, tables):
+        """{table: (min rowid, max rowid)} for the tables of one database
+        that have a rowid; one indexed read each. A WITHOUT ROWID table, a
+        view or an unreadable one is left out and read whole."""
+        out = {}
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % Path(path).as_posix(), uri=True,
+                                   timeout=5)
+        except sqlite3.Error:
+            return out
+        try:
+            for t in tables:
+                q = str(t).replace('"', '""')
+                try:
+                    # Two scalar subqueries, never min() and max() in one
+                    # SELECT: SQLite reads a lone min or max from the end of
+                    # the rowid tree, but both together scan the whole table
+                    # (12.9 s over this case's tables before the search began).
+                    out[t] = conn.execute('SELECT (SELECT min(rowid) FROM "%s"), '
+                                          '(SELECT max(rowid) FROM "%s")' % (q, q)).fetchone()
+                except sqlite3.Error:
+                    continue
+        finally:
+            conn.close()
+        return out
+
+    @staticmethod
+    def _join_slices(search_term, table, cap, parts):
+        """One table's SearchResults from its slices', exactly as one scan of
+        it returns them: the rows in rowid order, cut at the table's cap, then
+        sorted by relevance. A single part (a table read whole) is returned as
+        it is; None when no slice answered."""
+        answered = [x for x in parts if x is not None]
+        if len(parts) == 1 or not answered:
+            return answered[0] if answered else None
+        rows = []
+        for part in parts:
+            if part is None:
+                continue
+            got = part.get_results_by_table(table)
+            got.sort(key=lambda r: (r.record_data or {}).get("_rowid_") or 0)
+            rows.extend(got)
+        joined = SearchResults(search_term=search_term)
+        joined.tables_searched = 1
+        joined.search_time = max(x.search_time for x in answered)
+        for result in rows[:cap]:
+            joined.add_result(result)
+        joined.truncated = len(rows) > cap or any(x.truncated for x in answered)
+        if joined.total_matches:
+            joined.tables_with_results = 1
+        joined.sort_by_relevance()
+        return joined
 
     @staticmethod
     def _tables_or_all(db_tables, info):
@@ -720,7 +996,8 @@ class UnifiedDatabaseSearchEngine:
         max_results: int,
         timeout_seconds: float,
         start_time: Optional[datetime.datetime],
-        end_time: Optional[datetime.datetime]
+        end_time: Optional[datetime.datetime],
+        use_regex: bool = False
     ) -> Optional[SearchResults]:
         """
         Search a single database with time filtering.
@@ -774,7 +1051,8 @@ class UnifiedDatabaseSearchEngine:
                     case_sensitive=case_sensitive,
                     exact_match=exact_match,
                     max_results=max_results,
-                    timeout_seconds=timeout_seconds
+                    timeout_seconds=timeout_seconds,
+                    use_regex=use_regex
                 )
                 results.database_name = enhanced_db_info.name
                 return results
@@ -829,14 +1107,23 @@ class UnifiedDatabaseSearchEngine:
                         end_time=end_time,
                         max_results=max_results
                     )
-                    
-                    
-                    
+                    # The term is matched in SQL too, with the plain search's
+                    # own rule (match_where): only the first max_results * 10
+                    # rows in the period were read and then matched in
+                    # Python, so a match past them was never found, and Exact
+                    # Match and Regex were ignored (a substring test).
+                    match_sql, match_params = table_loader.match_where(
+                        table_loader.get_columns(table_name), search_term,
+                        case_sensitive, exact_match, use_regex)
+                    query = query.replace(
+                        "            LIMIT ",
+                        "            AND (%s)\n            LIMIT " % match_sql, 1)
+
                     # Execute query with remaining timeout
                     remaining_timeout = timeout_seconds - elapsed
                     results = table_loader.execute_query(
                         query,
-                        params=(),
+                        params=match_params,
                         fetch=True
                     )
                     
@@ -853,14 +1140,20 @@ class UnifiedDatabaseSearchEngine:
                         database_name=enhanced_db_info.name,
                         gui_tab_name=enhanced_db_info.gui_tab_name,
                         search_term=search_term,
-                        case_sensitive=case_sensitive
+                        case_sensitive=case_sensitive,
+                        exact_match=exact_match,
+                        use_regex=use_regex
                     )
 
                     if not filtered_results:
-                        fallback_query = f"SELECT rowid as _rowid_, * FROM \"{table_name}\" LIMIT {max_results * 10}"
+                        # Timestamps the SQL range cannot compare (another
+                        # format in the same column): the term's matches,
+                        # each period checked by the parser below.
+                        fallback_query = (f"SELECT rowid as _rowid_, * FROM \"{table_name}\" "
+                                          f"WHERE {match_sql} LIMIT {max_results * 10}")
                         fallback_rows = table_loader.execute_query(
                             fallback_query,
-                            params=(),
+                            params=match_params,
                             fetch=True
                         )
                         filtered_results = self._parse_and_filter_timestamps(
@@ -872,9 +1165,11 @@ class UnifiedDatabaseSearchEngine:
                             database_name=enhanced_db_info.name,
                             gui_tab_name=enhanced_db_info.gui_tab_name,
                             search_term=search_term,
-                            case_sensitive=case_sensitive
+                            case_sensitive=case_sensitive,
+                            exact_match=exact_match,
+                            use_regex=use_regex
                         )
-                    
+
                     all_table_results.extend(filtered_results)
                     
                     # Log performance metrics 
@@ -1082,7 +1377,9 @@ class UnifiedDatabaseSearchEngine:
         database_name: str,
         gui_tab_name: str,
         search_term: str = "",
-        case_sensitive: bool = False
+        case_sensitive: bool = False,
+        exact_match: bool = False,
+        use_regex: bool = False
     ) -> List[SearchResult]:
         """
         Post-process results to verify timestamp filtering and add metadata.
@@ -1114,29 +1411,15 @@ class UnifiedDatabaseSearchEngine:
         self.logger.debug(f"  Search term: '{search_term}', Case sensitive: {case_sensitive}")
         self.logger.debug(f"  Time range: {start_time} to {end_time}")
         
+        matches = value_matcher(search_term, case_sensitive, exact_match, use_regex) \
+            if search_term else None
         for row in results:
-            # First check if row matches search term (if provided)
+            # First check if row matches search term (if provided): the rule
+            # the SQL used, so a column is named matched only when it is.
             if search_term:
-                row_matches_search = False
-                matched_columns = []
-                
-                for col_name, col_value in row.items():
-                    if col_value is None:
-                        continue
-                    
-                    # Convert to string for searching
-                    str_value = str(col_value)
-                    search_str = search_term
-                    
-                    # Handle case sensitivity
-                    if not case_sensitive:
-                        str_value = str_value.lower()
-                        search_str = search_str.lower()
-                    
-                    # Check if search term is in the value
-                    if search_str in str_value:
-                        row_matches_search = True
-                        matched_columns.append(col_name)
+                matched_columns = [c for c, v in row.items()
+                                   if c != "_rowid_" and matches(v)]
+                row_matches_search = bool(matched_columns)
                 
                 # Skip this row if it doesn't match the search term
                 if not row_matches_search:

@@ -258,10 +258,19 @@ def test_the_store_is_reused_while_fresh_and_rebuilt_when_not(artifacts_dir):
     assert meta["built_at_utc"]
     second.close()
 
-    # A re-parse moves an evidence database's mtime: the store is stale.
+    # A re-parse COMMITS to an evidence database (its size and SQLite change
+    # counter move): the store is stale. A bare mtime touch is deliberately NOT
+    # enough any more - merely viewing a case bumps mtime, and that used to
+    # rebuild the ~1-min analysis on every open. The signature is size + the
+    # file change counter, so only a real write invalidates.
+    import sqlite3 as _sqlite3
     db = Path(artifacts_dir) / "registry_data.db"
-    st = db.stat()
-    os.utime(db, (st.st_atime, st.st_mtime + 30))
+    conn = _sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE IF NOT EXISTS _reparse_probe (x)")
+    conn.execute("INSERT INTO _reparse_probe VALUES (1)")
+    conn.commit()
+    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    conn.close()
     third = BehaviorEngine(str(artifacts_dir))
     assert not third.is_current()
     third.run_or_load()

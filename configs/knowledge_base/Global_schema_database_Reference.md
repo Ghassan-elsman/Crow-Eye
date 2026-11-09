@@ -71,6 +71,31 @@ verified against real data.
 | `parsed_at` | TEXT |
 
 
+### Table: `AmcacheHiveState`
+
+One row per Amcache.hve read, with the columns of `registry_hive_state`: how the hive was acquired, whether Windows had it open mid-transaction, and whether its `.LOG1`/`.LOG2` were replayed before parsing. `acquisition_route` is `file:collected` for a collected file (offline) and `export:ntsavekeyex` for a live parse, which reads the kernel's snapshot of the hive. That snapshot already holds what the logs would apply, so `was_dirty` is NULL ("not applicable") on that route, never 0. On `file:collected`, `was_dirty = 1` with `replayed = 0` means the AmCache rows may not be the hive's final state, and `reason` says why. `reorganized_at` is when Windows last compacted the hive. A recent date there means an empty `AmcacheCarvedKeys` is not evidence that nothing was deleted. A parse that reads the same hive in the same state again adds no row. All columns are stored as TEXT, as in every AmCache table.
+
+| Column | Type |
+|---|---|
+| `id` | TEXT |
+| `hive_name` | TEXT |
+| `hive_path` | TEXT |
+| `sequence_1` | TEXT |
+| `sequence_2` | TEXT |
+| `was_dirty` | TEXT |
+| `logs_found` | TEXT |
+| `log_format` | TEXT |
+| `replayed` | TEXT |
+| `entries_applied` | TEXT |
+| `pages_applied` | TEXT |
+| `highest_sequence` | TEXT |
+| `source_sha256` | TEXT |
+| `acquisition_route` | TEXT |
+| `reorganized_at` | TEXT |
+| `reason` | TEXT |
+| `parsed_at` | TEXT |
+
+
 ### Table: `DeviceCensus`
 
 | Column | Type |
@@ -769,6 +794,70 @@ Measured against Windows' own `WScript.Shell` resolver over 144 real shortcuts: 
 | `Keywords` | TEXT |
 | `TaskCategory` | TEXT |
 | `EventDescription` | TEXT |
+
+
+### Table: `partition_diagnostic`
+
+| Column | Type |
+|---|---|
+| `EventID` | INTEGER |
+| `EventTimestampUTC` | TEXT |
+| `ComputerName` | TEXT |
+| `RecordNumber` | INTEGER |
+| `DiskNumber` | INTEGER |
+| `BusType` | INTEGER |
+| `Manufacturer` | TEXT |
+| `Model` | TEXT |
+| `Revision` | TEXT |
+| `SerialNumber` | TEXT |
+| `ParentId` | TEXT |
+| `Location` | TEXT |
+| `Capacity` | INTEGER |
+| `PartitionStyle` | INTEGER |
+| `PartitionCount` | INTEGER |
+| `DiskId` | TEXT |
+| `AdapterId` | TEXT |
+| `RegistryId` | TEXT |
+| `UserRemovalPolicy` | TEXT |
+| `EventData` | TEXT |
+
+
+### Table: `driver_frameworks_usermode`
+
+| Column | Type |
+|---|---|
+| `EventID` | INTEGER |
+| `EventTimestampUTC` | TEXT |
+| `ComputerName` | TEXT |
+| `User` | TEXT |
+| `RecordNumber` | INTEGER |
+| `InstanceId` | TEXT |
+| `SerialNumber` | TEXT |
+| `LifetimeId` | TEXT |
+| `MajorCode` | INTEGER |
+| `MinorCode` | INTEGER |
+| `Status` | INTEGER |
+| `EventData` | TEXT |
+
+
+### Table: `setupapi_dev_log`
+
+| Column | Type |
+|---|---|
+| `section_title` | TEXT |
+| `section_kind` | TEXT |
+| `section_subject` | TEXT |
+| `device_instance_id` | TEXT |
+| `serial_number` | TEXT |
+| `section_start_local` | TEXT |
+| `section_start_utc` | TEXT |
+| `section_end_local` | TEXT |
+| `section_end_utc` | TEXT |
+| `exit_status` | TEXT |
+| `boot_session_local` | TEXT |
+| `time_basis` | TEXT |
+| `source_file` | TEXT |
+| `parsed_at` | TEXT |
 
 
 ## Database: `mft_claw_analysis.db`
@@ -2292,6 +2381,10 @@ be tied to it.
 | `time_basis` | TEXT |
 | `parsed_at` | TEXT |
 
+A `Server` row's `key_path` is that server's own key (`...\Servers\<server>`) and its
+`last_written` that key's last-write time ("key upper bound"): when the client last saved the
+server. `MRU` rows carry the `Default` key's time.
+
 ### Table: `RecentApps`
 
 | Column | Type |
@@ -3199,6 +3292,7 @@ column empty on every row, because none of them reference an AppId of that form.
 | `background_num_read_operations` | INTEGER |
 | `background_num_write_operations` | INTEGER |
 | `background_number_of_flushes` | INTEGER |
+| `auto_inc_id` | INTEGER |
 
 
 ### Table: `sqlite_sequence`
@@ -3224,6 +3318,7 @@ column empty on every row, because none of them reference an AppId of that form.
 | `l2_profile_flags` | INTEGER |
 | `connected_time` | INTEGER |
 | `connect_start_time` | TEXT |
+| `auto_inc_id` | INTEGER |
 
 
 ### Table: `srum_network_data_usage`
@@ -3242,6 +3337,7 @@ column empty on every row, because none of them reference an AppId of that form.
 | `bytes_received` | INTEGER |
 | `wake_count` | INTEGER |
 | `l2_profile_flags` | INTEGER |
+| `auto_inc_id` | INTEGER |
 
 
 ### Table: `srum_energy_usage`
@@ -3263,6 +3359,7 @@ column empty on every row, because none of them reference an AppId of that form.
 | `battery_count` | INTEGER |
 | `configuration_hash` | INTEGER |
 | `battery_charge_limited` | INTEGER |
+| `auto_inc_id` | INTEGER |
 
 `designed_capacity` vs `full_charged_capacity` (both mWh) is battery wear.
 
@@ -3331,6 +3428,9 @@ window, not a failed decode.
 | `cycles_wob_breakdown` | INTEGER |
 | `mbb_tail_raw` | INTEGER |
 | `mbb_bytes_raw` | INTEGER |
+| `auto_inc_id` | INTEGER |
+
+`auto_inc_id` is SRUDB.dat's own record number (AutoIncId). SRUM assigns it when it writes the record, so a higher number was written later. Empty on rows parsed before 2026-11-03.
 
 Crow-Eye captures every native column this provider defines. The `*_s` columns are second-counts; the
 `*_timeline` and `*_breakdown` columns are the raw packed per-window counters SRUM stores alongside them.
@@ -3377,6 +3477,9 @@ Crow-Eye captures every native column this provider defines. The `*_s` columns a
 | `file_attributes` | TEXT |
 | `record_length` | INTEGER |
 | `parsed_at` | TEXT |
+| `usn_journal_id` | INTEGER |
+
+`usn_journal_id` is the id of the journal the event was read from (UsnJournalID). A journal that was deleted and created again has a new id and starts its USNs low again, so two events with the same USN and different ids are different events. Empty on rows parsed before 2026-11-03 and on offline parses (the journal's $Max stream is not collected).
 
 
 ### Table: `deleted_entries`
@@ -3712,6 +3815,178 @@ Other tables in this database:
   `browser_gecko_credentials` (encrypted; key material in browser_metadata /
   browser_extracted), `browser_gecko_localstorage` (webappsstore + storage/default),
   `browser_gecko_sessions`.
+
+
+## Database: `ai_agents.db`
+
+Written by `AI_Agent_Claw`. The records AI agents keep in each user profile:
+Claude Code (`.claude`: projects, file-history, sessions, todos, plans,
+history.jsonl, jobs), Claude desktop (`AppData\Roaming\Claude`), Codex
+(`.codex`: rollouts, state_5.sqlite, thread_history_1.sqlite, config.toml),
+Gemini CLI (`.gemini\tmp\*\chats`, logs.json), GitHub Copilot CLI
+(`.copilot`), Antigravity (`.gemini\antigravity`) and Roo/Kilo/Cline (VS Code
+globalStorage tasks). Times are UTC `YYYY-MM-DD HH:MM:SS`; `parsed_at` is
+parser run time. Secrets are masked at parse time (`[masked: kind]`).
+Knowledge: `ai_agent_knowledge.md`. Every table carries `user_sid`, the profile owner's SID from this machine's ProfileList (live) or the case's SOFTWARE hive (offline, one source only); empty when no ProfileList names the folder.
+
+### Table: `ai_agent_sessions`
+
+| Column | Type |
+|---|---|
+| `agent` | TEXT |
+| `user_name` | TEXT |
+| `session_id` | TEXT |
+| `parent_session_id` | TEXT |
+| `title` | TEXT |
+| `project_path` | TEXT |
+| `model` | TEXT |
+| `agent_version` | TEXT |
+| `entrypoint` | TEXT |
+| `git_branch` | TEXT |
+| `approval_mode` | TEXT |
+| `first_ts` | TEXT |
+| `last_ts` | TEXT |
+| `prompts` | INTEGER |
+| `commands` | INTEGER |
+| `file_changes` | INTEGER |
+| `tool_calls` | INTEGER |
+| `source_path` | TEXT |
+| `source_size` | INTEGER |
+| `source_modified` | TEXT |
+| `parsed_at` | TEXT |
+| `app` | TEXT |
+| `pid` | INTEGER |
+| `process_start` | TEXT |
+| `git_sha` | TEXT |
+| `git_origin` | TEXT |
+| `sandbox_policy` | TEXT |
+| `name` | TEXT |
+| `user_sid` | TEXT |
+
+`app`: `cli`, `desktop`, `desktop-agent-mode`, `vscode`, `job`. `prompts`
+counts requests the person typed; `commands` and `file_changes` what the agent
+itself ran and changed (a sub-agent's are on its own row, linked by
+`parent_session_id`). `approval_mode` / `sandbox_policy`: how freely commands
+ran. `pid` / `process_start`: the agent process where its record names it.
+
+### Table: `ai_agent_steps`
+
+| Column | Type |
+|---|---|
+| `agent` | TEXT |
+| `user_name` | TEXT |
+| `session_id` | TEXT |
+| `step_id` | TEXT |
+| `ts` | TEXT |
+| `role` | TEXT |
+| `kind` | TEXT |
+| `tool` | TEXT |
+| `command` | TEXT |
+| `target` | TEXT |
+| `cwd` | TEXT |
+| `status` | TEXT |
+| `text` | TEXT |
+| `text_length` | INTEGER |
+| `is_sidechain` | INTEGER |
+| `source_path` | TEXT |
+| `parsed_at` | TEXT |
+| `program` | TEXT |
+| `exit_code` | INTEGER |
+| `duration_ms` | INTEGER |
+| `output` | TEXT |
+| `approval` | TEXT |
+| `origin` | TEXT |
+| `seq` | INTEGER |
+| `turn` | INTEGER |
+| `instruction` | TEXT |
+| `ordered_by` | TEXT |
+| `session_name` | TEXT |
+| `user_sid` | TEXT |
+
+`role`: `user` (the person), `assistant` (the agent), `agent` (the main agent
+instructing a sub-agent, or - with `is_sidechain = 0` - another agent session's
+message), `tool` (a call's output), `system` (a prompt nobody typed: scheduled
+task, `claude -p`, automatic continuation; or an injected notice). `origin` on a
+prompt says who sent it (`person (typed)`, `scheduled task <id>`, `another agent
+session <name>`, `a program (claude -p / Agent SDK)`, `automatic continuation`).
+`approval` on a call says who let it run (`allowed by the person (once)`,
+`allowed by the auto-mode classifier`, `refused by a settings rule` ...);
+`status = 'rejected'` - it never ran. `output` is the first 1,000 characters of
+the call's result. `seq` is the step's place in its session; `turn` the
+instruction (prompt) it answers, `instruction` that prompt's opening 300
+characters and `ordered_by` who gave it; `session_name` is the session's
+`name` (its recorded title, or `first request: ...`).
+`kind`: `prompt`, `answer`, `command`, `file_read`, `file_write`, `file_edit`,
+`search`, `web`, `browser`, `computer`, `screenshot`, `mcp`, `subagent`,
+`todo`, `plan`, `job`, `tool`, `result`, `notice`. The person's requests:
+`role = 'user' AND kind = 'prompt'`. Commands the agent ran: `role =
+'assistant' AND kind = 'command'`; `program` lists the executables each
+started, comma-separated (`python, git`), so match one with
+`(', ' || program || ', ') LIKE '%, git, %'`. `exit_code` is set where the
+agent recorded it; `duration_ms` is the step's duration. `text` of a `result`
+is cut at 4000 characters; `text_length` is the full length.
+
+### Table: `ai_agent_file_versions`
+
+| Column | Type |
+|---|---|
+| `agent` | TEXT |
+| `user_name` | TEXT |
+| `session_id` | TEXT |
+| `file_path` | TEXT |
+| `version` | INTEGER |
+| `saved_at` | TEXT |
+| `size` | INTEGER |
+| `sha1` | TEXT |
+| `backup_path` | TEXT |
+| `in_case_path` | TEXT |
+| `parsed_at` | TEXT |
+| `user_sid` | TEXT |
+
+The copy an agent saved **before** changing `file_path` (Claude Code
+file-history, Copilot session files). `sha1` empty: the file was new.
+`in_case_path` is set once the copy is saved into the case.
+
+### Table: `ai_agent_processes`
+
+| Column | Type |
+|---|---|
+| `agent` | TEXT |
+| `user_name` | TEXT |
+| `pid` | INTEGER |
+| `process_start` | TEXT |
+| `session_id` | TEXT |
+| `cwd` | TEXT |
+| `started_at` | TEXT |
+| `kind` | TEXT |
+| `entrypoint` | TEXT |
+| `version` | TEXT |
+| `source_path` | TEXT |
+| `parsed_at` | TEXT |
+| `user_sid` | TEXT |
+
+Agent processes: `.claude\sessions\<pid>.json`, the daemon attach journal,
+Copilot `process-<ms>-<PID>.log` names. `process_start` is the process
+creation time the agent recorded.
+
+### Table: `ai_agent_settings`
+
+| Column | Type |
+|---|---|
+| `agent` | TEXT |
+| `user_name` | TEXT |
+| `scope` | TEXT |
+| `setting` | TEXT |
+| `value` | TEXT |
+| `source_path` | TEXT |
+| `source_modified` | TEXT |
+| `parsed_at` | TEXT |
+| `user_sid` | TEXT |
+
+What the agent was allowed and set up to do: `permissions.allow` / `deny`, MCP
+servers (environment variable names only), plugins and skills, approval and
+sandbox modes, computer-use configuration. `scope`: `user`, `user local`,
+`project <path>`, `desktop agent session <id>`, `computer use`.
 
 
 ## `last_written` and `time_basis`

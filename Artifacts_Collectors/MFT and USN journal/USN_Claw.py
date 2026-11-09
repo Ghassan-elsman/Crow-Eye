@@ -738,6 +738,7 @@ def init_db(db_path=OUTPUT_DB):
             file_attributes TEXT,
             record_length INTEGER,
             parsed_at TEXT,
+            usn_journal_id INTEGER,
             PRIMARY KEY (volume_letter, usn)
         )
     ''')
@@ -767,6 +768,11 @@ def init_db(db_path=OUTPUT_DB):
     journal_cols = {r[1] for r in cur.execute("PRAGMA table_info(journal_events)")}
     if "parsed_at" not in journal_cols:
         cur.execute("ALTER TABLE journal_events ADD COLUMN parsed_at TEXT")
+    # The journal's own id (Sentinel P6): a journal deleted and recreated starts
+    # its USNs low again, and this tells its events apart. Not part of the
+    # identity, so a case parsed before it keeps its rows (NULL here).
+    if "usn_journal_id" not in journal_cols:
+        cur.execute("ALTER TABLE journal_events ADD COLUMN usn_journal_id INTEGER")
     deleted_cols = {r[1] for r in cur.execute("PRAGMA table_info(deleted_entries)")}
     if "parsed_at" not in deleted_cols:
         cur.execute("ALTER TABLE deleted_entries ADD COLUMN parsed_at TEXT")
@@ -787,6 +793,35 @@ def init_db(db_path=OUTPUT_DB):
 
 
 
+
+
+INSERT_EVENT_SQL = (
+    "INSERT OR IGNORE INTO journal_events (volume_letter, filename, usn, major_version, frn, "
+    "parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, "
+    "parsed_at, usn_journal_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+
+
+def insert_new_events(cursor, conn, volume_letter, rows):
+    """Store the events of ``rows`` the case does not hold yet; return how many.
+
+    The identity is (volume_letter, usn). The check used to compare the stored
+    USNs with column 1 of each row - the FILE NAME - so it never matched, and
+    on any re-parse the primary key rolled the whole batch back and aborted the
+    volume: no new event was ever added to a case parsed before (2026-11-03).
+    OR IGNORE also covers a USN repeated inside one batch."""
+    if not rows:
+        return 0
+    usns = [r[2] for r in rows]
+    placeholders = ",".join("?" for _ in usns)
+    cursor.execute("SELECT usn FROM journal_events WHERE volume_letter = ? AND usn IN (%s)"
+                   % placeholders, [volume_letter] + usns)
+    existing = {row[0] for row in cursor.fetchall()}
+    new_rows = [r for r in rows if r[2] not in existing]
+    if not new_rows:
+        return 0
+    before = conn.total_changes
+    cursor.executemany(INSERT_EVENT_SQL, new_rows)
+    return conn.total_changes - before
 
 
 def record_deleted_entry(volume_letter, gap_start, gap_end, cursor, conn):
@@ -1137,7 +1172,8 @@ def read_journal_events(volume_letter, cursor, conn):
                         batch_records.append((
                             volume_letter, rec["filename"], rec["usn"], rec["major_version"], rec["frn"], rec["parent_frn"],
                             rec["timestamp"], rec["reason"], rec["source_info"], rec["security_id"],
-                            rec["file_attributes"], rec["record_length"], parsed_at
+                            rec["file_attributes"], rec["record_length"], parsed_at,
+                            journal_data.UsnJournalID
                         ))
                         
                         # Increment progress counter and update progress bar more frequently
@@ -1171,29 +1207,10 @@ def read_journal_events(volume_letter, cursor, conn):
                         # Process batch when it reaches batch_size
                         if len(batch_records) >= batch_size:
                             with DatabaseTransaction(conn) as transaction:
-                                # Check for existing records to avoid duplicates
-                                new_records = []
-                                usn_list = [str(record[1]) for record in batch_records]  # USN is at index 1
-                                
-                                # Query existing USNs in batch
-                                placeholders = ','.join(['?' for _ in usn_list])
-                                cursor.execute(f"SELECT usn FROM journal_events WHERE volume_letter = ? AND usn IN ({placeholders})", 
-                                             [volume_letter] + usn_list)
-                                existing_usns = set(row[0] for row in cursor.fetchall())
-                                
-                                # Filter out existing records
-                                for record in batch_records:
-                                    if record[1] not in existing_usns:  # USN is at index 1
-                                        new_records.append(record)
-                                
-                                # Insert only new records; count them only once the
-                                # insert went through (a rolled-back batch is not "new")
-                                if new_records:
-                                    cursor.executemany(
-                                        "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                                        new_records
-                                    )
-                                _count_batch(len(batch_records), len(new_records))
+                                # Only the events the case does not hold, counted once the
+                                # insert went through (see insert_new_events)
+                                added = insert_new_events(cursor, conn, volume_letter, batch_records)
+                                _count_batch(len(batch_records), added)
                                 
                                 batch_records.clear()
                                 
@@ -1225,30 +1242,12 @@ def read_journal_events(volume_letter, cursor, conn):
             # Process any remaining records in the batch
             if batch_records:
                 with DatabaseTransaction(conn) as transaction:
-                    # Check for existing records in final batch
-                    new_records = []
-                    usn_list = [str(record[1]) for record in batch_records]  # USN is at index 1
+                    # Only the events the case does not hold, counted once the
+                    # insert went through (see insert_new_events)
+                    added = insert_new_events(cursor, conn, volume_letter, batch_records)
+                    _count_batch(len(batch_records), added)
                     
-                    # Query existing USNs in final batch
-                    placeholders = ','.join(['?' for _ in usn_list])
-                    cursor.execute(f"SELECT usn FROM journal_events WHERE volume_letter = ? AND usn IN ({placeholders})", 
-                                 [volume_letter] + usn_list)
-                    existing_usns = set(row[0] for row in cursor.fetchall())
-                    
-                    # Filter out existing records
-                    for record in batch_records:
-                        if record[1] not in existing_usns:  # USN is at index 1
-                            new_records.append(record)
-                    
-                    # Insert only new records, counted once the insert went through
-                    if new_records:
-                        cursor.executemany(
-                            "INSERT INTO journal_events (volume_letter, filename, usn, major_version, frn, parent_frn, timestamp, reason, source_info, security_id, file_attributes, record_length, parsed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                            new_records
-                        )
-                    _count_batch(len(batch_records), len(new_records))
-                    
-                    logger.info(f"Final batch: {len(new_records)} new records inserted")
+                    logger.info(f"Final batch: {added} new records inserted")
 
         logger.info(f"{volume_letter}: {record_count} journal events parsed from {total_bytes_processed} bytes")
         if excluded_count > 0:

@@ -24,7 +24,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
   isBridgeReady, initializeBridge, getNarrativeMap, commitMapEdit as bridgeCommit, onNarrativeMapUpdated,
-  investigateNarrative, onNarrativeInvestigationComplete, onNarrativeMapFocus,
+  investigateNarrative, onNarrativeInvestigationComplete, onNarrativeMapFocus, callSlotAsync,
 } from './bridge';
 import DataViewer from './DataViewer';
 import type { DataViewerProps } from './types';
@@ -1263,7 +1263,8 @@ export function useSourceRows(e: Evidence | null, live: boolean, auto: boolean) 
     const runQuery = async (db: string, sql: string): Promise<DataViewerProps | null> => {
       const tryDb = async (d: string) => {
         try {
-          const raw = await bridge.query_database(d, sql);
+          // Off the GUI thread: a stored query can scan millions of rows.
+          const raw = await callSlotAsync(bridge, 'query_database', [d, sql]);
           const res = typeof raw === 'string' ? JSON.parse(raw) : raw;
           const data = res?.data || res;
           const r = data?.rows || data?.data;

@@ -163,7 +163,9 @@ class PartialResultsManager:
             base_output_path: Base directory for saving partial results
         """
         self.base_output_path = Path(base_output_path) if base_output_path else Path.cwd() / "partial_results"
-        self.base_output_path.mkdir(exist_ok=True)
+        # Made when a partial result is saved, not when an engine is built:
+        # every engine made one, so every run left an empty partial_results
+        # folder wherever the process stood.
         
         self._partial_results: Dict[str, Any] = {}
         self._result_metadata: Dict[str, Dict[str, Any]] = {}
@@ -186,6 +188,7 @@ class PartialResultsManager:
         """
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"partial_result_{result_id}_{timestamp}.json"
+        self.base_output_path.mkdir(parents=True, exist_ok=True)
         filepath = self.base_output_path / filename
         
         # Prepare result data for serialization

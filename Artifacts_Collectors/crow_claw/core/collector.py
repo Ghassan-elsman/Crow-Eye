@@ -59,6 +59,14 @@ def _case_root(output_directory):
 # the layout matches what the Offline Importer and image extraction write.
 _BROWSER_DIR = "Browser"
 _BROWSER_SOURCE_TAG = "live"
+# AI agent session trees: the same layout under their own folder
+# (<output>/AIAgents/live/Users/<name>/.claude/projects/...).
+try:
+    from Artifacts_Collectors.ai_agent_paths import AI_AGENT_CASE_DIR as _AI_AGENTS_DIR
+    from Artifacts_Collectors.ai_agent_paths import ai_agent_file_wanted as _ai_agent_file_wanted
+except ImportError:  # run with Artifacts_Collectors itself on sys.path
+    from ai_agent_paths import AI_AGENT_CASE_DIR as _AI_AGENTS_DIR
+    from ai_agent_paths import ai_agent_file_wanted as _ai_agent_file_wanted
 
 
 def _extended_if_long(path, at=240):
@@ -974,14 +982,23 @@ class ArtifactCollector:
         if self.include_browser_cache:
             patterns += list(getattr(artifact, "cache_paths", []) or [])
         volume_root = os.path.join(windows_partition.rstrip("\\/") + os.sep)
-        dest_root = os.path.join(output_directory, _BROWSER_DIR, _BROWSER_SOURCE_TAG)
+        # AI agent session trees: their own folder, files as roots too (the
+        # Codex state database), no browser folder rules, and only the records
+        # the parser reads copied - never a credential file beside them.
+        ai_agents = artifact.artifact_type.value == _AI_AGENTS_DIR
+        tree_dir = _AI_AGENTS_DIR if ai_agents else _BROWSER_DIR
+        dir_skipped = (lambda _d, _c: False) if ai_agents else browser_dir_skipped
+        dest_root = os.path.join(output_directory, tree_dir, _BROWSER_SOURCE_TAG)
         result.dest_path = dest_root
         # One root per real folder: a junction (Local\Application Data -> Local)
         # matches the same profile a second time under another name.
         by_real = {}
         for p in self.expand_artifact_paths(patterns, windows_partition):
             p = os.path.normpath(p)
-            if not os.path.isdir(p) or browser_root_excluded(p):
+            if ai_agents:
+                if not os.path.exists(p):
+                    continue
+            elif not os.path.isdir(p) or browser_root_excluded(p):
                 continue
             real = os.path.normcase(os.path.realpath(p))
             if real not in by_real or real == os.path.normcase(p):
@@ -1005,16 +1022,20 @@ class ArtifactCollector:
             if disk_full:
                 break
             self.status_reporter.display_status(f"{artifact.name}: {root}")
-            for cur, dirs, files in os.walk(root):
+            walk = ([(os.path.dirname(root), [], [os.path.basename(root)])]
+                    if os.path.isfile(root) else os.walk(root))
+            for cur, dirs, files in walk:
                 if disk_full:
                     break
-                dirs[:] = [d for d in dirs if not browser_dir_skipped(d, self.include_browser_cache)
+                dirs[:] = [d for d in dirs if not dir_skipped(d, self.include_browser_cache)
                            and not _is_link(os.path.join(cur, d))]
                 for name in files:
                     src = os.path.join(cur, name)
                     try:
                         rel = os.path.relpath(src, volume_root)
                     except ValueError:      # another drive: not below this volume
+                        continue
+                    if ai_agents and not _ai_agent_file_wanted(rel):
                         continue
                     dst = os.path.join(dest_root, rel)
                     # An earlier run's copy is refreshed, not kept: a second
@@ -1077,7 +1098,7 @@ class ArtifactCollector:
                             errors.append(f"Failed to collect {src}: "
                                           f"{(res.error if res is not None else err) or 'Unknown error'}")
         if failed > 50:
-            errors.append(f"... and {failed - 50} more browser file(s) could not be copied")
+            errors.append(f"... and {failed - 50} more file(s) could not be copied")
 
         result.files_collected = files_collected
         result.bytes_collected = bytes_collected

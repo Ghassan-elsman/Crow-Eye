@@ -3,6 +3,7 @@
   "wing_name": "Anti-Forensics & Evidence Tampering Correlation",
   "wing_id": "default_wing_antiforensics_001",
   "wing_category": "identity",
+  "host_scope": "same_host",
   "description": "Detects evidence that an actor attempted to remove forensic traces or tamper with logging on the host. Uses a tiered approach with audit-log clearance events (Security 1102 / System 104) and wiper-tool prefetch hits weighted highest, followed by mass-delete bursts in USN, RecycleBin context, and tampering with Defender / autostart / services as supporting context.",
   "proves": "An actor attempted to remove forensic traces or tamper with logging",
   "author": "Crow-Eye Team",

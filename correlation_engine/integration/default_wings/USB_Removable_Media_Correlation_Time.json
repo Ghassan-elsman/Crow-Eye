@@ -3,6 +3,7 @@
   "wing_name": "USB / Removable Media Correlation (Time)",
   "wing_id": "default_wing_usb_001_time",
   "wing_category": "time",
+  "host_scope": "same_host",
   "description": "Detects evidence that external storage (USB drives, removable media) was attached and used. Uses a tiered approach with LNK header evidence (Volume Serial Number + drive type = Removable) and ShellBags removable-folder navigation weighted highest, followed by recent-path MRUs and JumpLists, with file-system CREATE/RENAME on removable volumes as supporting context.",
   "proves": "External / removable media was attached and used on the host",
   "author": "Crow-Eye Team",

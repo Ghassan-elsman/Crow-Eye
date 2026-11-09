@@ -3,6 +3,7 @@
   "wing_name": "USB Insert, Then Mass Copy (Behaviour)",
   "wing_id": "default_behaviour_usb_mass_copy_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "A USB device is plugged in and, within 30 minutes, at least 20 files appear to have been copied into one person's own folders. UBA rules: usb_connected, storage drives only (details.storage: a USBStorageDevices entry, or a USBDevices entry enumerated under USBSTOR or with a storage driver - the LAST connection time of each device, and no account: a machine step; mice, webcams and hubs are left out) then file_copy_inferred ($MFT: created after last modified, in the person's Desktop / Documents / Downloads; grouped per folder per day and timed at the first copy). The copy rule sees files ARRIVING on this disk; copies made TO the USB drive are not recorded on this volume.",
   "proves": "Files appear to have been copied into a person's folders soon after a USB device was connected",
   "author": "Crow-Eye Team",

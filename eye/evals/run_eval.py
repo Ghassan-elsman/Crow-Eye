@@ -129,7 +129,16 @@ def main(argv=None):
     def counted(*args, **kw):
         reply = real(*args, **kw)
         u = _usage_of(reply, router.backend)
+        # What this call carried, to explain the cost curve: history and system
+        # prompt size, and why a Claude Code session restarted.
+        hist = kw.get("history") if "history" in kw else (args[3] if len(args) > 3 else None)
+        system = kw.get("system_prompt") if "system_prompt" in kw else (args[0] if args else "")
+        sess = (reply or {}).get("session") if isinstance(reply, dict) else None
         calls.append({"usage": u,
+                      "history_msgs": len(hist or []),
+                      "history_chars": sum(len(str(m.get("content") or "")) for m in (hist or [])),
+                      "system_chars": len(system or ""),
+                      "restart": (sess or {}).get("restart") or "",
                       "tools": [c.get("function", {}).get("name") for c in (reply or {}).get("tool_calls", [])]
                       if isinstance(reply, dict) else []})
         return reply
@@ -158,6 +167,9 @@ def main(argv=None):
                    "out": tot("output_tokens"), "cost_usd": round(sum(float(c["usage"].get("cost_usd") or 0)
                                                                       for c in calls), 4),
                    "tools": sorted({n for c in calls for n in c["tools"] if n}),
+                   "max_history_chars": max([c["history_chars"] for c in calls] or [0]),
+                   "max_system_chars": max([c["system_chars"] for c in calls] or [0]),
+                   "restarts": [c["restart"] for c in calls if c["restart"]],
                    "claims_checked": cc.get("checked", 0),
                    "claims_unsupported": [c.get("value") for c in cc.get("unsupported") or []],
                    "claims_shifted": [[c.get("value"), c.get("shift_hours")] for c in cc.get("shifted") or []],

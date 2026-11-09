@@ -2021,12 +2021,15 @@ def volume_object_id(fixed_rec3):
     return None
 
 
-def _open_integrity_run(volume_letter, volume_reader, record_count, case_dir, db_connection):
+def _open_integrity_run(volume_letter, volume_reader, record_count, case_dir, db_connection,
+                        options=None):
     """The NTFS integrity checks and delta parse for one live volume, started
     (ntfs_integrity.IntegrityRun) - or None, with the reason logged and put
-    in custody, when they cannot start. A parse never fails because of them."""
+    in custody, when they cannot start. A parse never fails because of them.
+    ``options``: a caller's own settings, key and map folder
+    (ntfs_integrity.check_options), None for Settings."""
     try:
-        from ntfs_integrity import IntegrityRun
+        from ntfs_integrity import IntegrityRun, run_kwargs
         from ntfs_digest_map import runlist_hash
         try:
             objid = volume_object_id(_fixed_record(volume_reader, 3))
@@ -2039,7 +2042,7 @@ def _open_integrity_run(volume_letter, volume_reader, record_count, case_dir, db
         run = IntegrityRun(volume=volume_letter, source='live', case_dir=case_dir,
                            record_size=volume_reader.mft_record_size, record_count=record_count,
                            identity=identity, reread=volume_reader.read_mft_record,
-                           source_path=r"\\.\%s:\$MFT" % volume_letter)
+                           source_path=r"\\.\%s:\$MFT" % volume_letter, **run_kwargs(options))
         pre = {'usn': live_usn_journal(volume_reader.handle), 'host_settings': live_host_settings()}
         if run.on['ntfs_integrity_lsn_checks'] or run.on['ntfs_integrity_logfile_continuity'] \
                 or run.need_map:
@@ -2060,14 +2063,14 @@ def _open_integrity_run(volume_letter, volume_reader, record_count, case_dir, db
 
 
 def open_file_integrity_run(volume_label, mft_path, record_size, record_count, case_dir,
-                            db_connection):
+                            db_connection, options=None):
     """The integrity checks and delta parse for a $MFT copied out as a file
     (offline_MFTClaw, an image's extracted $MFT). What a file copy cannot say
     is recorded as unavailable: the USN journal's state and the $MFT bitmap
     live elsewhere on the volume. A $LogFile beside the $MFT is read when
     the collection brought one. None when the checks cannot start."""
     try:
-        from ntfs_integrity import IntegrityRun
+        from ntfs_integrity import IntegrityRun, run_kwargs
         from ntfs_digest_map import runlist_hash
         from utils.ntfs_runs import unnamed_data_runs, fixup_stride
         runs, objid = None, None
@@ -2087,7 +2090,8 @@ def open_file_integrity_run(volume_label, mft_path, record_size, record_count, c
                     'volume_object_id': objid, 'runlist_hash': runlist_hash(runs)}
         run = IntegrityRun(volume=volume_label, source='file', case_dir=case_dir,
                            record_size=record_size, record_count=record_count,
-                           identity=identity, reread=None, source_path=mft_path)
+                           identity=identity, reread=None, source_path=mft_path,
+                           **run_kwargs(options))
         pre = {'usn': {'available': False, 'note': 'a $MFT file copy does not carry the '
                                                    'USN journal state'}}
         logfile = os.path.join(os.path.dirname(os.path.abspath(mft_path)), '$LogFile')
@@ -2109,6 +2113,18 @@ def open_file_integrity_run(volume_label, mft_path, record_size, record_count, c
         except Exception:
             pass
         return None
+
+
+def integrity_result(run, manifest):
+    """What a caller with its own ledger and its own copy of the chain needs
+    from one volume's run (Sentinel's agent, decisions 132 and 133): where
+    the map is and whether it waits for ntfs_integrity.commit_map, the
+    chain, the manifest, and every custody line the run wrote."""
+    m = manifest.get('map') or {}
+    return {'map_file': m.get('file'), 'map_pending': bool(m.get('pending')),
+            'map_saved_as': m.get('saved_as'),
+            'chain': manifest.get('chain'), 'prev_chain': manifest.get('prev_chain'),
+            'manifest': manifest, 'custody': list(getattr(run, 'custody_events', []))}
 
 
 def finish_file_integrity_run(run, db_manager):
@@ -2454,6 +2470,8 @@ class MFTParser:
         self.config = config
         self.db_manager = DatabaseManager(config)
         self.attr_registry = AttributeParserRegistry()
+        # A caller's NTFS integrity options (main(integrity=...)), None for Settings.
+        self.integrity_options = None
         
         # Current volume being processed (for cleanup purposes)
         self.current_volume_letter = None
@@ -2593,7 +2611,8 @@ class MFTParser:
             # they cannot start - then every record is parsed, as before.
             case_dir = os.path.dirname(os.path.abspath(self.config.output_directory))
             integrity = _open_integrity_run(volume_letter, volume_reader, logical_records,
-                                            case_dir, self.db_manager.connection)
+                                            case_dir, self.db_manager.connection,
+                                            options=self.integrity_options)
             if integrity is not None:
                 logger.info(f"[MFT] {volume_letter}: {integrity.mode} parse"
                             + (f" ({integrity.reason})" if integrity.reason else
@@ -2830,6 +2849,7 @@ class MFTParser:
                  'findings': sum(found.values()), 'findings_written': c.get('findings_written', 0),
                  'manifest_id': manifest.get('manifest_id'),
                  'map_written': (manifest.get('map') or {}).get('written')}
+        entry.update(integrity_result(run, manifest))
         self.stats.setdefault('integrity', []).append(entry)
         if run.mode == 'delta':
             logger.info(f"[MFT] {volume_letter}: delta parse - {changed:,} of "
@@ -3541,12 +3561,25 @@ def parse_chunks_parallel(chunks, volume_letter, rec_size, db_manager, batch_siz
     return totals['parsed'], state['integrity']
 
 
-def main():
-    """Main entry point for MFT Claw - Automatic Analysis Mode"""
+def main(integrity=None):
+    """Main entry point for MFT Claw - Automatic Analysis Mode.
+
+    ``integrity``: a caller's NTFS integrity options (ntfs_integrity.RUN_OPTIONS:
+    settings, map_dir, secret, key_dir, agent_id, pending, db_rows_check).
+    None reads Settings, as the desktop does. Checked before any volume is
+    read: an unknown or mistyped option or setting raises ValueError rather
+    than parse with the defaults. Each volume's outcome is in
+    LAST_COUNTS['integrity'] (integrity_result)."""
     # This run's counts only: a run that fails early must not hand on the
     # previous run's (the module stays loaded between parses).
     global LAST_COUNTS
     LAST_COUNTS = None
+    if integrity is not None:
+        try:
+            from ntfs_integrity import check_options
+        except ImportError:                                  # imported as a package
+            from .ntfs_integrity import check_options
+        integrity = check_options(integrity)
 
     print(f"{COLOR_HEADER}{'=' * 60}{COLOR_RESET}")
     print(f"{COLOR_HEADER}MFT CLAW - AUTOMATIC FORENSIC ANALYSIS{COLOR_RESET}")
@@ -3594,6 +3627,7 @@ def main():
         
         # Create parser
         mft_parser = MFTParser(config)
+        mft_parser.integrity_options = integrity
         setup_signal_handlers(mft_parser)
         
         # Start parsing

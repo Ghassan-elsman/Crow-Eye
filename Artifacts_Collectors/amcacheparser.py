@@ -46,6 +46,12 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 NORMALIZED_DATABASE_PATH = os.path.join(SCRIPT_DIR, r"Amcashedb.db")  # Normalized database path
 SEARCH_KEYS = None  # Set to None for all keys or a list like ["Root\\InventoryApplication"]
 
+# The live route's name in AmcacheHiveState.acquisition_route: the string
+# live_hive_access.ROUTE_EXPORT writes into registry_hive_state for a hive
+# serialised by NtSaveKeyEx, so one query reads both tables alike. Written out
+# rather than imported: live_hive_access pulls in the whole acquisition ladder.
+ROUTE_LIVE_SNAPSHOT = "export:ntsavekeyex"
+
 def get_live_amcache_path(windows_partition: str = "C:") -> str:
     """
     Get the live Amcache.hve path based on Windows partition.
@@ -395,6 +401,14 @@ AMCACHE_SCHEMAS = {
         "cell_offset", "parent_cell_offset", "key_path", "value_name",
         "value_type", "data_size", "is_inline", "data", "record_state",
         "parsed_at"],
+    # One row per Amcache.hve read: how it was acquired, whether Windows had
+    # it mid-transaction, and whether its .LOG1/.LOG2 were replayed. The
+    # columns of Regclaw's registry_hive_state, so the two read alike.
+    "AmcacheHiveState": [
+        "hive_name", "hive_path", "sequence_1", "sequence_2", "was_dirty",
+        "logs_found", "log_format", "replayed", "entries_applied",
+        "pages_applied", "highest_sequence", "source_sha256",
+        "acquisition_route", "reorganized_at", "reason", "parsed_at"],
 
     # The catch-all: a Root subkey Windows adds that nothing here knows about.
     "UnknownSubkeys": ["subkey_name", "data", "key_last_write", "parsed_at"],
@@ -749,6 +763,9 @@ class AmcacheParser:
         self.verify_hashes = bool(verify_hashes) and not offline_mode
         self._hashes_checked = 0
         self._hashes_mismatched = 0
+        # When Windows last compacted the hive (the carve pass reads it);
+        # recorded in AmcacheHiveState beside the route.
+        self._reorganized_at = ""
         print("Loading Amcache.hve file...")
         sys.stdout.flush()  # Allow UI to process events
         
@@ -1151,6 +1168,12 @@ class AmcacheParser:
                 return
 
             reorganized = getattr(walk, "reorganized_raw", None)
+            if reorganized:
+                try:
+                    self._reorganized_at = format_forensic_timestamp(
+                        filetime_to_datetime(reorganized))
+                except Exception:
+                    self._reorganized_at = ""
             print("[Amcache] Free-space walk: %d bins, %d free cell(s), "
                   "%d byte(s) free%s"
                   % (walk.bins, walk.cells_free, walk.free_bytes,
@@ -1210,6 +1233,72 @@ class AmcacheParser:
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def hive_state_row(self, source):
+        """The AmcacheHiveState row for this parse, as {column: value}.
+
+        `source` is the collected Amcache.hve when the file was read (offline),
+        None when the live hive was read through RegLoadAppKey + NtSaveKeyEx.
+
+        The file route goes through registry_transaction_log, whose
+        RecoveryResult says whether the hive was dirty, which logs were found
+        and whether they were applied - the same facts registry_hive_state
+        records for every other hive. The live route has no file to be stale:
+        the kernel's snapshot already holds what the logs would apply, so
+        was_dirty is NULL ("not applicable"), never 0.
+        """
+        # `id` leads every AmCache table (the GUI's first column); here it is
+        # the hive, as the carved tables' id is the cell.
+        row = {"id": "Amcache.hve"}
+        row.update({c: None for c in AMCACHE_SCHEMAS["AmcacheHiveState"]})
+        row.update(hive_name="Amcache.hve", logs_found="", log_format="",
+                   replayed=0, entries_applied=0, pages_applied=0,
+                   source_sha256="", reorganized_at=self._reorganized_at or "",
+                   parsed_at=get_current_forensic_timestamp())
+        if source is None:
+            row.update(hive_path=str(self.hive_source or ""),
+                       acquisition_route=ROUTE_LIVE_SNAPSHOT,
+                       reason="live parse: an NtSaveKeyEx snapshot of the hive as "
+                              "the kernel holds it, which already includes what "
+                              "its transaction logs would apply")
+            return row
+        source = os.fsdecode(source)
+        row.update(hive_path=source, acquisition_route="file:collected")
+        res = registry_transaction_log.recovery_result_for(source)
+        if res is None:
+            row["reason"] = "the hive's transaction state was not read"
+            return row
+        row.update(sequence_1=res.sequence_1, sequence_2=res.sequence_2,
+                   was_dirty=None if res.was_dirty is None else (1 if res.was_dirty else 0),
+                   logs_found="; ".join(os.path.basename(x) for x in res.logs_found),
+                   log_format=res.log_format, replayed=1 if res.recovered else 0,
+                   entries_applied=res.entries_applied, pages_applied=res.pages_applied,
+                   highest_sequence=res.highest_sequence,
+                   source_sha256=res.source_sha256, reason=res.reason)
+        return row
+
+    def record_hive_state(self, source):
+        """Write the AmcacheHiveState row. A re-parse of the same hive in the
+        same state adds nothing; a hive that has moved on gets a new row."""
+        try:
+            row = self.hive_state_row(source)
+            cols = list(row)
+            conn = self._connection()
+            insert_new(conn, "AmcacheHiveState", cols, [tuple(row[c] for c in cols)],
+                       ["hive_path", "sequence_1", "sequence_2", "replayed",
+                        "acquisition_route"])
+            conn.commit()
+            if row["was_dirty"] == 1 and not row["replayed"]:
+                # Loud on purpose, as the registry parser is: the rows above
+                # may not be the hive's final state.
+                print("[Amcache] [STALE] Amcache.hve was dirty and NOT replayed - %s"
+                      % row["reason"])
+            elif row["replayed"]:
+                print("[Amcache] [REPLAY] Amcache.hve: %s" % row["reason"])
+            return row
+        except Exception as exc:                       # pragma: no cover
+            print("[Amcache] Hive state not recorded, parse continues: %s" % exc)
+            return None
 
     def _hive_as_file(self):
         """A path to the hive, exporting it first if we only hold a handle.
@@ -1374,7 +1463,9 @@ class AmcacheParser:
         # is nothing to replay there anyway: NtSaveKeyEx snapshots the hive as
         # the kernel currently holds it, which already includes everything the
         # logs would have applied.
+        source = None
         if isinstance(self.handle, (str, bytes, os.PathLike)):
+            source = self.handle
             self.handle = registry_transaction_log.hive_for_reading(self.handle)
         r = Registry.Registry(self.handle)
         # Yield to UI before opening root
@@ -1453,6 +1544,7 @@ class AmcacheParser:
             print()  # Newline after progress bar
         self.classify_program_association()
         self.carve_deleted_entries()
+        self.record_hive_state(source)
         self._close_connection()
         if self.verify_hashes:
             print("[Amcache] FileId re-hashed against disk on %d file(s); "

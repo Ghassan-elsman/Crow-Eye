@@ -520,3 +520,29 @@ body { margin: 0; background: var(--bg); }
 .fr-rec-h { color: var(--tx2); font-family: var(--mono); font-size: 11px; font-weight: 700;
   letter-spacing: 0.03em; padding: 4px 4px 2px; border-bottom: 1px solid var(--border2, var(--border)); }
 .fr-rec .fr-list { max-height: none; margin-top: 4px; }
+
+/* ---- network badge (FlowBadge.jsx) placed in this dashboard ---- */
+/* A tile or total that counts data moving: the badge's arrow beside the number. */
+.ov-tile--flow, .tot--flow { display: flex; align-items: center; }
+.ov-tile--flow .flowb-ico, .tot--flow .flowb-ico { display: inline-flex; font-size: inherit; }
+/* The name above its two badges: side by side they crushed the name to one letter. */
+.net-app { flex-wrap: wrap; row-gap: 3px; }
+.net-app-name { flex: 1 1 100%; }
+.net-app-vals > .flowb + .flowb { margin-left: 6px; }
+.hour-flow-h { display: inline-flex; align-items: center; justify-content: flex-end; }
+.hour-flow-h .flowb-ico, .prov-leg .flowb-ico { margin-right: 5px; }
+.net-leg .prov-swatch { margin-right: 6px; }
+.net-leg + .net-leg { margin-left: 14px; }
+/* Sent / received columns sized for a whole badge: at 0.9fr the value was clipped to "112.1". */
+.hour-row { grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 100px 100px minmax(0, 0.9fr) 44px; }
+.hour-row > span:nth-child(3), .hour-row > span:nth-child(4) { overflow: visible; }
+.hour-row .flowb { height: 20px; padding-right: 6px; }
+/* Chart tooltips drawn as HTML (chartTip.js), so sent / received can carry the badge. */
+.cj-tip { position: fixed; font-family: var(--sans); z-index: 9999; pointer-events: none; opacity: 0; transition: opacity .12s;
+  background: #0b1226; border: 1px solid var(--border2); border-radius: 8px; padding: 8px 10px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45); font-size: 12px; color: var(--tx2); max-width: 340px; }
+.cj-tip-t { color: var(--tx); font-weight: 700; margin-bottom: 6px; }
+.cj-tip-row { display: flex; padding: 1px 0; }
+.cj-tip-l { color: var(--tx3); margin-right: 8px; }
+.cj-tip-v { color: var(--tx); font-family: var(--mono); font-size: 11.5px; }
+.cj-tip-flow { margin: 2px 0 4px; }

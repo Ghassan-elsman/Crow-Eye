@@ -832,6 +832,8 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
                                               data["size"], data["used"])
         self.map.set_empty_note(empty_note)
         self.table.setRowCount(len(self.copies))
+        was_sorting = self.table.isSortingEnabled()
+        self.table.setSortingEnabled(False)
         for r, c in enumerate(self.copies):
             req = c.get("requester") or {}
             cells = [_copy_name(c), (c.get("created") or "").replace("T", " ").rstrip("Z"), _age(c.get("created")),
@@ -849,6 +851,7 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
                 if col == 5 and c.get("provenance") is None:
                     it.setForeground(QtGui.QColor("#64748B"))
                 self.table.setItem(r, col, it)
+        self.table.setSortingEnabled(was_sorting)
         # The tick box is wider under the theme than the header's measure of the column allows.
         fm = self.table.fontMetrics()
         self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Interactive)
@@ -1162,6 +1165,8 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
             "WHERE run_id=? AND interval=? AND path LIKE ? ORDER BY path LIMIT 5000",
             (self._run["run_id"], k, like)).fetchall()
         self.files.setRowCount(len(rows))
+        was_sorting = self.files.isSortingEnabled()
+        self.files.setSortingEnabled(False)
         colour = {"added": "#34D399", "deleted": "#FBBF24", "changed": "#22D3EE", "replaced": "#22D3EE"}
         for r, row in enumerate(rows):
             vals = [row[0], row[1], size_text(row[2]) if row[2] is not None else "",
@@ -1172,6 +1177,7 @@ class ShadowCopiesDialog(QtWidgets.QDialog):
                 if c == 0:
                     it.setForeground(QtGui.QColor(colour.get(row[0], "#E2E8F0")))
                 self.files.setItem(r, c, it)
+        self.files.setSortingEnabled(was_sorting)
         self.files.resizeColumnToContents(0)
 
     def closeEvent(self, event):

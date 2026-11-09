@@ -228,11 +228,6 @@ def test_all_activity_bearing_tables_are_covered(engine):
         # were risk judgements rolled up from machine_run, user_run and
         # InstalledSoftware, which UBA already reads, so nothing is lost.
         "AutoStartSuspicious", "SuspiciousIndicators",
-        # activity-bearing, but no extractor written for it yet. Listed here so
-        # the suite states the truth rather than calling it non-activity: focus
-        # and keyboard seconds are the strongest presence evidence SRUM holds,
-        # and an extractor for them is outstanding work.
-        "srum_app_timeline",
         # registry raw mirrors / config snapshots not modeled as activity
         "machine_run", "user_run", "Windows_lastupdate",
         "Windows_lastupdate_subkeys", "computer_Name", "time_zone",

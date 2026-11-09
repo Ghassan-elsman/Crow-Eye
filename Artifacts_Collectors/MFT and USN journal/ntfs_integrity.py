@@ -12,22 +12,29 @@ Two halves:
    findings and the new map, and writes the volume's integrity manifest to the
    case's chain-of-custody ledger.
 
-The checks built here are the ones a single image can answer (P1). The ones
-that need the previous parse's map - SEMANTIC changed with an unchanged LSN
-(D2), times moving backwards (D8), wiped records with a tombstone (D9 with
-history), USN and $LogFile continuity between parses (D4/D5 with history) -
-and the P2 checks come in later steps; the map they need is written now.
+The checks built here are the ones a single image can answer (P1), and
+(M5, 10.11) the ones the previous parse's map answers: SEMANTIC changed with
+an unchanged LSN (D2), the USN journal deleted or recreated between parses
+(D4 with history), and a volume rolled back or its $LogFile reset (D6). Times
+moving backwards (D8) needs the times themselves, which the map does not
+keep, and the P2 checks come in later steps.
 
 | ID  | Check | Setting (one per group) |
 |-----|-------|-------------------------|
 | D1  | what changed between parses: deletions, reuse | ntfs_integrity_digest_map |
+| D2  | a record changed with its LSN unchanged (a raw write) | ntfs_integrity_lsn_checks |
 | D3  | a record LSN above the highest LSN in $LogFile | ntfs_integrity_lsn_checks |
-| D4  | the USN journal's state (ID, range, deleted, disabled) | ntfs_integrity_usn_continuity |
+| D4  | the USN journal's state, and deleted / recreated since the last parse | ntfs_integrity_usn_continuity |
 | D5  | $LogFile restart pages: clean flag, version, agreement | ntfs_integrity_logfile_continuity |
+| D6  | the volume rolled back, or $LogFile reset, since the last parse | ntfs_integrity_offline_detect |
 | D7  | SI vs FN times (two comparisons, nothing more) | ntfs_integrity_timestomp |
 | D9  | an in-use record wiped or emptied | ntfs_integrity_wipe_detect |
 | D10 | fixups, BAAD, bytes in use, link count | ntfs_integrity_structural |
 | D29 | $MFT:$BITMAP against each record's in-use flag | ntfs_integrity_structural |
+
+A caller with its own settings, key and map folder - Sentinel's agent, whose
+run folder is deleted after every cycle - passes them as ``options`` (see
+check_options); the desktop passes none and reads Settings.
 
 Every check is on by default and can be turned off in Settings -> Parsing ->
 NTFS integrity checks. A check that is off is written to custody at every
@@ -89,9 +96,12 @@ SETTING_DEFAULTS = OrderedDict([
 # version" - their absence must not read as a clean result.
 BUILT_CHECKS = OrderedDict([
     ('ntfs_integrity_digest_map', ('D1', "Record what changed between parses (deletions, reused records)")),
-    ('ntfs_integrity_lsn_checks', ('D3', "A record LSN above the highest LSN in $LogFile")),
-    ('ntfs_integrity_usn_continuity', ('D4', "USN journal state: deleted, being deleted, or not active")),
+    ('ntfs_integrity_lsn_checks', ('D2, D3', "A record changed with its LSN unchanged (a raw write), "
+                                             "or an LSN above the highest LSN in $LogFile")),
+    ('ntfs_integrity_usn_continuity', ('D4', "USN journal deleted, recreated, being deleted, or not active")),
     ('ntfs_integrity_logfile_continuity', ('D5', "$LogFile restart pages: empty log, copies that disagree")),
+    ('ntfs_integrity_offline_detect', ('D6', "The volume rolled back, or $LogFile reset, since the last "
+                                             "parse (VM revert, image restore, offline mount)")),
     ('ntfs_integrity_timestomp', ('D7', "Timestomping: $STANDARD_INFORMATION earlier than $FILE_NAME")),
     ('ntfs_integrity_wipe_detect', ('D9', "An in-use record wiped or emptied")),
     ('ntfs_integrity_structural', ('D10, D29', "Record structure (fixups, BAAD, sizes, link count) and the $MFT bitmap")),
@@ -116,6 +126,103 @@ def read_settings(reader=None):
                 value = default
         out[key] = value if value is not None else default
     return out
+
+
+# ------------------------------------------------- a caller's own options --
+# Sentinel's agent runs this parser with the settings of its signed policy, a
+# key and a map folder of its own (decisions 132, 133), because its run folder
+# is deleted after every cycle and its case database is new every cycle.
+RUN_OPTIONS = (
+    'settings',        # dict over SETTING_DEFAULTS; None reads Settings
+    'map_dir',         # where the digest maps live (default <case>/state)
+    'secret',          # the map key, bytes; None: held by DPAPI (key_dir)
+    'key_dir',         # where the DPAPI-held key lives (default: Crow-Eye's config)
+    'agent_id',        # part of the map's identity (decision 132)
+    'pending',         # True: the new map waits as <map>.pending until commit_map()
+    'db_rows_check',   # False: the case database is not the last parse's (agent)
+)
+
+
+def check_settings(settings):
+    """``settings`` over SETTING_DEFAULTS. An unknown key or a value of the
+    wrong type is refused (ValueError), never ignored: a switch misspelled in
+    a policy would otherwise leave its check on, or off, with nothing to say
+    so."""
+    if not isinstance(settings, dict):
+        raise ValueError("NTFS integrity settings must be a dict, not %s" % type(settings).__name__)
+    unknown = sorted(set(settings) - set(SETTING_DEFAULTS))
+    if unknown:
+        raise ValueError("unknown NTFS integrity setting(s): %s" % ", ".join(unknown))
+    out = OrderedDict(SETTING_DEFAULTS)
+    for key, value in settings.items():
+        kind = type(SETTING_DEFAULTS[key])
+        if not isinstance(value, kind) or (kind is not bool and isinstance(value, bool)):
+            raise ValueError("NTFS integrity setting %s must be %s, not %r"
+                             % (key, kind.__name__, value))
+        out[key] = value
+    return out
+
+
+def check_options(options):
+    """A caller's options, checked; None when there are none (the desktop).
+    Refused with ValueError: an unknown option, unknown or mistyped
+    settings, a secret shorter than 16 bytes, a folder that is not a
+    string. Checked before any volume is read, so a refused policy never
+    becomes a parse with the defaults."""
+    if options is None:
+        return None
+    if not isinstance(options, dict):
+        raise ValueError("NTFS integrity options must be a dict, not %s" % type(options).__name__)
+    unknown = sorted(set(options) - set(RUN_OPTIONS))
+    if unknown:
+        raise ValueError("unknown NTFS integrity option(s): %s" % ", ".join(unknown))
+    out = dict(options)
+    if out.get('settings') is not None:
+        out['settings'] = check_settings(out['settings'])
+    secret = out.get('secret')
+    if secret is not None and (not isinstance(secret, (bytes, bytearray)) or len(secret) < 16):
+        raise ValueError("the NTFS integrity map secret must be at least 16 bytes")
+    for key in ('map_dir', 'key_dir', 'agent_id'):
+        if out.get(key) is not None and not isinstance(out[key], str):
+            raise ValueError("NTFS integrity option %s must be a string" % key)
+    for key in ('pending', 'db_rows_check'):
+        if key in out and not isinstance(out[key], bool):
+            raise ValueError("NTFS integrity option %s must be True or False" % key)
+    return out
+
+
+def run_kwargs(options):
+    """IntegrityRun's keyword arguments for check_options' result."""
+    if not options:
+        return {}
+    out = {k: options[k] for k in ('settings', 'map_dir', 'key_dir', 'agent_id', 'pending',
+                                   'db_rows_check') if k in options}
+    if options.get('secret') is not None:
+        out['secret'] = bytes(options['secret'])
+        out['key_store'] = 'caller'
+    return out
+
+
+def commit_map(map_file):
+    """Make a pending map (option ``pending``) the one the next parse compares
+    with, once the caller knows the run it describes arrived. Until then the
+    next parse compares with the last committed map, so a run that never
+    arrived is sent again - deletions included - with the same finding ids.
+    True when a pending map was promoted, False when there was none."""
+    pending = dm.pending_path(map_file)
+    if not os.path.isfile(pending):
+        return False
+    os.replace(pending, map_file)
+    return True
+
+
+def discard_pending_map(map_file):
+    """Drop a pending map the caller will not commit. True when one was removed."""
+    pending = dm.pending_path(map_file)
+    if not os.path.isfile(pending):
+        return False
+    os.remove(pending)
+    return True
 
 
 def policy_hash(settings):
@@ -464,6 +571,99 @@ def rule_logfile_state(logsum):
     return out
 
 
+# ------------------------------------------- D4 / D6 since the last parse --
+def rule_usn_history(old, new, since):
+    """D4 with history: the journal the last parse saw against this one.
+    ``since`` is the last parse's manifest id, which makes each id one per
+    event: parsing again before the last run is committed finds the same
+    event under the same id."""
+    old, new = old or {}, new or {}
+    if not old.get('available') or not new.get('available') or old.get('state') != 'active':
+        return []
+    old_id, new_id = old.get('journal_id'), new.get('journal_id')
+    ev = {'previous_journal_id': old_id, 'journal_id': new_id,
+          'previous_next_usn': old.get('next_usn'), 'next_usn': new.get('next_usn'),
+          'previous_max_size': old.get('max_size'), 'max_size': new.get('max_size'),
+          'since_manifest': since}
+    if new.get('state') != 'active':
+        ev['_id_extra'] = 'id-%s;since-%s' % (old_id, since)
+        return [finding('D4', 'usn_journal_deleted', 'ntfs_integrity_usn_continuity', 'high',
+                        "The USN journal was active at the last parse and is %s now (fsutil usn "
+                        "deletejournal, or FSCTL_DELETE_USN_JOURNAL)"
+                        % str(new.get('state') or 'gone').replace('_', ' '), evidence=ev)]
+    if old_id is not None and new_id is not None and old_id != new_id:
+        ev['_id_extra'] = 'id-%s>%s' % (old_id, new_id)
+        return [finding('D4', 'usn_journal_recreated', 'ntfs_integrity_usn_continuity', 'high',
+                        "The USN journal was deleted and created again since the last parse "
+                        "(journal ID %s -> %s): every change between the two is gone from it"
+                        % (old_id, new_id), evidence=ev)]
+    if old.get('max_size') and new.get('max_size') and new['max_size'] < old['max_size']:
+        ev['_id_extra'] = 'size-%s>%s;since-%s' % (old['max_size'], new['max_size'], since)
+        return [finding('D4', 'usn_journal_shrunk', 'ntfs_integrity_usn_continuity', 'medium',
+                        "The USN journal's maximum size shrank since the last parse (%s -> %s "
+                        "bytes): it now keeps less history" % (old['max_size'], new['max_size']),
+                        evidence=ev)]
+    return []
+
+
+def rule_volume_back(old_usn, usn, old_log, log, since, records_back=0, first_records=None):
+    """D6: one finding per event, never one per record. The volume went back
+    since the last parse when the same USN journal's next USN, or the
+    highest $LogFile LSN, is lower than it was: a VM snapshot reverted, an
+    image or ``vssadmin revert`` restored. $LogFile alone going back with the
+    journal still moving forward is an offline mount that reset the log
+    (ntfs-3g, chkdsk /L). Records whose LSN went back with the same sequence
+    number, with neither of those, are a rollback the volume facts did not
+    show (a $MFT copy has no journal to compare). ``since``: the last
+    parse's manifest id - the event's id, so one revert is one finding
+    however many times the parse is run before it is committed."""
+    old_usn, usn, old_log, log = old_usn or {}, usn or {}, old_log or {}, log or {}
+    usn_back = bool(old_usn.get('available') and usn.get('available')
+                    and old_usn.get('journal_id') is not None
+                    and old_usn.get('journal_id') == usn.get('journal_id')
+                    and old_usn.get('next_usn') and usn.get('next_usn') is not None
+                    and usn['next_usn'] < old_usn['next_usn'])
+    log_back = bool(old_log.get('highest_lsn') and log.get('highest_lsn') is not None
+                    and log['highest_lsn'] < old_log['highest_lsn'])
+    ev = {'previous_next_usn': old_usn.get('next_usn'), 'next_usn': usn.get('next_usn'),
+          'journal_id': usn.get('journal_id'),
+          'previous_highest_lsn': old_log.get('highest_lsn'), 'highest_lsn': log.get('highest_lsn'),
+          'records_lsn_backwards': records_back,
+          'first_records_lsn_backwards': list(first_records or [])[:20],
+          'since_manifest': since, '_id_extra': 'since-%s' % since}
+    if usn_back:
+        return finding('D6', 'volume_rollback', 'ntfs_integrity_offline_detect', 'high',
+                       "The volume went back in time since the last parse: the USN journal's "
+                       "next USN is lower than it was%s (a VM snapshot reverted, an image or "
+                       "shadow copy restored)" % (" and so is $LogFile's highest LSN" if log_back
+                                                  else ""), evidence=ev)
+    if log_back:
+        return finding('D6', 'logfile_lsn_backwards', 'ntfs_integrity_offline_detect', 'high',
+                       "$LogFile's highest LSN is lower than at the last parse while the USN "
+                       "journal did not go back: the log was reset, which an offline mount "
+                       "(ntfs-3g), chkdsk /L or a restore of the volume does", evidence=ev)
+    if records_back:
+        return finding('D6', 'records_lsn_backwards', 'ntfs_integrity_offline_detect', 'high',
+                       "%d record(s) carry an older LSN than at the last parse with the same "
+                       "sequence number: their earlier content was put back (a rollback, or "
+                       "records restored by a raw write)" % records_back, evidence=ev)
+    return None
+
+
+def rule_raw_write(rn, old, header, semantic):
+    """D2: what a record holds changed while its LSN did not. Every change
+    NTFS makes to a record goes through $LogFile and moves the LSN; a write
+    to the disk that went round NTFS (an offline editor, a raw-sector tool)
+    does not. ``old``: the last parse's map entry."""
+    lsn, seq = header.get('lsn') or 0, header.get('sequence')
+    return finding('D2', 'semantic_changed_lsn_same', 'ntfs_integrity_lsn_checks', 'high',
+                   "The record's content changed since the last parse while its LSN did not: "
+                   "it was written round NTFS (offline, or with raw disk access)",
+                   record=rn, seq=seq, lsn=lsn,
+                   evidence={'lsn': lsn, 'previous_semantic': old[1].hex(),
+                             'semantic': semantic.hex(), '_id_extra': semantic.hex()[:16]})
+
+
 # ------------------------------------------------------- D1 change events --
 def change_event(rn, old, new_header):
     """D1: what happened to a record between two parses. ``old`` is the
@@ -610,7 +810,8 @@ class IntegrityRun:
 
     def __init__(self, *, volume, source, case_dir, record_size, record_count, identity,
                  settings=None, secret=None, key_store=None, reread=None, source_path=None,
-                 parser_version=PARSER_VERSION):
+                 parser_version=PARSER_VERSION, map_dir=None, key_dir=None, agent_id=None,
+                 pending=False, db_rows_check=True):
         self.volume = str(volume)
         self.source = source                       # 'live' or 'file'
         self.source_path = source_path
@@ -620,9 +821,14 @@ class IntegrityRun:
         self.identity = dict(identity or {})
         self.identity.setdefault('source', source)
         self.identity.setdefault('label', self.volume)
+        if agent_id:
+            self.identity['agent_id'] = agent_id
+        self.map_dir, self.key_dir = map_dir, key_dir
+        self.pending = bool(pending)
+        self.db_rows_check = bool(db_rows_check)
         self.parser_version = parser_version
         self.reread = reread
-        self.settings = settings if settings is not None else read_settings()
+        self.settings = check_settings(settings) if settings is not None else read_settings()
         self.master = bool(self.settings.get('ntfs_integrity_enabled', True))
         self.on = {g: self.master and bool(self.settings.get(g, True)) for g in BUILT_CHECKS}
         self.delta_wanted = bool(self.settings.get('mft_delta_parse', True))
@@ -632,10 +838,15 @@ class IntegrityRun:
         self._secret, self._key_store = secret, key_store
         self.keys = None
         self.prior = None
-        self.prior_valid = False
+        self.prior_valid = False                   # a delta parse may compare with it
+        self.comparable = False                    # its digests can be compared with these
+        self.rollback = None                       # the D6 finding, once known
+        self._lsn_back = []                        # records whose LSN went back
+        self.custody_events = []                   # every custody line, for the caller
         self.mode, self.reason = 'full', None
         self.map = None
         self.map_file = None
+        self.save_file = None                      # map_file, or its pending name
         self.manifest_id = '%s-%s' % (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()),
                                       uuid.uuid4().hex[:8])
         self.findings = []
@@ -668,15 +879,23 @@ class IntegrityRun:
             self.mode, self.reason = 'full', 'map_off'
             return self.mode
         if self._secret is None:
-            self._secret, self._key_store = dm.load_key(self.case_dir)
+            self._secret, self._key_store = dm.load_key(self.case_dir, folder=self.key_dir)
         self.keys = dm.Keys(self._secret, self._key_store or 'given')
-        self.map_file = dm.map_path(self.case_dir, self.identity)
+        self.map_file = dm.map_path(self.case_dir, self.identity, folder=self.map_dir)
+        self.save_file = dm.pending_path(self.map_file) if self.pending else self.map_file
         prior, why = dm.DigestMap.load(self.map_file, self.keys)
         self.prior = prior
         if prior is None:
             self.mode, self.reason = 'full', why
         else:
-            self.reason = self._trigger(prior.header, db_conn)
+            # Comparable whenever the digests mean the same thing, even when a
+            # trigger forces a full parse: a raw edit made offline is exactly
+            # the case where the log was reset and the parse is full.
+            head = prior.header
+            self.comparable = (head.get('parser_version') == self.parser_version
+                               and int(head.get('record_size') or 0) == self.record_size)
+            self._history(head)
+            self.reason = self._trigger(head, db_conn)
             if self.reason:
                 self.mode = 'full'
             else:
@@ -691,6 +910,17 @@ class IntegrityRun:
                           reason_text=FULL_PARSE_REASONS.get(self.reason, self.reason),
                           map_file=self.map_file, manifest_id=self.manifest_id)
         return self.mode
+
+    def _history(self, head):
+        """D4 and D6 from the last parse's map header against this volume."""
+        pre = self.facts['pre']
+        since = head.get('manifest_id')
+        if self.on['ntfs_integrity_usn_continuity']:
+            for f in rule_usn_history(head.get('usn'), pre.get('usn'), since):
+                self._add(f)
+        if self.on['ntfs_integrity_offline_detect']:
+            self.rollback = rule_volume_back(head.get('usn'), pre.get('usn'),
+                                             head.get('logfile'), pre.get('logfile'), since)
 
     def _trigger(self, head, db_conn):
         """The first full-parse reason that holds, or None."""
@@ -719,7 +949,7 @@ class IntegrityRun:
         if (old_log.get('highest_lsn') and log.get('highest_lsn') is not None
                 and log['highest_lsn'] < old_log['highest_lsn']):
             return 'logfile_lsn_backwards'
-        if db_conn is not None:
+        if db_conn is not None and self.db_rows_check:
             have = self._db_rows(db_conn)
             if not have or have < int(head.get('db_rows') or 0):
                 return 'database_rows_missing'
@@ -758,7 +988,7 @@ class IntegrityRun:
             if block_complete and self.map is not None:
                 bd = dm.block_digest([r['full'] for r in recs], self.keys.block)
                 self.map.set_block(b, bd)
-                if self.prior_valid and self.prior.block_digest(b) == bd:
+                if self.comparable and self.prior.block_digest(b) == bd:
                     same_block = True
             for r in recs:
                 self._settle(r, full_parse, same_block, want)
@@ -769,7 +999,7 @@ class IntegrityRun:
         """What precompute_chunk needs, or None when the scan must stay here:
         nothing to scan, or a prior map to compare against (a delta parse
         decides what to parse from the digests, before the parse)."""
-        if not self.started or self.idle or self.prior_valid or self.mode == 'delta':
+        if not self.started or self.idle or self.comparable or self.mode == 'delta':
             return None
         return {'record_size': self.record_size, 'on': dict(self.on), 'source': self.source,
                 'now_ticks': self.now_ticks,
@@ -820,7 +1050,7 @@ class IntegrityRun:
         if it['semantic'] is not None:
             semantic = it['semantic']
             flags |= dm.F_SEMANTIC
-            self.counts['new_since_last_parse' if self.prior_valid else 'baseline'] += 1
+            self.counts['new_since_last_parse' if self.comparable else 'baseline'] += 1
         if self.map is not None:
             self.map.set(rn, it['full'], semantic, h.get('lsn') or 0, h.get('sequence') or 0,
                          h.get('usa_value') or 0, flags, h.get('links') or 0)
@@ -880,7 +1110,7 @@ class IntegrityRun:
 
     def _settle(self, r, full_parse, same_block, want):
         rn, h = r['rn'], r['h']
-        old = self.prior.get(rn) if self.prior_valid else None
+        old = self.prior.get(rn) if self.comparable else None
         flags = 0
         if h['present']:
             flags |= dm.F_PRESENT
@@ -915,8 +1145,12 @@ class IntegrityRun:
                     self.counts['semantic_changed'] += 1
                     if want is not None:
                         want.add(rn)
+                    if (self.on['ntfs_integrity_lsn_checks'] and old[5] & dm.F_SEMANTIC
+                            and old[5] & dm.F_PRESENT and old[3] == h.get('sequence')
+                            and old[2] == (h.get('lsn') or 0)):
+                        self._add(rule_raw_write(rn, old, h, semantic))
             else:
-                self.counts['new_since_last_parse' if self.prior_valid else 'baseline'] += 1
+                self.counts['new_since_last_parse' if self.comparable else 'baseline'] += 1
                 if want is not None:
                     want.add(rn)
         elif old is not None and bool(old[5] & dm.F_PRESENT) != bool(h['present']):
@@ -924,7 +1158,14 @@ class IntegrityRun:
         if self.map is not None:
             self.map.set(rn, r['full'], semantic, h.get('lsn') or 0, h.get('sequence') or 0,
                          h.get('usa_value') or 0, flags, h.get('links') or 0)
-        if self.prior_valid and self.on['ntfs_integrity_digest_map'] and old is not None:
+        if (old is not None and h['present'] and old[5] & dm.F_PRESENT
+                and old[3] == h.get('sequence') and (h.get('lsn') or 0) < old[2]):
+            self.counts['record_lsn_backwards'] += 1
+            if len(self._lsn_back) < 20:
+                self._lsn_back.append(rn)
+        # A delta parse states its deletions whatever the D1 switch says:
+        # they are what the delta is, not a check (decision 132).
+        if old is not None and (self.on['ntfs_integrity_digest_map'] or self.mode == 'delta'):
             ev = change_event(rn, old, h)
             if ev:
                 self.counts['change_' + ev['check']] += 1
@@ -957,6 +1198,9 @@ class IntegrityRun:
     def _add(self, f):
         key = (f['rule'], f['check'])
         self._per_check[key] += 1
+        if f['rule'] == 'D1' and self.mode == 'delta':
+            self.findings.append(f)                # every deletion of a delta, never capped
+            return
         if self._per_check[key] > MAX_PER_CHECK:
             self._overflow[key] += 1
             return
@@ -978,8 +1222,28 @@ class IntegrityRun:
         usn = post.get('usn') or self.facts['pre'].get('usn')
         logsum = post.get('logfile') or self.facts['pre'].get('logfile')
         if self.on['ntfs_integrity_usn_continuity']:
+            told = {f['check'] for f in self.findings if f['rule'] == 'D4'}
             for f in rule_usn_state(usn):
+                if f['check'] == 'usn_journal_not_active' and 'usn_journal_deleted' in told:
+                    continue                       # the history finding says more
                 self._add(f)
+        if self.on['ntfs_integrity_offline_detect'] and self.prior is not None:
+            back = self.counts.get('record_lsn_backwards', 0)
+            if self.rollback is not None:
+                self.rollback['evidence']['records_lsn_backwards'] = back
+                self.rollback['evidence']['first_records_lsn_backwards'] = list(self._lsn_back)
+            elif back:
+                self.rollback = rule_volume_back(None, None, None, None,
+                                                 self.prior.header.get('manifest_id'),
+                                                 records_back=back, first_records=self._lsn_back)
+            if self.rollback is not None:
+                self._add(self.rollback)
+                self._custody('volume rollback', volume=self.volume,
+                              check=self.rollback['check'], detail=self.rollback['detail'],
+                              finding_id=finding_id(self.rollback, self.volume_key),
+                              manifest_id=self.manifest_id,
+                              **{k: v for k, v in self.rollback['evidence'].items()
+                                 if not k.startswith('_')})
         if self.on['ntfs_integrity_logfile_continuity']:
             for f in rule_logfile_state(logsum):
                 self._add(f)
@@ -1232,6 +1496,7 @@ class IntegrityRun:
             ('findings', dict(by_check)),
             ('findings_not_listed', {'%s.%s' % k: n for k, n in self._overflow.items()}),
             ('map', {'file': self.map_file, 'kept': self.need_map,
+                     'pending': self.pending, 'saved_as': self.save_file,
                      'key_store': self.keys.store if self.keys else None,
                      'merkle_root': root, 'previous_merkle_root': prev_root}),
             ('prev_chain', prev_chain),
@@ -1254,7 +1519,8 @@ class IntegrityRun:
                 'db_rows': self._db_rows(db_conn) if db_conn is not None else None,
                 'chain': manifest['chain'], 'manifest_id': self.manifest_id})
             try:
-                self.map.save(self.map_file, self.keys)
+                os.makedirs(os.path.dirname(self.save_file), exist_ok=True)
+                self.map.save(self.save_file, self.keys)
                 manifest['map']['written'] = True
             except Exception as e:                           # noqa: BLE001
                 manifest['map']['written'] = False
@@ -1264,7 +1530,9 @@ class IntegrityRun:
 
     # ----------------------------------------------------------- custody --
     def _custody(self, event, **fields):
-        """Into the case's chain-of-custody ledger; never raises."""
+        """Into the case's chain-of-custody ledger; never raises. Also kept on
+        the run (custody_events), for a caller whose ledger is its own."""
+        self.custody_events.append({'event': event, 'fields': dict(fields)})
         try:
             from utils import custody
             custody.ledger(self.case_dir, event, **fields)

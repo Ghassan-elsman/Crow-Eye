@@ -56,7 +56,7 @@ logger = logging.getLogger(__name__)
 # Regex for the GEP-2 "database:table:rowid" evidence-ref shape.
 # rowid must be a positive integer; database/table names allow letters,
 # digits, underscore, and dot (for files like Log_Claw.db).
-_EVIDENCE_REF_RE = re.compile(r'^([A-Za-z0-9_.\-]+):([A-Za-z0-9_]+):(\d+)$')
+from eye.services.case_data_source import parse_row_ref as _parse_row_ref
 
 
 class CorrelationConfigHandlers:
@@ -111,6 +111,13 @@ class CorrelationConfigHandlers:
                 return self._fail(
                     "Missing or unknown parameter: `wing_category` - one of "
                     f"{', '.join(WING_CATEGORIES)}. It decides which engine runs the Wing.")
+            from correlation_engine.config.wing_config import (
+                HOST_SCOPES, host_scope_problems, normalize_host_scope, WingScopeError)
+            scope_problems = host_scope_problems(params.get("host_scope"))
+            if scope_problems:
+                return self._fail("Missing or unknown parameter: `host_scope` - one of "
+                                  f"{', '.join(HOST_SCOPES)}. " + " ".join(scope_problems))
+            host_scope = normalize_host_scope(params.get("host_scope"))
             if not feathers_raw and wing_category != WING_CATEGORY_BEHAVIOUR:
                 return self._fail("Missing required parameter: `feathers` (at least one feather reference).")
 
@@ -139,6 +146,7 @@ class CorrelationConfigHandlers:
                 case_types=list(params.get("case_types") or []),
                 eye_authorship=authorship,
                 wing_category=wing_category,
+                host_scope=host_scope,
             )
             # A Behaviour Wing's steps, time range, subject and alert; the
             # same shape the Wing files carry (see wing_config.BEHAVIOUR_FIELDS).
@@ -237,10 +245,21 @@ class CorrelationConfigHandlers:
                 if category != wing.wing_category:
                     wing.wing_category = category
                     diff_summary_parts.append("wing_category")
+            if params.get("host_scope") is not None:
+                from correlation_engine.config.wing_config import (
+                    host_scope_problems, normalize_host_scope)
+                scope_problems = host_scope_problems(params.get("host_scope"))
+                if scope_problems:
+                    return self._fail(" ".join(scope_problems))
+                scope = normalize_host_scope(params.get("host_scope"))
+                if scope != wing.host_scope:
+                    wing.host_scope = scope
+                    diff_summary_parts.append("host_scope")
             # The same refusals as the Wing Creator: a Wing saved without a
-            # category, or a Time Wing carrying rules only the Identity engine
-            # can evaluate, would be skipped at run time.
-            problems = wing.category_problems()
+            # category or a host scope, or a Time Wing carrying rules only the
+            # Identity engine can evaluate, would be skipped at run time.
+            from correlation_engine.config.wing_config import host_scope_problems
+            problems = wing.category_problems() + host_scope_problems(wing.host_scope)
             if problems:
                 return self._fail(" ".join(problems))
 
@@ -531,18 +550,26 @@ class CorrelationConfigHandlers:
             if not isinstance(ref, str):
                 unresolved.append(str(ref))
                 continue
-            m = _EVIDENCE_REF_RE.match(ref.strip())
-            if not m:
+            # Read through the case's data source (case_data_source.parse_row_ref).
+            if db_service is not None and hasattr(db_service, "parse_row_ref"):
+                parsed = db_service.parse_row_ref(ref)
+            else:
+                parsed = _parse_row_ref(ref)
+            if not parsed:
                 unresolved.append(ref)
                 continue
-            db_name, table, rowid = m.group(1), m.group(2), int(m.group(3))
+            db_name, table, rowid = parsed
             if db_service is None:
                 # No DB service at hand — can't verify; treat as unresolved
                 # but don't block the write.
                 unresolved.append(ref)
                 continue
             try:
-                # Cheap probe: row count for the exact rowid.
+                if hasattr(db_service, "fetch_row"):
+                    if db_service.fetch_row(db_name, table, rowid) is None:
+                        unresolved.append(ref)
+                    continue
+                # An older service without fetch_row: probe for the exact rowid.
                 probe_sql = f'SELECT 1 FROM "{table}" WHERE rowid = ? LIMIT 1'
                 res = db_service.execute_query(db_name, probe_sql, params=[rowid])
                 # ForensicDatabaseService.execute_query returns matched rows under

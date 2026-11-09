@@ -23,7 +23,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 
 from utils.parse_status import (ARTIFACTS, NOT_A_FAILURE, ArtifactOutcome,
                                 ParseStatus, ParseStatusStore, artifact_label,
-                                db_table_counts, status_label)
+                                db_table_counts, status_label,
+                                table_row_count)
 
 
 # sqlite table -> widget attribute (registry_data.db)
@@ -164,6 +165,9 @@ _STATIC_SOURCES: Dict[str, Tuple[str, str, str]] = {
     "SystemLogs_table": ("evtx", "Log_Claw.db", "SystemLogs"),
     "AppLogs_table": ("evtx", "Log_Claw.db", "ApplicationLogs"),
     "SecurityLogs_table": ("evtx", "Log_Claw.db", "SecurityLogs"),
+    "PartitionDiagnostic_table": ("evtx", "Log_Claw.db", "partition_diagnostic"),
+    "DriverFrameworks_table": ("evtx", "Log_Claw.db", "driver_frameworks_usermode"),
+    "SetupAPI_table": ("evtx", "Log_Claw.db", "setupapi_dev_log"),
     "ShimCache_main_table": ("shimcache", "shimcache.db", "shimcache_entries"),
     "RecycleBin_main_table": ("recyclebin", "recyclebin_analysis.db", "recycle_bin_entries"),
     "SRUM_application_usage_table": ("srum", "srum_data.db", "srum_application_usage"),
@@ -179,6 +183,12 @@ _STATIC_SOURCES: Dict[str, Tuple[str, str, str]] = {
     "USN_table": ("usn", "USN_journal.db", "journal_events"),
     "Correlated_table": ("mft_usn_correlation", "mft_usn_correlated_analysis.db",
                          "mft_usn_correlated"),
+    # AI Agents tab (Crow Eye.py AI_AGENT_TABS -> create_ai_agent_table_tabs)
+    "AIAgents_sessions_table": ("ai_agents", "ai_agents.db", "ai_agent_sessions"),
+    "AIAgents_steps_table": ("ai_agents", "ai_agents.db", "ai_agent_steps"),
+    "AIAgents_file_versions_table": ("ai_agents", "ai_agents.db", "ai_agent_file_versions"),
+    "AIAgents_processes_table": ("ai_agents", "ai_agents.db", "ai_agent_processes"),
+    "AIAgents_settings_table": ("ai_agents", "ai_agents.db", "ai_agent_settings"),
 }
 
 
@@ -290,12 +300,11 @@ def explain_empty(widget_attr: str, case_root: Optional[str],
     hint = hint_for(table, artifact)
 
     db_path = os.path.join(case_root or "", "Target_Artifacts", db_file) if case_root else ""
-    if _db_counts_cache is not None and db_path in _db_counts_cache:
-        counts = _db_counts_cache[db_path]
-    else:
-        counts = db_table_counts(db_path) if db_path else {}
-        if _db_counts_cache is not None:
-            _db_counts_cache[db_path] = counts
+    # This table's count only (table_row_count): the shown table is empty,
+    # so its count is cheap, where counting the whole database was not.
+    counts = _db_counts_cache.setdefault(db_path, {}) if _db_counts_cache is not None else {}
+    if table not in counts:
+        counts[table] = table_row_count(db_path, table) if db_path else None
     db_exists = bool(db_path) and os.path.isfile(db_path)
     rows = counts.get(table)
 

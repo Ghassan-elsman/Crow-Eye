@@ -37,7 +37,7 @@ class EvidenceIndexService:
     def __init__(self, case_directory, database_service, embedding_client,
                  per_table_cap: int = DEFAULT_PER_TABLE_CAP,
                  max_text_chars: int = DEFAULT_MAX_TEXT_CHARS,
-                 max_total_rows: int = DEFAULT_MAX_TOTAL_ROWS):
+                 max_total_rows: int = DEFAULT_MAX_TOTAL_ROWS, index_store=None):
         self.case_directory = Path(case_directory) if case_directory else None
         self.database_service = database_service
         self.embedding_client = embedding_client
@@ -46,6 +46,12 @@ class EvidenceIndexService:
         self.max_total_rows = max_total_rows
         self.logger = logging.getLogger(__name__)
 
+        # Where the index is kept (case_data_source.SemanticIndexStore): the
+        # data source's scope's store, or JSONL beside the case.
+        if index_store is None and self.case_directory is not None:
+            from eye.services.case_data_source import JsonlIndexStore
+            index_store = JsonlIndexStore(self.case_directory)
+        self.index_store = index_store
         self.index: List[Dict[str, Any]] = []   # {database, table, rowid, text, embedding}
         self.capped_tables: List[Dict[str, Any]] = []  # {database, table, total, indexed}
         self.built = False
@@ -55,12 +61,13 @@ class EvidenceIndexService:
         """Whether semantic indexing/search is possible (embedding client present)."""
         return self.embedding_client is not None and self.case_directory is not None
 
+    def _model(self) -> str:
+        return getattr(self.embedding_client, "model_name", "emb") or "emb"
+
     def _index_file(self) -> Optional[Path]:
-        if not self.case_directory:
-            return None
-        model = getattr(self.embedding_client, "model_name", "emb") or "emb"
-        safe = re.sub(r"[^a-z0-9._-]+", "_", model.lower())
-        return self.case_directory / "EYE_Logs" / "eye_evidence_index" / f"{safe}.jsonl"
+        """The JSONL file, when the store is the desktop's JSONL store."""
+        path = getattr(self.index_store, "path", None)
+        return path(self._model()) if callable(path) else None
 
     # ------------------------------------------------------------------
     @staticmethod
@@ -90,42 +97,24 @@ class EvidenceIndexService:
     # ------------------------------------------------------------------
     def load(self) -> bool:
         """Load a previously persisted index from disk. Returns True if non-empty."""
-        path = self._index_file()
-        if not path or not path.exists():
+        if self.index_store is None:
             return False
         try:
-            loaded = []
-            with open(path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except Exception:
-                        continue
-                    if rec.get("embedding"):
-                        loaded.append(rec)
+            loaded = self.index_store.load(self._model())
             if loaded:
                 self.index = loaded
                 self.built = True
-                self.logger.info(f"Loaded evidence index with {len(loaded)} rows from {path}.")
+                self.logger.info(f"Loaded evidence index with {len(loaded)} rows.")
                 return True
         except Exception as e:
             self.logger.debug(f"Evidence index load failed: {e}")
         return False
 
     def _save(self):
-        path = self._index_file()
-        if not path:
+        if self.index_store is None:
             return
         try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".jsonl.tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                for rec in self.index:
-                    f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-            tmp.replace(path)
+            self.index_store.save(self._model(), self.index)
         except Exception as e:
             self.logger.debug(f"Evidence index save failed: {e}")
 

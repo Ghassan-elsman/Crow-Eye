@@ -91,7 +91,7 @@
     </script>
 
     <style>
-        /* ---- Eye-describe anatomy palette (shared with the anatomy modules) ---- */
+        /* ---- Eye-Describe anatomy palette (shared with the anatomy modules) ---- */
         :root {
             --header-color: #60a5fa; --header-dim: #0a1835;
             --identity-color: #22d3ee; --identity-dim: #0a1d2e;
@@ -517,10 +517,30 @@
     .see-also::after { content: ' \2192'; }
     .see-also:hover, .see-also:focus { text-decoration: underline; }
   </style>
+  <!-- CFR centrepiece: takes the galaxy's place, same fixed full-viewport layer as #particles-canvas -->
+  <style>
+    .cp-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100lvh;
+      z-index: -1;
+      pointer-events: none;
+      display: block;
+    }
+    @media print {
+      .cp-canvas {
+        display: none;
+      }
+    }
+  </style>
 </head>
 
 <body>
-  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <canvas id="particles-canvas" data-no-galaxy aria-hidden="true"></canvas>
+  <canvas class="cp-canvas" data-centerpiece data-cp-x="0.5" data-cp-y="0.9" data-cp-s="1" data-cp-fade="top" aria-hidden="true"></canvas>
 
 
 
@@ -529,10 +549,11 @@
         <div class="nav-links-wrap">
             <a href="https://crow-eye.com/">Home</a>
             <a href="https://crow-eye.com/sentinel">Sentinel</a>
-            <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+            <a href="https://crow-eye.com/eye-describe" class="active">Eye-Describe</a>
             <a href="https://crow-eye.com/eye-ai">Eye AI</a>
             <a href="https://crow-eye.com/user-guide">User Guide</a>
             <a href="https://crow-eye.com/documentation">Docs</a>
+            <a href="https://crow-eye.com/#support">Support</a>
             <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
         </div>
         <button class="nav-toggle" aria-label="Toggle Menu">
@@ -2025,12 +2046,13 @@
 
     <footer>
         <div class="container">
-            <p>Crow Eye: Digital Forensic Analysis Suite</p>
+            <p>Crow-Eye: Digital Forensic Analysis Suite</p>
         </div>
     </footer>
 
     <script src="anatomy.js"></script>
     <script src="../main.js"></script>
+    <script src="../cp-cfr.js"></script>
     <script>
     // Generated from real hives by gen_hive_bytes.py - do not hand-edit.
 const HIVE = {
@@ -5050,7 +5072,7 @@ const HIVE = {
     (function () {
       'use strict';
 
-      // ---- Eye-describe anatomy palettes: 7 solid steps per family, rotated
+      // ---- Eye-Describe anatomy palettes: 7 solid steps per family, rotated
       // by field index so adjacent fields in one section stay distinguishable.
       const palettes = {
         'header-color': [

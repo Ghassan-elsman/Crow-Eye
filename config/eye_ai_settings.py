@@ -67,13 +67,17 @@ DEFAULTS = {
     "enable_summary_buffer": True,
     "enable_conversation_recall": True,
     "conversation_recall_top_k": 3,
+    "fold_earlier_questions": True,
+    "compact_tool_results_over_chars": 120000,
+    "compact_keep_last": 2,
     "search_max_rows": 50,
 }
 
 
 def eye_config_path() -> Path:
-    """Absolute path to the app's ``configs/eye_config.json``."""
-    return Path(__file__).resolve().parent.parent / "configs" / "eye_config.json"
+    """The investigator's eye_config.json (per user; see config_manager.user_config_path)."""
+    from eye.services.config_manager import user_config_path
+    return user_config_path()
 
 
 def _load(path: Path) -> Dict[str, object]:
@@ -130,6 +134,9 @@ def read_eye_ai_settings(path: Optional[Path] = None) -> Dict[str, object]:
         out["enable_conversation_recall"] = bool(rs.get("enable_conversation_recall", DEFAULTS["enable_conversation_recall"]))
         out["conversation_recall_top_k"] = int(rs.get("conversation_recall_top_k", DEFAULTS["conversation_recall_top_k"]))
         out["search_max_rows"] = int(rs.get("search_max_rows", DEFAULTS["search_max_rows"]))
+        out["fold_earlier_questions"] = bool(rs.get("fold_earlier_questions", DEFAULTS["fold_earlier_questions"]))
+        out["compact_tool_results_over_chars"] = int(rs.get("compact_tool_results_over_chars", DEFAULTS["compact_tool_results_over_chars"]))
+        out["compact_keep_last"] = int(rs.get("compact_keep_last", DEFAULTS["compact_keep_last"]))
         out["embedding_enabled"] = bool(em.get("enabled", DEFAULTS["embedding_enabled"]))
         out["embedding_model"] = str(em.get("model", DEFAULTS["embedding_model"]))
         out["embedding_endpoint"] = str(em.get("endpoint", DEFAULTS["embedding_endpoint"]))
@@ -232,6 +239,12 @@ def write_eye_ai_settings(settings: Dict[str, object], path: Optional[Path] = No
         rs["conversation_recall_top_k"] = min(20, max(1, int(settings["conversation_recall_top_k"])))
     if "search_max_rows" in settings:
         rs["search_max_rows"] = min(10000, max(1, int(settings["search_max_rows"])))
+    if "fold_earlier_questions" in settings:
+        rs["fold_earlier_questions"] = bool(settings["fold_earlier_questions"])
+    if "compact_tool_results_over_chars" in settings:
+        rs["compact_tool_results_over_chars"] = min(5000000, max(10000, int(settings["compact_tool_results_over_chars"])))
+    if "compact_keep_last" in settings:
+        rs["compact_keep_last"] = min(20, max(0, int(settings["compact_keep_last"])))
     if rs:
         cfg["reasoning"] = rs
 

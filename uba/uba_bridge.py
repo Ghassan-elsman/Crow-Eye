@@ -33,9 +33,10 @@ import logging
 import os
 import re
 
-from PyQt5.QtCore import QObject, pyqtSlot, pyqtSignal, QThread
+from PyQt5.QtCore import pyqtSlot, pyqtSignal, QThread
 
 from uba.engine import rule_switches
+from visualizations.async_bridge import AsyncBridge
 from uba.engine.behavior_engine import BehaviorEngine
 from uba.engine.evidence import EvidenceFetcher
 from uba.utils.db_access import data_status
@@ -107,7 +108,43 @@ class AnalysisWorker(QThread):
                 logger.debug("UBA: worker connection cleanup skipped", exc_info=True)
 
 
-class UBABridge(QObject):
+# Slots the page may run off the GUI thread (callAsync): the two that read the
+# evidence databases for the Who drove it tab, and the event store's heavier
+# readers. The store is one in-memory connection opened with
+# check_same_thread=False; every slot that reads it holds its lock
+# (_store_slot), so a worker and the GUI thread never use it at once.
+# getSessions, getRowEvidence and getEvidence run off the GUI thread too now:
+# getSessions hands this thread's pool connections back afterwards
+# (_cleanup_worker_pool), and the two evidence slots read on a throwaway own
+# pool (_on_own_pool), so a worker thread never shares a connection with the GUI
+# thread (SQLite connections are thread-bound).
+# Measured on a real case (38,611 activities): getSummary 0.39 s,
+# getDriversByPerson 0.24 s, a story page 0.24 s, getSessions/getEvidence
+# 0.24-0.39 s - each a stall of the window when it runs on the GUI thread.
+ASYNC_SLOTS = {"getInputLayer", "getAgentSessions", "getSummary", "getDriversByPerson",
+               "getBehaviorEvents", "getDaySummary",
+               "getSessions", "getRowEvidence", "getEvidence"}
+
+
+def _store_slot(fn):
+    """Run a slot that reads the engine's event store under the store's lock."""
+    import functools
+
+    @functools.wraps(fn)
+    def run(self, *args):
+        engine = self.engine
+        lock = getattr(getattr(engine, "store", None), "lock", None)
+        if lock is None:
+            return fn(self, *args)
+        with lock:
+            return fn(self, *args)
+    return run
+# Tables the Who drove it tab may open a row of (getRowEvidence).
+ROW_TABLES = {("ai_agents", "ai_agent_steps"), ("ai_agents", "ai_agent_sessions"),
+              ("srum", "srum_app_timeline")}
+
+
+class UBABridge(AsyncBridge):
     analysisProgress = pyqtSignal(int, str)
     analysisComplete = pyqtSignal(str)
     analysisError = pyqtSignal(str)
@@ -242,12 +279,14 @@ class UBABridge(QObject):
         return self._analysis_done and self.engine is not None
 
     @pyqtSlot(result=str)
+    @_store_slot
     def getUsers(self) -> str:
         if not self._ensure_ready():
             return self._dumps({"pending": True, "users": []})
         return self._dumps({"users": self.engine.users()})
 
     @pyqtSlot(result=str)
+    @_store_slot
     def getApps(self) -> str:
         if not self._ensure_ready():
             return self._dumps({"pending": True, "apps": []})
@@ -333,11 +372,19 @@ class UBABridge(QObject):
         return self._dumps(out)
 
     @pyqtSlot(result=str)
+    @_store_slot
     def getSessions(self) -> str:
         """Sign-in sessions, accounts, machine uptime and the auditing note."""
         if not self._ensure_ready():
             return self._dumps({"pending": True, "sessions": []})
-        return self._dumps(self.engine.sessions_report())
+        try:
+            return self._dumps(self.engine.sessions_report())
+        finally:
+            # sessions_report reads the registry/logs through the engine's
+            # shared thread-local pool; when this runs on an async worker thread
+            # those connections belong to that thread, so hand them back rather
+            # than leaving them on the async thread pool.
+            self._cleanup_worker_pool()
 
     @pyqtSlot(result=str)
     def getCoverage(self) -> str:
@@ -346,13 +393,100 @@ class UBABridge(QObject):
         return self._dumps(self.engine.coverage_report)
 
     @pyqtSlot(str, result=str)
+    @_store_slot
     def getSummary(self, filters_json: str) -> str:
         if not self._ensure_ready():
             return self._dumps({"pending": True})
         filters = self._parse(filters_json)
         return self._dumps(self.engine.store.summary(filters))
 
+    # ---------------------------------------------------------------- #
+    # Who drove it (uba/engine/drivers.py)
+    @pyqtSlot(str, str, str)
+    def callAsync(self, method, request_id, args_json):
+        if method not in ASYNC_SLOTS:
+            self.asyncResult.emit(request_id, json.dumps(
+                {"__asyncError": "not callable off the GUI thread: %r" % method}))
+            return
+        super().callAsync(method, request_id, args_json)
+
     @pyqtSlot(str, result=str)
+    @_store_slot
+    def getDriversByPerson(self, filters_json: str) -> str:
+        if not self._ensure_ready():
+            return self._dumps({"pending": True, "people": []})
+        from uba.engine import drivers
+        return self._dumps(drivers.by_person(self.engine.store, self._parse(filters_json)))
+
+    def _cleanup_worker_pool(self):
+        """Close this thread's engine-pool connections, but only when we are NOT
+        on the GUI thread (an async worker) - the GUI thread's connections are
+        reused by other reads and must be left in place."""
+        try:
+            from PyQt5.QtCore import QThread
+            from PyQt5.QtWidgets import QApplication
+            app = QApplication.instance()
+            if app is not None and QThread.currentThread() is not app.thread():
+                self.engine.db_pool.cleanup_thread_connections()
+        except Exception:
+            logger.debug("UBA: worker pool cleanup skipped", exc_info=True)
+
+    def _on_own_pool(self, fn):
+        """fn(pool) on a DbPool of this thread's own, closed after: the slot
+        runs on a worker thread, and SQLite connections are thread-bound."""
+        from uba.utils.db_access import DbPool
+        pool = DbPool(self.artifacts_dir)
+        try:
+            return fn(pool)
+        finally:
+            try:
+                pool.cleanup_thread_connections()
+                pool.close()
+            except Exception:
+                logger.debug("UBA: Who drove it pool cleanup skipped", exc_info=True)
+
+    @pyqtSlot(str, result=str)
+    def getInputLayer(self, request_json: str) -> str:
+        """One day of SRUM's App Timeline per program ({"day"})."""
+        from uba.engine import drivers
+        day = str(self._parse(request_json).get("day") or "")[:10]
+        return self._dumps(self._on_own_pool(lambda pool: drivers.input_layer(pool, day)))
+
+    @pyqtSlot(str, result=str)
+    def getAgentSessions(self, request_json: str) -> str:
+        """AI agent sessions overlapping {"start", "end"}, with their marks."""
+        from uba.engine import drivers
+        req = self._parse(request_json)
+        start, end = str(req.get("start") or ""), str(req.get("end") or "")
+        if not start or not end:
+            return self._dumps({"available": False, "sessions": [], "reason": "No time range was chosen."})
+        return self._dumps(self._on_own_pool(lambda pool: drivers.agent_sessions(pool, start, end)))
+
+    @pyqtSlot(str, result=str)
+    def getRowEvidence(self, request_json: str) -> str:
+        """Rows of one source table by rowid ({"db", "table", "rowids", "title"}),
+        in the shape getEvidence answers - for a mark or a program row."""
+        if not self._ensure_ready():
+            return self._dumps({"pending": True})
+        req = self._parse(request_json)
+        db, table = str(req.get("db") or ""), str(req.get("table") or "")
+        if (db, table) not in ROW_TABLES:
+            return self._dumps({"error": "rows of %s/%s are not opened here" % (db, table)})
+        rowids = [int(r) for r in (req.get("rowids") or []) if str(r).lstrip("-").isdigit()][:500]
+        ref = {"db": db, "table": table, "rowids": rowids, "count": len(rowids), "role": "primary"}
+        # On its own thread-local pool (cleaned up after) so this slot is safe to
+        # run off the GUI thread: SQLite connections are thread-bound.
+        from uba.engine.evidence import EvidenceFetcher
+        result = self._on_own_pool(lambda pool: EvidenceFetcher(pool).fetch(
+            [ref], offset=int(req.get("offset", 0) or 0),
+            page_size=int(req.get("page_size", 50) or 50)))
+        result["event"] = {"description": str(req.get("title") or ""), "activity": "", "severity": "routine",
+                           "confidence": "", "actor_type": "", "actor_name": "", "event_id": ""}
+        result["details"] = {}
+        return self._dumps(result)
+
+    @pyqtSlot(str, result=str)
+    @_store_slot
     def getBehaviorEvents(self, query_json: str) -> str:
         if not self._ensure_ready():
             return self._dumps({"pending": True, "events": []})
@@ -360,10 +494,37 @@ class UBABridge(QObject):
         cursor = query.pop("cursor", None)
         page_size = int(query.pop("page_size", 200) or 200)
         page_size = max(1, min(page_size, 500))
-        return self._dumps(self.engine.store.query_events(
-            filters=query, cursor=cursor, page_size=page_size))
+        grouped = bool(query.pop("grouped", False))
+        page = self.engine.store.query_events(
+            filters=query, cursor=cursor, page_size=page_size)
+        if grouped and page.get("events"):
+            # Alike activity in a run folds into one line that keeps its members
+            # (story_digest.group_repeats); the page's cursor is unchanged.
+            from uba.engine import story_digest
+            by_id = {e.get("event_id"): e for e in page["events"]}
+            items = story_digest.group_repeats(page["events"])
+            for item in items:
+                if item.get("kind") == "group":
+                    item["members"] = [by_id[i] for i in item["event_ids"] if i in by_id]
+            page["events"] = items
+        return self._dumps(page)
 
     @pyqtSlot(str, result=str)
+    @_store_slot
+    def getDaySummary(self, request_json: str) -> str:
+        """The opening card of one day of the Activity Story (story_digest)."""
+        if not self._ensure_ready():
+            return self._dumps({"pending": True})
+        request = self._parse(request_json)
+        day = str(request.get("day") or "")[:10]
+        if len(day) != 10:
+            return self._dumps({"lines": []})
+        from uba.engine import story_digest
+        rows = self.engine.store.events_for_day(day)
+        return self._dumps(story_digest.day_summary(rows, day, request.get("person") or None))
+
+    @pyqtSlot(str, result=str)
+    @_store_slot
     def getEvidence(self, request_json: str) -> str:
         if not self._ensure_ready():
             return self._dumps({"pending": True})
@@ -371,9 +532,12 @@ class UBABridge(QObject):
         event = self.engine.store.get_event(request.get("event_id", ""))
         if not event:
             return self._dumps({"error": "event not found"})
-        result = self.fetcher.fetch(
+        # Own thread-local pool (cleaned up after) so this is safe off the GUI
+        # thread; the store read above is already guarded by @_store_slot.
+        from uba.engine.evidence import EvidenceFetcher
+        result = self._on_own_pool(lambda pool: EvidenceFetcher(pool).fetch(
             event["evidence"], offset=int(request.get("offset", 0) or 0),
-            page_size=int(request.get("page_size", 50) or 50))
+            page_size=int(request.get("page_size", 50) or 50)))
         result["event"] = {k: event[k] for k in (
             "event_id", "description", "actor_type", "actor_name",
             "actor_basis", "severity", "confidence", "activity",

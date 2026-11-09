@@ -229,8 +229,12 @@ class CorrelationIntegration:
                 self.config_manager.set_case_directory(case_root)
                 print(f"[Correlation] Set case directory: {case_root}")
             
-            # Initialize case with Default Wings, feather configs, and default pipeline
-            if case_root:
+            # Initialize case with Default Wings, feather configs, and default
+            # pipeline - unless a background warm-up already did it for this case
+            # on open (self._warmed_case_root), so the window opens at once.
+            if case_root and getattr(self, '_warmed_case_root', None) == case_root:
+                print(f"[Correlation] Case was warmed up on open - skipping re-init")
+            elif case_root:
                 try:
                     print(f"[Correlation] Initializing case: {case_root}")
                     init_result = CaseInitializer.initialize_case(Path(case_root))

@@ -3,6 +3,7 @@
   "wing_name": "User Activity Correlation (Time)",
   "wing_id": "default_wing_activity_001_time",
   "wing_category": "time",
+  "host_scope": "same_host",
   "description": "Proves user activity using weighted scoring based on user interaction evidence strength. Uses a tiered approach with explicit user interaction artifacts (UserAssist, RecentDocs, MRU) weighted highest, followed by navigation evidence (ShellBags, TypedPaths), and temporal system confirmation (Security Logs).",
   "proves": "User actively interacted with the system",
   "author": "Crow-Eye Team",

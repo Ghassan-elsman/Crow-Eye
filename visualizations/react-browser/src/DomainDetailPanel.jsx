@@ -1,6 +1,7 @@
 import React from 'react'
 import FullRecordSection from './FullRecordSection.jsx'
 import { fmtInt, fmtBytes, fmtWhen, baseName, dangerLabel, isTypedTransition } from './format.js'
+import FlowBadge, { FlowIcon } from './FlowBadge.jsx'
 
 /** Everything the case knows about one domain, across every browser table.
  *
@@ -72,12 +73,14 @@ export default function DomainDetailPanel({ detail, loading, onClose }) {
           <div className="dd-sec">
             <div className="dd-h">Downloads from this domain</div>
             <table className="dd-table">
-              <thead><tr><th>File</th><th>Size</th><th>Started</th><th>Flags</th></tr></thead>
+              <thead><tr><th>File</th><th><span className="dd-flow-h"><FlowIcon dir="down" />Downloaded</span></th><th>Started</th><th>Flags</th></tr></thead>
               <tbody>
                 {downloads.map((d, i) => (
-                  <tr key={i}>
+                  <tr key={i} className="flow-host">
                     <td className="mono" title={d.targetPath}>{baseName(d.targetPath) || '—'}</td>
-                    <td>{fmtBytes(d.bytes)}</td>
+                    <td>{Number(d.bytes) > 0
+                      ? <FlowBadge dir="down" value={fmtBytes(d.bytes)} label={false} title={`downloaded: ${fmtBytes(d.bytes)}`} />
+                      : '—'}</td>
                     <td className="mono">{fmtWhen(d.started)}</td>
                     <td>
                       {dangerLabel(d.dangerType) ? <span className="ov-flag">flagged</span> : null}

@@ -286,6 +286,9 @@ class Wing:
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
     description: str = ""
     proves: str = ""
+    # How a match reads, in the author's words: a sentence template filled
+    # only from the match's records (wings.core.narrative; Sentinel 21.3).
+    narrative: str = ""
     feathers: List[FeatherSpec] = field(default_factory=list)
     correlation_rules: CorrelationRules = field(default_factory=CorrelationRules)
     metadata: WingMetadata = field(default_factory=WingMetadata)
@@ -301,6 +304,8 @@ class Wing:
     # "time" / "identity" / "behaviour"; None = uncategorised (cannot run).
     # See config.wing_config.normalize_wing_category.
     wing_category: Optional[str] = None
+    # "same_host" / "any_host"; None = not declared (config.wing_config.HOST_SCOPES).
+    host_scope: Optional[str] = None
     # The analyst changed a shipped Wing's rules (config.wing_config.
     # rules_differ_from_shipped): a reload keeps them instead of the shipped ones.
     rules_edited: bool = False
@@ -316,8 +321,10 @@ class Wing:
     alert: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self):
-        from correlation_engine.config.wing_config import normalize_wing_category
+        from correlation_engine.config.wing_config import (
+            normalize_wing_category, normalize_host_scope)
         self.wing_category = normalize_wing_category(self.wing_category)
+        self.host_scope = normalize_host_scope(self.host_scope)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization"""
@@ -338,8 +345,13 @@ class Wing:
             'scoring': self.scoring,
             'wing_category': self.wing_category
         }
+        if self.host_scope:
+            data['host_scope'] = self.host_scope
         if self.rules_edited:
             data['rules_edited'] = True
+        # Only when written, so a Wing without one saves exactly as before.
+        if self.narrative:
+            data['narrative'] = self.narrative
         # Behaviour fields: always for a Behaviour Wing, otherwise only when
         # set, so a Time or Identity Wing saves exactly as it did.
         from correlation_engine.config.wing_config import (
@@ -432,6 +444,7 @@ class Wing:
             created_date=data.get('created_date', datetime.now().isoformat()),
             description=data.get('description', ''),
             proves=data.get('proves', ''),
+            narrative=str(data.get('narrative') or ''),
             feathers=feathers,
             correlation_rules=correlation_rules,
             metadata=metadata,
@@ -440,6 +453,7 @@ class Wing:
             use_weighted_scoring=use_weighted_scoring,
             scoring=scoring,
             wing_category=data.get('wing_category'),
+            host_scope=data.get('host_scope'),
             rules_edited=bool(data.get('rules_edited', False)),
             steps=list(data.get('steps') or []),
             ordered=data.get('ordered', True) if data.get('ordered') is not None else True,
@@ -483,10 +497,12 @@ class Wing:
         # Check feathers. A Behaviour Wing names none: it reads UBA's
         # behaviour events, so demanding two would refuse every one of them.
         from correlation_engine.config.wing_config import (
-            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of)
+            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of,
+            host_scope_problems)
         errors.extend(category_problems(self.wing_category, self.semantic_rules,
                                         self.feathers,
                                         behaviour=behaviour_fields_of(self)))
+        errors.extend(host_scope_problems(self.host_scope))
         if self.wing_category != WING_CATEGORY_BEHAVIOUR and len(self.feathers) < 2:
             errors.append("Wing must have at least 2 feathers")
         

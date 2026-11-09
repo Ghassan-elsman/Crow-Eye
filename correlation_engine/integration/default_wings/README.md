@@ -20,6 +20,60 @@ another category, records a SKIPPED row with the reason, and writes the same lin
   `wing_id`. A user Wing with no category is listed under "Needs a category" and does not run
   until the Wing Creator gives it one.
 
+## Host scope: one machine or any
+
+Every Wing declares `host_scope`: `same_host` (every row it pairs comes from one machine) or
+`any_host` (rows may come from different machines). A case is one machine, so on the desktop the
+two run the same; across a fleet (Crow-Eye Sentinel) a `same_host` Wing never pairs rows from two
+machines. It is never defaulted: `WingConfig.from_dict(strict=True)` refuses a Wing without one
+(the built-in Wings load strict, as Sentinel does), and the Wing Creator shows an older Wing as
+"Scope not declared" and will not save it until one is chosen. A copy of a built-in Wing takes the
+built-in's scope. All 40 built-in Wings are `same_host`: each reads the evidence one machine kept,
+the lateral-movement Wings included ("activity on this host originated from or propagated to
+another machine").
+
+The engines read several machines in one call with
+`engine.execute_wing_partitioned(wing, {agent_id: {feather_id: path}}, clock_skew_s=None,
+max_workers=1)` (`engine/partitioned.py`). A `same_host` Wing runs once per machine, one machine at
+a time (or in up to `max_workers` processes), so no match ever holds two machines' rows; each match
+carries `agent_id`. An `any_host` Wing runs once over each feather merged across the machines
+(every row stamped with its `agent_id`, on disk); a match lists `hosts`, and with `clock_skew_s`
+the time window is widened by the largest skew between two machines and a cross-machine match
+carries `max_clock_skew_s`. Matches come in a fixed order (earliest row, then agent) with ids
+derived from their rows, so two runs give the same result byte for byte; `partition_info` on the
+result says how it ran.
+
+Across machines a Wing's advanced rules must say what they mean (`engine/fleet_rules.py`; the hits
+are `fleet_rule_hits` on the result). An absence declares `absence.scope`: `absent_on_host` or
+`absent_everywhere` (any_host Wings only: no machine holds the trace); a machine with no file for the
+absent feather never collected it and is reported `not_collected`, never `absent`. A threshold
+declares `threshold.denominator`: `per_host` or `per_fleet`. A sequence may span machines on an
+any_host Wing, each step hash-joined to the one before on `join_fields` (or the identity); a
+composition (`compare_to_feather` / `compare_to_field`) across machines is a hash join on the compared
+value when it is an equality, and refused with the reason otherwise. Each join's plan is in
+`partition_info['rule_plans']`; a rule that does not declare its fleet meaning is listed in
+`partition_info['rules_refused']` and never run with a default. On a single case none of this applies.
+
+A partitioned run also says where every row went (`partition_info['accounting']`,
+`engine/fleet_accounting.py`): per machine and feather, `in_matches` or one named bucket
+(`outside_wing_targets`, `no_identity`, `timeless_not_joined`, `no_timestamp`, `uncorroborated`), and
+`balanced` checks they sum to the rows. A feather the caller names in `pending` has not arrived: it is
+reported `pending`, never read and never dropped; one with no file is `not_collected`. With `max_cost`,
+a preflight counts each partition's rows and estimates the work (sorting each machine's rows on a
+same_host Wing, all of them together on an any_host Wing, plus each hash join); past the threshold
+the run is refused with the estimate (`PreflightRefused.estimate`).
+
+Every match of a partitioned run carries `subject_keys` (`engine/fleet_identity.py`): the account and
+the program its rows are about, keyed the same on every machine and in every run, and
+`partition_info['subjects']` lists each key with its source and hosts. An account is keyed by its SID
+when it is a domain or Azure AD SID (one account wherever it signs in); a well-known SID (SYSTEM, the
+service accounts, BUILTIN groups) or a bare user name is tied to its machine, since it names a
+different account on each. A program is keyed by its content hash when a row records one (SHA-256,
+SHA-1 - AmCache's `0000` prefix dropped - or MD5; never Prefetch's path hash), otherwise by the
+engine's own program identity. A conclusion reached about one match (its semantic results, or a fleet
+rule hit about its program) is copied to every other match sharing the subject, on any machine, under
+`semantic_data['fleet_propagated']` with the rule, the host and the match it came from.
+
 ## Behaviour Wings (run by the Behavioural engine)
 
 A Behaviour Wing (`wing_category: "behaviour"`) names no Feathers. It is a set of behaviour

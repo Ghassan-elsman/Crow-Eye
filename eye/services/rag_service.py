@@ -221,7 +221,13 @@ class RAGService:
         never mixes incompatible vectors."""
         model = getattr(self.embedding_client, "model_name", "emb") or "emb"
         safe = re.sub(r"[^a-z0-9._-]+", "_", model.lower())
-        return self.knowledge_base_dir / ".embcache" / f"{safe}.json"
+        # Per user, not in the knowledge base folder: that ships inside the app
+        # (`_internal` in the EXE), which an upgrade replaces.
+        try:
+            from eye.services.config_manager import user_config_dir
+            return user_config_dir() / "eye_embcache" / f"{safe}.json"
+        except Exception:
+            return self.knowledge_base_dir / ".embcache" / f"{safe}.json"
 
     def _load_emb_cache(self) -> Dict[str, List[float]]:
         try:
@@ -455,6 +461,23 @@ class RAGService:
             "saved password": "browser_knowledge.md",
             "web history": "browser_knowledge.md",
             "remote access": "remote_access_knowledge.md",
+            "ai agent": "ai_agent_knowledge.md",
+            "claude code": "ai_agent_knowledge.md",
+            "gemini cli": "ai_agent_knowledge.md",
+            "codex": "ai_agent_knowledge.md",
+            "agent session": "ai_agent_knowledge.md",
+            "ai_agent_steps": "ai_agent_knowledge.md",
+            "ai_agent_sessions": "ai_agent_knowledge.md",
+            "ai_agent_file_versions": "ai_agent_knowledge.md",
+            "ai_agent_processes": "ai_agent_knowledge.md",
+            "ai_agent_settings": "ai_agent_knowledge.md",
+            "copilot cli": "ai_agent_knowledge.md",
+            "antigravity": "ai_agent_knowledge.md",
+            "roo code": "ai_agent_knowledge.md",
+            "kilo code": "ai_agent_knowledge.md",
+            "cline": "ai_agent_knowledge.md",
+            "file-history": "ai_agent_knowledge.md",
+            "computer use": "ai_agent_knowledge.md",
             "rdp": "remote_access_knowledge.md",
             "teamviewer": "remote_access_knowledge.md",
             "anydesk": "remote_access_knowledge.md",

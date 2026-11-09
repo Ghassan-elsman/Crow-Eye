@@ -1,0 +1,238 @@
+{
+  "config_name": "ai_agent_execution_correlation_time",
+  "wing_name": "AI Agent Execution Correlation (Time)",
+  "wing_id": "default_wing_ai_agent_exec_001_time",
+  "wing_category": "time",
+  "host_scope": "same_host",
+  "description": "Puts each command an AI agent ran (Claude Code, Codex, Gemini CLI, Copilot, Roo/Kilo/Cline: the agent's own session record, with the program the command started) beside what Windows recorded of that program: Prefetch runs, BAM, Security 4688, AmCache and ShimCache presence, SRUM runtime. The agent's record says it asked; Windows' records say the program ran.",
+  "proves": "A program an AI agent asked for, and Windows' own record that it ran, minutes apart",
+  "narrative": "{ai_steps.agent} ran `{ai_steps.command}` at {ai_steps.timestamp} in session '{ai_steps.session_name}', ordered by {ai_steps.ordered_by}. Windows' records of {executable_name} in the same window: {records} records from {feathers}, between {first_time} and {last_time}.",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-11-04T00:00:00Z",
+  "last_modified": "2026-11-04T00:00:00Z",
+  "version": "1.0",
+  "feathers": [
+    {
+      "feather_config_name": "AIAgentSteps_CrowEyeFeather",
+      "feather_database_path": "feathers/AIAgentSteps_CrowEyeFeather.db",
+      "artifact_type": "AIAgents",
+      "feather_id": "ai_steps",
+      "weight": 0.35,
+      "tier": 1,
+      "tier_name": "The AI agent's own record of the act"
+    },
+    {
+      "feather_config_name": "Prefetch_CrowEyeFeather",
+      "feather_database_path": "feathers/Prefetch_CrowEyeFeather.db",
+      "artifact_type": "Prefetch",
+      "feather_id": "prefetch",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "Windows ran the program"
+    },
+    {
+      "feather_config_name": "BAM_CrowEyeFeather",
+      "feather_database_path": "feathers/BAM_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "bam",
+      "weight": 0.1,
+      "tier": 2,
+      "tier_name": "Last execution by account (BAM)"
+    },
+    {
+      "feather_config_name": "SecurityLogs_CrowEyeFeather",
+      "feather_database_path": "feathers/SecurityLogs_CrowEyeFeather.db",
+      "artifact_type": "Logs",
+      "feather_id": "security_logs",
+      "weight": 0.1,
+      "tier": 2,
+      "tier_name": "Process creation (4688)"
+    },
+    {
+      "feather_config_name": "InventoryApplicationFile_CrowEyeFeather",
+      "feather_database_path": "feathers/InventoryApplicationFile_CrowEyeFeather.db",
+      "artifact_type": "AmCache",
+      "feather_id": "amcache_file",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Presence / inventory indicator (AmCache)"
+    },
+    {
+      "feather_config_name": "ShimCache_CrowEyeFeather",
+      "feather_database_path": "feathers/ShimCache_CrowEyeFeather.db",
+      "artifact_type": "ShimCache",
+      "feather_id": "shimcache",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "Presence / compatibility indicator"
+    },
+    {
+      "feather_config_name": "SRUM_ApplicationUsage_CrowEyeFeather",
+      "feather_database_path": "feathers/SRUM_ApplicationUsage_CrowEyeFeather.db",
+      "artifact_type": "SRUM",
+      "feather_id": "srum_app",
+      "weight": 0.1,
+      "tier": 3,
+      "tier_name": "Runtime in that hour (SRUM)"
+    }
+  ],
+  "time_window_minutes": 10,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "AIAgents",
+    "Prefetch",
+    "Logs",
+    "Registry",
+    "AmCache",
+    "ShimCache",
+    "SRUM"
+  ],
+  "use_weighted_scoring": true,
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.6,
+        "label": "The agent's act and Windows' record agree"
+      },
+      "probable": {
+        "min": 0.35,
+        "label": "Corroborated in part"
+      },
+      "weak": {
+        "min": 0.0,
+        "label": "The agent's record alone"
+      }
+    }
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "ai_cmd",
+      "confidence": 0.5,
+      "name": "AI agent ran a command",
+      "semantic_value": "AI Agent Command",
+      "description": "The agent's session record holds a command that started this program.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "equals",
+          "value": "command"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_cmd_prefetch",
+      "confidence": 0.5,
+      "name": "AI command and Prefetch run (AND)",
+      "semantic_value": "AI Command Corroborated by Prefetch",
+      "description": "The program the agent asked for is in Prefetch: Windows ran it.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "equals",
+          "value": "command"
+        },
+        {
+          "feather_id": "prefetch",
+          "field_name": "executable_name",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_cmd_4688",
+      "confidence": 0.5,
+      "name": "AI command and process creation (AND)",
+      "semantic_value": "AI Command Corroborated by 4688",
+      "description": "A Security 4688 event records the program starting.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "equals",
+          "value": "command"
+        },
+        {
+          "feather_id": "security_logs",
+          "field_name": "EventID",
+          "operator": "equals",
+          "value": "4688"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_cmd_failed",
+      "confidence": 0.5,
+      "name": "AI command that failed",
+      "semantic_value": "AI Command Failed",
+      "description": "The agent's record gives a non-zero exit code: the program ran and reported failure.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "exit_code",
+          "operator": "regex",
+          "value": "^-?[1-9][0-9]*$"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "low"
+    },
+    {
+      "rule_id": "ai_runs_shell_script_host",
+      "confidence": 0.5,
+      "name": "AI agent ran a script host or LOLBin",
+      "semantic_value": "AI Agent Ran Script Host",
+      "description": "The agent started a script host or a binary often used to fetch or run code (powershell, cmd, wscript, cscript, mshta, rundll32, regsvr32, certutil, bitsadmin, curl, wget).",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "executable_name",
+          "operator": "regex",
+          "value": "(?i)^(powershell|pwsh|cmd|wscript|cscript|mshta|rundll32|regsvr32|certutil|bitsadmin|curl|wget|msiexec|schtasks|sc|reg|net|netsh|wmic)$"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "process_execution",
+      "severity": "medium",
+      "technique_id": [
+        "T1059"
+      ],
+      "tactic": [
+        "execution"
+      ]
+    }
+  ],
+  "tags": [
+    "ai_agent",
+    "execution",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "ai_agent",
+    "insider",
+    "intrusion"
+  ]
+}

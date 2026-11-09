@@ -1,9 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { CLASS_STYLE, SEVERITY_STYLE, CONFIDENCE_TIER } from '../styles/tokens.js'
+import {
+  CLASS_STYLE, SEVERITY_STYLE, CONFIDENCE_TIER, APP_STATE_STYLE, DRIVERS, DRIVER_GROUPS, chipStyle,
+} from '../styles/tokens.js'
 
 const CLASSES = ['user', 'application', 'system']
 const SEVERITIES = ['routine', 'notable', 'suspicious', 'critical']
 const CONFIDENCES = ['corroborated', 'log-only', 'artifact-only', 'presence', 'inference']
+
+// "Driven by": a group is on when no driver filter is set or all its drivers
+// are in it. Off removes them; all on again clears the filter.
+function groupOn(drivers, g) {
+  return !drivers.length || g.drivers.every((d) => drivers.includes(d))
+}
+function toggleGroup(drivers, g) {
+  const base = drivers.length ? drivers : DRIVERS
+  const next = groupOn(drivers, g)
+    ? base.filter((d) => !g.drivers.includes(d))
+    : [...new Set([...base, ...g.drivers])]
+  return DRIVERS.every((d) => next.includes(d)) ? [] : DRIVERS.filter((d) => next.includes(d))
+}
 
 function toggle(list, value) {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value]
@@ -72,133 +87,182 @@ export default function FilterBar({ filters, onChange, users, apps, rules, summa
   }
   const presetValue = !filters.start && !filters.end ? 'all' : 'custom'
 
+  // How many filters narrow the view now; Reset all clears them (the reading
+  // order is a preference, not a filter, and stays).
+  const active = [
+    filters.actors.length || sids.length, filters.apps.length, filters.rules.length,
+    filters.classes.length, filters.severities.length, filters.confidences.length,
+    (filters.drivers || []).length, (filters.app_states || []).length,
+    filters.search, filters.start || filters.end,
+  ].filter(Boolean).length
+  const resetAll = () => {
+    setSearch('')
+    onChange({
+      ...filters, actors: [], actor_sids: [], apps: [], rules: [], classes: [], severities: [],
+      confidences: [], drivers: [], app_states: [], search: '', start: '', end: '',
+      include_session_user: false,
+    })
+  }
+
   return (
     <div className="filterbar">
-      {origin && (
-        <span className="origin-chip"
-          title="This window was opened filtered to this person and time range. Clear to see the whole case.">
-          From {origin}
-          <span className="origin-clear" role="button" tabIndex={0} onClick={onClearOrigin}
-            onKeyDown={(e) => { if (e.key === 'Enter') onClearOrigin() }}>Clear</span>
-        </span>
-      )}
-      <input type="search" placeholder="Search activities…" value={search}
-        onChange={(e) => setSearch(e.target.value)} />
-
-      {/* ---- User ---- */}
-      <div className="filter-group">
-        <span className="filter-label">User</span>
-        <div className="chiprow">
-          {actorOptions.map((a) => (
-            <span key={a.value || 'none'}
-              className={'chip ' + (actorOn(a) ? 'on' : '')}
-              title={a.sid ? a.sid : undefined}
-              onClick={() => toggleActor(a)}>
-              {a.label}
-            </span>
-          ))}
-          {filters.actors.length > 0 && (
-            <span
-              className={'chip ' + (filters.include_session_user ? 'on' : '')}
-              title="Also include activity that happened while the selected person was signed in (labelled, not proven)"
-              onClick={() => onChange({ ...filters, include_session_user: !filters.include_session_user })}>
-              {filters.include_session_user ? '✓ ' : ''}incl. signed-in time
-            </span>
+      {/* ---- 1. Search, time and order ---- */}
+      <div className="fb-row">
+        {origin && (
+          <span className="origin-chip"
+            title="This window was opened filtered to this person and time range. Clear to see the whole case.">
+            From {origin}
+            <span className="origin-clear" role="button" tabIndex={0} onClick={onClearOrigin}
+              onKeyDown={(e) => { if (e.key === 'Enter') onClearOrigin() }}>Clear</span>
+          </span>
+        )}
+        <label className="fb-search">
+          <svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true">
+            <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="2" />
+            <path d="M20 20l-4.2-4.2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input type="search" placeholder="Search activities, people, programs…" value={search}
+            onChange={(e) => setSearch(e.target.value)} />
+        </label>
+        <div className="fb-field">
+          <span className="filter-label">Time</span>
+          <select className="preset-select" value={presetValue}
+            onChange={(e) => applyPreset(e.target.value)} title="Quick time range">
+            <option value="all">All time</option>
+            {presetValue === 'custom' && <option value="custom">Custom range</option>}
+            <option value="first">First day</option>
+            <option value="last">Last day</option>
+            <option value="lasthour">Last hour of activity</option>
+          </select>
+          <input type="datetime-local" value={toInput(filters.start)} title="From"
+            onChange={(e) => onChange({ ...filters, start: fromInput(e.target.value, false) })} />
+          <span className="range-sep">→</span>
+          <input type="datetime-local" value={toInput(filters.end)} title="To"
+            onChange={(e) => onChange({ ...filters, end: fromInput(e.target.value, true) })} />
+          {(filters.start || filters.end) && (
+            <button type="button" className="fb-mini" onClick={clearTime} title="Clear time range">Clear</button>
           )}
         </div>
+        <div className="fb-field">
+          <span className="filter-label">Order</span>
+          <select className="preset-select" value={filters.order || 'desc'}
+            title="Read the story newest-first or oldest-first"
+            onChange={(e) => onChange({ ...filters, order: e.target.value })}>
+            <option value="desc">Newest first</option>
+            <option value="asc">Oldest first</option>
+          </select>
+        </div>
+        <div className="fb-spacer" />
+        <span className={'fb-count' + (active ? ' on' : '')}>
+          {active ? `${active} filter${active === 1 ? '' : 's'} on` : 'Showing everything'}
+        </span>
+        <button type="button" className="fb-reset" disabled={!active} onClick={resetAll}
+          title="Clear every filter (the reading order stays)">Reset all</button>
       </div>
 
-      {/* ---- App ---- */}
-      <div className="filter-group">
-        <span className="filter-label">App</span>
-        <AppMultiSelect apps={apps}
-          selected={filters.apps}
-          onChange={(next) => onChange({ ...filters, apps: next })} />
-      </div>
-
-      {/* ---- Detection rule ---- */}
-      <div className="filter-group">
-        <span className="filter-label">Rules</span>
-        <RuleSelect rules={rules}
-          selected={filters.rules}
-          onChange={(next) => onChange({ ...filters, rules: next })} />
-      </div>
-
-      {/* ---- Class ---- */}
-      <div className="chiprow">
-        {CLASSES.map((c) => (
-          <span key={c}
-            className={'chip ' + (filters.classes.includes(c) ? 'on' : '')}
-            style={filters.classes.includes(c) ? { borderColor: CLASS_STYLE[c].color } : null}
-            onClick={() => onChange({ ...filters, classes: toggle(filters.classes, c) })}>
-            {CLASS_STYLE[c].label}
-          </span>
-        ))}
-      </div>
-
-      {/* ---- Severity ---- */}
-      <div className="chiprow">
-        {SEVERITIES.map((s) => (
-          <span key={s}
-            className={'chip ' + (filters.severities.includes(s) ? 'on' : '')}
-            style={filters.severities.includes(s) ? { borderColor: SEVERITY_STYLE[s].color, color: SEVERITY_STYLE[s].color } : null}
-            onClick={() => onChange({ ...filters, severities: toggle(filters.severities, s) })}>
-            {SEVERITY_STYLE[s].label}
-          </span>
-        ))}
-      </div>
-
-      {/* ---- Time range ---- */}
-      <div className="filter-group">
-        <span className="filter-label">Time</span>
-        <select className="preset-select" value={presetValue}
-          onChange={(e) => applyPreset(e.target.value)} title="Quick time range">
-          <option value="all">All time</option>
-          {presetValue === 'custom' && <option value="custom">Custom range</option>}
-          <option value="first">First day</option>
-          <option value="last">Last day</option>
-          <option value="lasthour">Last hour of activity</option>
-        </select>
-        <input type="datetime-local" value={toInput(filters.start)} title="From"
-          onChange={(e) => onChange({ ...filters, start: fromInput(e.target.value, false) })} />
-        <span className="range-sep">→</span>
-        <input type="datetime-local" value={toInput(filters.end)} title="To"
-          onChange={(e) => onChange({ ...filters, end: fromInput(e.target.value, true) })} />
-        {(filters.start || filters.end) && (
-          <span className="chip" onClick={clearTime} title="Clear time range">Clear</span>
-        )}
-      </div>
-
-      {/* ---- Certainty ---- */}
-      <div className="filter-group">
-        <span className="filter-label">Certainty</span>
-        <div className="chiprow">
-          {CONFIDENCES.map((c) => {
-            const tier = CONFIDENCE_TIER[c] || { label: c, color: '#8c95ab' }
-            const on = filters.confidences.includes(c)
+      {/* ---- 2. What drove it, its kind, how serious ---- */}
+      <div className="fb-row">
+        <div className="fb-seg">
+          <span className="fb-seg-label">Driven by</span>
+          {DRIVER_GROUPS.map((g) => {
+            const on = groupOn(filters.drivers || [], g)
             return (
-              <span key={c} className={'chip ' + (on ? 'on' : '')}
-                style={on ? { borderColor: tier.color, color: tier.color } : null}
-                title={`Show only activities whose evidence is ${tier.label.toLowerCase()}`}
-                onClick={() => onChange({
-                  ...filters, confidences: toggle(filters.confidences, c),
-                })}>
-                {tier.label}
-              </span>
+              <button key={g.key} type="button" className={'tgl' + (on ? ' on' : '')} aria-pressed={on}
+                style={chipStyle(g.color, on)} title={(on ? 'Hide: ' : 'Show: ') + g.title}
+                onClick={() => onChange({ ...filters, drivers: toggleGroup(filters.drivers || [], g) })}>
+                <span className="tgl-dot" />{g.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="fb-seg">
+          <span className="fb-seg-label">Kind</span>
+          {CLASSES.map((c) => {
+            const on = filters.classes.includes(c)
+            return (
+              <button key={c} type="button" className={'chip dot' + (on ? ' on' : '')} aria-pressed={on}
+                style={chipStyle(CLASS_STYLE[c].color, on)}
+                onClick={() => onChange({ ...filters, classes: toggle(filters.classes, c) })}>
+                {CLASS_STYLE[c].label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="fb-seg">
+          <span className="fb-seg-label">Severity</span>
+          {SEVERITIES.map((s) => {
+            const on = filters.severities.includes(s)
+            return (
+              <button key={s} type="button" className={'chip dot' + (on ? ' on' : '')} aria-pressed={on}
+                style={chipStyle(SEVERITY_STYLE[s].color, on)}
+                onClick={() => onChange({ ...filters, severities: toggle(filters.severities, s) })}>
+                {SEVERITY_STYLE[s].label}
+              </button>
             )
           })}
         </div>
       </div>
 
-      {/* ---- Reading order ---- */}
-      <div className="filter-group">
-        <span className="filter-label">Order</span>
-        <select className="preset-select" value={filters.order || 'desc'}
-          title="Read the story newest-first or oldest-first"
-          onChange={(e) => onChange({ ...filters, order: e.target.value })}>
-          <option value="desc">Newest first</option>
-          <option value="asc">Oldest first</option>
-        </select>
+      {/* ---- 3. Whose, which program, which rule, how sure ---- */}
+      <div className="fb-row">
+        <div className="fb-seg">
+          <span className="fb-seg-label">Certainty</span>
+          {CONFIDENCES.map((c) => {
+            const tier = CONFIDENCE_TIER[c] || { label: c, color: '#8c95ab' }
+            const on = filters.confidences.includes(c)
+            return (
+              <button key={c} type="button" className={'chip dot' + (on ? ' on' : '')} aria-pressed={on}
+                style={chipStyle(tier.color, on)}
+                title={`Show only activities whose evidence is ${tier.label.toLowerCase()}`}
+                onClick={() => onChange({ ...filters, confidences: toggle(filters.confidences, c) })}>
+                {tier.label}
+              </button>
+            )
+          })}
+        </div>
+        <div className="fb-seg">
+          <span className="fb-seg-label">User</span>
+          {actorOptions.map((a) => {
+            const on = actorOn(a)
+            return (
+              <button key={a.value || 'none'} type="button" className={'chip dot' + (on ? ' on' : '')} aria-pressed={on}
+                style={chipStyle(a.value ? '#4f8eff' : '#8c95ab', on)} title={a.sid ? a.sid : undefined}
+                onClick={() => toggleActor(a)}>
+                {a.label}
+              </button>
+            )
+          })}
+          {filters.actors.length > 0 && (
+            <button type="button" className={'chip' + (filters.include_session_user ? ' on' : '')}
+              style={chipStyle('#8b8cf8', filters.include_session_user)}
+              title="Also include activity that happened while the selected person was signed in (labelled, not proven)"
+              onClick={() => onChange({ ...filters, include_session_user: !filters.include_session_user })}>
+              {filters.include_session_user ? '✓ ' : ''}incl. signed-in time
+            </button>
+          )}
+        </div>
+        <div className="fb-seg">
+          <span className="fb-seg-label">App</span>
+          <AppMultiSelect apps={apps}
+            selected={filters.apps}
+            onChange={(next) => onChange({ ...filters, apps: next })} />
+        </div>
+        <div className="fb-seg">
+          <span className="fb-seg-label">Rules</span>
+          <RuleSelect rules={rules}
+            selected={filters.rules}
+            onChange={(next) => onChange({ ...filters, rules: next })} />
+        </div>
+        {(filters.app_states || []).length > 0 && (
+          <span className="origin-chip driver-chip">
+            {(filters.app_states || []).map((k) => (
+              <span key={k} className="driver-chip-k">{(APP_STATE_STYLE[k] || { label: k }).label}</span>
+            ))}
+            <span className="origin-clear" role="button" tabIndex={0}
+              onClick={() => onChange({ ...filters, app_states: [] })}
+              onKeyDown={(e) => { if (e.key === 'Enter') onChange({ ...filters, app_states: [] }) }}>Clear</span>
+          </span>
+        )}
       </div>
     </div>
   )

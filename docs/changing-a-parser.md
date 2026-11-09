@@ -211,6 +211,15 @@ taken must bump `ntfs_integrity.PARSER_VERSION`, which forces one full parse
 (`parser_version_changed`). A new column filled from a field the digest leaves out (the access
 time, the SI's USN or quota) keeps its first value on a delta parse.
 
+**A caller can run it with its own settings, key and map folder.** `MFT_Claw.main(integrity=...)`
+and `offline_MFTClaw.run_offline_mft(..., integrity=...)` take `ntfs_integrity.RUN_OPTIONS`:
+`settings` (every `ntfs_integrity_*` switch and `mft_delta_parse`; an unknown key or a wrong type
+raises before anything is read), `map_dir`, `secret` or `key_dir`, `agent_id` (part of the map's
+identity), `pending` (the new map waits as `<map>.pending` until `ntfs_integrity.commit_map`) and
+`db_rows_check` (False when the case database is new every run). Sentinel's agent is that caller:
+its run folder is deleted after every cycle. Each volume's map, chain, manifest and custody lines
+come back in `LAST_COUNTS['integrity']` / the result's `integrity` (`integrity_result`).
+
 **Record sizes come from the volume, never 1024.** The live parser takes it from the boot sector,
 a `$MFT` file from record 0's own header (`utils/ntfs_runs.record_size_from_header`), and the
 update-sequence stride from `fixup_stride()`.

@@ -3,6 +3,7 @@
   "wing_name": "Remote-Access Site, Then a Program Download (Behaviour)",
   "wing_id": "default_behaviour_remote_access_download_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "One person visits a remote-access service's site (AnyDesk, TeamViewer, ScreenConnect, RustDesk and others in UBA's site categories) and, within one hour, downloads a program. UBA rules: browser_visit_remote_access then browser_download_executable. Helpdesk support sessions look the same; the question is whether the person was expecting one.",
   "proves": "A person downloaded a program soon after visiting a remote-access service",
   "author": "Crow-Eye Team",

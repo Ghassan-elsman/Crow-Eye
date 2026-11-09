@@ -210,6 +210,19 @@ class ProfileSource:
     root_dir: str
     local_state_path: Optional[str] = None
     cache_dir: Optional[str] = None  # Gecko keeps its cache under LocalAppData
+    # The preserved route (Sentinel P3): ``root_dir`` / ``cache_dir`` are a
+    # COLLECTED copy of the profile, and these are the live folders it was
+    # copied from. Every path a row records (source_path, original_path, a
+    # database not read) is then the live one, so the rows - and their
+    # hashes - are the same whichever route read them. ``sid`` and
+    # ``user_name`` are taken as given, never looked up on this machine.
+    original_root: Optional[str] = None
+    original_cache_dir: Optional[str] = None
+    # Chromium's ``Local State`` sits beside the profile, in User Data, so no
+    # root above reaches it: the live file it was copied from. When it is not
+    # given and the copy keeps Chromium's layout (Local State the copied
+    # profile's sibling), it is the live profile's sibling (_original_roots).
+    original_local_state_path: Optional[str] = None
 
 
 def _live_user_roots() -> List[Tuple[str, str]]:
@@ -775,10 +788,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
 _SQLITE_SIDECARS = ("-wal", "-journal", "-shm")
 
 
-# Databases that could not be copied in this parse (locked by a running
-# browser) - reported as warnings, so a profile read only in part does not
-# show as plainly "Parsed". Reset by parse_browser_data.
-_UNREAD: List[str] = []
+# Databases that could not be read in this parse - reported as warnings, so a
+# profile read only in part does not show as plainly "Parsed", and returned as
+# `sources_not_read` [{path, reason, rung_tried}] for Crow-Eye Sentinel (P2).
+# reason: "locked" (no copy could be taken) or "torn_after_retries" (the copy
+# was still damaged after SQLite's recovery). rung_tried: the last way a copy
+# was attempted - "copy:shared_read" (plain copy) or "raw_disk:extents" (the
+# locked-file chain). Reset by parse_browser_data.
+_UNREAD: List[Tuple[str, str, str]] = []
+# Our working copy -> (the evidence it was copied from, the rung that took it),
+# so a copy that fails recovery is reported by its source, not a temp path.
+_COPY_SOURCE: Dict[str, Tuple[str, str]] = {}
 _ACCESSOR = {"obj": None}
 
 
@@ -832,57 +852,116 @@ def _custody_before(src):
         return None, None
 
 
-def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
-    """Copy a SQLite DB (and its WAL/journal/shm sidecars) into tmp_dir.
+# A group at or under this size is read twice and the two reads compared;
+# a larger one is read once (Sentinel takes those from the run's shadow copy).
+_VERIFY_MAX_BYTES = 64 * 1024 * 1024
+# A group whose two reads differ is taken again, at most this many times,
+# this far apart, before it is called torn.
+_VERIFY_RETRIES = 2
+_VERIFY_PAUSE_S = 0.25
 
-    Returns the path to the copied main DB, or None on failure. Locked files
-    (e.g. Cookies while the browser runs) fall back to the raw backup-semantics
-    copy that SRUM uses. The evidence file itself is never opened for write.
+
+def _sha256_file(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _group_of(src: str) -> List[str]:
+    """The database and the sidecars it has now (-wal, -journal, -shm)."""
+    return [src] + [src + sfx for sfx in _SQLITE_SIDECARS if os.path.isfile(src + sfx)]
+
+
+def _take_group(files: List[str], dst_dir: str, rung: str) -> bool:
+    """Every file of the group into dst_dir, on ONE rung. A sidecar taken on
+    another rung than its database (a plain copy of the database, a raw copy
+    of its WAL a moment later) is not one moment of the database; any
+    failure gives the whole group up for the next rung."""
+    for f in files:
+        dst = os.path.join(dst_dir, os.path.basename(f))
+        try:
+            if rung == "copy:shared_read":
+                shutil.copy2(f, dst)
+            elif not _copy_locked(f, dst):
+                return False
+        except (PermissionError, OSError):
+            return False
+        if not os.path.isfile(dst):
+            return False
+    return True
+
+
+def _copy_sqlite_with_sidecars(src: str, tmp_dir: str) -> Optional[str]:
+    """Copy a SQLite DB and its sidecars into tmp_dir as ONE verified group.
+
+    Returns the path to the copied main DB, or None. The group (database
+    plus -wal / -journal / -shm) is always taken from one rung - a plain
+    shared-read copy, else Crow-Eye's locked-file chain (FileAccessor:
+    StandardCopy -> VSS -> RawDisk) - and a group at or under 64 MB is read
+    twice, the SHA-256 of every file compared between the two reads: a
+    browser writing between them shows as a difference, and the group is
+    taken again (twice, 250 ms apart) before it is named torn_after_retries.
+    The evidence file itself is never opened for write. (Sentinel P1;
+    locked-and-incremental-design A1-A2.)
     """
     if not os.path.isfile(src):
         return None
-    # One private folder per copy. A shared folder keyed on the basename let a
-    # leftover "data.sqlite-wal" from one origin / profile sit beside the next
-    # copy of the same-named DB, and SQLite would apply the wrong WAL to it.
-    dst_dir = tempfile.mkdtemp(prefix="db_", dir=tmp_dir)
-    dst = os.path.join(dst_dir, os.path.basename(src))
-    copied = False
-    method = "copy"
     rec, times = _custody_before(src)
-    try:
-        shutil.copy2(src, dst)
-        copied = True
-    except (PermissionError, OSError) as exc:
-        logger.debug("Plain copy of %s failed (%s); trying the locked-file chain", src, exc)
-        copied = _copy_locked(src, dst)
-        method = "locked-file copy (FileAccessor / backup semantics)"
-    if not copied:
-        _UNREAD.append(src)
-        if rec is not None:
-            rec.add_failure(src, "browser database could not be copied (locked by the browser)",
-                            method="copy")
-        return None
+    last_rung = "copy:shared_read"
+    for rung in ("copy:shared_read", "raw_disk:extents"):
+        last_rung = rung
+        torn = False
+        for attempt in range(_VERIFY_RETRIES + 1):
+            files = _group_of(src)
+            # One private folder per copy. A shared folder keyed on the
+            # basename let a leftover "data.sqlite-wal" from one origin /
+            # profile sit beside the next copy of the same-named DB, and
+            # SQLite would apply the wrong WAL to it.
+            dst_dir = tempfile.mkdtemp(prefix="db_", dir=tmp_dir)
+            if not _take_group(files, dst_dir, rung):
+                logger.debug("%s of %s failed; trying the next rung", rung, src)
+                break
+            dst = os.path.join(dst_dir, os.path.basename(src))
+            size = sum(os.path.getsize(os.path.join(dst_dir, os.path.basename(f))) for f in files)
+            verify = "single read (over 64 MB)"
+            if size <= _VERIFY_MAX_BYTES:
+                check_dir = tempfile.mkdtemp(prefix="db_check_", dir=tmp_dir)
+                same = _take_group(files, check_dir, rung) and all(
+                    _sha256_file(os.path.join(dst_dir, os.path.basename(f)))
+                    == _sha256_file(os.path.join(check_dir, os.path.basename(f))) for f in files)
+                shutil.rmtree(check_dir, ignore_errors=True)
+                if not same:
+                    torn = True
+                    shutil.rmtree(dst_dir, ignore_errors=True)
+                    if attempt < _VERIFY_RETRIES:
+                        import time as _time
+                        _time.sleep(_VERIFY_PAUSE_S)
+                    continue
+                verify = "double read, SHA-256 equal" + (" (retry %d)" % attempt if attempt else "")
+            _COPY_SOURCE[dst] = (src, rung)
+            if rec is not None:
+                try:
+                    rec.add_source(src, copy=dst, method=rung, times=times,
+                                   note="temporary working copy, parsed read-only; group %s; %s"
+                                        % ("+".join(os.path.basename(f) for f in files), verify))
+                except Exception:
+                    pass
+            return dst
+        if torn:
+            # The browser kept writing between every pair of reads: no read of
+            # this database is one moment, so none is parsed.
+            _UNREAD.append((src, "torn_after_retries", rung))
+            if rec is not None:
+                rec.add_failure(src, "browser database changed between reads (%d tries)"
+                                % (_VERIFY_RETRIES + 1), method=rung)
+            return None
+    _UNREAD.append((src, "locked", last_rung))
     if rec is not None:
-        try:
-            # Source and copy hashed; a browser that is running can change the
-            # file between the two reads, which the entry then says.
-            rec.add_source(src, copy=dst, method=method, times=times,
-                           note="temporary working copy, parsed read-only")
-        except Exception:
-            pass
-    # Bring the sidecars along so WAL/rollback content is visible.
-    for suffix in _SQLITE_SIDECARS:
-        side = src + suffix
-        if os.path.isfile(side):
-            try:
-                shutil.copy2(side, dst + suffix)
-            except (PermissionError, OSError):
-                if copy_locked_file_raw is not None:
-                    try:
-                        copy_locked_file_raw(side, dst + suffix)
-                    except Exception:
-                        pass
-    return dst
+        rec.add_failure(src, "browser database could not be copied (locked by the browser)",
+                        method="copy")
+    return None
 
 
 def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
@@ -897,7 +976,7 @@ def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
     not roll a hot journal back (``mode=ro`` refuses it), so it fell to
     ``immutable=1``, which read the file as it lay: the transaction's
     half-written rows, looking like evidence (Sentinel P1, 2026-11-01). A copy
-    that still fails ``quick_check`` after recovery is not read at all and is
+    that still fails ``integrity_check`` after recovery is not read at all and is
     named in the log. Once recovered the connection is query-only.
     """
     try:
@@ -910,11 +989,15 @@ def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
         if str(mode).lower() == "wal":
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-        check = [r[0] for r in conn.execute("PRAGMA quick_check")]
+        # integrity_check, not quick_check: it also checks every index
+        # against its table (locked-and-incremental-design A2).
+        check = [r[0] for r in conn.execute("PRAGMA integrity_check")]
         if check != ["ok"]:
             logger.warning("Browser database copy %s is damaged after recovery "
                            "(%s); it was not read", db_path, "; ".join(
                                str(c) for c in check[:3]))
+            src, rung = _COPY_SOURCE.get(db_path, (db_path, "copy:shared_read"))
+            _UNREAD.append((src, "torn_after_retries", rung))
             conn.close()
             return None
         conn.execute("PRAGMA query_only = 1")
@@ -922,6 +1005,10 @@ def _open_ro(db_path: str) -> Optional[sqlite3.Connection]:
         return conn
     except sqlite3.Error as exc:
         logger.debug("Could not recover %s: %s", db_path, exc)
+        # A copy SQLite cannot read even after recovery ("malformed"): its rows
+        # are missing from the parse just as a damaged one's are.
+        src, rung = _COPY_SOURCE.get(db_path, (db_path, "copy:shared_read"))
+        _UNREAD.append((src, "torn_after_retries", rung))
         try:
             conn.close()
         except sqlite3.Error:
@@ -1257,8 +1344,48 @@ class _Writer:
 _NOT_IDENTITY = ("parsed_at", "sid")
 
 
+# Collected profile folder -> the live folder it was copied from, for every
+# ProfileSource of this parse that names one (the preserved route). Set by
+# parse_browser_data.
+_ORIGINAL_ROOTS: List[Tuple[str, str]] = []
+
+
+def _original_path(path: str) -> str:
+    """``path`` under a collected profile, as the live path it was copied
+    from; any other path unchanged."""
+    if not path or not _ORIGINAL_ROOTS:
+        return path
+    norm = os.path.normcase(os.path.abspath(path))
+    for copied, original in _ORIGINAL_ROOTS:
+        if norm == copied:
+            return original
+        if norm.startswith(copied + os.sep):
+            return os.path.join(original, os.path.abspath(path)[len(copied) + 1:])
+    return path
+
+
+def _original_roots(ps: ProfileSource) -> List[Tuple[str, str]]:
+    """``(collected, live)`` pairs one preserved ProfileSource adds to
+    _ORIGINAL_ROOTS: its profile, its cache and its Local State. Nothing for
+    a live ProfileSource, so the live route's rows are untouched."""
+    out = []
+    local_state = ps.original_local_state_path
+    if (not local_state and ps.local_state_path and ps.root_dir and ps.original_root
+            and os.path.normcase(os.path.dirname(os.path.abspath(ps.local_state_path)))
+            == os.path.normcase(os.path.dirname(os.path.abspath(ps.root_dir).rstrip("\\/")))):
+        local_state = os.path.join(os.path.dirname(ps.original_root.rstrip("\\/")),
+                                   os.path.basename(ps.local_state_path))
+    for copied, original in ((ps.root_dir, ps.original_root),
+                             (ps.cache_dir, ps.original_cache_dir),
+                             (ps.local_state_path, local_state)):
+        if copied and original:
+            out.append((os.path.normcase(os.path.abspath(copied)).rstrip("\\/"),
+                        original.rstrip("\\/")))
+    return out
+
+
 def _prov_tuple(ps: ProfileSource, source_path: str, now: str) -> tuple:
-    return (ps.browser, ps.vendor, ps.user_name, ps.sid, ps.profile, source_path, now)
+    return (ps.browser, ps.vendor, ps.user_name, ps.sid, ps.profile, _original_path(source_path), now)
 
 
 _PROV_COLS = ["browser", "vendor", "user_name", "sid", "profile", "source_path", "parsed_at"]
@@ -1918,7 +2045,7 @@ def _parse_chromium_metadata(ps, writer, now):
         "browser", "vendor", "user_name", "sid", "profile", "source_path",
         "version", "os_crypt_key_b64", "key_scheme", "profile_created", "parsed_at"],
         [(ps.browser, ps.vendor, ps.user_name, ps.sid, ps.profile,
-          ps.local_state_path or ps.root_dir, version, os_key_b64, scheme,
+          _original_path(ps.local_state_path or ps.root_dir), version, os_key_b64, scheme,
           prof_created, now)])
 
 
@@ -2216,6 +2343,7 @@ def _copy_payload(src: str, dest: str) -> str:
 
 def _record_extracted(writer, ps, now, artifact, original_path, extracted_path):
     """Add a browser_files inventory row for an extracted payload."""
+    original_path = _original_path(original_path)
     try:
         size = os.path.getsize(extracted_path)
         mtime = format_forensic_timestamp(
@@ -3988,7 +4116,7 @@ def _parse_gecko_metadata(ps, writer, now, extract_root):
     writer.add("browser_metadata", [
         "browser", "vendor", "user_name", "sid", "profile", "source_path",
         "version", "os_crypt_key_b64", "key_scheme", "profile_created", "parsed_at"],
-        [(ps.browser, ps.vendor, ps.user_name, ps.sid, ps.profile, ps.root_dir,
+        [(ps.browser, ps.vendor, ps.user_name, ps.sid, ps.profile, _original_path(ps.root_dir),
           _gecko_last_version(ps), key_ref,
           "nss_key4" if key_ref else "", "", now)])
 
@@ -4063,7 +4191,8 @@ def _forget_profile_rows(conn, ps: ProfileSource) -> None:
     doubled them. Rows are matched on their own source path (``original_path``
     for browser_files), so other profiles and other sources are untouched.
     """
-    prefixes = [os.path.join(d, "") for d in (ps.root_dir, ps.cache_dir) if d]
+    prefixes = [os.path.join(d, "") for d in (ps.root_dir, ps.cache_dir,
+                                               ps.original_root, ps.original_cache_dir) if d]
     for table in TABLE_SCHEMAS:
         col = "original_path" if table == "browser_files" else "source_path"
         cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
@@ -4141,6 +4270,10 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
     writer = _Writer(conn)   # first: its tally lists the indexes create_schema adds
     create_schema(conn)
     del _UNREAD[:]
+    _COPY_SOURCE.clear()
+    del _ORIGINAL_ROOTS[:]
+    for ps in sources:
+        _ORIGINAL_ROOTS.extend(_original_roots(ps))
     now = get_current_forensic_timestamp()
     warnings: List[str] = []
 
@@ -4160,9 +4293,21 @@ def parse_browser_data(case_artifacts_dir, progress_callback=None,
     result["statistics"] = dict(writer.stats)
     # Each database a running browser kept locked, by name: its rows are
     # missing from this parse (close the browser, or parse again elevated).
-    for path in _UNREAD:
-        warnings.append("Not read - locked by the running browser: %s" % path)
+    seen = set()
+    unread = []
+    for path, reason, rung in _UNREAD:
+        path = _original_path(path)
+        if path in seen:
+            continue
+        seen.add(path)
+        unread.append({"path": path, "reason": reason, "rung_tried": rung})
+        if reason == "locked":
+            warnings.append("Not read - locked by the running browser: %s" % path)
+        else:
+            warnings.append("Not read - no copy was one moment of the database (it changed "
+                            "between reads, or was damaged after recovery): %s" % path)
     result["warnings"] = warnings
+    result["sources_not_read"] = unread
     result["success"] = True
     tot = writer.tally.totals()
     result["records"] = tot["parsed"]

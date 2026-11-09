@@ -255,8 +255,9 @@ def migrate_on_startup(config_directory: str = "configs") -> bool:
         True if migration was successful, False otherwise
     """
     try:
-        config_dir = Path(config_directory)
-        
+        from correlation_engine.config.config_manager import resolve_config_directory
+        config_dir = resolve_config_directory(config_directory)
+
         if not config_dir.exists():
             logger.info("Configuration directory does not exist, no migration needed")
             return True

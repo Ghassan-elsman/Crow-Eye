@@ -46,6 +46,82 @@ _USED_EXISTING = set()     # existing snapshots already written to the custody r
 _SHARED_IDS = set()     # snapshots the run's collector made for every worker
 
 
+# Windows allows at most 64 shadow copies per volume; creating the 65th fails.
+MAX_SHADOW_COPIES_PER_VOLUME = 64
+# Refuse to create a copy once a volume already holds this many, leaving two
+# slots free. A crowded volume (System Restore plus other tools) is left as it
+# is rather than pushed over the edge: 62 is where one runaway collection on
+# DESKTOP-4U181E2 had driven the volume before a create failed. A real run
+# makes at most one copy per volume (see _CREATION_ATTEMPTED), so this is a
+# backstop, not the throttle.
+CREATE_REFUSE_AT = MAX_SHADOW_COPIES_PER_VOLUME - 2
+
+# "Already tried to create a copy for this volume" is per PROCESS, not per
+# VSSAccessStrategy instance. live_hive_access and SRUM_Claw build a
+# FileAccessor - and so a fresh VSSAccessStrategy - per file, so a per-instance
+# flag reset on every file and each file made its own copy: one collection
+# cycle on DESKTOP-4U181E2 created 62. Keyed by normalized volume ("C:").
+_CREATION_ATTEMPTED: dict[str, bool] = {}
+
+
+def reset_creation_attempted():
+    """Forget which volumes a create was tried for (a new collection run, or a test)."""
+    _CREATION_ATTEMPTED.clear()
+
+
+# Process cache of Win32_ShadowCopy InstallDate times, short TTL, so per-file
+# enumerations do not each shell to PowerShell.
+_WMI_TIMES = {"at": 0.0, "map": {}}
+
+
+def _sort_epoch(shadow_copy):
+    """A POSIX timestamp for sorting shadow copies, or -inf when the time is unknown.
+
+    vssadmin times are naive local and WMI times are aware UTC; .timestamp()
+    reduces both to a comparable float, so a list that mixes the two kinds sorts
+    without the TypeError that comparing a naive to an aware datetime raises.
+    """
+    t = getattr(shadow_copy, "creation_time", None)
+    if t is None:
+        return float("-inf")
+    try:
+        return t.timestamp()
+    except (OverflowError, OSError, ValueError):
+        return float("-inf")
+
+
+def _wmi_shadow_times():
+    """{SHADOW_ID_UPPER: aware-UTC datetime} from Win32_ShadowCopy.InstallDate.
+
+    vssadmin prints the locale's date, and a non-US locale can defeat every
+    strptime format, leaving the creation time unknown - which then reads as an
+    unknown age. Win32_ShadowCopy.InstallDate carries the same time
+    locale-independently. Reuses volume_layout._wmi_copies (the partition bar's
+    proven shadow-copy reader). Empty when WMI is unavailable (standalone
+    Crow-Claw, or no privilege).
+    """
+    now = time.time()
+    if now - _WMI_TIMES["at"] < 30.0 and _WMI_TIMES["map"]:
+        return _WMI_TIMES["map"]
+    out = {}
+    try:
+        import datetime as _dt
+        from Artifacts_Collectors.volume_layout import _wmi_copies
+        for cid, row in (_wmi_copies() or {}).items():
+            at = row.get("At")
+            if not at:
+                continue
+            try:
+                out[str(cid).upper()] = _dt.datetime.strptime(
+                    at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc)
+            except ValueError:
+                continue
+    except Exception:
+        return _WMI_TIMES["map"] or {}
+    _WMI_TIMES["at"], _WMI_TIMES["map"] = now, out
+    return out
+
+
 def register_shared_snapshots(ids):
     """A pool worker: trust the snapshot(s) the collector created for this run.
 
@@ -129,7 +205,11 @@ class VSSAccessStrategy(FileAccessStrategy):
         self.shadow_copies: List[ShadowCopy] = []
         self.vss_available: bool = False
         self._enumerated: bool = False
-        self._creation_attempted: dict[str, bool] = {}  # Track per volume
+        # Per PROCESS, not per instance: shared across every VSSAccessStrategy so
+        # one collection makes at most one create attempt per volume however many
+        # files (and so FileAccessors) it opens. A test may rebind this to its own
+        # dict for isolation; reset_creation_attempted() clears it between runs.
+        self._creation_attempted = _CREATION_ATTEMPTED
         # May this strategy CREATE a shadow copy when none exists, or only use
         # the ones already there? True keeps the collector's behaviour, which is
         # what acquisition wants. A parse can turn it off: reading evidence and
@@ -404,8 +484,23 @@ class VSSAccessStrategy(FileAccessStrategy):
                     )
                     shadow_copies.append(shadow_copy)
             
-            # Sort by creation time (newest first)
-            shadow_copies.sort(key=lambda sc: sc.creation_time or datetime.min, reverse=True)
+            # Fill any time vssadmin's localised output defeated from
+            # Win32_ShadowCopy.InstallDate (locale-independent), matched by
+            # ShadowID, so an unknown age does not read as "unknown" when the
+            # time is in fact knowable.
+            if any(sc.creation_time is None for sc in shadow_copies):
+                wmi_times = _wmi_shadow_times()
+                if wmi_times:
+                    for sc in shadow_copies:
+                        if sc.creation_time is None:
+                            t = wmi_times.get((sc.shadow_copy_id or "").upper())
+                            if t is not None:
+                                sc.creation_time = t
+
+            # Sort newest first. _sort_epoch keeps naive (vssadmin, local) and
+            # aware (WMI, UTC) times comparable; comparing the two kinds directly
+            # would raise.
+            shadow_copies.sort(key=_sort_epoch, reverse=True)
             
             self.shadow_copies = shadow_copies
             self.vss_available = len(shadow_copies) > 0
@@ -445,18 +540,45 @@ class VSSAccessStrategy(FileAccessStrategy):
         if not volume.endswith("\\"):
             volume = volume + "\\"
         
-        # Find shadow copies for this volume
+        # Among this volume's copies, prefer one this run registered
+        # (register_shared_snapshots) or created, matched by ShadowID: vssadmin
+        # lists the machine's own copies too, and when their times do not parse
+        # they are indistinguishable by age from ours, so "newest" could return
+        # a machine copy instead of the one just made. Fall back to the newest by
+        # time (shadow_copies is sorted newest first), as before.
+        own = _created_ids()
+        fallback = None
         for shadow_copy in self.shadow_copies:
-            # Match volume (handle different formats)
             orig_vol = shadow_copy.original_volume
             if not orig_vol.endswith("\\"):
                 orig_vol = orig_vol + "\\"
-            
-            if orig_vol.upper() == volume.upper():
+            if orig_vol.upper() != volume.upper():
+                continue
+            if (shadow_copy.shadow_copy_id or "").lower() in own:
                 return shadow_copy
-        
-        return None
-    
+            if fallback is None:
+                fallback = shadow_copy
+
+        return fallback
+
+    def _shadow_copy_count(self, volume_normalized: str) -> int:
+        """How many shadow copies this volume already has, from the last enumeration.
+
+        vssadmin lists every volume's copies, so counting the ones whose original
+        volume matches gives the true per-volume total the 64-copy ceiling limits.
+        """
+        if not self._enumerated:
+            self.enumerate_shadow_copies()
+        want = volume_normalized.rstrip('\\').upper()
+        if want and not want.endswith(':'):
+            want = want + ':'
+        n = 0
+        for sc in self.shadow_copies:
+            ov = (sc.original_volume or "").rstrip('\\').upper()
+            if ov and ov == want:
+                n += 1
+        return n
+
     def get_vss_path(self, file_path: str, shadow_copy: ShadowCopy) -> str:
         r"""Convert regular path to VSS path.
         
@@ -629,6 +751,60 @@ class VSSAccessStrategy(FileAccessStrategy):
             logger.info("[VSSAccessStrategy] Not creating a shadow copy for %s: "
                         "creation is disabled by the caller.", volume_normalized)
             return None
+
+        # Refuse when the volume is already near Windows' 64-copy ceiling:
+        # creating the 65th fails, and a crowded volume should be left as it is
+        # rather than pushed over. Counted from the enumeration done before this.
+        existing = self._shadow_copy_count(volume_normalized)
+        if existing >= CREATE_REFUSE_AT:
+            logger.warning(
+                "[VSSAccessStrategy] Not creating a shadow copy for %s: the volume "
+                "already holds %d shadow copies (ceiling %d). Leaving it as it is.",
+                volume_normalized, existing, MAX_SHADOW_COPIES_PER_VOLUME
+            )
+            self._creation_attempted[volume_normalized] = True
+            msg = (
+                "Volume %s already holds %d of at most %d shadow copies; creating "
+                "another risks the 65th failing. Not created - the next method reads "
+                "the current file." % (volume_normalized, existing, MAX_SHADOW_COPIES_PER_VOLUME)
+            )
+            return ShadowCopyCreationResult(
+                success=False,
+                shadow_copy=None,
+                duration_seconds=0.0,
+                pre_creation_checks=PreCreationCheckResult(
+                    all_passed=False,
+                    checks={"below_copy_ceiling": False},
+                    blocking_issues=[msg],
+                    warnings=[],
+                    auto_fix_attempted=False,
+                    auto_fix_results=None
+                ),
+                vssadmin_result=VssAdminResult(
+                    returncode=-1, stdout="", stderr="", duration_seconds=0.0, command=""
+                ),
+                error=VssAdminError(
+                    error_code=-1,
+                    error_category="volume_full",
+                    error_message="Volume at the shadow copy ceiling",
+                    technical_details=(
+                        "Volume %s holds %d shadow copies; the refusal threshold is %d "
+                        "(ceiling %d)." % (volume_normalized, existing, CREATE_REFUSE_AT,
+                                           MAX_SHADOW_COPIES_PER_VOLUME)
+                    ),
+                    user_friendly_message=msg,
+                    remediation_steps=[
+                        "No copy was created; the next access method reads the current file",
+                        "Review the volume's shadow copies: vssadmin list shadows",
+                    ],
+                    is_retryable=False
+                ),
+                diagnostics=None,
+                remediation_steps=[
+                    "No copy was created on %s; the next access method reads the current file"
+                    % volume_normalized
+                ]
+            )
 
         # Mark volume as attempted BEFORE calling create_shadow_copy
         # This ensures we track the attempt even if the manager's internal tracking fails

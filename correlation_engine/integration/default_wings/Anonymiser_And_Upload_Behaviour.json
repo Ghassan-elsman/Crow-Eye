@@ -3,6 +3,7 @@
   "wing_name": "Anonymiser Used Around a File-Sharing Upload (Behaviour)",
   "wing_id": "default_behaviour_anonymiser_upload_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "Within one hour, one person visits an anonymising service (a web proxy, Tor gateway or VPN site in UBA's site categories) and submits a form to a file-sharing site, in either order. UBA rules: browser_visit_anonymiser and browser_upload_inferred. Both come from the person's own browser history, so the person is the profile owner.",
   "proves": "A person used an anonymising service around an upload to a file-sharing site",
   "author": "Crow-Eye Team",

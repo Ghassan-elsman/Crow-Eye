@@ -1,0 +1,55 @@
+{
+  "config_name": "ai_agent_turn_mass_file_deletion_behaviour",
+  "wing_name": "AI Agent Turn, Then Mass File Deletion (Behaviour)",
+  "wing_id": "default_behaviour_ai_mass_delete_001",
+  "wing_category": "behaviour",
+  "host_scope": "same_host",
+  "description": "An AI agent worked on a request, and within 15 minutes at least 20 files were permanently deleted (UBA's file_deleted events, from the USN journal). An agent cleaning up after itself is common; one deleting a person's documents is not - the hit names the folder.",
+  "proves": "Many files were permanently deleted while an AI agent was working",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-11-04T00:00:00Z",
+  "last_modified": "2026-11-04T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "An AI agent worked on a request",
+      "rule_id": "ai_agent_turn",
+      "actor": "any"
+    },
+    {
+      "label": "Files permanently deleted in bulk",
+      "rule_id": "file_deleted",
+      "actor": "any",
+      "min_count": 20
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 15,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1485",
+      "T1070.004"
+    ],
+    "tactic": [
+      "impact",
+      "defense_evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "ai_agent",
+    "anti_forensics",
+    "behaviour"
+  ],
+  "case_types": [
+    "ai_agent",
+    "insider",
+    "intrusion"
+  ]
+}

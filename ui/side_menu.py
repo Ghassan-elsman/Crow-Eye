@@ -28,7 +28,7 @@ PARSED_C = "#4ADE80"
 SECTIONS = (
     ("live", "Live analysis", LIVE_C, ("registrybutton", "lnkbutton", "Prefetchbutton", "ShimCacheButton",
                                        "AmcacheButton", "MFT_USN_CorrelateButton", "logbutton", "RecycleBinButton",
-                                       "SRUMButton", "BrowserButton")),
+                                       "SRUMButton", "BrowserButton", "AIAgentsButton")),
     ("tools", "Tools", TOOLS_C, ("PartitionButton", "LiveFileBrowserButton", "ShadowCopiesButton",
                                  "LiveAppAcquisitionButton")),
     ("offline", "Offline analysis", OFFLINE_C, ("CrowClawButton", "OfflineImporterButton", "ImageParsingButton",
@@ -49,6 +49,7 @@ PARSED_BY = {
     "RecycleBinButton": ("recyclebin_analysis.db",),
     "SRUMButton": ("srum_data.db",),
     "BrowserButton": ("browser_analysis.db",),
+    "AIAgentsButton": ("ai_agents.db",),
     "PartitionButton": ("partition_data.db",),
     "ShadowCopiesButton": ("shadow_copies.db",),
 }

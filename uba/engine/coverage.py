@@ -25,6 +25,8 @@ _LOG_TABLES = ("SecurityLogs", "SystemLogs", "ApplicationLogs")
 
 # Friendly artifact-source names for the "what artifacts are used" list.
 _SOURCE_LABEL = {
+    "ai_agent_sessions": "AI agent sessions (Claude Code, Gemini CLI, Codex)",
+    "ai_agent_steps": "AI agent steps - prompts, commands, file changes",
     # Browser databases. Without these the Coverage panel prints the bare SQL
     # table name at the analyst.
     "browser_history": "Browser — history",
@@ -59,6 +61,7 @@ _SOURCE_LABEL = {
     "InventoryApplicationShortcut": "AmCache — shortcuts", "InventoryDriverBinary": "AmCache — drivers",
     "InventoryDevicePnp": "AmCache — devices", "MUICache": "MUICache",
     "USBDevices": "Registry — USB", "USBStorageDevices": "Registry — USB storage",
+    "printer_connections": "Registry — printers", "RDPClientMRU": "Registry — Remote Desktop history", "srum_app_timeline": "SRUM — keyboard, mouse and focus time",
     "InstalledSoftware": "Registry — installed software", "SystemServices": "Registry — services",
     "AutoStartPrograms": "Registry — autostart", "Network_list": "Registry — networks",
     "BrowserHistory": "Registry — browser history", "RecentDocs": "Registry — recent docs",

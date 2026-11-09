@@ -475,6 +475,46 @@ export async function sendMessage(query: string): Promise<string> {
  * 
  * @returns true if bridge is available, false otherwise
  */
+/**
+ * Call a bridge slot off Crow-Eye's GUI thread when the bridge can
+ * (EYEBridge.callAsync / asyncResult), else the plain synchronous call. A slow
+ * slot run the plain way holds the whole application while it runs: one stored
+ * evidence query over the MFT/USN table froze Crow-Eye for 10 s. Resolves with
+ * the slot's JSON string; an off-thread failure resolves with
+ * {"__asyncError": "..."}, which callers treat like any failed answer.
+ */
+let asyncSeq = 0;
+// Every Eye window (chat, Narrative Map, evidence) shares one bridge and hears
+// every asyncResult: the ids carry this page's own prefix so one window's
+// answer never resolves another's request.
+const asyncPage = Math.random().toString(36).slice(2, 10);
+const asyncPending = new Map<string, (payload: string) => void>();
+const asyncHooked = new WeakSet<object>();
+interface AsyncCapableBridge {
+  callAsync?: (method: string, requestId: string, argsJson: string) => void;
+  asyncResult?: { connect: (cb: (requestId: string, payload: string) => void) => void };
+  [slot: string]: unknown;
+}
+export function callSlotAsync(bridge: AsyncCapableBridge, method: string, args: unknown[]): Promise<string> {
+  if (!bridge || typeof bridge.callAsync !== 'function' || !bridge.asyncResult
+      || typeof bridge.asyncResult.connect !== 'function') {
+    return Promise.resolve((bridge[method] as (...a: unknown[]) => string | Promise<string>)(...args));
+  }
+  if (!asyncHooked.has(bridge)) {
+    asyncHooked.add(bridge);
+    bridge.asyncResult.connect((id: string, payload: string) => {
+      const resolve = asyncPending.get(id);
+      if (resolve) { asyncPending.delete(id); resolve(payload); }
+    });
+  }
+  asyncSeq += 1;
+  const id = `eye-${asyncPage}-${asyncSeq}`;
+  return new Promise<string>((resolve) => {
+    asyncPending.set(id, resolve);
+    bridge.callAsync!(method, id, JSON.stringify(args));
+  });
+}
+
 export function isBridgeReady(): boolean {
   return bridgeInitialized && window.bridge !== undefined;
 }
@@ -551,6 +591,21 @@ export async function getConversationHistory(): Promise<string> {
     console.error('Error getting conversation history from bridge:', error);
     throw error;
   }
+}
+
+/**
+ * The last `count` messages' id, role and metadata (no content): what the
+ * chat realigns its ids with after each answer. Falls back to the whole
+ * history on a bridge without the slot.
+ */
+export async function getRecentMessageIds(count: number): Promise<string> {
+  if (!window.bridge) {
+    throw new Error('Bridge not initialized. Call initializeBridge() first.');
+  }
+  if (typeof window.bridge.get_recent_message_ids === 'function') {
+    return window.bridge.get_recent_message_ids(count);
+  }
+  return window.bridge.get_conversation_history();
 }
 
 /**
@@ -1169,7 +1224,7 @@ export async function getStepHistory(): Promise<StepHistoryResponse> {
     };
   }
   try {
-    const raw = await window.bridge.get_step_history();
+    const raw = await callSlotAsync(window.bridge as never, 'get_step_history', []);
     return JSON.parse(raw) as StepHistoryResponse;
   } catch (error) {
     console.error('Error fetching step history:', error);
@@ -1206,7 +1261,7 @@ export async function getDialogueHistory(): Promise<DialogueHistoryResponse> {
     };
   }
   try {
-    const raw = await window.bridge.get_dialogue_history();
+    const raw = await callSlotAsync(window.bridge as never, 'get_dialogue_history', []);
     return JSON.parse(raw) as DialogueHistoryResponse;
   } catch (error) {
     console.error('Error fetching dialogue history:', error);
@@ -1250,7 +1305,7 @@ export async function getGepTurns(): Promise<GepTurnsResponse> {
     };
   }
   try {
-    const raw = await window.bridge.get_gep_turns();
+    const raw = await callSlotAsync(window.bridge as never, 'get_gep_turns', []);
     return JSON.parse(raw) as GepTurnsResponse;
   } catch (error) {
     console.error('Error fetching GEP turns:', error);
@@ -1312,7 +1367,7 @@ export async function getReasoningTurns(): Promise<ReasoningTurnsResponse> {
     };
   }
   try {
-    const raw = await window.bridge.get_reasoning_turns();
+    const raw = await callSlotAsync(window.bridge as never, 'get_reasoning_turns', []);
     return JSON.parse(raw) as ReasoningTurnsResponse;
   } catch (error) {
     console.error('Error fetching reasoning turns:', error);

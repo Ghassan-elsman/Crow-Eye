@@ -3,6 +3,7 @@
   "wing_name": "Execution Proof Correlation (Time)",
   "wing_id": "default_wing_execution_001_time",
   "wing_category": "time",
+  "host_scope": "same_host",
   "description": "Scores execution likelihood by weighted corroboration across artifacts: Prefetch (strongest execution indicator), ShimCache/AmCache (presence/compatibility indicators that do not by themselves prove execution), user-triggered traces (LNK, Jumplists), and runtime behavior (SRUM).",
   "proves": "Corroborated indicators that a program executed on the system",
   "author": "Crow-Eye Team",

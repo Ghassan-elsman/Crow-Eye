@@ -289,8 +289,11 @@ code {
   padding: 1px 6px;
   border-radius: 4px;
   border: 1px solid var(--border);
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  /* break-word, not anywhere: a long path or hash still wraps when it must, but an ordinary
+     word keeps its full width as the cell's minimum, so table columns are never squeezed
+     until a word splits mid-word. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 /* ==========================================================================
@@ -342,10 +345,14 @@ code {
   border-bottom: 1px solid var(--border);
   color: var(--tx2);
   vertical-align: top;
-  /* NO width cap: table-layout:auto sizes each column to its content (the ratio);
-     only wrap long paths/tokens so nothing overflows horizontally. */
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  /* NO width cap: table-layout:auto sizes each column to its content (the ratio).
+     break-word (never anywhere): words keep their min-content width, so auto layout cannot
+     squeeze a column below a word ("Continuous" split mid-word). A long path or identifier
+     sets its column's width instead, so on a tablet or phone such a table scrolls sideways
+     inside its overflow-x wrapper: intended (GUIDELINES.md 10.5). Guarded by
+     _build/checks/wordbreak-check.mjs. */
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 /* byte-map field tables (ref-table/.fmt): the offset/size code columns read
    green and stay tight to their short content. NOT .kb-table (text tables). */

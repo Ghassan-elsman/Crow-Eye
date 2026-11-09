@@ -214,6 +214,7 @@ export interface EYEBridge {
   export_report: (format: string) => Promise<string>;
   get_context_stats: () => Promise<string>;
   get_conversation_history: () => Promise<string>;
+  get_recent_message_ids?: (count: number) => Promise<string>;
   clear_conversation_history: () => Promise<string>;
   get_available_models_with_quota: () => Promise<string>;
   get_grouped_backend_connections: () => Promise<string>;

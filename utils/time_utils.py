@@ -503,6 +503,73 @@ def get_current_forensic_timestamp() -> str:
 
 
 # Example usage
+
+# ---------------------------------------------- a machine's own zone rules --
+def _zone_rule(raw):
+    """A StandardStart / DaylightStart value (16 bytes, as stored under
+    Control\\TimeZoneInformation: wYear, wMonth, wDay = occurrence 1-5 where 5
+    is the last, wHour, wMinute, wSecond, wMilliseconds, then wDayOfWeek LAST -
+    see registry_binary_parser.parse_tz_transition_rule). None when the zone
+    does not change its clocks or the value is not a rule."""
+    if not raw or len(raw) < 16:
+        return None
+    year, month, occ, hour, minute, second, _ms, dow = struct.unpack_from("<8H", bytes(raw), 0)
+    if month == 0 or not (1 <= month <= 12 and 1 <= occ <= 5 and dow <= 6
+                          and hour <= 23 and minute <= 59):
+        return None
+    return month, occ, dow, hour, minute, second
+
+
+def _rule_moment(year, rule):
+    """The local moment a rule names in ``year`` (the occ-th weekday of the month)."""
+    month, occ, dow, hour, minute, second = rule
+    first = datetime.date(year, month, 1)
+    # Windows day of week: 0 = Sunday; Python: Monday = 0.
+    offset = (dow - (first.weekday() + 1) % 7) % 7
+    day = 1 + offset + 7 * (occ - 1)
+    last = (datetime.date(year + (month == 12), month % 12 + 1, 1) - datetime.timedelta(days=1)).day
+    while day > last:
+        day -= 7
+    return datetime.datetime(year, month, day, hour, minute, second)
+
+
+def windows_zone_to_utc(bias, standard_bias=0, daylight_bias=0, standard_start=None,
+                        daylight_start=None):
+    """A function: naive LOCAL datetime -> aware UTC datetime, by the zone rules
+    a Windows machine kept in its SYSTEM hive (Control\\TimeZoneInformation:
+    Bias, StandardBias, DaylightBias, StandardStart, DaylightStart). For text a
+    machine wrote in its own local time - setupapi.dev.log - read from an image,
+    where this machine's zone says nothing. UTC = local + Bias + the season's bias
+    (minutes). A local time inside the hour that never existed (clocks forward)
+    or that happened twice (clocks back) takes the offset in force before the
+    change, as Windows does: checked against this machine's own conversion for
+    every half hour of two years, transitions included."""
+    std_rule, dst_rule = _zone_rule(standard_start), _zone_rule(daylight_start)
+    bias, standard_bias, daylight_bias = int(bias or 0), int(standard_bias or 0), int(daylight_bias or 0)
+    # DWORDs read unsigned: a zone east of UTC has a negative bias.
+    bias, standard_bias, daylight_bias = [v - (1 << 32) if v >= (1 << 31) else v
+                                          for v in (bias, standard_bias, daylight_bias)]
+
+    def convert(local):
+        extra = standard_bias
+        if std_rule and dst_rule:
+            # DaylightStart names a standard-time wall clock that jumps
+            # forward: the skipped span keeps standard time. StandardStart
+            # names a daylight-time wall clock: the repeated span keeps
+            # daylight time up to it.
+            dst_on = _rule_moment(local.year, dst_rule) + datetime.timedelta(
+                minutes=standard_bias - daylight_bias)
+            std_on = _rule_moment(local.year, std_rule)
+            if dst_on < std_on:
+                in_dst = dst_on <= local < std_on
+            else:                                  # southern hemisphere
+                in_dst = not (std_on <= local < dst_on)
+            if in_dst:
+                extra = daylight_bias
+        utc = local + datetime.timedelta(minutes=bias + extra)
+        return utc.replace(tzinfo=datetime.timezone.utc)
+    return convert
+
 if __name__ == "__main__":
     # Current time in various formats
     now = get_current_utc()

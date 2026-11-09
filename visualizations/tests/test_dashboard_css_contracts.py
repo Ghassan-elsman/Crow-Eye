@@ -26,7 +26,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DASHBOARDS = ["react-viz", "react-mftusn", "react-lnkjl",
-              "react-prefetch", "react-shellitems", "react-browser"]
+              "react-prefetch", "react-shellitems", "react-browser",
+              "react-aiagents"]
 
 # Containers that cap their height and scroll. Every one of them is a column
 # flexbox, so every one of them can crush its rows.
@@ -98,6 +99,7 @@ class EveryHeatmapIsAHorizontalDayStrip(unittest.TestCase):
         "react-prefetch": "LocationTimeline.jsx",
         "react-shellitems": "SourceTimeline.jsx",
         "react-browser": "BrowserTimeline.jsx",
+        "react-aiagents": "ActivityStrip.jsx",
     }
 
     def _src(self, dash):
@@ -319,6 +321,7 @@ class ClickingAnHourOpensThatHour(unittest.TestCase):
         "react-prefetch": "DaySection.jsx",
         "react-shellitems": "DaySection.jsx",
         "react-browser": "DaySection.jsx",
+        "react-aiagents": "DaySection.jsx",
     }
 
     def _read(self, dash, name):
@@ -401,6 +404,52 @@ class ClickingAnHourOpensThatHour(unittest.TestCase):
             css = _css(dash)
             self.assertIn(".hour-table > *", css,
                           "%s: hour rows are not guarded against crushing" % dash)
+
+
+class NetworkNumbersWearTheFlowBadge(unittest.TestCase):
+    """Data sent and received (and a file downloaded) reads the same in every
+    view: the User Behavior window's fact badge - an arrow in a rounded square,
+    the value in white, a faint label, no hue (Ghassan, 2026-11-04).
+
+    `FlowBadge.jsx` carries its own stylesheet and is duplicated, like
+    Icons.jsx and DayAxis.jsx, into the six dashboards and the timeline."""
+
+    TIMELINE = os.path.join(os.path.dirname(ROOT), "timeline", "react-timeline",
+                            "src", "components", "FlowBadge.jsx")
+
+    def _read(self, *parts):
+        with open(os.path.join(*parts), encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_badge_is_identical_everywhere(self):
+        first = self._read(ROOT, "react-viz", "src", "FlowBadge.jsx")
+        for dash in DASHBOARDS:
+            self.assertEqual(self._read(ROOT, dash, "src", "FlowBadge.jsx"), first,
+                             "%s: FlowBadge.jsx has drifted" % dash)
+        self.assertEqual(self._read(self.TIMELINE), first,
+                         "timeline: FlowBadge.jsx has drifted")
+
+    def test_it_carries_no_hue_and_respects_reduced_motion(self):
+        src = self._read(ROOT, "react-viz", "src", "FlowBadge.jsx")
+        self.assertIn("color: #a3a8b3", src)      # the unit grey
+        self.assertIn("prefers-reduced-motion", src)
+        # Chromium 83 (Qt 5.15) ignores `gap` on a flexbox; spacing is margins.
+        css = src.split("const CSS = `", 1)[1].split("`", 1)[0]
+        self.assertNotRegex(css, r"(^|[;{\s])gap\s*:")
+
+    def test_no_view_still_draws_a_triangle_or_tints_by_direction(self):
+        """The old ways: a coloured up/down triangle beside the bytes, or the
+        upload in blue and the download in green."""
+        views = [(ROOT, "react-viz", "src", f) for f in
+                 ("OverviewPanel.jsx", "AppDetailPanel.jsx", "HourDetailPanel.jsx")]
+        tl = os.path.join(os.path.dirname(ROOT), "timeline", "react-timeline", "src", "components")
+        views.append((tl, "TimelineView.jsx"))
+        for parts in views:
+            src = self._read(*parts)
+            self.assertNotIn("&#9650; {fmtBytes", src, parts[-1])
+            self.assertNotIn("&#9660; {fmtBytes", src, parts[-1])
+            self.assertNotIn("\u2193{down}", src, parts[-1])
+            self.assertIn("FlowBadge", src, parts[-1])
 
 
 if __name__ == "__main__":

@@ -219,6 +219,78 @@
     .kb-table th { text-align: left; padding: 12px; border-bottom: 1px solid var(--border2); color: var(--accent); font-family: 'Space Mono'; text-transform: uppercase; font-size: 11px; }
     .kb-table td { padding: 12px; border-bottom: 1px solid var(--border); color: var(--tx2); vertical-align: top; }
     .kb-table tr:hover { background: rgba(255,255,255,0.02); }
+    /* .mech - how a mechanism works (Change detection and integrity). Indigo: structure, not a
+       warning; the red .myth callout stays reserved for the limits section. */
+    .mech { border-left: 3px solid #818cf8; padding: 14px 18px; margin: 18px 0;
+            background: rgba(129, 140, 248, 0.06); border-radius: 0 8px 8px 0; }
+    .mech h4 { color: #c7d2fe; margin: 0 0 8px; font-size: 15px; }
+    .mech p { margin: 0; }
+    .mech p + p { margin-top: 10px; }
+
+    /* Change detection on the bytes (#change-detection): Figure 2 colours the
+       example record by the role each byte plays in the comparison, Figure 3
+       walks six changes through it. Its own classes throughout - the section
+       must not touch .v-tab (setVersion indexes every .v-tab on the page) or
+       .dynamic-side (the dissection map's panel). No glow: the selected cell
+       is outlined, not lit. */
+    .cd-h3 { font-size: 20px; font-weight: 800; color: var(--tx); margin: 36px 0 10px; }
+    .cd-p { color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 14px; }
+    .cd-p code, .cd-why code, .cd-steps code { white-space: nowrap; }
+    .cd-fig { background: var(--viz-outer, var(--bg1)); border: 1px solid var(--viz-bd, var(--border)); border-radius: 16px; padding: 18px; margin: 6px 0 26px; }
+    .cd-layout { display: grid; grid-template-columns: minmax(0, 680px) minmax(0, 1fr); gap: 22px; align-items: start; }
+    .cd-map { display: grid; grid-template-columns: repeat(16, minmax(0, 1fr)); gap: 4px; background: var(--viz-inner, var(--bg)); border: 1px solid var(--viz-bd, var(--border)); border-radius: 10px; padding: 10px; }
+    .cd-map .byte-cell { font-size: 10px; border-radius: 3px; }
+    .cd-map .byte-cell.cd-on { outline: 2px solid var(--tx); outline-offset: -2px; }
+    .cd-map .divider-row { height: auto; min-height: 24px; margin: 8px 0 2px; padding-top: 6px; letter-spacing: 0.12em; }
+    .cd-modes { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; align-items: center; }
+    .cd-modes .cd-modes-l { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.1em; margin-right: 4px; }
+    .cd-mode { background: var(--bg1); border: 1px solid var(--border); color: var(--tx3); font-family: 'Space Mono', monospace; font-weight: 700; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; padding: 7px 12px; border-radius: 8px; cursor: pointer; }
+    .cd-mode:hover { color: var(--tx2); border-color: var(--border2); }
+    .cd-mode[aria-pressed="true"] { color: var(--tx); border-color: var(--tx2); background: var(--bg2); }
+    .cd-panel { background: var(--bg); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; min-height: 300px; position: sticky; top: 90px; }
+    .cd-panel .cd-pl { font-family: 'Space Mono', monospace; font-size: 11px; color: var(--tx3); text-transform: uppercase; letter-spacing: 0.1em; display: block; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    .cd-panel .cd-pn { font-size: 20px; font-weight: 800; color: var(--tx); line-height: 1.25; margin-bottom: 8px; }
+    .cd-hex { font-family: 'Space Mono', monospace; font-size: 12.5px; color: var(--tx); background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; margin: 6px 0 12px; line-height: 1.6; }
+    .cd-dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 12px; font-size: 14px; margin: 0 0 12px; }
+    .cd-dl dt { color: var(--tx3); font-family: 'Space Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; padding-top: 2px; }
+    .cd-dl dd { color: var(--tx); margin: 0; }
+    .cd-why { color: var(--tx2); font-size: 14px; line-height: 1.65; }
+    .cd-role { display: inline-block; font-family: 'Space Mono', monospace; font-weight: 700; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .cd-r-semantic { background: #0b4150; color: #a5f3fc; }
+    .cd-r-house    { background: #2d3d0c; color: #d9f99d; }
+    .cd-r-struct   { background: #25246b; color: #c7d2fe; }
+    .cd-r-zeroed   { background: #2a3240; color: #cbd5e1; }
+    .cd-r-witness  { background: #3a1f63; color: #ddd6fe; }
+    .cd-r-reserved { background: var(--bg3); color: var(--tx3); }
+    .cd-fig .bar-legend { margin-top: 14px; }
+    .cd-fig > .cap:first-child { margin-top: 0; }
+    .cd-table th:nth-child(-n+2), .cd-table td:nth-child(-n+2) { white-space: nowrap; }
+    .cd-table td:nth-child(-n+2) { font-family: 'Space Mono', monospace; font-size: 12.5px; }
+    .cd-table .ref-section-head td { color: var(--tx); font-family: 'Space Mono', monospace; font-size: 11.5px; letter-spacing: 0.08em; text-transform: uppercase; background: var(--bg2); }
+    .cd-x { white-space: nowrap; font-family: 'Space Mono', monospace; font-size: 12.5px; color: var(--tx); }
+    .cd-steps { color: var(--tx2); font-size: 15.5px; line-height: 1.7; margin: 6px 0 16px 22px; }
+    .cd-steps li { margin-bottom: 6px; }
+    .cd-ex { border-left: 3px solid var(--border2); background: var(--bg1); padding: 16px 18px; border-radius: 0 10px 10px 0; margin: 14px 0; }
+    .cd-ex h4 { color: var(--tx); font-size: 16px; font-weight: 800; margin: 0 0 6px; }
+    .cd-ex p { color: var(--tx2); font-size: 14.5px; line-height: 1.65; margin: 0 0 10px; }
+    .cd-ex .kb-table { font-size: 13.5px; }
+    .cd-ex .kb-table td, .cd-ex .kb-table th { padding: 8px 10px; }
+    .cd-verdict { margin-top: 10px; color: var(--tx2); font-size: 14.5px; line-height: 1.65; }
+    .cd-v { display: inline-block; font-family: 'Space Mono', monospace; font-weight: 700; font-size: 11px; letter-spacing: 0.05em; text-transform: uppercase; padding: 2px 8px; border-radius: 4px; margin-right: 6px; white-space: nowrap; }
+    .cd-v.parsed { background: #0b4150; color: #a5f3fc; }
+    .cd-v.house  { background: #2d3d0c; color: #d9f99d; }
+    .cd-v.found  { background: #4c0d1d; color: #fda4af; }
+    .cd-found { color: #fb7185; font-weight: 700; }
+    @media (max-width: 900px) {
+      .cd-layout { grid-template-columns: minmax(0, 1fr); }
+      .cd-fig { padding: 8px; }
+      .cd-map { gap: 2px; padding: 4px; }
+      .cd-map .byte-cell { font-size: 8px; border-radius: 2px; }
+      .cd-map .divider-row { font-size: 8px; letter-spacing: 0.06em; }
+      .cd-panel { min-height: 0; position: static; }
+      .cd-fig .bar-legend-item { display: block; }
+      .cd-fig .bar-legend-swatch { display: inline-block; vertical-align: -2px; margin-right: 6px; }
+    }
     /* h2 look -> anatomy.css */
     /* h2::before look -> anatomy.css */
 
@@ -282,7 +354,7 @@
       "image": "https://crow-eye.com/og-eye-describe.jpg",
       "about": "NTFS Master File Table",
       "inLanguage": "en",
-      "dateModified": "2026-06-14",
+      "dateModified": "2026-10-26",
       "author": {
         "@type": "Organization",
         "name": "Crow-Eye",
@@ -361,15 +433,90 @@
           "@type": "Answer",
           "text": "Files small enough to fit inside their own MFT record are stored there rather than in separate clusters. The whole content of a small file can therefore be recovered from the MFT alone, even if nothing remains elsewhere on the volume."
         }
+      },
+      {
+        "@type": "Question",
+        "name": "Is the USN journal enough to know what changed in the MFT?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "No. The USN journal can be deleted or recreated, wraps once it reaches its maximum size, does not record last-access updates and never sees raw or offline writes. Crow-Eye compares a fingerprint of every MFT record with the previous pass to find what changed, and uses the USN journal as a witness: a change with no matching journal entry, or a journal that was deleted or reset, is surfaced for review."
+        }
       }
     ]
   }
   </script>
   <link rel="stylesheet" href="anatomy.css">
+  <!-- Eye-Describe centrepiece: takes the galaxy's place, same fixed full-viewport layer as #particles-canvas -->
+  <style>
+    .cp-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100lvh;
+      z-index: -1;
+      pointer-events: none;
+      display: block;
+    }
+    @media print {
+      .cp-canvas {
+        display: none;
+      }
+    }
+
+    /* ---------- change-detection cycle card: the animation (left) beside its steps (right) ----------
+       Moved here from the CFR page; the same card pattern. cp-cfrviz.js mounts the cfr-delta scene
+       and sets data-step="1..6" on the card, and the matching step brightens; with no data-step (no
+       script, reduced motion) every step stays at full strength. */
+    .s-explain { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 2.6rem;
+                 align-items: center; padding: 2.2rem; border-radius: 20px; margin: 28px 0 36px;
+                 background: rgba(12, 16, 32, 0.92); border: 1px solid rgba(129, 140, 248, 0.2); }
+    .s-explain-anim { position: relative; aspect-ratio: 16 / 11; min-height: 360px; border-radius: 14px;
+                      background: #0a0c10; overflow: hidden; border: 1px solid rgba(129, 140, 248, 0.16); }
+    .s-explain-anim canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    .s-explain-text { min-width: 0; align-self: center; }
+    .s-explain h3.s-explain-title { font-family: 'Barlow Semi Condensed', sans-serif; font-size: 1.7rem;
+                 font-weight: 700; line-height: 1.15; color: var(--tx); margin: 0 0 1rem; overflow-wrap: break-word; }
+    .s-explain .s-in-label { font-family: 'Space Mono', monospace; font-size: 0.72rem; font-weight: 700;
+                 letter-spacing: 0.12em; text-transform: uppercase; color: #a5b4fc; margin: 0 0 0.55rem; }
+    .s-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+    .s-steps li { display: grid; grid-template-columns: 1.9rem minmax(0, 1fr); column-gap: 0.85rem;
+                 padding: 0.5rem 0.75rem 0.5rem 0.65rem; border-left: 2px solid transparent; border-radius: 0 10px 10px 0;
+                 line-height: 1.4; transition: opacity .45s ease, background-color .45s ease, border-color .45s ease; }
+    .s-step-n { grid-row: 1 / span 3; width: 1.9rem; height: 1.9rem; border-radius: 50%; display: inline-flex;
+                align-items: center; justify-content: center; font-family: 'Space Mono', monospace; font-size: 0.8rem;
+                font-weight: 700; color: #a5b4fc; border: 1px solid rgba(129, 140, 248, 0.45);
+                background: rgba(129, 140, 248, 0.08); transition: color .45s ease, background-color .45s ease, border-color .45s ease; }
+    .s-steps b { display: block; font-size: 1.02rem; line-height: 1.3; color: var(--tx); margin: 0.22rem 0 0.15rem; }
+    .s-steps p { color: #cbd5e1; font-size: 0.93rem; line-height: 1.55; margin: 0; }
+    .s-explain[data-step] .s-steps li { opacity: 0.72; }
+    .s-explain[data-step="1"] .s-steps li[data-step="1"], .s-explain[data-step="2"] .s-steps li[data-step="2"],
+    .s-explain[data-step="3"] .s-steps li[data-step="3"], .s-explain[data-step="4"] .s-steps li[data-step="4"],
+    .s-explain[data-step="5"] .s-steps li[data-step="5"], .s-explain[data-step="6"] .s-steps li[data-step="6"] {
+      opacity: 1; background-color: rgba(129, 140, 248, 0.07); border-left-color: #818cf8; }
+    .s-explain[data-step="1"] .s-steps li[data-step="1"] .s-step-n, .s-explain[data-step="2"] .s-steps li[data-step="2"] .s-step-n,
+    .s-explain[data-step="3"] .s-steps li[data-step="3"] .s-step-n, .s-explain[data-step="4"] .s-steps li[data-step="4"] .s-step-n,
+    .s-explain[data-step="5"] .s-steps li[data-step="5"] .s-step-n, .s-explain[data-step="6"] .s-steps li[data-step="6"] .s-step-n {
+      color: #0a0c10; background-color: #818cf8; border-color: #818cf8; }
+    @media (max-width: 960px) {
+      .s-explain { grid-template-columns: minmax(0, 1fr); gap: 1.6rem; padding: 1.4rem; }
+      .s-explain-anim { aspect-ratio: 4 / 3; min-height: 0; }
+      .s-explain[data-step] .s-steps li { opacity: 1; }
+    }
+    @media (max-width: 600px) {
+      .s-explain { padding: 0.9rem; gap: 1.2rem; border-radius: 14px; }
+      .s-steps li { padding-left: 0.35rem; padding-right: 0.35rem; column-gap: 0.6rem; }
+    }
+    @media print {
+      .s-explain-anim { display: none; }
+    }
+  </style>
 </head>
 
 <body>
-  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <canvas id="particles-canvas" data-no-galaxy aria-hidden="true"></canvas>
+  <canvas class="cp-canvas" data-centerpiece data-cp-artifact="mft" data-cp-x="0.8" data-cp-y="0.3" data-cp-s="0.55" aria-hidden="true"></canvas>
   <div id="scroll-progress"></div>
 
   <!-- NAV -->
@@ -378,10 +525,11 @@
     <div class="nav-links-wrap">
       <a href="https://crow-eye.com/">Home</a>
       <a href="https://crow-eye.com/sentinel">Sentinel</a>
-      <a href="https://crow-eye.com/eye-describe" class="active">Eye Describe</a>
+      <a href="https://crow-eye.com/eye-describe" class="active">Eye-Describe</a>
       <a href="https://crow-eye.com/eye-ai">Eye AI</a>
       <a href="https://crow-eye.com/user-guide">User Guide</a>
       <a href="https://crow-eye.com/documentation">Docs</a>
+      <a href="https://crow-eye.com/#support">Support</a>
       
       <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
       
@@ -393,7 +541,7 @@
 
   <div class="wrap" style="padding-top: 100px;">
     <header>
-      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye Describe Anatomy</div>
+      <div style="font-family: 'Space Mono'; font-size: 12px; color: var(--accent); letter-spacing: 0.3em; text-transform: uppercase; margin-bottom: 8px;">Eye-Describe Anatomy</div>
       <h1>The NTFS Master File Table: structure, contents and evidential limits</h1>
       <p class="header-sub">Logical mapping of the 1024-byte NTFS FILE record, its attribute headers, and the four most forensically-loaded attributes: <code style="color: var(--accent);">$STANDARD_INFORMATION</code>, <code style="color: var(--accent);">$FILE_NAME</code>, <code style="color: var(--accent);">$DATA</code>, and <code style="color: var(--accent);">$ATTRIBUTE_LIST</code> &mdash; including the timestamp pair that exposes timestomping.</p>
     </header>
@@ -415,6 +563,7 @@
         <li><a href="#reparse-tags">Reparse point tags ($REPARSE_POINT 0xC0)</a></li>
         <li><a href="#record-flags">FILE record flags (header offset 0x16)</a></li>
         <li><a href="#limits">What an MFT record supports, and what it does not</a></li>
+        <li><a href="#change-detection">Change detection and integrity</a></li>
         <li><a href="#anti-forensics">Anti-forensic techniques</a></li>
         <li><a href="#dashboard">Reading the MFT/USN dashboard</a></li>
         <li><a href="#faq">Frequently asked questions</a></li>
@@ -433,7 +582,7 @@
         <div class="intro-body">
           <strong style="color: var(--accent);">TL;DR &mdash;</strong> NTFS's central index. Every file and directory on the volume has at least one <strong>1024-byte FILE record</strong> in <code>$MFT</code> carrying the timestamps, sizes, parent pointer, and a list of attributes that describe the actual data. For an investigator, it is the closest thing NTFS has to a <strong>full filesystem ledger</strong>.
           <br><br>
-          The <strong>Master File Table</strong> &mdash; stored as the system file <code>$MFT</code> &mdash; is the spine of NTFS. Every file, every directory, and even the volume's metadata files live as fixed-size <strong>FILE records</strong> (1024 bytes on standard volumes, 4096 bytes on some large-cluster formats) inside this table. A FILE record begins with the magic bytes <code>F I L E</code> (0x46 0x49 0x4C 0x45), followed by a header, then a stream of <strong>attributes</strong> that describe everything Windows knows about that file: when it was created, where its data lives on disk, who owns it, what's in its name, what reparse points it carries.
+          The <strong>Master File Table</strong> &mdash; stored as the system file <code>$MFT</code> &mdash; is the spine of NTFS. Every file, every directory, and even the volume's metadata files live as fixed-size <strong>FILE records</strong> (1024 bytes on standard volumes, 4096 bytes on volumes formatted with <code>format /L</code> or on disks with 4096-byte sectors) inside this table. A FILE record begins with the magic bytes <code>F I L E</code> (0x46 0x49 0x4C 0x45), followed by a header, then a stream of <strong>attributes</strong> that describe everything Windows knows about that file: when it was created, where its data lives on disk, who owns it, what's in its name, what reparse points it carries.
           <br><br>
           For a forensic investigator, the MFT is the most authoritative source of file metadata on the system. It survives deletion (the record is just marked free, not zeroed), records four independent timestamp sets — one in <code>$SI</code>, short for <code>$STANDARD_INFORMATION</code>, and one in <code>$FN</code>, short for <code>$FILE_NAME</code> —, and links every file to its parent directory by MFT reference.
         </div>
@@ -453,7 +602,7 @@
         <div class="container-strip-meta">Slot size<strong>1024 B</strong>fixed</div>
       </div>
 
-      <p class="map-intro">An MFT entry is always exactly <strong>1024 bytes</strong> on standard NTFS volumes (4096 on large-cluster formats). The first <strong>48 bytes</strong> are a kernel-managed <strong>FILE Record Header</strong> (NTFS 3.1) ending at <code>0x2F</code>, followed by an <strong>Update Sequence Array</strong> (USA) at <code>0x30</code>&ndash;<code>0x37</code> (a 2-byte Update Sequence Number, two fixup values and two bytes of alignment — note this USN is the record's own torn-write counter and has nothing to do with the USN Journal). The first attribute begins at offset <code>0x38</code> (per the header's <em>First Attribute Offset</em> field) and a stream of typed, 8-byte-aligned <strong>attributes</strong> follows in canonical order: <code style="color:var(--accent);">$STANDARD_INFORMATION</code> &rarr; <code style="color:var(--accent);">$FILE_NAME</code> &rarr; <code style="color:var(--accent);">$DATA</code> &rarr; &hellip; until a <code style="color:var(--accent);">0xFFFFFFFF</code> sentinel marks end-of-attributes. Everything past that point is <strong>record slack</strong>. The bar below maps that 1024 B slot &mdash; drawn to true byte proportions on a wide canvas so every band stays readable. <strong>Scroll horizontally</strong> to traverse the full record; <strong>click any band</strong> to jump to its byte-level tab.</p>
+      <p class="map-intro">An MFT entry is always exactly <strong>1024 bytes</strong> on standard NTFS volumes (4096 on volumes formatted with <code>format /L</code> or on disks with 4096-byte sectors). The first <strong>48 bytes</strong> are a kernel-managed <strong>FILE Record Header</strong> (NTFS 3.1) ending at <code>0x2F</code>, followed by an <strong>Update Sequence Array</strong> (USA) at <code>0x30</code>&ndash;<code>0x37</code> (a 2-byte Update Sequence Number, two fixup values and two bytes of alignment — note this USN is the record's own torn-write counter and has nothing to do with the USN Journal). The first attribute begins at offset <code>0x38</code> (per the header's <em>First Attribute Offset</em> field) and a stream of typed, 8-byte-aligned <strong>attributes</strong> follows in canonical order: <code style="color:var(--accent);">$STANDARD_INFORMATION</code> &rarr; <code style="color:var(--accent);">$FILE_NAME</code> &rarr; <code style="color:var(--accent);">$DATA</code> &rarr; &hellip; until a <code style="color:var(--accent);">0xFFFFFFFF</code> sentinel marks end-of-attributes. Everything past that point is <strong>record slack</strong>. The bar below maps that 1024 B slot &mdash; drawn to true byte proportions on a wide canvas so every band stays readable. <strong>Scroll horizontally</strong> to traverse the full record; <strong>click any band</strong> to jump to its byte-level tab.</p>
 
       <!-- Single merged bar — drawn to actual byte proportions, scrolls horizontally so every band stays fully readable -->
       <div class="component-bar-wrap">
@@ -689,11 +838,11 @@
         <p>At volume format time, NTFS reserves an <strong>MFT Zone</strong> &mdash; by default about <strong>12.5%</strong> of the volume &mdash; for the MFT to grow into without fragmenting. The first 16 records (0&ndash;15) are reserved for NTFS metadata files. Records 16 and beyond hold user files and directories.</p>
         <p>The <strong>lifecycle of a single FILE record:</strong></p>
         <ol style="margin-left: 24px; margin-top: 8px;">
-          <li><strong>Allocation.</strong> When a new file is created, NTFS finds a free record slot (tracked by the <code>$Bitmap</code> attribute on the MFT itself) and writes a fresh FILE header with the in-use flag set.</li>
+          <li><strong>Allocation.</strong> When a new file is created, NTFS finds a free record slot (tracked by the <code>$BITMAP</code> attribute, type <code>0xB0</code>, of <code>$MFT</code> itself) and writes a fresh FILE header with the in-use flag set.</li>
           <li><strong>Attribute population.</strong> The kernel writes <code>$STANDARD_INFORMATION</code> (four FILETIMEs, file-attribute flags) and <code>$FILE_NAME</code> (parent reference, name, second FILETIME set) immediately. If the file has data, a <code>$DATA</code> attribute follows &mdash; resident if the data fits in the remaining bytes of the record, non-resident (with cluster runlists) if it doesn't.</li>
-          <li><strong>Updates.</strong> Each metadata change increments the record's <code>$LogFile</code> Sequence Number (LSN) and updates the <code>$SI</code> "entry changed" timestamp. The on-disk update is fixed up at write time by the <strong>Update Sequence Array</strong> (USA) &mdash; a 2-byte signature is interleaved into every 512-byte sector so torn writes can be detected.</li>
+          <li><strong>Updates.</strong> Each logged metadata change moves the record's <code>$LogFile</code> Sequence Number (LSN) forward to the log position of that change and updates the <code>$SI</code> "entry changed" timestamp. The on-disk update is fixed up at write time by the <strong>Update Sequence Array</strong> (USA) &mdash; a 2-byte signature is interleaved into every 512-byte sector so torn writes can be detected.</li>
           <li><strong>Deletion.</strong> When the file is deleted, only the in-use flag (bit 0 of record flags) is cleared. The attributes, filename, timestamps, and parent pointer all <strong>remain intact</strong>. This is why MFT analysis recovers so much forensic value from deleted files &mdash; the record is essentially a tombstone with full metadata.</li>
-          <li><strong>Reuse.</strong> The next file created in that slot increments the record's <strong>sequence number</strong> and overwrites the attributes. Cross-checking the sequence number is how NTFS detects stale references.</li>
+          <li><strong>Reuse.</strong> NTFS increments the record's <strong>sequence number</strong> when it frees the record, so the next file created in that slot carries the new number and overwrites the attributes. Cross-checking the sequence number is how NTFS detects stale references.</li>
         </ol>
         <p style="margin-top: 16px;">Every <code>$FILE_NAME</code> attribute embeds its parent directory as an <strong>8-byte MFT reference</strong>: the lower 48 bits are the parent's MFT entry number, the upper 16 bits are the parent's sequence number. By chasing parent references record-by-record back to entry 5 (the root), Crow-Eye reconstructs full paths even for deleted files whose parent directory still exists.</p>
       </div>
@@ -739,7 +888,7 @@
         <div class="fact-card">
           <div class="fact-label">Record size</div>
           <div class="fact-value">1024 B</div>
-          <div class="fact-detail">Standard FILE record. 4096&nbsp;B on volumes with very large clusters (rare).</div>
+          <div class="fact-detail">Standard FILE record. 4096&nbsp;B on volumes formatted with <code>format /L</code> or on disks with 4096-byte sectors.</div>
         </div>
         <div class="fact-card">
           <div class="fact-label">Magic / Signature</div>
@@ -990,7 +1139,7 @@
         <h4>A record is a file's description, not a record of use</h4>
         <p>There is no user, no process and no application anywhere in an MFT entry. It says a file
         of this name, size and layout existed at this path with these times. Who created it, what
-        opened it and whether anyone ever read it are questions for Prefetch, the USN journal, the
+        opened it and whether anyone ever read it are questions for Prefetch, the <a href="usn_anatomy.html">USN journal</a>, the
         registry's MRU keys or the event log &mdash; never for the MFT alone.</p>
       </div>
 
@@ -1006,8 +1155,8 @@
       <div class="myth">
         <h4>A record marked not-in-use may already belong to another file</h4>
         <p>Deleting a file clears the in-use flag and leaves the record where it is, which is why
-        deleted entries are recoverable at all. But NTFS reuses those records, incrementing the
-        sequence number each time. A record found without its in-use flag may be an intact deleted
+        deleted entries are recoverable at all. But NTFS increments the sequence number when it
+        frees a record, and later reuses the record for another file. A record found without its in-use flag may be an intact deleted
         file, or the remains of one partially overwritten by the next. The sequence number is what
         distinguishes the two, and a file reference that quotes an older sequence number is pointing
         at a file that no longer exists.</p>
@@ -1020,11 +1169,539 @@
       Windows artifact both covers the whole volume and contains its own contradiction detector.</p>
     </div>
 
+    <!-- CHANGE DETECTION AND INTEGRITY - explained on the bytes of the same
+         example record as Figure 1 / Table 4 (Figure 2 is drawn from realRecord). -->
+    <div class="kb-section" style="margin-bottom: 60px;">
+      <h2 id="change-detection">Change detection and integrity</h2>
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">Reading
+      the MFT a second time is only useful if the reader can say exactly what changed since the first
+      time. Crow-Eye reads every FILE record on every pass, fingerprints each one, compares the
+      fingerprints with the previous pass and parses only the records that changed. The
+      <a href="usn_anatomy.html">USN journal</a> is consulted as a witness to those changes,
+      never as the list of them. This section works through that comparison on the bytes of the same
+      <code>cmd.exe</code> record drawn in Figure 1 and dissected in Table 4: which bytes are hashed,
+      which are zeroed first, which point into the logs, and what a change in each one means.</p>
+
+      <div class="s-explain" id="cfr-delta-card">
+        <div class="s-explain-anim"><canvas class="cp-box" data-cp-box="cfr-delta" aria-hidden="true"></canvas></div>
+        <div class="s-explain-text">
+          <h3 class="s-explain-title">Read everything, parse only what changed</h3>
+          <p class="s-in-label">Each cycle, on each NTFS volume</p>
+          <ol class="s-steps">
+            <li data-step="1"><span class="s-step-n">1</span><b>Read every record</b><p>The whole <code>$MFT</code> is read straight from the volume: every <a href="#record">FILE record</a>, every cycle.</p></li>
+            <li data-step="2"><span class="s-step-n">2</span><b>Lay each record out</b><p>The fixups check the last two bytes of each 512-byte stride against the update sequence number and put the real bytes back (<a href="#cd-fixups">the fixup walk</a>). The LSN and the <code>$SI</code> USN, pointers into the logs, are zeroed and kept beside the digests; the update sequence array is left out.</p></li>
+            <li data-step="3"><span class="s-step-n">3</span><b>Fingerprint it twice</b><p>A full digest covers every remaining byte, slack and runlist included; a narrower semantic digest covers only the fields an investigator reads (<a href="#cd-roles">Figure 2</a>).</p></li>
+            <li data-step="4"><span class="s-step-n">4</span><b>Compare with the last cycle</b><p>Most pairs match. A full-only difference with the LSN moved forward is housekeeping and only updates the stored map. A semantic difference is a change; a cleared in-use flag is a deletion (<a href="#cd-examples">worked examples</a>).</p></li>
+            <li data-step="5"><span class="s-step-n">5</span><b>Parse only the changes</b><p>Only the changed records are parsed, sealed and added to the retained history; a deleted record is kept as a tombstone.</p></li>
+            <li data-step="6"><span class="s-step-n">6</span><b>Check the witnesses, keep custody</b><p>A logged change moves the record’s <code>$LogFile</code> sequence number forward and leaves an entry in the <a href="usn_anatomy.html">USN journal</a>: witnesses, never the source. A change missing either is flagged for review; the one here has neither, the mark of a write outside NTFS. The cycle’s integrity manifest joins the chain of custody, and the map keeps the new digests.</p></li>
+          </ol>
+        </div>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">Three
+      mechanisms make it work:</p>
+
+      <div class="mech">
+        <h4>Record fingerprints: compare the records, not a log of them</h4>
+        <p>Each record is read raw and its fixups are applied first (the fixup walk, below). Two
+        digests are then kept per record. The <strong>full</strong> digest covers every byte of the
+        record, slack included, except the update sequence array at <code>0x30</code> and the two
+        witness pointers &mdash; the LSN at <code>0x08</code> and the <code>$SI</code> USN at
+        <code>0x90</code> &mdash; which are zeroed for hashing, stored beside the digests and checked
+        against <code>$LogFile</code> and the <a href="usn_anatomy.html">USN journal</a>.
+        The <strong>semantic</strong> digest covers only the values an investigator reads. Figure 2
+        colours every byte of the example record by that role, and Table 9 lists the fields one by
+        one.</p>
+        <p>A full change with no semantic change is housekeeping when the LSN advanced with it (a
+        defragmenter moving a non-resident stream, slack rewritten as the record shrinks and grows);
+        a change confined to the <code>$SI</code> accessed time is housekeeping either way. Any other
+        change with the LSN unchanged, a runlist or record slack included, was not logged by NTFS and
+        is a finding. A semantic change is parsed. An in-use flag that flips, or a sequence number
+        that moves, is recorded as an explicit deletion or reuse. The digests sit in a map indexed by
+        record number, compared 64 records at a time and then record by record, sealed against
+        editing and keyed to the agent's own identity as well as the volume's (Table 11), because a
+        byte-for-byte clone copies the volume serial number and object ID along with everything
+        else. A cloned machine never inherits another machine's baseline.</p>
+      </div>
+
+      <div class="mech">
+        <h4>The LSN: NTFS signs every change it logs</h4>
+        <p>Header offset <code>0x08</code> holds the record's <code>$LogFile</code> Sequence Number:
+        the log position of the last logged change to the record. NTFS moves it forward every time
+        it logs a change to the record. A record whose content changed while its LSN did not was
+        written by something that bypassed NTFS logging: a kernel driver writing the disk directly,
+        <code>chkdsk</code> or <code>autochk</code> repairing the volume, or an edit made while the
+        volume was not mounted by Windows. One record whose LSN went backwards while the log and the
+        other records moved forward is not something NTFS produces, and points to an old image of
+        the record put back. A rollback of the whole volume (a virtual machine snapshot, an image
+        restore) moves every LSN back together and is recorded as a rollback, not as a forged
+        record.</p>
+        <p>The <code>$LogFile</code> restart area is compared on every pass as well. The system's own
+        shutdown and restart rewrite it and move its current LSN forward. A log that was reset, or a
+        current LSN lower than on the previous pass, is not produced by that cycle: it points to
+        another mount (Linux's ntfs-3g resets <code>$LogFile</code> when it mounts a volume
+        read-write) or to <code>chkdsk</code>, which can reinitialize the log, and it is read
+        together with the boot-time <code>chkdsk</code> record. A WinPE or second Windows
+        installation uses the same NTFS driver, so it advances the log instead, and its changes carry
+        journal times from the period the monitored system was not running.</p>
+      </div>
+
+      <div class="mech">
+        <h4>The journal is a witness, not the source</h4>
+        <p>The <a href="usn_anatomy.html">USN journal</a> records the changes NTFS makes
+        through the file system, which makes it an excellent corroborator and a poor foundation.
+        It can be deleted (<code>fsutil usn deletejournal</code>): NTFS then walks every file on the
+        volume, resets its <code>$SI</code> USN to zero and removes the journal, and a new one can be
+        created in its place. It wraps: by default it keeps only tens of megabytes of history, and
+        the oldest entries are discarded as new ones arrive. It does not record last-access updates.
+        It never sees raw or offline writes, because those never pass through NTFS. A parser that
+        trusts the journal after its first full read therefore misses exactly the changes an
+        adversary would make.</p>
+        <p>So the record comparison decides what changed, and the journal is checked for a matching
+        entry for each changed record. A change with an entry is explained. A change with no entry
+        while the journal covers that window is surfaced for review. A journal whose ID changed,
+        that shrank, that disappeared, or whose USNs dropped to zero across the volume is a finding
+        of its own, and the next pass is a full parse; a journal that merely wrapped past the last
+        entry read is recorded as lost coverage.</p>
+      </div>
+
+      <h3 class="cd-h3" id="cd-roles">Every byte has a role in the comparison</h3>
+      <p class="cd-p">The comparison does not treat a FILE record as one opaque blob. Each byte
+      plays one of five roles, and Figure 2 colours the example record by them; reserved bytes,
+      expected to be zero, are drawn dim. The bytes
+      are the ones Figure 1 draws, so every offset agrees with Table 4; the figure adds the two
+      512-byte stride tails, <code>0x1F0</code>&ndash;<code>0x1FF</code> and
+      <code>0x3F0</code>&ndash;<code>0x3FF</code>, which the 320-byte slice in Figure 1 does not
+      reach and where the fixup walk happens. Hovering or focusing a field shows what it is;
+      clicking it, or pressing Enter on it, keeps it in the panel.</p>
+
+      <div class="cd-fig" id="cd-figure">
+        <span class="cap">Figure 2</span>
+        <div class="cd-modes" role="group" aria-label="Which bytes Figure 2 shows">
+          <span class="cd-modes-l">Bytes shown</span>
+          <button type="button" class="cd-mode" data-cd-mode="after" aria-pressed="true">After fixups (what is hashed)</button>
+          <button type="button" class="cd-mode" data-cd-mode="disk" aria-pressed="false">As read from disk</button>
+        </div>
+        <div class="cd-layout">
+          <div>
+            <div class="cd-map" id="cd-map" aria-label="The example FILE record coloured by change-detection role"></div>
+          </div>
+          <div class="cd-panel" id="cd-panel" aria-live="polite">
+            <span class="cd-pl">Field and its role</span>
+            <div id="cd-panel-body"><p class="cd-why">Select a field in the map.</p></div>
+          </div>
+        </div>
+        <div class="bar-legend" aria-label="Figure 2 colour legend">
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#0b4150;"></span> Semantic <span style="color:var(--tx3);">(cyan &mdash; read: a change here is parsed)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#2d3d0c;"></span> Housekeeping <span style="color:var(--tx3);">(lime &mdash; kept in the sealed full digest only)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#25246b;"></span> Structure <span style="color:var(--tx3);">(indigo &mdash; locates the fields, validated on every read)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#3a1f63;"></span> Witness pointer <span style="color:var(--tx3);">(violet &mdash; zeroed for hashing, checked against a log)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:#2a3240;"></span> Not hashed where stored <span style="color:var(--tx3);">(slate &mdash; the update sequence number and its on-disk copies in the stride tails, and the fixup values, which are hashed at the tails instead)</span></div>
+          <div class="bar-legend-item"><span class="bar-legend-swatch" style="background:var(--bg3); opacity: 0.5;"></span> Reserved <span style="color:var(--tx3);">(dim &mdash; expected zero, in the full digest)</span></div>
+        </div>
+      </div>
+
+      <p class="cd-p"><strong style="color: var(--tx);">Semantic</strong> bytes are the ones an
+      investigator reads: a change in any of them means the file itself changed, and the record is
+      parsed again. <strong style="color: var(--tx);">Housekeeping</strong> bytes change in normal
+      operation without saying anything new about the file, so they are sealed in the full digest
+      and nothing more: the <code>$SI</code> accessed time, quota charged, the next attribute ID,
+      non-resident runlists and record slack. <strong style="color: var(--tx);">Structure</strong>
+      bytes say where things are: the signature, the update sequence array's offset and size, the
+      first attribute offset, bytes in use, allocated size, the record number, and every
+      attribute's type code, length, resident flag and content offset. They are in the full digest
+      and checked on every read, but the semantic digest is taken over the values they locate, so
+      an attribute that moves inside the record without changing does not register as a semantic
+      change. <strong style="color: var(--tx);">Witness pointers</strong> are the two numbers that
+      point outside the record, into <code>$LogFile</code> and the
+      <a href="usn_anatomy.html">USN journal</a>; hashing them would make every logged
+      write register as a change even when it rewrote the same values.
+      <strong style="color: var(--tx);">Not hashed where stored</strong> are the update sequence
+      number, which NTFS bumps on every write, and the fixup values, which are hashed at their real
+      place in the stride tails instead.</p>
+      <p class="cd-p">In this example the LSN at <code>0x08</code> and the <code>$SI</code> USN at
+      <code>0x90</code> hold the same number, <code>0x12A6F8</code>. That is a coincidence of the
+      example: one is a position in <code>$LogFile</code>, the other the byte offset of an entry in
+      the <a href="usn_anatomy.html">USN journal</a>'s <code>$J</code> stream, and the two
+      never relate. The example also stops at <code>$FILE_NAME</code>: a real base record for a
+      366,592-byte file carries an unnamed, non-resident <code>$DATA</code> attribute after it,
+      where the end marker sits here. Its fields are given in Table 9 relative to the attribute's
+      start, and drawn in the <code>$DATA</code> tabs of the dissection map.</p>
+      <p class="cd-p"><strong style="color: var(--tx);">A file, not a record.</strong> When a file
+      has more attributes than one record holds, NTFS moves some of them into extension records,
+      each pointing back through its base record reference at <code>0x20</code>, and lists them all
+      in the base record's <code>$ATTRIBUTE_LIST</code>. NTFS can move an attribute from the base
+      record to an extension record as the file grows, which changes both records without changing
+      the file. The semantic digest is therefore taken per file: over the base record and every
+      extension record its <code>$ATTRIBUTE_LIST</code> names, keyed by attribute type, name and
+      ID, so an attribute that only moved between records is not a change.</p>
+      <p class="cd-p"><strong style="color: var(--tx);">Directories.</strong> A directory record
+      carries its <code>$I30</code> index in <code>$INDEX_ROOT</code> (type <code>0x90</code>) and,
+      once the index outgrows the record, <code>$INDEX_ALLOCATION</code> (<code>0xA0</code>) with
+      its own <code>$BITMAP</code> (<code>0xB0</code>). Every child created, deleted or renamed
+      changes the parent's index and its <code>$SI</code> modified time, so the parent registers a
+      semantic change alongside the child, and the two are read as one event. Each index entry
+      holds a copy of the child's <code>$FILE_NAME</code> with its own times and sizes, often
+      older than the child's record. An index entry whose file reference no longer resolves, or
+      quotes an older sequence number than the record now carries, corroborates a wiped record or
+      a reuse (Table 12).</p>
+      <p class="cd-p"><strong style="color: var(--tx);">What the record comparison cannot see.</strong>
+      It reads FILE records. A raw write into the clusters of a non-resident stream that leaves the
+      stream's record untouched changes no byte of any record, so it is outside what this
+      comparison can detect.</p>
+
+      <h3 class="cd-h3" id="cd-fields">Field by field: what each digest holds</h3>
+      <p class="cd-p">Table 9 takes every field of the FILE record header (<code>0x00</code>&ndash;<code>0x37</code>),
+      the attribute header every attribute shares, and the content fields of
+      <code>$STANDARD_INFORMATION</code>, <code>$FILE_NAME</code> and <code>$DATA</code>. Attribute
+      fields are given at their offset in the example record, with the offset inside the
+      attribute after it. Journal reasons are named as the
+      <a href="usn_anatomy.html#reasons">USN journal reason flags</a> that a change made
+      through NTFS writes.</p>
+      <span class="cap">Table 9</span>
+      <div class="responsive-table-wrap">
+        <table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Full digest</th><th>Semantic digest</th><th>What a change means &mdash; normal cause, then tamper signal</th></tr></thead>
+          <tbody>
+            <tr class="ref-section-head"><td colspan="6">FILE record header</td></tr>
+            <tr><td>0x00</td><td>4</td><td>Signature <code>FILE</code></td><td>yes</td><td>structure</td><td>Never changes on a valid record. Gone from a record that was not reused since the previous pass: a wiped record (Table 12). <code>BAAD</code> in its place marks a record that failed the multi-sector transfer check (written by NTFS or <code>chkdsk</code>).</td></tr>
+            <tr><td>0x04</td><td>2</td><td>Update sequence array offset</td><td>yes</td><td>structure</td><td>Fixed by the format: <code>0x30</code> on NTFS 3.1, <code>0x2A</code> on records written under NTFS 3.0. Outside a free and reuse, a change points to a crafted record.</td></tr>
+            <tr><td>0x06</td><td>2</td><td>Update sequence array size</td><td>yes</td><td>structure</td><td>Record size &divide; 512 + 1: 3 for a 1024-byte record, 9 for a 4096-byte one. A value that disagrees with the record size <code>$Boot</code> declares points to a crafted record.</td></tr>
+            <tr><td>0x08</td><td>8</td><td><code>$LogFile</code> sequence number (LSN)</td><td>zeroed, stored beside</td><td>witness</td><td>Moves forward every time NTFS logs a change to the record. Unchanged while the record changed (outside an access-time update): written outside NTFS logging. Backwards on this record alone: an old image of the record put back; backwards on every record: a whole-volume rollback. Above the highest LSN in <code>$LogFile</code>: checked only while the log has not been reset since the previous pass, against a log read after the records.</td></tr>
+            <tr><td>0x10</td><td>2</td><td>Sequence number</td><td>yes</td><td>yes</td><td>NTFS adds 1 when it frees the record, wrapping from <code>0xFFFF</code> to 1 (0 is skipped). Between passes a rise is a deletion, or a deletion and reuse, and the journal decides which: <code>FILE_DELETE</code> for the old file reference, then <code>FILE_CREATE</code> for the new one. The reuse can carry the same name in the same directory, as when a program saves by deleting and re-creating a file. A rise with neither entry while the journal covers the window, or a fall other than the wrap, points to an old record image put back or a write outside NTFS.</td></tr>
+            <tr><td>0x12</td><td>2</td><td>Hard link count</td><td>yes</td><td>yes</td><td>A hard link added or removed, with a <code>HARD_LINK_CHANGE</code> entry in the journal; a separate DOS-namespace <code>$FILE_NAME</code> can count here too, so a short name added or removed can move it. A change with no explaining entry while the journal covers the window is surfaced.</td></tr>
+            <tr><td>0x14</td><td>2</td><td>First attribute offset</td><td>yes</td><td>structure</td><td>The first 8-byte boundary after the update sequence array: <code>0x38</code> for a 1024-byte record, <code>0x48</code> for a 4096-byte one, whose array runs to <code>0x41</code>. Fixed for the life of the record; outside a free and reuse, a change points to a crafted record.</td></tr>
+            <tr><td>0x16</td><td>2</td><td>Flags (in use <code>0x0001</code>, directory <code>0x0002</code>)</td><td>yes</td><td>yes</td><td>In use set on allocation and cleared on deletion; the directory bit is fixed for the life of the file. The in-use bit is compared with the record's bit in the <code>$MFT</code> <code>$BITMAP</code> (Table 11). The two reach the disk at different moments, so a disagreement is read again once, the reserved system records are left out, and only a disagreement that persists while the volume is clean is raised, as consistent with a raw write. A directory bit that flips without a reuse points to a crafted record.</td></tr>
+            <tr><td>0x18</td><td>4</td><td>Bytes in use</td><td>yes</td><td>structure (bounds the walk)</td><td>Grows and shrinks as attributes change. The end marker must sit inside it, and it can never exceed the allocated size; a record that breaks either rule is rejected as crafted or corrupt.</td></tr>
+            <tr><td>0x1C</td><td>4</td><td>Allocated size</td><td>yes</td><td>structure</td><td>Equal to the record size <code>$Boot</code> declares (1024 or 4096); never changes.</td></tr>
+            <tr><td>0x20</td><td>8</td><td>Base record reference</td><td>yes</td><td>yes</td><td>0 on a base record; on an extension record it names the base record and its sequence number. A change outside a free and reuse moves an extension to another file, and points to a crafted record.</td></tr>
+            <tr><td>0x28</td><td>2</td><td>Next attribute ID</td><td>yes</td><td>no</td><td>Rises when an attribute is added, and the added attribute is itself semantic. NTFS sets it back to 0 when the record is reused.</td></tr>
+            <tr><td>0x2A</td><td>2</td><td>Padding</td><td>yes</td><td>no</td><td>Expected zero.</td></tr>
+            <tr><td>0x2C</td><td>4</td><td>MFT record number</td><td>yes</td><td>structure</td><td>Must equal the record's position in <code>$MFT</code> divided by the record size (<code>7E 54 04 00</code> = 283774 here). A mismatch points to a record copied in from another slot. Records written under NTFS 3.0 have no such field.</td></tr>
+            <tr><td>0x30</td><td>2</td><td>Update sequence number</td><td>zeroed</td><td>no</td><td>NTFS increments it every time it writes the record, so it carries nothing about the file. On disk it must also sit in the last two bytes of every 512-byte stride (the fixup walk).</td></tr>
+            <tr><td>0x32</td><td>2</td><td>Fixup value for <code>0x1FE</code></td><td>swapped back, then zeroed here</td><td>follows its bytes</td><td>The real bytes of <code>0x1FE</code>&ndash;<code>0x1FF</code>. They are hashed at their own offset, and they count as whatever field those two bytes belong to.</td></tr>
+            <tr><td>0x34</td><td>2</td><td>Fixup value for <code>0x3FE</code></td><td>swapped back, then zeroed here</td><td>follows its bytes</td><td>The same for <code>0x3FE</code>&ndash;<code>0x3FF</code>. A 4096-byte record carries six more, for <code>0x5FE</code> through <code>0xFFE</code>.</td></tr>
+            <tr><td>0x36</td><td>2</td><td>Padding, or fixup value 3</td><td>yes</td><td>no</td><td>Padding, expected zero, in a 1024-byte record. In a 4096-byte record it is the fixup value for <code>0x5FE</code>, handled like the two above.</td></tr>
+
+            <tr class="ref-section-head"><td colspan="6">Every attribute header (at 0x38 for $SI, 0x98 for $FN)</td></tr>
+            <tr><td>+0x00</td><td>4</td><td>Type code</td><td>yes</td><td>structure</td><td>An attribute added or removed is seen through its own content: a new named <code>$DATA</code> is a new stream (<code>STREAM_CHANGE</code>). <code>0xFFFFFFFF</code> here is the end marker.</td></tr>
+            <tr><td>+0x04</td><td>4</td><td>Attribute length</td><td>yes</td><td>structure</td><td>Follows the content. A length that runs past bytes in use is a crafted record.</td></tr>
+            <tr><td>+0x08</td><td>1</td><td>Non-resident flag</td><td>yes</td><td>structure</td><td>A resident <code>$DATA</code> turning non-resident is normal growth; the sizes carry the change. The content then leaves the record, and the old resident bytes can remain in record slack, a recovery source for the earlier content.</td></tr>
+            <tr><td>+0x09</td><td>3</td><td>Name length and offset</td><td>yes</td><td>the name: yes</td><td>The attribute's name is the stream name of an alternate data stream, so the name itself is semantic.</td></tr>
+            <tr><td>+0x0C</td><td>2</td><td>Attribute flags</td><td>yes</td><td>yes</td><td>Compressed <code>0x0001</code>, encrypted <code>0x4000</code>, sparse <code>0x8000</code>. A stream that becomes compressed or encrypted writes <code>COMPRESSION_CHANGE</code> or <code>ENCRYPTION_CHANGE</code>.</td></tr>
+            <tr><td>+0x0E</td><td>2</td><td>Attribute ID</td><td>yes</td><td>structure</td><td>Assigned once from the header's next attribute ID; a change on a surviving attribute points to a crafted record.</td></tr>
+            <tr><td>+0x10</td><td>6</td><td>Resident content size and offset</td><td>yes</td><td>structure</td><td>Follow the content they frame.</td></tr>
+            <tr><td>+0x16</td><td>2</td><td>Indexed flag and padding (resident)</td><td>yes</td><td>structure</td><td>1 on <code>$FILE_NAME</code>, whose name is a key in the parent's index; 0 on <code>$STANDARD_INFORMATION</code>.</td></tr>
+
+            <tr class="ref-section-head"><td colspan="6">$STANDARD_INFORMATION content (0x50&ndash;0x97)</td></tr>
+            <tr><td>0x50 (+0x18)</td><td>8</td><td>Created</td><td>yes</td><td>yes</td><td>Set at creation; changed only through an API that sets times (<code>BASIC_INFO_CHANGE</code>). Earlier than <code>$FN</code> created, or moved backwards between passes: a timestomp signal (Table 12).</td></tr>
+            <tr><td>0x58 (+0x20)</td><td>8</td><td>Modified</td><td>yes</td><td>yes</td><td>A data write (<code>DATA_OVERWRITE</code>, <code>DATA_EXTEND</code>, <code>DATA_TRUNCATION</code>) or a time set (<code>BASIC_INFO_CHANGE</code>).</td></tr>
+            <tr><td>0x60 (+0x28)</td><td>8</td><td>MFT changed</td><td>yes</td><td>yes</td><td>Moved by NTFS on every metadata change. <code>SetFileTime</code> cannot set it; <code>NtSetInformationFile</code> can, so a value earlier than <code>$FN</code> created, or one that moved backwards, is a strong timestomp signal.</td></tr>
+            <tr><td>0x68 (+0x30)</td><td>8</td><td>Accessed</td><td>yes</td><td>no</td><td>Last-access updates are written lazily, never journaled, and disabled or system-managed on many machines. Whether one moves the LSN is an open lab question; the change is housekeeping either way.</td></tr>
+            <tr><td>0x70 (+0x38)</td><td>4</td><td>File attributes</td><td>yes</td><td>yes</td><td>Hidden, system, read-only and the rest (Table 5), set through <code>SetFileAttributes</code> (<code>BASIC_INFO_CHANGE</code>).</td></tr>
+            <tr><td>0x74 (+0x3C)</td><td>12</td><td>Max versions, version, class ID</td><td>yes</td><td>no</td><td>Expected zero on modern Windows.</td></tr>
+            <tr><td>0x80 (+0x48)</td><td>4</td><td>Owner ID</td><td>yes</td><td>yes</td><td>The quota owner ID. Meaningful, and moved by a change of ownership, only while disk quotas are tracked; otherwise it does not follow NTFS ownership.</td></tr>
+            <tr><td>0x84 (+0x4C)</td><td>4</td><td>Security ID</td><td>yes</td><td>yes</td><td>A key into <code>$Secure</code> (Table 11). A new owner or ACL gives a new ID (<code>SECURITY_CHANGE</code>); the descriptor behind it is read and compared.</td></tr>
+            <tr><td>0x88 (+0x50)</td><td>8</td><td>Quota charged</td><td>yes</td><td>no</td><td>Follows the allocation; the sizes themselves are compared through <code>$FN</code> and <code>$DATA</code>.</td></tr>
+            <tr><td>0x90 (+0x58)</td><td>8</td><td>USN</td><td>zeroed, stored beside</td><td>witness</td><td>Moves with every journal entry written for the file. A non-zero value must land on a journal entry that names this record; a value past the journal's end is impossible. 0 is not an entry: it is what every record holds after the journal is deleted. Unchanged while the semantic digest changed and the journal was active: the change did not pass through NTFS.</td></tr>
+
+            <tr class="ref-section-head"><td colspan="6">$FILE_NAME content (0xB0&ndash;0xFF), every copy</td></tr>
+            <tr><td>0xB0 (+0x18)</td><td>8</td><td>Parent directory reference</td><td>yes</td><td>yes</td><td>A move to another directory (<code>RENAME_OLD_NAME</code> then <code>RENAME_NEW_NAME</code>). A change with no such entry while the journal covers the window is unexplained and surfaced for review.</td></tr>
+            <tr><td>0xB8 (+0x20)</td><td>32</td><td>Created, modified, MFT changed, accessed</td><td>yes</td><td>yes</td><td>Written by NTFS at creation and refreshed on a rename or move; no API sets them directly. Moving with no rename or move in the journal is unexplained and surfaced for review; moving backwards is surfaced even with a rename to explain it (the double timestomp in Table 12).</td></tr>
+            <tr><td>0xD8 (+0x40)</td><td>16</td><td>Allocated and real size</td><td>yes</td><td>yes</td><td>NTFS refreshes these copies less often than the <code>$DATA</code> sizes, so a change here is read together with <code>$DATA</code>, not on its own.</td></tr>
+            <tr><td>0xE8 (+0x50)</td><td>4</td><td>File attribute flags</td><td>yes</td><td>yes</td><td>A copy of the <code>$SI</code> flags taken when the name was written, and refreshed rarely. Attributes set later often appear only in <code>$SI</code>, and a directory carries <code>0x10000000</code> here that <code>$SI</code> does not, so the two commonly diverge; a divergence is not a signal on its own.</td></tr>
+            <tr><td>0xEC (+0x54)</td><td>4</td><td>Reparse tag or EA size</td><td>yes</td><td>yes</td><td>A reparse point added or removed (<code>REPARSE_POINT_CHANGE</code>) or extended attributes changed (<code>EA_CHANGE</code>).</td></tr>
+            <tr><td>0xF0 (+0x58)</td><td>2 + 2n</td><td>Name length, namespace, name</td><td>yes</td><td>yes</td><td>A rename (<code>RENAME_OLD_NAME</code> / <code>RENAME_NEW_NAME</code>); a new or removed copy is a hard link or a short name.</td></tr>
+
+            <tr class="ref-section-head"><td colspan="6">$DATA and the other attributes the comparison reads</td></tr>
+            <tr><td>resident</td><td>n</td><td><code>$DATA</code> content</td><td>yes</td><td>yes</td><td>A write to a small file or stream (<code>DATA_*</code>; <code>NAMED_DATA_*</code> for an alternate data stream).</td></tr>
+            <tr><td>+0x10</td><td>16</td><td>Starting and ending VCN</td><td>yes</td><td>structure</td><td>Follow the stream's size.</td></tr>
+            <tr><td>+0x28</td><td>24</td><td>Allocated, real and initialized size</td><td>yes</td><td>yes</td><td>Extend or truncate (<code>DATA_EXTEND</code>, <code>DATA_TRUNCATION</code>); initialized size rises as data is written.</td></tr>
+            <tr><td>at +0x20</td><td>n</td><td>Runlist (at the offset stored at <code>+0x20</code>: <code>+0x40</code> for an unnamed, uncompressed stream)</td><td>yes</td><td>no</td><td>A defragmenter moving clusters changes the runlist and not the content; NTFS logs the move, so the LSN advances. A runlist change with an unchanged LSN is a raw write that may point the stream at other clusters, and is a finding.</td></tr>
+            <tr><td>0x20 type</td><td>n</td><td><code>$ATTRIBUTE_LIST</code> entries</td><td>yes</td><td>yes</td><td>Extension records added or removed as the file grows. An entry naming a record whose base reference (<code>0x20</code>) does not point back is a crafted record.</td></tr>
+            <tr><td>0x40, 0xC0, 0xD0, 0xE0 types</td><td>n</td><td><code>$OBJECT_ID</code>, <code>$REPARSE_POINT</code>, <code>$EA_INFORMATION</code>, <code>$EA</code></td><td>yes</td><td>yes</td><td><code>OBJECT_ID_CHANGE</code>, <code>REPARSE_POINT_CHANGE</code>, <code>EA_CHANGE</code>.</td></tr>
+            <tr><td>0x90, 0xA0, 0xB0 types</td><td>n</td><td><code>$INDEX_ROOT</code>, <code>$INDEX_ALLOCATION</code>, <code>$BITMAP</code> (directories)</td><td>yes</td><td>no</td><td>The <code>$I30</code> index. Its entries are copies of the children's <code>$FILE_NAME</code>, which each child's own record carries semantically; an entry that no longer resolves, or quotes an older sequence number, is read with the child (Table 12).</td></tr>
+            <tr><td>0x100</td><td>8</td><td>End marker and its slot</td><td>yes</td><td>structure</td><td>Must appear inside bytes in use (<code>0x108</code> here).</td></tr>
+            <tr><td>0x108&ndash;0x3FF</td><td>760</td><td>Record slack</td><td>yes</td><td>no</td><td>Residue that changes as the record shrinks and grows, with the LSN advancing. Slack that changed while the LSN did not was written outside NTFS logging; data hidden in record slack is found this way.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="cd-h3" id="cd-fixups">The fixup walk, on the bytes</h3>
+      <p class="cd-p">NTFS protects a multi-sector record against a torn write by stamping the last
+      two bytes of every 512-byte stride with the record's update sequence number and keeping the
+      real two bytes in the update sequence array. A reader has to undo that before the record
+      means anything. On the example record, with Figure 2 switched between its two views:</p>
+      <ol class="cd-steps">
+        <li>Read the whole record &mdash; its size comes from <code>$Boot</code> (Table 11), never
+        assumed &mdash; and check the signature <code>FILE</code> at <code>0x00</code>.</li>
+        <li>Read the array's offset at <code>0x04</code> (<code>0x0030</code>) and its size at
+        <code>0x06</code> (<code>3</code>): one update sequence number plus one fixup value for each
+        of the two strides.</li>
+        <li>Compare the last two bytes of each stride, <code>0x1FE</code>&ndash;<code>0x1FF</code>
+        and <code>0x3FE</code>&ndash;<code>0x3FF</code>, with the update sequence number at
+        <code>0x30</code>&ndash;<code>0x31</code>. On disk all three read <code>12 34</code>.</li>
+        <li>Put the real bytes back: <code>56 78</code> from <code>0x32</code> into
+        <code>0x1FE</code>, and <code>9A BC</code> from <code>0x34</code> into
+        <code>0x3FE</code>.</li>
+        <li>Only now walk the attributes from <code>0x38</code> to the end marker at
+        <code>0x100</code>, bounded by bytes in use at <code>0x18</code> (<code>0x108</code>), and
+        hash.</li>
+      </ol>
+      <span class="cap">Table 10</span>
+      <div class="responsive-table-wrap">
+        <table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>On disk</th><th>After fixups</th><th>In the digests</th></tr></thead>
+          <tbody>
+            <tr><td>0x30</td><td>2</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">12 34</span></td><td>Zeroed: the update sequence number changes on every write.</td></tr>
+            <tr><td>0x32</td><td>2</td><td><span class="cd-x">56 78</span></td><td><span class="cd-x">56 78</span></td><td>Zeroed here; hashed at <code>0x1FE</code>.</td></tr>
+            <tr><td>0x34</td><td>2</td><td><span class="cd-x">9A BC</span></td><td><span class="cd-x">9A BC</span></td><td>Zeroed here; hashed at <code>0x3FE</code>.</td></tr>
+            <tr><td>0x1FE</td><td>2</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">56 78</span></td><td>Hashed as part of whatever lies there: record slack in this record. The example gives the two tails distinct values so the swap is visible; a real slack tail often holds <code>00 00</code>.</td></tr>
+            <tr><td>0x3FE</td><td>2</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">9A BC</span></td><td>The same for the second stride.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="cd-p"><strong style="color: var(--tx);">Why the digest is taken after the fixups.</strong>
+      On disk, the stride tails hold the update sequence number, not the record's content. In this
+      record both tails fall in slack, but in a fuller record an attribute can cross
+      <code>0x1FE</code>, and its real two bytes then live only in the array. Hashing the on-disk
+      image would hash the counter in their place: the digest would change on every write of the
+      record and would miss a change to those two bytes. After the fixups every byte sits at its
+      true offset exactly once, which is the only form in which two passes can be compared.</p>
+      <p class="cd-p"><strong style="color: var(--tx);">Why a mismatch is a finding.</strong> A live
+      read can race NTFS's own write of the record, so a stride tail that does not match the update
+      sequence number is read again once. A mismatch that survives the re-read is either a torn
+      write (power was lost, or the system stopped, partway through writing the strides) or a
+      record written by something that did not follow the protocol: a raw write that changed a
+      stride without stamping its tail, or a crafted record. Either way the record is not hashed as
+      if it were valid; the last good digest is kept, and the mismatch is recorded with it.</p>
+      <p class="cd-p"><strong style="color: var(--tx);">Why bytes in use bounds the walk.</strong>
+      Bytes in use (<code>0x18</code> = <code>0x108</code>) is where the record's live content
+      ends: the attribute walk must meet the end marker before it, and the semantic digest is taken
+      only from what lies inside it, never from slack. It can never exceed the allocated size
+      (<code>0x1C</code> = <code>0x400</code>): a record cannot use more bytes than it has, so
+      bytes in use above allocated, or an attribute walk that runs past bytes in use without
+      meeting the end marker, is a crafted or corrupt record and is rejected. The full digest still
+      covers the whole allocated record, so a change in slack is seen there, as housekeeping. A
+      4096-byte record works the same way with eight strides, an array of size 9, and tails at
+      <code>0x1FE</code>, <code>0x3FE</code> and so on up to <code>0xFFE</code>.</p>
+
+      <h3 class="cd-h3" id="cd-metafiles">Beyond one record: the NTFS metadata files the comparison reads</h3>
+      <p class="cd-p">One record cannot vouch for itself. The comparison also reads the metadata
+      files NTFS keeps about the table, the log and the volume, at the record numbers listed in
+      <a href="#system-files">Table 1</a>:</p>
+      <span class="cap">Table 11</span>
+      <div class="responsive-table-wrap">
+        <table class="kb-table cd-table">
+          <thead><tr><th>Record</th><th>File</th><th>What is read</th><th>What it contributes</th></tr></thead>
+          <tbody>
+            <tr><td>0</td><td>$MFT</td><td>Its own <code>$DATA</code> runlist and size; its <code>$BITMAP</code> attribute (type <code>0xB0</code>), one bit per record.</td><td>The record count is the <code>$DATA</code> size divided by the record size, and the runlist says where every record lives on disk. The table normally grows by gaining runs, so a runlist that changed while the record count did not means the table's own clusters moved: every record's location is derived again and the pass is a full parse. Each <code>$BITMAP</code> bit is compared with the in-use flag at <code>0x16</code> of its record, with the re-read and clean-volume rule in Table 9.</td></tr>
+            <tr><td>1</td><td>$MFTMirr</td><td>The copy of at least the first four records (<code>$MFT</code>, <code>$MFTMirr</code>, <code>$LogFile</code>, <code>$Volume</code>).</td><td>Their semantic fields are compared with the originals in <code>$MFT</code>. NTFS writes both, so a divergence is a finding (and something <code>chkdsk</code> repairs).</td></tr>
+            <tr><td>2</td><td>$LogFile</td><td>The two restart pages (signature <code>RSTR</code>, at the start of the file and one system page, normally 4&nbsp;KiB, further on), whose restart area holds the current LSN and records whether the volume was cleanly unmounted; and the log record pages (<code>RCRD</code>) with the highest LSN they hold.</td><td>Every record's LSN (<code>0x08</code>) is checked against them, under the conditions in Table 9. The system's own shutdown and restart rewrite the restart area and move its current LSN forward, so a change there is expected. A reset log, a current LSN lower than on the previous pass, or a clean-unmount state that contradicts how the system last shut down, points to another mount or to <code>chkdsk</code> in between.</td></tr>
+            <tr><td>3</td><td>$Volume</td><td><code>$VOLUME_INFORMATION</code> (NTFS version and flags, including dirty <code>0x0001</code>), and its <code>$OBJECT_ID</code> when one has been assigned.</td><td>The volume object ID is part of the key the map is sealed under. A dirty flag that appeared means <code>chkdsk</code> is due, and <code>chkdsk</code> rewrites records and can recreate the journal: the next pass records it as context (Table 12).</td></tr>
+            <tr><td>6</td><td>$Bitmap</td><td>One bit per cluster on the volume.</td><td>A runlist that changed with the LSN unchanged (Table 9) is checked against it: runs that point at clusters the volume holds as free are a stream aimed at unallocated space.</td></tr>
+            <tr><td>7</td><td>$Boot</td><td>The boot sector: bytes per sector (<code>0x0B</code>), sectors per cluster (<code>0x0D</code>), the cluster of <code>$MFT</code> (<code>0x30</code>) and <code>$MFTMirr</code> (<code>0x38</code>), clusters per FILE record (<code>0x40</code>), and the volume serial number (<code>0x48</code>).</td><td>The record size is taken from here, never assumed: a negative value <em>n</em> at <code>0x40</code> means 2<sup>|n|</sup> bytes, so <code>0xF6</code> (&minus;10) is 1024. Volumes with 4096-byte records exist (<code>format /L</code>, and disks with 4096-byte sectors). The serial number joins the volume object ID in the map's key.</td></tr>
+            <tr><td>9</td><td>$Secure</td><td>The <code>$SII</code> index and the <code>$SDS</code> stream.</td><td>The security ID at <code>$SI</code> <code>0x84</code> is looked up in <code>$SII</code> and its descriptor read from <code>$SDS</code>, so a changed ID is compared as an owner and ACL, not as a number.</td></tr>
+            <tr><td>via 11</td><td>$Extend\$UsnJrnl</td><td>The <code>$J</code> stream of entries and the <code>$Max</code> stream (maximum size, allocation delta, journal ID, lowest valid USN). Its record number is assigned when the journal is created and is found through the <code>$Extend</code> directory, record 11.</td><td>The witness. Each changed record's <code>$SI</code> USN (<code>0x90</code>) is resolved against <code>$J</code>, and the journal ID, maximum size and lowest valid USN are compared with the previous pass: a new ID, a shrink, a missing journal, or <code>$SI</code> USNs that dropped to 0 across the volume is the journal-deletion signal in Table 12; a lowest valid USN past the last entry read is lost coverage from a wrap. See the <a href="usn_anatomy.html">USN journal anatomy</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 class="cd-h3" id="cd-examples">Worked examples on the bytes</h3>
+      <p class="cd-p">Figure 3 takes the example record from Figure 2 as the previous pass and walks
+      six changes through the comparison. Only the fields that moved are listed, as raw
+      little-endian bytes with the decoded value after them; every time is UTC, shown to the full
+      100-nanosecond tick. The record is
+      number <code>283774</code> (<code>0x2C</code> = <code>7E 54 04 00</code>) with sequence
+      number 2, so its file reference in the <a href="usn_anatomy.html">USN journal</a>
+      is <code>0x000200000004547E</code>. A cyan tag means the record was parsed and the change is
+      explained, lime means housekeeping, and rose marks a finding to examine, with the value it
+      rests on in rose.</p>
+      <span class="cap">Figure 3</span>
+
+      <div class="cd-ex">
+        <h4>Example 1: a normal edit through Windows</h4>
+        <p>The file's content is rewritten in place through the Windows API, keeping its size.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Previous pass</th><th>This pass</th></tr></thead>
+          <tbody>
+            <tr><td>0x08</td><td>8</td><td>LSN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x">10 C4 12 00 00 00 00 00</span> (advanced)</td></tr>
+            <tr><td>0x30</td><td>2</td><td>Update sequence number</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">13 34</span> (zeroed, not compared)</td></tr>
+            <tr><td>0x58</td><td>8</td><td><code>$SI</code> modified</td><td><span class="cd-x">00 A0 5D 3B B3 A1 DB 01</span> 2025-03-30 20:35:10.4771072</td><td><span class="cd-x">05 1C C6 1B 6B 60 DD 01</span> 2026-10-20 08:15:03.4718213</td></tr>
+            <tr><td>0x60</td><td>8</td><td><code>$SI</code> MFT changed</td><td><span class="cd-x">00 A0 5D 3B B3 A1 DB 01</span> 2025-03-30 20:35:10.4771072</td><td><span class="cd-x">05 1C C6 1B 6B 60 DD 01</span> 2026-10-20 08:15:03.4718213</td></tr>
+            <tr><td>0x90</td><td>8</td><td><code>$SI</code> USN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x">C0 A2 F4 01 00 00 00 00</span> = <code>0x1F4A2C0</code></td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v parsed">Parsed &middot; explained</span> The semantic digest changed, the LSN advanced, and
+        the journal's last entry for this file reference, at USN <code>0x1F4A2C0</code> (the
+        value now in the <code>$SI</code> USN), carries <code>DATA_OVERWRITE | CLOSE</code>. <code>$FILE_NAME</code> did not move, as expected for
+        a write that renames nothing. Depending on the last-access policy the <code>$SI</code>
+        accessed time may move as well; that part of the change is housekeeping (example 2).</p>
+      </div>
+
+      <div class="cd-ex">
+        <h4>Example 2: a housekeeping-only change</h4>
+        <p>The file is read and its last-access time is updated.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Previous pass</th><th>This pass</th></tr></thead>
+          <tbody>
+            <tr><td>0x08</td><td>8</td><td>LSN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td>not relied on either way</td></tr>
+            <tr><td>0x30</td><td>2</td><td>Update sequence number</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">13 34</span> (zeroed, not compared)</td></tr>
+            <tr><td>0x68</td><td>8</td><td><code>$SI</code> accessed</td><td><span class="cd-x">00 80 AC F1 E5 9E DC 01</span> 2026-02-16 01:45:35.3585664</td><td><span class="cd-x">28 81 40 33 51 61 DD 01</span> 2026-10-21 11:42:07.1093544</td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v house">Housekeeping</span> The full digest changed and the semantic digest did not: the
+        map is updated and nothing is parsed. No journal entry is expected, because the
+        <a href="usn_anatomy.html">USN journal</a> does not record last-access updates.
+        Whether an access-time update moves the LSN is an open lab question, so the classification
+        does not depend on it.</p>
+      </div>
+
+      <div class="cd-ex">
+        <h4>Example 3: a timestomp with SetFileTime</h4>
+        <p>A tool calls <code>SetFileTime</code> to set created, modified and accessed to
+        2019-06-01 00:00:00. <code>SetFileTime</code> cannot set the MFT-changed time, so NTFS sets
+        that one itself, to the moment of the call.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Previous pass</th><th>This pass</th></tr></thead>
+          <tbody>
+            <tr><td>0x08</td><td>8</td><td>LSN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x">A8 D2 12 00 00 00 00 00</span> (advanced)</td></tr>
+            <tr><td>0x30</td><td>2</td><td>Update sequence number</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">13 34</span> (zeroed, not compared)</td></tr>
+            <tr><td>0x50</td><td>8</td><td><code>$SI</code> created</td><td><span class="cd-x">00 00 38 7E F3 77 DA 01</span> 2024-03-16 22:44:23.9208448</td><td><span class="cd-x cd-found">00 80 9E F4 0C 18 D5 01</span> <span class="cd-found">2019-06-01 00:00:00.0000000</span></td></tr>
+            <tr><td>0x58</td><td>8</td><td><code>$SI</code> modified</td><td><span class="cd-x">00 A0 5D 3B B3 A1 DB 01</span> 2025-03-30 20:35:10.4771072</td><td><span class="cd-x">00 80 9E F4 0C 18 D5 01</span> 2019-06-01 00:00:00.0000000</td></tr>
+            <tr><td>0x60</td><td>8</td><td><code>$SI</code> MFT changed</td><td><span class="cd-x">00 A0 5D 3B B3 A1 DB 01</span> 2025-03-30 20:35:10.4771072</td><td><span class="cd-x">97 8A 6A 17 3F 62 DD 01</span> 2026-10-22 16:05:00.6302871</td></tr>
+            <tr><td>0x68</td><td>8</td><td><code>$SI</code> accessed</td><td><span class="cd-x">00 80 AC F1 E5 9E DC 01</span> 2026-02-16 01:45:35.3585664</td><td><span class="cd-x">00 80 9E F4 0C 18 D5 01</span> 2019-06-01 00:00:00.0000000</td></tr>
+            <tr><td>0x90</td><td>8</td><td><code>$SI</code> USN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x">E8 B5 F4 01 00 00 00 00</span> = <code>0x1F4B5E8</code></td></tr>
+            <tr><td>0xB8</td><td>8</td><td><code>$FN</code> created</td><td><span class="cd-x">00 00 38 7E F3 77 DA 01</span> 2024-03-16 22:44:23.9208448</td><td>unchanged</td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v found">Finding &middot; timestomp signal</span> The write went through NTFS: the LSN advanced and the journal
+        entry the <code>$SI</code> USN now points at, <code>0x1F4B5E8</code>, carries
+        <code>BASIC_INFO_CHANGE | CLOSE</code>. That
+        explains how the change was made, not whether it is legitimate. The values are the finding:
+        <code>$SI</code> created is now 2019 while <code>$FN</code> created is still 2024; it moved
+        backwards between passes while <code>$FN</code> did not; and the three times the tool set are
+        exact whole seconds, while the MFT-changed time NTFS wrote in the same call carries
+        sub-second ticks, as NTFS-written times do. Read alongside the causes in Table 12.</p>
+      </div>
+
+      <div class="cd-ex">
+        <h4>Example 4: an offline raw edit</h4>
+        <p>With the volume not mounted by Windows, a raw editor sets both <code>$SI</code> created
+        and <code>$FN</code> created to 2019-06-01 00:00:00 &mdash; a double timestomp that leaves
+        the two in agreement. The stride tails are not touched, so the fixup check still passes.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Previous pass</th><th>This pass</th></tr></thead>
+          <tbody>
+            <tr><td>0x08</td><td>8</td><td>LSN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x cd-found">F8 A6 12 00 00 00 00 00</span> <span class="cd-found">unchanged</span></td></tr>
+            <tr><td>0x30</td><td>2</td><td>Update sequence number</td><td><span class="cd-x">12 34</span></td><td><span class="cd-x">12 34</span> unchanged</td></tr>
+            <tr><td>0x50</td><td>8</td><td><code>$SI</code> created</td><td><span class="cd-x">00 00 38 7E F3 77 DA 01</span> 2024-03-16 22:44:23.9208448</td><td><span class="cd-x">00 80 9E F4 0C 18 D5 01</span> 2019-06-01 00:00:00.0000000</td></tr>
+            <tr><td>0x90</td><td>8</td><td><code>$SI</code> USN</td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span></td><td><span class="cd-x">F8 A6 12 00 00 00 00 00</span> unchanged</td></tr>
+            <tr><td>0xB8</td><td>8</td><td><code>$FN</code> created</td><td><span class="cd-x">00 00 38 7E F3 77 DA 01</span> 2024-03-16 22:44:23.9208448</td><td><span class="cd-x cd-found">00 80 9E F4 0C 18 D5 01</span> <span class="cd-found">2019-06-01 00:00:00.0000000</span></td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v found">Finding &middot; offline edit signal</span> The semantic digest changed while the LSN did not, so
+        NTFS did not write it; the <code>$SI</code> USN did not move and no journal entry exists;
+        and <code>$FN</code> created moved with no rename or move to explain it. Within one pass the
+        two times agree and the <code>$SI</code>/<code>$FN</code> cross-check sees nothing; only the
+        comparison with the previous pass does. The <code>$LogFile</code> restart area and the
+        shutdown window are read with it (Table 12).</p>
+      </div>
+
+      <div class="cd-ex">
+        <h4>Example 5: a wiped in-use record</h4>
+        <p>A tool overwrites the whole record with zeros while the file is still allocated.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Previous pass</th><th>This pass</th></tr></thead>
+          <tbody>
+            <tr><td>0x00</td><td>4</td><td>Signature</td><td><span class="cd-x">46 49 4C 45</span> <code>FILE</code></td><td><span class="cd-x cd-found">00 00 00 00</span></td></tr>
+            <tr><td>0x16</td><td>2</td><td>Flags</td><td><span class="cd-x">01 00</span> in use</td><td><span class="cd-x">00 00</span></td></tr>
+            <tr><td>0x000&ndash;0x3FF</td><td>1024</td><td>Every other byte</td><td>the record in Figure 2</td><td><span class="cd-x">00</span> &hellip;</td></tr>
+            <tr><td>$MFT $BITMAP</td><td>1 bit</td><td>Bit 283774</td><td>1 (in use)</td><td><span class="cd-found">1 (in use)</span></td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v found">Finding &middot; wiped record signal</span> NTFS clears the in-use flag when a file is deleted;
+        it never blanks a record that is in use. Here the record was in use on the previous pass,
+        has no signature now, its <code>$BITMAP</code> bit still says in use, and the journal holds
+        no <code>FILE_DELETE</code> for its file reference. The last known copy from the previous
+        pass is kept, so the wiped file's names, times and size remain readable.</p>
+      </div>
+
+      <div class="cd-ex">
+        <h4>Example 6: delete, then reuse</h4>
+        <p>The file is deleted through Windows; on a later pass a new file has taken the slot.</p>
+        <div class="responsive-table-wrap"><table class="kb-table cd-table">
+          <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Pass n</th><th>Pass n+1 (deleted)</th><th>Pass n+2 (reused)</th></tr></thead>
+          <tbody>
+            <tr><td>0x10</td><td>2</td><td>Sequence number</td><td><span class="cd-x">02 00</span></td><td><span class="cd-x">03 00</span></td><td><span class="cd-x">03 00</span></td></tr>
+            <tr><td>0x16</td><td>2</td><td>Flags</td><td><span class="cd-x">01 00</span> in use</td><td><span class="cd-x">00 00</span> free</td><td><span class="cd-x">01 00</span> in use</td></tr>
+            <tr><td>0x08</td><td>8</td><td>LSN</td><td><span class="cd-x">F8 A6 12 00 &hellip;</span></td><td>advanced</td><td>advanced</td></tr>
+            <tr><td>0xB0, 0xF2</td><td>8, n</td><td><code>$FN</code> parent and name</td><td>root, <code>cmd.exe</code></td><td>unchanged</td><td>new parent, new name</td></tr>
+            <tr><td>$MFT $BITMAP</td><td>1 bit</td><td>Bit 283774</td><td>1</td><td>0</td><td>1</td></tr>
+          </tbody>
+        </table></div>
+        <p class="cd-verdict"><span class="cd-v parsed">Parsed &middot; explained</span> Pass n+1 is an explicit deletion: the in-use bit cleared,
+        the sequence number rose, the bitmap bit cleared together with it, and the journal has
+        <code>FILE_DELETE | CLOSE</code> for <code>0x000200000004547E</code>. The record is kept as
+        a deleted-file tombstone. Pass n+2 is a reuse: the slot is in use again under sequence
+        number 3, with a <code>FILE_CREATE</code> for <code>0x000300000004547E</code>. Any
+        reference that still quotes sequence number 2 &mdash; an entry in the
+        <a href="usn_anatomy.html">USN journal</a>, a Prefetch file reference, a parent
+        pointer &mdash; now points at a file that no longer exists. A pass that only sees n and n+2
+        classifies it the same way, and the deciding evidence is the journal pair, not the names:
+        <code>FILE_DELETE</code> for the old reference and <code>FILE_CREATE</code> for the new one.
+        A program that saves by deleting and re-creating a file can land the new file in the same
+        record with the same name and directory, and it is still a reuse.</p>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin: 28px 0 14px;">The
+      comparison turns four well-known tampering methods into signals an investigator can read.
+      Each row names the bytes it rests on in Table 9 and Figure 2:</p>
+      <span class="cap">Table 12</span>
+      <div class="responsive-table-wrap">
+        <table class="kb-table" style="font-size: 15px;">
+          <thead><tr><th>Tamper signal</th><th>What the comparison sees</th><th>Read it alongside</th></tr></thead>
+          <tbody>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Timestomp</td>
+              <td><code>$SI</code> created (<code>0x50</code>) earlier than <code>$FN</code> created (<code>0xB8</code>); <code>$SI</code> MFT-changed (<code>0x60</code>) earlier than <code>$FN</code> created; <code>$SI</code> created earlier than the file-create entry for the same record in the <a href="usn_anatomy.html#reasons">USN journal</a>; or an <code>$SI</code> time that moved backwards between two passes while <code>$FN</code> did not; or both moving with no rename or move to explain the <code>$FN</code> change, which catches a raw double timestomp (Figure 3, examples 3 and 4); or an <code>$FN</code> time (<code>0xB8</code>&ndash;<code>0xD7</code>) that moved backwards even with a rename or move to explain it. The widely reported API-only double timestomp backdates <code>$SI</code>, then renames or moves the file so that NTFS refreshes <code>$FN</code> from the backdated values; in the journal it shows as <code>BASIC_INFO_CHANGE</code> followed by the rename pair.</td>
+              <td>Restores from backup and archive extraction set old times legitimately. NTFS tunneling (a name deleted and re-created within seconds keeps the old created time) explains some <code>$SI</code>/<code>$FN</code> gaps, so tunneling is checked before the signal is raised.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Wiped record</td>
+              <td>A record that loses its <code>FILE</code> signature at <code>0x00</code>, or all of its attributes, without being reused. The strongest form is a record in use on the previous pass with no deletion in between and its <code>$MFT</code> <code>$BITMAP</code> bit still set (Figure 3, example 5); the post-deletion form is a freed record that was blanked. NTFS does neither: deleting a file clears the in-use flag and leaves the record's content until a reuse writes a new FILE record over it. A parent index entry that still names the record corroborates either form.</td>
+              <td>The last known copy of the record is kept from the previous pass, so the wiped file's names, times and size remain readable. Wiping tools also leave rename storms followed by a delete in the <a href="usn_anatomy.html#anti-forensics">USN journal</a>.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Journal deletion</td>
+              <td>The <a href="usn_anatomy.html">USN journal</a> ID in <code>$Max</code> changed, the journal is missing or disabled, or its maximum size shrank (Table 11). A deletion through NTFS also resets the <code>$SI</code> USN (<code>0x90</code>) of every file on the volume to 0 before it removes the journal, so the USNs stored with the digests drop to 0 in record after record: a volume-wide change in itself.</td>
+              <td>Backup software and <code>chkdsk</code> can recreate the journal too, so the gap is judged with the process activity around it. A journal with the same ID whose oldest entry is past the last entry read on the previous pass only wrapped under heavy activity: that is recorded as lost coverage, not as a deletion. Either way the record comparison is unaffected: every change since the previous pass is still found.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Offline edit</td>
+              <td>Record contents changed while the LSN at <code>0x08</code> did not; the <code>$LogFile</code> was reset or its current LSN went backwards (Table 11); the changes have no matching <a href="usn_anatomy.html">USN journal</a> entries, or carry journal times from inside the shutdown window. The last pass before shutdown is compared with the first pass after start (Figure 3, example 4).</td>
+              <td>Fast Startup, hibernation and <code>chkdsk</code> at boot also touch the log, and are recorded as context. A deleted hibernation file or a failed resume strengthens the signal.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-top: 20px;"><strong style="color: var(--tx);">Chain
+      of custody:</strong> every pass writes an integrity manifest for each volume: the volume's
+      identity (the <code>$Boot</code> serial number and the <code>$Volume</code> object ID in
+      Table 11), the <a href="usn_anatomy.html">USN journal</a> ID and range, the
+      <code>$LogFile</code> LSN, whether the pass was full or a delta and why, the count of each
+      signal in Table 12, and the map's root hash chained to the previous pass. Turning a check off
+      is written to custody as well, when it is turned off and on every pass after, so a silenced
+      check never reads as a clean one. No single signal proves tampering by itself; each one is a
+      finding to examine with the records around it.</p>
+    </div>
+
     <!-- ANTI-FORENSICS -->
     <div class="kb-section" style="margin-bottom: 60px;">
       <h2 id="anti-forensics">Anti-forensic techniques</h2>
       <p style="color: var(--tx2); font-size: 16px; line-height: 1.75; margin-bottom: 20px;">How sophisticated adversaries try to defeat MFT-based evidence &mdash; and how an investigator catches each play:</p>
-      <span class="cap">Table 9</span>
+      <span class="cap">Table 13</span>
       <div class="responsive-table-wrap">
       <table class="kb-table" style="font-size: 15px;">
           <thead><tr><th>Technique</th><th>Indicator in the MFT</th><th>Counter-detection</th></tr></thead>
@@ -1056,13 +1733,28 @@
             </tr>
             <tr>
               <td style="color: var(--tx); font-weight: 700;">Sequence-number reuse</td>
-              <td>An adversary deletes a file, then creates one in the same MFT slot &mdash; references to the old file (in <code>$FILE_NAME</code> parent pointers, USN journal, <a href="prefetch_anatomy.html#dissection">prefetch</a>) now resolve to a totally different binary.</td>
-              <td>The 16-bit <strong>sequence number</strong> in every MFT reference increments on reuse. Compare the sequence number in the reference against the live record's sequence number &mdash; a mismatch proves slot reuse.</td>
+              <td>An adversary deletes a file, then creates one in the same MFT slot &mdash; references to the old file (in <code>$FILE_NAME</code> parent pointers, <a href="usn_anatomy.html">USN journal</a>, <a href="prefetch_anatomy.html#dissection">prefetch</a>) now resolve to a totally different binary.</td>
+              <td>The 16-bit <strong>sequence number</strong> in every MFT reference is incremented when NTFS frees the record. Compare the sequence number in the reference against the live record's sequence number &mdash; a mismatch shows the record was freed since the reference was written, and possibly reused.</td>
             </tr>
             <tr>
               <td style="color: var(--tx); font-weight: 700;">USA / fixup forgery</td>
-              <td>Attempts to forge a FILE record on disk fail to update the Update Sequence Array correctly &mdash; the 2-byte sector signatures at offsets <code>0x1FE</code>, <code>0x3FE</code> don't match the USN at the top of the USA.</td>
-              <td>Validate the USA: the last 2 bytes of every 512-byte sector inside the record should equal the first 2 bytes of the USA (the USN). Mismatches are evidence of crafted records or torn writes.</td>
+              <td>A raw edit that touches a stride tail at <code>0x1FE</code> or <code>0x3FE</code> without restamping it leaves a tail that no longer matches the update sequence number at <code>0x30</code>. An edit elsewhere in the record passes the check (Figure 3, example 4).</td>
+              <td>Validate the USA: the last 2 bytes of every 512-byte sector inside the record should equal the first 2 bytes of the USA (the USN). A mismatch that survives a re-read is evidence of a crafted record or a torn write; a passing check proves nothing on its own, so the LSN comparison (Table 12) is read with it.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">USN journal deletion</td>
+              <td>The adversary runs <code>fsutil usn deletejournal</code>, or deletes and recreates the <a href="usn_anatomy.html">USN journal</a>, so the change history behind the records is gone. NTFS resets the <code>$SI</code> USN of every file to 0 as part of the deletion.</td>
+              <td>See Table 12, "Journal deletion". The record comparison never depended on the journal, so every change since the previous pass is still found.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">Offline edits</td>
+              <td>The volume is changed while the monitored Windows installation is not running it: booted into Linux (ntfs-3g) or WinPE, or a virtual machine's disk edited while powered off. A raw editor and ntfs-3g write no <a href="usn_anatomy.html">USN journal</a> entries. WinPE mounts the volume with the Windows NTFS driver, so its changes do reach the journal on the volume, stamped with times when the monitored system was down.</td>
+              <td>See Table 12, "Offline edit", and Figure 3, example 4.</td>
+            </tr>
+            <tr>
+              <td style="color: var(--tx); font-weight: 700;">LSN-unchanged writes</td>
+              <td>A kernel driver writes a record's bytes straight to the disk, bypassing NTFS. The record's content changes, but the LSN at header offset <code>0x08</code> stays where it was, because NTFS logged nothing.</td>
+              <td>See Table 9 (<code>0x08</code>) and Table 12, "Offline edit". While <code>$LogFile</code> still covers the period, the absence of a matching redo record corroborates it.</td>
             </tr>
           </tbody>
         </table>
@@ -1083,12 +1775,24 @@
       'trace-color': [{ bg: '#130a21', fg: '#7c3aed' }, { bg: '#1e1035', fg: '#8b5cf6' }, { bg: '#2b174a', fg: '#a78bfa' }, { bg: '#391f63', fg: '#c4b5fd' }, { bg: '#4a2880', fg: '#ddd6fe' }, { bg: '#5c319e', fg: '#ede9fe' }, { bg: '#6e3bbd', fg: '#f5f3ff' }],
       'string-color': [{ bg: '#1a0006', fg: '#dc2626' }, { bg: '#2e000a', fg: '#ef4444' }, { bg: '#45000f', fg: '#f87171' }, { bg: '#5e0015', fg: '#fca5a5' }, { bg: '#79001b', fg: '#fecaca' }, { bg: '#940021', fg: '#fee2e2' }, { bg: '#b00028', fg: '#fef2f2' }],
       'hash-color': [{ bg: '#051621', fg: '#0891b2' }, { bg: '#0a1d2e', fg: '#06b6d4' }, { bg: '#0f2b45', fg: '#22d3ee' }, { bg: '#143c60', fg: '#67e8f9' }, { bg: '#1a4e7c', fg: '#a5f3fc' }, { bg: '#20619b', fg: '#cffafe' }, { bg: '#2673b8', fg: '#ecfeff' }],
-      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }]
+      'mam-color': [{ bg: '#051c11', fg: '#059669' }, { bg: '#0a2a1a', fg: '#34d399' }, { bg: '#0d3823', fg: '#6ee7b7' }, { bg: '#124c2e', fg: '#a7f3d0' }, { bg: '#16613a', fg: '#d1fae5' }, { bg: '#1b7747', fg: '#ecfdf5' }, { bg: '#208d55', fg: '#f0fdf4' }],
+      // Figure 2 (change detection): one family per ROLE a byte plays in the
+      // comparison, in the site's colour language - cyan = read (re-parsed),
+      // lime = kept (sealed in the full digest only), indigo = structure,
+      // slate = excluded (zeroed before hashing), violet = pointer into a log
+      // (the same violet as the LSN and USN fields in Figure 1).
+      'cd-semantic': [{ bg: '#0b4150', fg: '#a5f3fc' }, { bg: '#0e5263', fg: '#cffafe' }, { bg: '#093846', fg: '#67e8f9' }, { bg: '#11606f', fg: '#ecfeff' }, { bg: '#0c4a59', fg: '#a5f3fc' }, { bg: '#0a3c4a', fg: '#67e8f9' }, { bg: '#13697a', fg: '#cffafe' }],
+      'cd-house': [{ bg: '#2d3d0c', fg: '#d9f99d' }, { bg: '#384c10', fg: '#ecfccb' }, { bg: '#263409', fg: '#bef264' }, { bg: '#425914', fg: '#f7fee7' }, { bg: '#33450e', fg: '#d9f99d' }, { bg: '#2a390b', fg: '#bef264' }, { bg: '#4a6417', fg: '#ecfccb' }],
+      'cd-struct': [{ bg: '#25246b', fg: '#c7d2fe' }, { bg: '#2e2d80', fg: '#e0e7ff' }, { bg: '#1f1e5c', fg: '#a5b4fc' }, { bg: '#373694', fg: '#eef2ff' }, { bg: '#292875', fg: '#c7d2fe' }, { bg: '#222163', fg: '#a5b4fc' }, { bg: '#3f3ea3', fg: '#e0e7ff' }],
+      'cd-zeroed': [{ bg: '#2a3240', fg: '#cbd5e1' }, { bg: '#333c4c', fg: '#e2e8f0' }, { bg: '#242b37', fg: '#94a3b8' }, { bg: '#3c4658', fg: '#f1f5f9' }, { bg: '#2e3646', fg: '#cbd5e1' }, { bg: '#272e3b', fg: '#94a3b8' }, { bg: '#454f63', fg: '#e2e8f0' }],
+      'cd-witness': [{ bg: '#3a1f63', fg: '#ddd6fe' }, { bg: '#4a2880', fg: '#ede9fe' }, { bg: '#2b174a', fg: '#c4b5fd' }, { bg: '#5c319e', fg: '#f5f3ff' }, { bg: '#41236f', fg: '#ddd6fe' }, { bg: '#331b57', fg: '#c4b5fd' }, { bg: '#6e3bbd', fg: '#f5f3ff' }]
     };
     function gen(l, s) { let r = []; for(let i=0; i<l; i++) r.push(((Math.sin(s + i) * 10000) & 0xFF).toString(16).padStart(2, '0').toUpperCase()); return r; }
-    // Build a 320-byte realistic FILE record. Represents an MFT entry for
-    // C:\Windows\System32\cmd.exe whose parent directory is the volume root
-    // (record 5).  All fields match the documented offsets verbatim, including
+    // Build a 320-byte realistic FILE record. Represents an MFT entry for a
+    // copy of cmd.exe in the volume root (C:\cmd.exe, parent = record 5).
+    // The record holds $SI and $FN only: the non-resident $DATA a real record
+    // would carry after $FN is left out (the page says so).  All fields match
+    // the documented offsets verbatim, including
     // the canonical FILETIME order (Created, Modified, MFT-Modified, Accessed)
     // confirmed by libfsntfs and flatcap.
     function HX(s) { return s.replace(/\s+/g, '').match(/.{2}/g).map(b => b.toUpperCase()); }
@@ -1102,12 +1806,12 @@
       HX('0100'),                   // 0x12 Hard Link Count = 1
       HX('3800'),                   // 0x14 First Attribute Offset = 0x0038
       HX('0100'),                   // 0x16 Flags = IN_USE
-      HX('80010000'),               // 0x18 Used Size = 384
+      HX('08010000'),               // 0x18 Used Size = 0x108 (end marker at 0x100 + its 8-byte slot)
       HX('00040000'),               // 0x1C Allocated Size = 1024
       HX('00000000 00000000'),      // 0x20 Base Record Ref = 0 (base record)
       HX('0600'),                   // 0x28 Next Attribute ID = 6
       HX('0000'),                   // 0x2A Alignment padding
-      HX('7E540400'),               // 0x2C MFT Record Number = 283262
+      HX('7E540400'),               // 0x2C MFT Record Number = 283774
       // ---- Update Sequence Array (0x30..0x37 = 8 B) ----
       HX('1234'),                   // 0x30 USN sentinel
       HX('5678'),                   // 0x32 Fixup [0] (real bytes from sector 1's tail)
@@ -1124,10 +1828,10 @@
       HX('48000000'),               // 0x48 content size = 72
       HX('1800'),                   // 0x4C content offset = 24
       HX('0000'),                   // 0x4E indexed + pad
-      HX('00003 87 EF377DA01'.replace(/\s+/g, '')),  // 0x50 Created  (2024-03-14 10:00:00 UTC)
-      HX('00A05D3BB3A1DB01'),       // 0x58 Modified (2025-01-15 14:30:00 UTC)
+      HX('00003 87 EF377DA01'.replace(/\s+/g, '')),  // 0x50 Created  (2024-03-16 22:44:23.9208448 UTC)
+      HX('00A05D3BB3A1DB01'),       // 0x58 Modified (2025-03-30 20:35:10.4771072 UTC)
       HX('00A05D3BB3A1DB01'),       // 0x60 MFT Entry Modified (same as modified — typical)
-      HX('0080ACF1E59EDC01'),       // 0x68 Accessed (2026-04-30 09:00:00 UTC)
+      HX('0080ACF1E59EDC01'),       // 0x68 Accessed (2026-02-16 01:45:35.3585664 UTC)
       HX('20000000'),               // 0x70 File-attr flags = Archive
       HX('00000000'),               // 0x74 Max versions
       HX('00000000'),               // 0x78 Version
@@ -1153,18 +1857,20 @@
       HX('0000387EF377DA01'),       // 0xC8 MFT Entry Modified (same)
       HX('0000387EF377DA01'),       // 0xD0 Accessed (same)
       HX('00000600 00000000'),      // 0xD8 Allocated size = 393216
-      HX('00980500 00000000'),      // 0xE0 Real size = 366080
+      HX('00980500 00000000'),      // 0xE0 Real size = 366592
       HX('20000000'),               // 0xE8 Flags = Archive
       HX('00000000'),               // 0xEC Reparse value
       HX('07'),                     // 0xF0 Filename length = 7 chars
-      HX('01'),                     // 0xF1 Namespace = Win32
-      HX('63006D00 64002E00 65007800 65000000'),  // 0xF2 "cmd.exe" UTF-16LE + 2-byte align
-      // ---- 8-byte attribute alignment padding (0x100..0x107) ----
-      HX('00000000 00000000'),
-      // ---- End-of-attributes marker (0x108..0x10B) ----
+      HX('03'),                     // 0xF1 Namespace = Win32 & DOS (cmd.exe is a valid 8.3 name)
+      HX('63006D00 64002E00 65007800 6500'),  // 0xF2 "cmd.exe" UTF-16LE (14 B) - $FN ends at 0x100, 0x98 + 0x68
+      // ---- End-of-attributes marker (0x100..0x103). Every attribute length is a
+      //      multiple of 8, so the marker follows the last attribute directly. ----
       HX('FFFFFFFF'),
-      // ---- Record slack (0x10C..0x13F = 52 B, mostly zeros) ----
-      HX('00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000')
+      // ---- Rest of the marker's 8-byte slot (0x104..0x107); bytes in use = 0x108 ----
+      HX('00000000'),
+      // ---- Record slack (0x108..0x13F = 56 B, zeros in this example; the stride
+      //      tails at 0x1FE / 0x3FE get distinct values in Figure 2 so the swap shows) ----
+      HX('00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000 00000000')
     );
     // Trim/pad to exactly 320 bytes
     while (realRecord.length < 320) realRecord.push('00');
@@ -1175,13 +1881,13 @@
       { section: 'FILE Record Header', name: 'Signature \"FILE\"', offset: baseOff + 0, size: 4, type: 'header-color', val: 'FILE', forensic: '<strong>4-byte ASCII magic.</strong> <code>0x46 0x49 0x4C 0x45</code> &mdash; the carving anchor for every MFT record. Crow-Eye validates it at <code>raw_data[0:4] != b\"FILE\"</code> (MFT_Claw.py:1111, 1482). A record missing this signature is either zeroed slack space or a corrupted entry and is skipped.' },
       { section: 'FILE Record Header', name: 'USA Offset', offset: baseOff + 4, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; offset to the Update Sequence Array.</strong> Typically <code>0x002A</code> or <code>0x0030</code>. The USA is the integrity mechanism: its first 2 bytes are the USN (Update Sequence Number) and the last 2 bytes of every 512-byte sector inside the record are swapped with sector-specific fixup values so torn writes can be detected.' },
       { section: 'FILE Record Header', name: 'USA Size', offset: baseOff + 6, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; number of 2-byte entries in the USA, including the USN itself.</strong> For a 1024-byte record split across two 512-byte sectors this is typically <strong>3</strong> (1 USN + 2 fixups). For a 4096-byte record it is 9.' },
-      { section: 'FILE Record Header', name: '$LogFile Sequence Number (LSN)', offset: baseOff + 8, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; the last transaction in the <code>$LogFile</code> that affected this record.</strong> Used by NTFS recovery to undo / redo unfinished operations after a crash. For investigators, the LSN delta between successive backups proves how many transactions occurred &mdash; useful in change-volume analysis.' },
-      { section: 'FILE Record Header', name: 'Sequence Number', offset: baseOff + 16, size: 2, type: 'hash-color', forensic: '<strong>UInt16 &mdash; increments every time this record slot is reused.</strong> Crow-Eye reads it via <code>struct.unpack(\"<H\", raw_data[16:18])</code> (MFT_Claw.py:1486). When something references this MFT entry (a parent ref, a USN entry, a prefetch MFT ref), the reference embeds the sequence too &mdash; mismatch proves slot reuse.' },
+      { section: 'FILE Record Header', name: '$LogFile Sequence Number (LSN)', offset: baseOff + 8, size: 8, type: 'trace-color', forensic: '<strong>UInt64 &mdash; the last transaction in the <code>$LogFile</code> that affected this record.</strong> Used by NTFS recovery to undo / redo unfinished operations after a crash. For investigators, the LSN difference between two copies of a record shows how far the log advanced between them; an LSN is a position in the log, not a count of transactions.' },
+      { section: 'FILE Record Header', name: 'Sequence Number', offset: baseOff + 16, size: 2, type: 'hash-color', forensic: '<strong>UInt16 &mdash; incremented when NTFS frees the record, so the next file in this slot carries the new number.</strong> Crow-Eye reads it via <code>struct.unpack(\"<H\", raw_data[16:18])</code> (MFT_Claw.py:1486). When something references this MFT entry (a parent ref, a USN entry, a prefetch MFT ref), the reference embeds the sequence too &mdash; a mismatch shows the record was freed since the reference was written, and possibly reused.' },
       { section: 'FILE Record Header', name: 'Hard Link Count', offset: baseOff + 18, size: 2, type: 'identity-color', forensic: '<strong>UInt16 &mdash; number of hard links pointing at this file.</strong> Each link contributes one <code>$FILE_NAME</code> attribute. Multiple non-DOS <code>$FN</code>s in one record means real hard linking is in play &mdash; common for system DLLs (e.g. WinSxS).' },
       { section: 'FILE Record Header', name: 'First Attribute Offset', offset: baseOff + 20, size: 2, type: 'fileinfo-color', forensic: '<strong>UInt16 &mdash; byte offset of the first attribute inside the record.</strong> Typically <code>0x0038</code> (56). Crow-Eye uses it as the starting point for <code>_parse_attributes()</code> (MFT_Claw.py:1540).' },
       { section: 'FILE Record Header', name: 'Flags', offset: baseOff + 22, size: 2, type: 'props-color', forensic: '<strong>UInt16 bitmask.</strong> Bit 0 = <code>IN_USE</code>, bit 1 = <code>IS_DIRECTORY</code>, bit 2 = <code>IS_EXTENSION</code>. Crow-Eye decodes <code>in_use = bool(flags &amp; 0x0001)</code> and <code>is_directory = bool(flags &amp; 0x0002)</code> (MFT_Claw.py:1488-1489). <strong>Deleted files have bit 0 cleared but every other byte of the record is intact &mdash; that is why MFT analysis recovers so much from "deleted" files.</strong>' },
       { section: 'FILE Record Header', name: 'Used Size', offset: baseOff + 24, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; actual bytes in use inside this 1024-byte record.</strong> Typically 400&ndash;900 depending on attribute payload. Anything past this byte is unused slack inside the record &mdash; valuable for recovering overwritten attribute data.' },
-      { section: 'FILE Record Header', name: 'Allocated Size', offset: baseOff + 28, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; total bytes allocated to the record.</strong> Usually <strong>1024</strong> exactly. Discrepancies between this value and the record size declared in <code>$MFT</code>\'s DATA attribute hint at corruption or crafted records.' },
+      { section: 'FILE Record Header', name: 'Allocated Size', offset: baseOff + 28, size: 4, type: 'volumes-color', forensic: '<strong>UInt32 &mdash; total bytes allocated to the record.</strong> Usually <strong>1024</strong> exactly. Discrepancies between this value and the record size declared in <code>$Boot</code> (offset <code>0x40</code>) hint at corruption or crafted records.' },
       { section: 'FILE Record Header', name: 'Base Record File Reference', offset: baseOff + 32, size: 8, type: 'hash-color', forensic: '<strong>8 bytes &mdash; MFT reference to the base record for extension records.</strong> Zero for normal (base) records. When an attribute spills via <code>$ATTRIBUTE_LIST</code> into an extension record, that extension record\'s base-ref points back here. Crow-Eye tracks the relationship in <code>MFTRecord.extension_records</code>.' },
       { section: 'FILE Record Header', name: 'Next Attribute ID', offset: baseOff + 40, size: 2, type: 'identity-color', forensic: '<strong>UInt16 &mdash; the ID that will be assigned to the next attribute added to this record.</strong> Functions as a monotonic counter &mdash; useful for spotting heavily modified records.' },
       { section: 'FILE Record Header', name: 'Reserved / Padding', offset: baseOff + 42, size: 2, type: 'reserved', forensic: '<strong>2 bytes of alignment padding.</strong> In NTFS 3.0 and earlier this was always zero. NTFS 3.1 added a 4-byte field at 0x2C, so this padding remains; not parsed.' },
@@ -1191,7 +1897,7 @@
     const usaFields = (off) => [
       { section: 'Update Sequence Array', name: 'Update Sequence Number (USN)', offset: off + 0, size: 2, type: 'fileinfo-color', forensic: '<strong>2 bytes &mdash; the integrity signature.</strong> NTFS writes this value to the <strong>last 2 bytes of every 512-byte sector</strong> of the record, then patches in the real fixup values from the USA before reading. Mismatch on read = the record was torn (e.g. mid-write power loss) and needs <code>$LogFile</code> replay.' },
       { section: 'Update Sequence Array', name: 'Fixup [0] (sector 1)', offset: off + 2, size: 2, type: 'fileinfo-color', forensic: '<strong>The real value that originally lived at offset 0x1FE.</strong> When the record was last written, NTFS overwrote those 2 bytes with the USN and stashed the originals here. On read the swap is reversed. Forgers who don\'t update the USA properly trip a fixup mismatch.' },
-      { section: 'Update Sequence Array', name: 'Fixup [1] (sector 2)', offset: off + 4, size: 2, type: 'fileinfo-color', forensic: '<strong>The real value originally at offset 0x3FE.</strong> Same mechanism as fixup[0] but for the second 512-byte sector of the 1024-byte record. A 4096-byte record would have 7 more fixups here.' }
+      { section: 'Update Sequence Array', name: 'Fixup [1] (sector 2)', offset: off + 4, size: 2, type: 'fileinfo-color', forensic: '<strong>The real value originally at offset 0x3FE.</strong> Same mechanism as fixup[0] but for the second 512-byte sector of the 1024-byte record. A 4096-byte record has 6 more fixups, which is why its first attribute starts at <code>0x48</code>.' }
     ];
 
     const siAttrFields = (off) => [
@@ -1208,7 +1914,7 @@
       { section: '$STANDARD_INFORMATION Content', name: 'Created (FILETIME)', offset: off + 24, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x00 &mdash; file creation time.</strong> 100-nanosecond intervals since 1601-01-01 UTC. Crow-Eye parses via <code>StandardInformationParser._parse_filetime()</code> (MFT_Claw.py:345-359). <strong>This is one of the four "$SI" timestamps in the SI/FN "MAC(b)" forensic shorthand. Timestomping tools usually touch ONLY these four &mdash; not the $FN copies.</strong>' },
       { section: '$STANDARD_INFORMATION Content', name: 'Modified (FILETIME)', offset: off + 32, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x08 &mdash; last data modification.</strong> Updated whenever <code>$DATA</code> changes. Persisted in <code>mft_records.modified_time</code> and <code>mft_standard_info.modified</code>.' },
       { section: '$STANDARD_INFORMATION Content', name: 'MFT Entry Modified (FILETIME)', offset: off + 40, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x10 &mdash; "entry changed" / MFT record modification time.</strong> Updated on every attribute write, including rename, permission change, and the kernel\'s internal metadata fixups. <strong>Order confirmed by <a href="https://github.com/libyal/libfsntfs/blob/main/documentation/New%20Technologies%20File%20System%20(NTFS).asciidoc" style="color: var(--accent);">libfsntfs</a> and <a href="https://flatcap.github.io/linux-ntfs/ntfs/attributes/standard_information.html" style="color: var(--accent);">flatcap docs</a>.</strong> Timestomping tools <strong>often forget</strong> to backdate this one &mdash; making it the single most reliable timestamp.' },
-      { section: '$STANDARD_INFORMATION Content', name: 'Accessed (FILETIME)', offset: off + 48, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x18 &mdash; last access time.</strong> Modern Windows (8+) disables real-time access updates by default (registry: <code>NtfsDisableLastAccessUpdate</code>). The stored time reflects either lazy updates or pre-disable values &mdash; investigators must know the setting before drawing conclusions.' },
+      { section: '$STANDARD_INFORMATION Content', name: 'Accessed (FILETIME)', offset: off + 48, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x18 &mdash; last access time.</strong> Windows Vista through early Windows 10 disabled last-access updates by default (registry: <code>NtfsDisableLastAccessUpdate</code>); since Windows 10 version 1803 the default is system-managed (values with the <code>0x80000000</code> bit set), and updates may be enabled. Even when enabled they are written lazily. The stored time reflects either lazy updates or pre-disable values &mdash; investigators must know the setting before drawing conclusions.' },
       { section: '$STANDARD_INFORMATION Content', name: 'File Attribute Flags', offset: off + 56, size: 4, type: 'props-color', forensic: '<strong>UInt32 bitmask &mdash; the classic DOS-era file attributes.</strong> See the "$STANDARD_INFORMATION Flags" reference box below. Crow-Eye persists this raw int in <code>mft_records.file_attributes</code> and <code>mft_standard_info.flags</code>.' },
       { section: '$STANDARD_INFORMATION Content', name: 'Max Versions', offset: off + 60, size: 4, type: 'reserved', forensic: '<strong>UInt32 &mdash; historic file-version cap.</strong> Unused in modern NTFS; always 0. Recorded by the parser for completeness.' },
       { section: '$STANDARD_INFORMATION Content', name: 'Version Number', offset: off + 64, size: 4, type: 'reserved', forensic: '<strong>UInt32.</strong> Companion to Max Versions; always 0 on modern Windows.' },
@@ -1234,11 +1940,11 @@
       { section: '$FILE_NAME Content', name: 'Accessed (FILETIME)', offset: off + 56, size: 8, type: 'times-color', forensic: '<strong>UInt64 FILETIME at content offset 0x20 &mdash; the $FN copy of access time.</strong> Updated only on rename / move (not on every access) &mdash; behaves almost like a creation time on stable files.' },
       { section: '$FILE_NAME Content', name: 'Allocated Size', offset: off + 64, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; bytes allocated to the file (sum of cluster runlists, rounded up).</strong> May exceed the real size &mdash; sparse / compressed files often differ significantly. Crow-Eye persists in <code>mft_file_names.allocated_size</code>.' },
       { section: '$FILE_NAME Content', name: 'Real Size', offset: off + 72, size: 8, type: 'volumes-color', forensic: '<strong>UInt64 &mdash; logical file size in bytes.</strong> The size Explorer displays. Stored in <code>mft_file_names.real_size</code>.' },
-      { section: '$FILE_NAME Content', name: 'File Attribute Flags', offset: off + 80, size: 4, type: 'props-color', forensic: '<strong>UInt32 &mdash; duplicate of the $SI file-attribute flags.</strong> NTFS keeps them in sync for index efficiency &mdash; the index uses the $FN copy. A divergence between $SI.flags and $FN.flags is itself an anomaly worth flagging.' },
+      { section: '$FILE_NAME Content', name: 'File Attribute Flags', offset: off + 80, size: 4, type: 'props-color', forensic: '<strong>UInt32 &mdash; duplicate of the $SI file-attribute flags.</strong> The copy is taken when the name is written and refreshed rarely, so attributes set later often appear only in $SI, and directories carry <code>0x10000000</code> here that $SI does not. The two commonly diverge; a divergence is not an anomaly on its own.' },
       { section: '$FILE_NAME Content', name: 'Reparse Value / EA Size', offset: off + 84, size: 4, type: 'fileinfo-color', forensic: '<strong>UInt32.</strong> If the file has a reparse point, this holds the reparse tag (see Reparse Tags reference). Otherwise it carries the extended attribute size.' },
       { section: '$FILE_NAME Content', name: 'Filename Length (chars)', offset: off + 88, size: 1, type: 'identity-color', forensic: '<strong>UInt8 &mdash; length of the filename in UTF-16 characters (not bytes).</strong> Maximum 255 chars. Multiply by 2 to get the byte count. Crow-Eye reads it at byte 64 of the content (MFT_Claw.py:397).' },
       { section: '$FILE_NAME Content', name: 'Filename Namespace', offset: off + 89, size: 1, type: 'props-color', forensic: '<strong>UInt8.</strong> <code>0</code>=POSIX, <code>1</code>=Win32, <code>2</code>=DOS, <code>3</code>=Win32+DOS. Crow-Eye prefers non-DOS names in <code>MFTRecord.get_primary_filename()</code> (MFT_Claw.py:234-245) to avoid surfacing 8.3-style short names like <code>PROGRA~1</code>.' },
-      { section: '$FILE_NAME Content', name: 'Filename (UTF-16LE)', offset: off + 90, size: 16, type: 'string-color', forensic: '<strong>Variable-length UTF-16LE filename.</strong> Up to 510 bytes (255 chars &times; 2). Crow-Eye decodes with <code>filename_bytes.decode(\"utf-16le\", errors=\"replace\")</code> (MFT_Claw.py:403-404) and persists in <code>mft_file_names.file_name</code>.' }
+      { section: '$FILE_NAME Content', name: 'Filename (UTF-16LE)', offset: off + 90, size: 14, type: 'string-color', forensic: '<strong>Variable-length UTF-16LE filename.</strong> Up to 510 bytes (255 chars &times; 2). Crow-Eye decodes with <code>filename_bytes.decode(\"utf-16le\", errors=\"replace\")</code> (MFT_Claw.py:403-404) and persists in <code>mft_file_names.file_name</code>.' }
     ];
 
     const dataAttrResidentFields = (off) => [
@@ -1315,15 +2021,15 @@
     // ----- Views (the "version" tabs) -----
     const fullRecord = {
       hex: realRecord.slice(0, 320),
-      banner: 'Full FILE record (CMD.EXE parented to root) &mdash; 320 byte slice of a real 1024 B record',
+      banner: 'Full FILE record (cmd.exe in the volume root) &mdash; 320 byte slice of a real 1024 B record',
       fields: [
         ...fileHeaderFields(0),
         ...usaFields(48),
         ...siAttrFields(56),
         ...fnAttrFields(152),
-        { section: 'Attribute Stream Terminator', name: 'Alignment Padding', offset: 256, size: 8, type: 'reserved', forensic: '<strong>8 bytes of zero padding</strong> that bring the next attribute (or the end-of-attributes marker) onto an 8-byte boundary. The kernel requires every attribute header to be 8-byte aligned; smaller attributes round up.' },
-        { section: 'Attribute Stream Terminator', name: 'End-of-attributes marker', offset: 264, size: 4, type: 'trace-color', val: '0xFFFFFFFF', forensic: '<strong>The 4 bytes <code>0xFFFFFFFF</code> tell the kernel "no more attributes in this record."</strong> Crow-Eye breaks the attribute loop here (MFT_Claw.py:1547-1548). Anything beyond this marker up to the allocated record size is <strong>record slack</strong> &mdash; potentially holding residue from a previously-deleted file that occupied this slot.' },
-        { section: 'Attribute Stream Terminator', name: 'Record Slack (unused bytes)', offset: 268, size: 52, type: 'reserved', forensic: '<strong>Trailing bytes inside the 1024-byte record that are not in active use.</strong> Sometimes hold leftover data from a previously-stored record &mdash; carving the slack of every record can recover deleted-file metadata even when the in-use flag has been reused.' }
+        { section: 'Attribute Stream Terminator', name: 'End-of-attributes marker', offset: 256, size: 4, type: 'trace-color', val: '0xFFFFFFFF', forensic: '<strong>The 4 bytes <code>0xFFFFFFFF</code> tell the kernel "no more attributes in this record."</strong> Every attribute length is a multiple of 8, so the marker follows the last attribute directly &mdash; here at <code>0x100</code>, where <code>$FILE_NAME</code> (<code>0x98</code> + <code>0x68</code>) ends. Crow-Eye breaks the attribute loop here (MFT_Claw.py:1547-1548). Anything beyond the marker\'s 8-byte slot up to the allocated record size is <strong>record slack</strong> &mdash; potentially holding residue from a previously-deleted file that occupied this slot.' },
+        { section: 'Attribute Stream Terminator', name: 'Rest of the end marker\'s slot', offset: 260, size: 4, type: 'reserved', forensic: '<strong>The 4 bytes that complete the 8-byte slot the end marker occupies.</strong> They count toward <em>Used Size</em> (header offset <code>0x18</code> = <code>0x108</code> in this record) and are not read as an attribute. They often carry leftover bytes rather than zeros.' },
+        { section: 'Attribute Stream Terminator', name: 'Record Slack (unused bytes)', offset: 264, size: 56, type: 'reserved', forensic: '<strong>Trailing bytes inside the 1024-byte record that are not in active use</strong> &mdash; everything from <em>Used Size</em> (<code>0x108</code>) to the allocated size (<code>0x400</code>); this slice shows the first 56 of them. Sometimes hold leftover data from a previously-stored record &mdash; carving the slack of every record can recover deleted-file metadata even when the in-use flag has been reused.' }
       ]
     };
     const headerOnly = {
@@ -1370,7 +2076,7 @@
       const order = ['full','header','si','fn','data_r','data_nr'];
       const idx = order.indexOf(v);
       if (tabs[idx]) tabs[idx].classList.add('active');
-      document.getElementById('view-banner-text').textContent = versions[v].banner.replace(/<[^>]+>/g, '');
+      document.getElementById('view-banner-text').textContent = versions[v].banner.replace(/<[^>]+>/g, '').replace(/&mdash;/g, '\u2014');
       render();
     }
 
@@ -1482,6 +2188,222 @@
       document.getElementById('selection-output').innerHTML = out;
     }
 
+    // ----- Figure 2: the example record coloured by change-detection role -----
+    // Same bytes as Figure 1 (realRecord, 0x000-0x13F), plus the two 512-byte
+    // stride tails the 320-byte slice does not reach. Beyond 0x140 the example
+    // record is zero slack, except the tails, which hold the update sequence
+    // number on disk and the fixup values once the fixups are applied.
+    // Rendered with the page's palettes and the anatomy cell pattern (solid
+    // backgroundColor / color, class 'reserved' for reserved bytes).
+    const CD_ROLES = {
+      'cd-semantic': ['Semantic', 'cd-r-semantic'],
+      'cd-house':    ['Housekeeping', 'cd-r-house'],
+      'cd-struct':   ['Structure', 'cd-r-struct'],
+      'cd-witness':  ['Witness pointer', 'cd-r-witness'],
+      'cd-zeroed':   ['Not hashed where stored', 'cd-r-zeroed'],
+      'reserved':    ['Reserved', 'cd-r-reserved']
+    };
+    const CD_SEC = {
+      H:  'FILE record header · 0x00–0x2F',
+      U:  'Update sequence array · 0x30–0x37',
+      SH: '$STANDARD_INFORMATION header · 0x38–0x4F',
+      SC: '$STANDARD_INFORMATION content · 0x50–0x97',
+      FH: '$FILE_NAME header · 0x98–0xAF',
+      FC: '$FILE_NAME content · 0xB0–0xFF',
+      E:  'End marker and slack · 0x100–0x13F',
+      G1: '0x140–0x1EF · zero slack, not drawn',
+      T1: 'End of stride 1 · 0x1F0–0x1FF',
+      G2: '0x200–0x3EF · zero slack, not drawn',
+      T2: 'End of stride 2 · 0x3F0–0x3FF'
+    };
+    const IN = 'yes', NO = 'no', LOC = 'no — structure; locates the values that are compared';
+    const ZW = 'zeroed for hashing; stored beside the digests';
+    const cdFields = [
+      { o: 0x00, s: 4, sec: 'H', n: 'Signature "FILE"', r: 'cd-struct', full: IN, sem: LOC, m: 'Never changes on a valid record. A record that loses it without being reused is a wiped record. <code>BAAD</code> here marks a record that failed its multi-sector transfer check (written by NTFS or <code>chkdsk</code>).' },
+      { o: 0x04, s: 2, sec: 'H', n: 'Update sequence array offset', r: 'cd-struct', full: IN, sem: LOC, m: 'Fixed by the format: <code>0x30</code> on NTFS 3.1 (<code>0x2A</code> on records written under NTFS 3.0). Outside a free and reuse, a change points to a crafted record.' },
+      { o: 0x06, s: 2, sec: 'H', n: 'Update sequence array size', r: 'cd-struct', full: IN, sem: LOC, m: 'Record size &divide; 512 + 1 &mdash; 3 here, 9 for a 4096-byte record. A value that disagrees with the record size in <code>$Boot</code> points to a crafted record.' },
+      { o: 0x08, s: 8, sec: 'H', n: '$LogFile sequence number (LSN)', r: 'cd-witness', full: ZW, sem: 'no — witness pointer', m: 'The log position of the last logged change to the record; NTFS moves it forward each time it logs one. Unchanged while the record changed (outside an access-time update): written outside NTFS logging. Backwards on this record alone: an old image put back; backwards on every record: a whole-volume rollback. The upper bound against <code>$LogFile</code> is checked only while the log has not been reset since the previous pass.' },
+      { o: 0x10, s: 2, sec: 'H', n: 'Sequence number', r: 'cd-semantic', full: IN, sem: IN, m: 'NTFS adds 1 when it frees the record, wrapping from <code>0xFFFF</code> to 1. A rise is a deletion or a deletion and reuse, decided by the journal: <code>FILE_DELETE</code> for the old reference, <code>FILE_CREATE</code> for the new one, even when the new file has the same name and directory. A rise with neither entry while the journal covers the window, or a fall other than the wrap, points to an old record image put back or a write outside NTFS.' },
+      { o: 0x12, s: 2, sec: 'H', n: 'Hard link count', r: 'cd-semantic', full: IN, sem: IN, m: 'A hard link added or removed, with a <code>HARD_LINK_CHANGE</code> journal entry; a separate DOS-namespace name can count here too. A change with no explaining entry while the journal covers the window is surfaced.' },
+      { o: 0x14, s: 2, sec: 'H', n: 'First attribute offset', r: 'cd-struct', full: IN, sem: LOC, m: 'The first 8-byte boundary after the update sequence array: <code>0x38</code> for a 1024-byte record like this one, <code>0x48</code> for a 4096-byte one. Fixed for the life of the record; outside a free and reuse, a change points to a crafted record.' },
+      { o: 0x16, s: 2, sec: 'H', n: 'Flags (in use, directory)', r: 'cd-semantic', full: IN, sem: IN, m: 'In use is set on allocation and cleared on deletion; the directory bit never changes for the life of a file. The in-use bit is compared with this record\'s bit in the <code>$MFT</code> <code>$BITMAP</code>. The two reach the disk at different moments, so a disagreement is read again, and only one that persists while the volume is clean is raised, as consistent with a raw write.' },
+      { o: 0x18, s: 4, sec: 'H', n: 'Bytes in use', r: 'cd-struct', full: IN, sem: 'no — structure; bounds the attribute walk', m: '<code>0x108</code> here. The end marker must sit inside it and it can never exceed the allocated size; a record that breaks either rule is rejected as crafted or corrupt.' },
+      { o: 0x1C, s: 4, sec: 'H', n: 'Allocated size', r: 'cd-struct', full: IN, sem: LOC, m: 'Equal to the record size <code>$Boot</code> declares (1024 here, 4096 on some volumes). Never changes.' },
+      { o: 0x20, s: 8, sec: 'H', n: 'Base record reference', r: 'cd-semantic', full: IN, sem: IN, m: 'Zero on a base record like this one. On an extension record it names the base record; a change outside a free and reuse moves an extension to another file.' },
+      { o: 0x28, s: 2, sec: 'H', n: 'Next attribute ID', r: 'cd-house', full: IN, sem: NO, m: 'Rises when an attribute is added, and the added attribute is semantic in its own right. NTFS sets it back to 0 when the record is reused.' },
+      { o: 0x2A, s: 2, sec: 'H', n: 'Padding', r: 'reserved', full: IN, sem: NO, m: 'Expected zero.' },
+      { o: 0x2C, s: 4, sec: 'H', n: 'MFT record number', r: 'cd-struct', full: IN, sem: LOC, m: '283774 here. It must equal the record\'s position in <code>$MFT</code> divided by the record size; a mismatch is a record copied in from another slot.' },
+      { o: 0x30, s: 2, sec: 'U', n: 'Update sequence number', r: 'cd-zeroed', full: 'zeroed', sem: NO, m: 'NTFS increments it every time it writes the record, so it says nothing about the file. On disk the same two bytes stand in the last two bytes of each 512-byte stride.' },
+      { o: 0x32, s: 2, sec: 'U', n: 'Fixup value for 0x1FE', r: 'cd-zeroed', full: 'zeroed here; hashed at 0x1FE', sem: 'follows the field at 0x1FE', m: 'The real bytes of <code>0x1FE</code>&ndash;<code>0x1FF</code>. They are swapped back into place before hashing, so they are hashed once, at their own offset.' },
+      { o: 0x34, s: 2, sec: 'U', n: 'Fixup value for 0x3FE', r: 'cd-zeroed', full: 'zeroed here; hashed at 0x3FE', sem: 'follows the field at 0x3FE', m: 'The real bytes of <code>0x3FE</code>&ndash;<code>0x3FF</code>, handled the same way.' },
+      { o: 0x36, s: 2, sec: 'U', n: 'Padding', r: 'reserved', full: IN, sem: NO, m: 'Expected zero in a 1024-byte record. In a 4096-byte record this is fixup value 3, for <code>0x5FE</code>.' },
+      { o: 0x38, s: 8, sec: 'SH', n: 'Type code and length', r: 'cd-struct', full: IN, sem: LOC, m: 'Type <code>0x10</code>, length <code>0x60</code>. They locate the attribute; its values are what the semantic digest compares.' },
+      { o: 0x40, s: 4, sec: 'SH', n: 'Resident flag, name length and offset', r: 'cd-struct', full: IN, sem: LOC, m: '<code>$STANDARD_INFORMATION</code> is always resident and unnamed.' },
+      { o: 0x44, s: 2, sec: 'SH', n: 'Attribute flags', r: 'cd-semantic', full: IN, sem: IN, m: 'Compressed, encrypted or sparse. A change writes <code>COMPRESSION_CHANGE</code> or <code>ENCRYPTION_CHANGE</code> in the journal.' },
+      { o: 0x46, s: 2, sec: 'SH', n: 'Attribute ID', r: 'cd-struct', full: IN, sem: LOC, m: 'Assigned once; a change on a surviving attribute is a crafted record.' },
+      { o: 0x48, s: 6, sec: 'SH', n: 'Content size and offset', r: 'cd-struct', full: IN, sem: LOC, m: '72 bytes at <code>+0x18</code>. They frame the content.' },
+      { o: 0x4E, s: 2, sec: 'SH', n: 'Indexed flag and padding', r: 'cd-struct', full: IN, sem: LOC, m: 'Zero for <code>$STANDARD_INFORMATION</code>, which is not indexed; 1 for <code>$FILE_NAME</code> at <code>0xAE</code>.' },
+      { o: 0x50, s: 8, sec: 'SC', n: '$SI created', r: 'cd-semantic', full: IN, sem: IN, m: 'Set at creation and changed only through an API that sets times (<code>BASIC_INFO_CHANGE</code>). Earlier than <code>$FN</code> created at <code>0xB8</code>, or moved backwards between passes: timestomp.' },
+      { o: 0x58, s: 8, sec: 'SC', n: '$SI modified', r: 'cd-semantic', full: IN, sem: IN, m: 'A data write (<code>DATA_OVERWRITE</code>, <code>DATA_EXTEND</code>, <code>DATA_TRUNCATION</code>) or a time set (<code>BASIC_INFO_CHANGE</code>).' },
+      { o: 0x60, s: 8, sec: 'SC', n: '$SI MFT changed', r: 'cd-semantic', full: IN, sem: IN, m: 'NTFS moves it on every metadata change. <code>SetFileTime</code> cannot set it and <code>NtSetInformationFile</code> can, so a value that moved backwards is a strong timestomp signal.' },
+      { o: 0x68, s: 8, sec: 'SC', n: '$SI accessed', r: 'cd-house', full: IN, sem: NO, m: 'Written lazily, never journaled, and disabled or system-managed on many machines. Whether an access update moves the LSN is an open lab question; the change is housekeeping either way.' },
+      { o: 0x70, s: 4, sec: 'SC', n: '$SI file attributes', r: 'cd-semantic', full: IN, sem: IN, m: 'Hidden, system, read-only and the rest, set through <code>SetFileAttributes</code> (<code>BASIC_INFO_CHANGE</code>).' },
+      { o: 0x74, s: 12, sec: 'SC', n: 'Max versions, version, class ID', r: 'reserved', full: IN, sem: NO, m: 'Expected zero on modern Windows.' },
+      { o: 0x80, s: 4, sec: 'SC', n: 'Owner ID', r: 'cd-semantic', full: IN, sem: IN, m: 'The quota owner ID. Meaningful, and moved by a change of ownership, only while disk quotas are tracked.' },
+      { o: 0x84, s: 4, sec: 'SC', n: 'Security ID', r: 'cd-semantic', full: IN, sem: IN, m: 'A key into <code>$Secure</code>. A new owner or ACL gives a new ID (<code>SECURITY_CHANGE</code>); the descriptor behind it is read and compared.' },
+      { o: 0x88, s: 8, sec: 'SC', n: 'Quota charged', r: 'cd-house', full: IN, sem: NO, m: 'Follows the allocation. The sizes themselves are compared through <code>$FILE_NAME</code> and <code>$DATA</code>.' },
+      { o: 0x90, s: 8, sec: 'SC', n: '$SI USN', r: 'cd-witness', full: ZW, sem: 'no — witness pointer', m: 'The byte offset, in the <a href="usn_anatomy.html">USN journal</a>\'s <code>$J</code>, of the last journal entry written for this file. A non-zero value must land on an entry naming this record; past the journal\'s end is impossible. 0 is not an entry: deleting the journal resets every file\'s USN to 0. Unchanged while the semantic digest changed and the journal was active: the change bypassed NTFS.' },
+      { o: 0x98, s: 8, sec: 'FH', n: 'Type code and length', r: 'cd-struct', full: IN, sem: LOC, m: 'Type <code>0x30</code>, length <code>0x68</code>.' },
+      { o: 0xA0, s: 4, sec: 'FH', n: 'Resident flag, name length and offset', r: 'cd-struct', full: IN, sem: LOC, m: '<code>$FILE_NAME</code> is always resident; the attribute itself is unnamed (the file name is in the content).' },
+      { o: 0xA4, s: 2, sec: 'FH', n: 'Attribute flags', r: 'cd-semantic', full: IN, sem: IN, m: 'Zero for <code>$FILE_NAME</code>; compared like every attribute\'s flags.' },
+      { o: 0xA6, s: 2, sec: 'FH', n: 'Attribute ID', r: 'cd-struct', full: IN, sem: LOC, m: 'Assigned once.' },
+      { o: 0xA8, s: 6, sec: 'FH', n: 'Content size and offset', r: 'cd-struct', full: IN, sem: LOC, m: '80 bytes at <code>+0x18</code>: 66 fixed bytes plus 7 UTF-16 characters.' },
+      { o: 0xAE, s: 2, sec: 'FH', n: 'Indexed flag and padding', r: 'cd-struct', full: IN, sem: LOC, m: 'Always 1 for <code>$FILE_NAME</code>: the name is a key in the parent directory\'s index.' },
+      { o: 0xB0, s: 8, sec: 'FC', n: 'Parent directory reference', r: 'cd-semantic', full: IN, sem: IN, m: 'Entry 5, sequence 5: the root. A move writes <code>RENAME_OLD_NAME</code> then <code>RENAME_NEW_NAME</code>; a change with neither while the journal covers the window is unexplained and surfaced for review.' },
+      { o: 0xB8, s: 8, sec: 'FC', n: '$FN created', r: 'cd-semantic', full: IN, sem: IN, m: 'Written by NTFS at creation and refreshed on rename or move; no API sets it directly. Moving with no rename or move in the journal is unexplained and surfaced; moving backwards is surfaced even with a rename, because a rename refreshes it from a <code>$SI</code> that may have been backdated first.' },
+      { o: 0xC0, s: 8, sec: 'FC', n: '$FN modified', r: 'cd-semantic', full: IN, sem: IN, m: 'Same rule as <code>$FN</code> created.' },
+      { o: 0xC8, s: 8, sec: 'FC', n: '$FN MFT changed', r: 'cd-semantic', full: IN, sem: IN, m: 'Same rule as <code>$FN</code> created.' },
+      { o: 0xD0, s: 8, sec: 'FC', n: '$FN accessed', r: 'cd-semantic', full: IN, sem: IN, m: 'Unlike the <code>$SI</code> copy, refreshed only with the name, so it is semantic.' },
+      { o: 0xD8, s: 16, sec: 'FC', n: '$FN allocated and real size', r: 'cd-semantic', full: IN, sem: IN, m: 'NTFS refreshes these copies less often than the <code>$DATA</code> sizes, so a change is read together with <code>$DATA</code>.' },
+      { o: 0xE8, s: 4, sec: 'FC', n: '$FN file attribute flags', r: 'cd-semantic', full: IN, sem: IN, m: 'A copy of the <code>$SI</code> flags taken when the name was written and refreshed rarely; the two commonly diverge, so a divergence is not a signal on its own.' },
+      { o: 0xEC, s: 4, sec: 'FC', n: 'Reparse tag or EA size', r: 'cd-semantic', full: IN, sem: IN, m: '<code>REPARSE_POINT_CHANGE</code> or <code>EA_CHANGE</code>.' },
+      { o: 0xF0, s: 2, sec: 'FC', n: 'Name length and namespace', r: 'cd-semantic', full: IN, sem: IN, m: '7 characters, namespace 3 (Win32 and DOS): <code>cmd.exe</code> is a valid 8.3 name, so one name serves both. Moves with a rename.' },
+      { o: 0xF2, s: 14, sec: 'FC', n: 'File name (UTF-16LE)', r: 'cd-semantic', full: IN, sem: IN, m: '<code>cmd.exe</code>. A rename writes <code>RENAME_OLD_NAME</code> / <code>RENAME_NEW_NAME</code>.' },
+      { o: 0x100, s: 4, sec: 'E', n: 'End marker 0xFFFFFFFF', r: 'cd-struct', full: IN, sem: LOC, m: 'Ends the attribute walk. It must appear inside bytes in use.' },
+      { o: 0x104, s: 4, sec: 'E', n: 'Rest of the end marker\'s slot', r: 'reserved', full: IN, sem: NO, m: 'Inside bytes in use (<code>0x108</code>), not read as an attribute.' },
+      { o: 0x108, s: 56, sec: 'E', n: 'Record slack', r: 'cd-house', full: IN, sem: NO, m: 'From bytes in use to the end of the record. Residue that changes as the record shrinks and grows, with the LSN advancing; slack that changed while the LSN did not was written outside NTFS logging. Zeros in this example.' },
+      { o: 0x1F0, s: 14, sec: 'T1', n: 'Record slack', r: 'cd-house', full: IN, sem: NO, m: 'Slack, as above. The two tails at <code>0x1FE</code> and <code>0x3FE</code> are given distinct values in this example so the swap is visible; a real slack tail often holds <code>00 00</code>.' },
+      { o: 0x1FE, s: 2, sec: 'T1', n: 'Last two bytes of stride 1', r: 'tail', full: 'yes, after the swap', sem: 'follows whatever lies there (slack here)' },
+      { o: 0x3F0, s: 14, sec: 'T2', n: 'Record slack', r: 'cd-house', full: IN, sem: NO, m: 'Slack, as above.' },
+      { o: 0x3FE, s: 2, sec: 'T2', n: 'Last two bytes of stride 2', r: 'tail', full: 'yes, after the swap', sem: 'follows whatever lies there (slack here)' }
+    ];
+    let cdMode = 'after';
+    let cdCommitted = null;
+    const cdHex = o => '0x' + o.toString(16).toUpperCase().padStart(2, '0');
+    const cdRole = f => f.r !== 'tail' ? f.r : (cdMode === 'disk' ? 'cd-zeroed' : 'cd-house');
+    function cdByte(o) {
+      if (o < realRecord.length) return realRecord[o];
+      const k = (o === 0x1FE || o === 0x3FE) ? 0 : (o === 0x1FF || o === 0x3FF) ? 1 : -1;
+      if (k < 0) return '00';
+      if (cdMode === 'disk') return realRecord[0x30 + k];          // the update sequence number
+      return realRecord[(o < 0x200 ? 0x32 : 0x34) + k];            // the fixup value put back
+    }
+    function cdMeaning(f) {
+      if (f.r !== 'tail') return f.m;
+      const fix = f.o < 0x200 ? '0x32' : '0x34';
+      return cdMode === 'disk'
+        ? 'As read from disk these two bytes hold the update sequence number (<code>12 34</code>, the same as <code>0x30</code>), not the record\'s content. They must match it; a mismatch that survives a re-read is a torn write or a raw write. Hashing them as they are would make every write of the record a change.'
+        : 'After the fixups the real bytes from <code>' + fix + '</code> are back in place, and these two bytes are hashed as part of whatever lies here &mdash; slack in this record, but in a fuller record an attribute can cross this point.';
+    }
+    const cdFull = f => f.r === 'tail' && cdMode === 'disk' ? 'not as read: the fixup value replaces them, then they are hashed' : f.full;
+    function cdShow(f) {
+      const body = document.getElementById('cd-panel-body');
+      if (!body || !f) return;
+      const role = CD_ROLES[cdRole(f)];
+      const bytes = [];
+      for (let i = 0; i < f.s; i++) bytes.push(cdByte(f.o + i));
+      body.innerHTML =
+        '<div class="cd-pn">' + f.n + '</div>' +
+        '<span class="cd-role ' + role[1] + '">' + role[0] + '</span>' +
+        '<div class="cd-hex">' + bytes.join(' ') + '</div>' +
+        '<dl class="cd-dl">' +
+          '<dt>Offset</dt><dd>' + cdHex(f.o) + (f.s > 1 ? '–' + cdHex(f.o + f.s - 1) : '') + '</dd>' +
+          '<dt>Size</dt><dd>' + f.s + (f.s === 1 ? ' byte' : ' bytes') + '</dd>' +
+          '<dt>Full digest</dt><dd>' + cdFull(f) + '</dd>' +
+          '<dt>Semantic</dt><dd>' + f.sem + '</dd>' +
+        '</dl>' +
+        '<p class="cd-why">' + cdMeaning(f) + '</p>';
+      document.querySelectorAll('#cd-map .byte-cell').forEach(c => {
+        const o = +c.dataset.o;
+        c.classList.toggle('cd-on', o >= f.o && o < f.o + f.s);
+      });
+    }
+    // Stacked layout (narrow screens): the panel sits below a tall map, so a
+    // committed selection scrolls it into view.
+    function cdReveal() {
+      const panel = document.getElementById('cd-panel');
+      if (!panel || !window.matchMedia('(max-width: 900px)').matches) return;
+      panel.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+    function cdRender() {
+      const map = document.getElementById('cd-map');
+      if (!map) return;
+      map.innerHTML = '';
+      const offsets = [];
+      for (let o = 0; o < 0x140; o++) offsets.push(o);
+      offsets.push('G1');
+      for (let o = 0x1F0; o < 0x200; o++) offsets.push(o);
+      offsets.push('G2');
+      for (let o = 0x3F0; o < 0x400; o++) offsets.push(o);
+      let curSec = '', curF = null, typeIdx = {};
+      const shade = new Map();
+      const divider = (key) => {
+        const d = document.createElement('div');
+        d.className = 'divider-row';
+        d.textContent = CD_SEC[key];
+        map.appendChild(d);
+      };
+      offsets.forEach(o => {
+        if (typeof o === 'string') { divider(o); curSec = o; return; }
+        const f = cdFields.find(x => o >= x.o && o < x.o + x.s);
+        if (f && f.sec !== curSec) { divider(f.sec); curSec = f.sec; typeIdx = {}; }
+        const role = f ? cdRole(f) : 'reserved';
+        if (f && f !== curF) {
+          curF = f;
+          if (role !== 'reserved') {
+            const i = typeIdx[role] || 0;
+            shade.set(f, i);
+            typeIdx[role] = i + 1;
+          }
+        }
+        const c = document.createElement('div');
+        c.className = 'byte-cell';
+        c.textContent = cdByte(o);
+        c.dataset.o = o;
+        if (role === 'reserved') {
+          c.classList.add('reserved');
+        } else {
+          const pal = palettes[role];
+          const color = pal[shade.get(f) % pal.length];
+          c.style.backgroundColor = color.bg;
+          c.style.color = color.fg;
+        }
+        if (f) {
+          if (o === f.o) {
+            // One tab stop per field, not per byte.
+            c.tabIndex = 0;
+            c.setAttribute('role', 'button');
+            c.setAttribute('aria-label', f.n + ', offset ' + cdHex(f.o) + ', ' + CD_ROLES[role][0]);
+            c.addEventListener('focus', () => cdShow(f));
+            c.addEventListener('blur', () => cdShow(cdCommitted));
+            c.addEventListener('keydown', e => {
+              if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); cdCommitted = f; cdShow(f); cdReveal(); }
+            });
+          }
+          c.addEventListener('mouseenter', () => cdShow(f));
+          c.addEventListener('click', () => { cdCommitted = f; cdShow(f); cdReveal(); });
+        }
+        map.appendChild(c);
+      });
+      map.onmouseleave = () => cdShow(cdCommitted);
+      cdShow(cdCommitted);
+    }
+    function cdInit() {
+      if (!document.getElementById('cd-map')) return;
+      cdCommitted = cdFields.find(f => f.o === 0x08);
+      document.querySelectorAll('#cd-figure .cd-mode').forEach(b => {
+        b.addEventListener('click', () => {
+          cdMode = b.dataset.cdMode;
+          document.querySelectorAll('#cd-figure .cd-mode').forEach(x =>
+            x.setAttribute('aria-pressed', x === b ? 'true' : 'false'));
+          if (cdCommitted && cdCommitted.r !== 'tail') cdCommitted = cdFields.find(f => f.o === 0x1FE);
+          cdRender();
+        });
+      });
+      cdRender();
+    }
+    cdInit();
+
     window.onload = () => {
       setVersion('full');
       initIntroTooltip();
@@ -1539,12 +2461,12 @@
       <code style="color:var(--accent);">mft_usn_correlated_analysis.db</code>. The <strong>Charts</strong>
       button on the MFT and USN table tabs opens that data as an interactive dashboard &mdash; the current
       state of every file (from <code style="color:var(--accent);">$MFT</code>) joined on
-      <strong>FRN</strong> to the <em>history</em> of what changed it (from the USN journal). One rule holds
+      <strong>FRN</strong> to the <em>history</em> of what changed it (from the <a href="usn_anatomy.html">USN journal</a>). One rule holds
       everywhere: <strong style="color:var(--trace-color);">USN reason = colour</strong>.</p>
 
     <div style="background:var(--bg2);border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin:16px 0;">
       <h3 style="font-size:18px;font-weight:800;color:var(--tx);margin-bottom:8px;">Two timelines, two time-scales</h3>
-      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">The MFT and the USN journal live on very
+      <p style="color:var(--tx2);font-size:14px;line-height:1.7;">The MFT and the <a href="usn_anatomy.html">USN journal</a> live on very
         different clocks, so the top of the dashboard stacks two timelines. The <strong>MFT history</strong>
         (a bar per day of files <span style="color:#22d3ee;font-weight:700;">created</span> /
         <span style="color:#6366f1;font-weight:700;">modified</span>, from Standard-Info times) spans the
@@ -1646,6 +2568,10 @@
         <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">What is MFT resident data?</h3>
         <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">Files small enough to fit inside their own MFT record are stored there rather than in separate clusters. The whole content of a small file can therefore be recovered from the MFT alone, even if nothing remains elsewhere on the volume.</p>
       </div>
+      <div style="margin-bottom:18px;">
+        <h3 style="font-size:15px;font-weight:700;color:var(--tx);margin-bottom:6px;">Is the USN journal enough to know what changed in the MFT?</h3>
+        <p style="color:var(--tx2);font-size:13.5px;line-height:1.65;">No. The <a href="usn_anatomy.html">USN journal</a> can be deleted or recreated, wraps once it reaches its maximum size, does not record last-access updates and never sees raw or offline writes. Crow-Eye compares a fingerprint of every MFT record with the previous pass to find what changed, and uses the <a href="usn_anatomy.html">USN journal</a> as a witness: a change with no matching journal entry, or a journal that was deleted or reset, is surfaced for review.</p>
+      </div>
     </section>
   </div>
   <footer style="border-top:1px solid var(--border);margin-top:48px;padding:28px 20px 36px;">
@@ -1662,5 +2588,7 @@
     <p style="text-align:center;color:var(--tx3);font-size:12px;margin-top:14px;">&copy; 2026 Crow-Eye by Ghassan Elsman. Licensed under GPL-3.0.</p>
   </footer>
   <script src="../main.js"></script>
+  <script src="../cp-describe.js"></script>
+  <script src="cp-cfrviz.js"></script>
 </body>
 </html>

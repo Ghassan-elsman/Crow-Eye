@@ -311,8 +311,8 @@ class ToolCapabilityProbe:
     def _default_cache_path() -> Path:
         # Capability is a property of the MODEL, not of a case, so it lives with
         # the app config rather than in a case's EYE_Logs.
-        from eye.services.config_manager import _default_config_dir
-        return _default_config_dir() / "eye_tool_capability.json"
+        from eye.services.config_manager import user_config_dir
+        return user_config_dir() / "eye_tool_capability.json"
 
     @staticmethod
     def _key(backend: str, model: str) -> str:

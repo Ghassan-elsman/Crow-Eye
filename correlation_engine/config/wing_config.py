@@ -88,6 +88,48 @@ _CATEGORY_ALIASES = {
 }
 
 
+# Where a Wing's rows may come from (Sentinel 14.2): one machine, or any. A
+# case on the desktop is one machine, so the engines there behave the same for
+# both; the fleet's engines (14.4) never pair a same_host Wing's rows across
+# two machines. Declared by every Wing, never defaulted: a Wing without one is
+# refused by a strict load (the built-in Wings, Sentinel) and cannot be saved
+# from the Wing Creator until one is chosen.
+HOST_SCOPE_SAME = "same_host"
+HOST_SCOPE_ANY = "any_host"
+HOST_SCOPES = (HOST_SCOPE_SAME, HOST_SCOPE_ANY)
+HOST_SCOPE_LABELS = {
+    HOST_SCOPE_SAME: "Same host - every row from one machine",
+    HOST_SCOPE_ANY: "Any host - rows may come from different machines",
+}
+
+
+class WingScopeError(ValueError):
+    """A Wing with no host scope, or one that is not same_host / any_host."""
+
+
+def normalize_host_scope(value) -> Optional[str]:
+    """'same_host' / 'any_host', or None when the Wing declares none. Any
+    other value raises WingScopeError: a misspelt scope is never read as
+    either one."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    text = str(value).strip().lower()
+    if text in HOST_SCOPES:
+        return text
+    raise WingScopeError("host_scope must be %s, not %r" % (" or ".join(HOST_SCOPES), value))
+
+
+def host_scope_problems(host_scope) -> List[str]:
+    """Why a Wing cannot be saved for want of a host scope (empty = fine)."""
+    try:
+        if normalize_host_scope(host_scope) is not None:
+            return []
+    except WingScopeError as exc:
+        return [str(exc) + "."]
+    return ["Choose the Wing's host scope: same host (every row from one machine) or any "
+            "host (rows may come from different machines)."]
+
+
 def normalize_wing_category(value) -> Optional[str]:
     """The canonical category for ``value``, or None when it names none.
 
@@ -417,6 +459,11 @@ class WingConfig:
     
     # Wing-specific semantic rules
     semantic_rules: List[Dict] = field(default_factory=list)
+
+    # How a match reads, in the author's words: a sentence template filled
+    # only from the match's records, with no word of intent (wings.core.
+    # narrative; Sentinel 21.3 renders it through the same check).
+    narrative: str = ""
     
     # Metadata
     created_date: str = field(default_factory=lambda: datetime.now().isoformat())
@@ -445,6 +492,9 @@ class WingConfig:
     # not run until the analyst picks one in the Wing Creator.
     wing_category: Optional[str] = None
 
+    # "same_host" / "any_host" (see HOST_SCOPES above); None = not declared.
+    host_scope: Optional[str] = None
+
     # Behaviour Wings only (see BEHAVIOUR_FIELDS above): the behaviour steps,
     # whether they must happen in order, the span the whole set must fit in,
     # the gap allowed between ordered steps, whom the Wing watches, and the
@@ -464,6 +514,7 @@ class WingConfig:
         """Initialize score configuration manager after dataclass initialization"""
         self._score_config_manager = ScoreConfigurationManager()
         self.wing_category = normalize_wing_category(self.wing_category)
+        self.host_scope = normalize_host_scope(self.host_scope)
     
     def get_score_thresholds(self) -> Dict[str, float]:
         """
@@ -523,6 +574,12 @@ class WingConfig:
         data.pop('_score_config_manager', None)
         if not data.get('rules_edited'):
             data.pop('rules_edited', None)
+        # Written once declared; a Wing saved before scopes existed keeps its shape.
+        if data.get('host_scope') is None:
+            data.pop('host_scope', None)
+        # Only when written, so a Wing without one saves exactly as before.
+        if not data.get('narrative'):
+            data.pop('narrative', None)
         # Behaviour fields only where they say something: a Time or Identity
         # Wing round-trips with exactly the keys it had before they existed.
         if not self.is_behaviour_wing():
@@ -548,8 +605,17 @@ class WingConfig:
             pass
     
     @classmethod
-    def from_dict(cls, data: dict) -> 'WingConfig':
-        """Create from dictionary"""
+    def from_dict(cls, data: dict, strict: bool = False) -> 'WingConfig':
+        """Create from dictionary.
+
+        ``strict``: a Wing that declares no host_scope is refused
+        (WingScopeError) rather than loaded. Every built-in Wing is loaded
+        strict, and Sentinel and the fleet loader always load strict; the
+        desktop loads an older user Wing without one, shows "scope not
+        declared" and will not save it until one is chosen. A copy of a
+        built-in Wing takes the built-in's scope - the same Wing, not a
+        default. A scope that is neither value is refused either way."""
+        data = dict(data)
         logger.debug(f"[WingConfig] Loading wing: {data.get('wing_name', 'Unknown')}")
         
         # Convert feather dicts to WingFeatherReference objects
@@ -658,6 +724,10 @@ class WingConfig:
                     # shipped rules (it may predate them).
                     if default_data.get('semantic_rules') and not data.get('rules_edited'):
                         data['semantic_rules'] = default_data['semantic_rules']
+                    # A copy saved before the shipped Wing had a narrative
+                    # reads the shipped one; the analyst's own is kept.
+                    if not data.get('narrative') and default_data.get('narrative'):
+                        data['narrative'] = default_data['narrative']
                         logger.debug(f"[WingConfig] Loaded {len(data['semantic_rules'])} default semantic rules for {wing_id}")
                     # A copy of a shipped Wing saved before categories existed
                     # (every case folder has them) takes the shipped category:
@@ -665,6 +735,9 @@ class WingConfig:
                     if not normalize_wing_category(data.get('wing_category')) and \
                             normalize_wing_category(default_data.get('wing_category')):
                         data['wing_category'] = default_data['wing_category']
+                    # Likewise its host scope.
+                    if not data.get('host_scope') and default_data.get('host_scope'):
+                        data['host_scope'] = default_data['host_scope']
                     break
             except Exception as e:
                 logger.warning(f"[WingConfig] Could not load default semantic rules: {e}")
@@ -685,6 +758,12 @@ class WingConfig:
                 raw if isinstance(raw, EyeAuthorship) else EyeAuthorship.from_dict(raw)
             )
 
+        scope = normalize_host_scope(data.get('host_scope'))
+        if strict and scope is None:
+            raise WingScopeError("Wing %r declares no host_scope (%s)"
+                                 % (data.get('wing_name') or data.get('wing_id'),
+                                    " or ".join(HOST_SCOPES)))
+
         # Drop any unexpected top-level keys to keep cls(**data) safe
         # against forward-compatible schema additions in saved files.
         valid = {f.name for f in cls.__dataclass_fields__.values() if f.init}
@@ -693,13 +772,13 @@ class WingConfig:
         return cls(**data)
     
     @classmethod
-    def from_json(cls, json_str: str) -> 'WingConfig':
+    def from_json(cls, json_str: str, strict: bool = False) -> 'WingConfig':
         """Create from JSON string"""
         data = json.loads(json_str)
-        return cls.from_dict(data)
+        return cls.from_dict(data, strict=strict)
     
     @classmethod
-    def load_from_file(cls, file_path: str) -> 'WingConfig':
+    def load_from_file(cls, file_path: str, strict: bool = False) -> 'WingConfig':
         """Load configuration from JSON file"""
         with open(file_path, 'r') as f:
-            return cls.from_json(f.read())
+            return cls.from_json(f.read(), strict=strict)

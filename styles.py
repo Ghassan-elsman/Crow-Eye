@@ -610,16 +610,18 @@ QToolTip {{
         # the virtual tables' cell/selection/background/scrollbar styling.
         style = CrowEyeStyles.UNIFIED_TABLE_STYLE.replace("QTableWidget", "QTableView")
 
-        # Reset any existing styles
-        table_widget.setStyleSheet('')
-
-        # Apply the complete table style
-        table_widget.setStyleSheet(style)
+        # Set only when it differs. Every setStyleSheet re-styles the widget
+        # and its children, and this ran three of them per table (a reset to
+        # '' first), at least twice per paged table: 752 calls, 3.4 s of the
+        # GUI thread at one case open. The polish below still runs.
+        if table_widget.styleSheet() != style:
+            table_widget.setStyleSheet(style)
 
         # Configure header
         header = table_widget.horizontalHeader()
         if header:
-            header.setStyleSheet(style)
+            if header.styleSheet() != style:
+                header.setStyleSheet(style)
             # Auto-fit each section to whichever is wider: header label or
             # cell content. Prevents column titles from getting truncated
             # to "Run Tim…" or similar. The last section still stretches

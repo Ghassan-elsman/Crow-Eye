@@ -63,7 +63,10 @@ def test_sixteen_new_rules_are_loaded_and_active(browser_rich_dir):
     cat = eng.rules_catalog()
     rows = cat["rules"] if isinstance(cat, dict) else cat
     status = {r["rule_id"]: r["status"] for r in rows}
-    assert len(eng.rules_config["rules"]) == 81
+    # 81 after round 11; 86 since 2026-11-03 (printer, outbound RDP, cloud sync,
+    # USB copy, files gathered: test_story_rules.py; 87 with input); 89 with the
+    # two AI agent rules (test_ai_agent_rules.py)
+    assert len(eng.rules_config["rules"]) == 89
     assert {r: status.get(r) for r in NEW_RULES if status.get(r) != "active"} == {}
 
 

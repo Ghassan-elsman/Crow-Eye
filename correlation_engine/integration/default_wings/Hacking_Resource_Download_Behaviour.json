@@ -3,6 +3,7 @@
   "wing_name": "Hacking Resource, Then a Program Download (Behaviour)",
   "wing_id": "default_behaviour_hacking_resource_download_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "One person visits a site UBA classes as a hacking resource (exploit and tool repositories, cracking forums) and, within two hours, downloads a program. UBA rules: browser_visit_hacking_resource then browser_download_executable. Security staff do this as part of their work.",
   "proves": "A person downloaded a program soon after visiting a hacking resource",
   "author": "Crow-Eye Team",

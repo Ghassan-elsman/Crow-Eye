@@ -4,9 +4,13 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale, BarElement, BarController, Tooltip,
 } from 'chart.js'
 import { fmtInt, fmtCompact, fmtBytes, fmtDuration, fmtDay, PROVIDERS, PROVIDER_LABEL } from './format.js'
+import FlowBadge, { FlowIcon } from './FlowBadge.jsx'
+import { htmlTooltip, tipFlow } from './chartTip.js'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, BarController, Tooltip)
 
+// Series colours (the chart's own meaning). The numbers themselves wear the
+// colourless FlowBadge; sent and received are told apart by the arrow.
 const NET_SENT = '#6366f1', NET_RECV = '#22d3ee'
 
 // One stacked dataset per provider (provider = colour everywhere).
@@ -57,8 +61,12 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
   }
   const netOpts = {
     responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { mode: 'index', intersect: false },
     plugins: { legend: { display: false },
-      tooltip: { callbacks: { title: (i) => fmtDay(i[0].label), label: (c) => `${c.dataset.label}: ${fmtBytes(c.parsed.y)}` } } },
+      tooltip: { enabled: false, external: htmlTooltip((tt) => {
+        const d = networkByDay[tt.dataPoints?.[0]?.dataIndex]
+        return d ? { title: fmtDay(d.day), rows: [tipFlow([['up', fmtBytes(d.sent)], ['down', fmtBytes(d.received)]])] } : null
+      }) } },
     scales: {
       x: { stacked: true, ticks: { display: false }, grid: { display: false } },
       y: { stacked: true, ticks: { color: '#94a3b8', font: { size: 11 }, callback: (v) => fmtBytes(v) }, grid: { color: 'rgba(99,102,241,0.10)' } },
@@ -71,8 +79,8 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
       <div className="ov-stats">
         <Tile v={fmtInt(t.activeDays)} l="active days" />
         <Tile v={fmtInt(t.apps)} l="distinct apps" />
-        <Tile v={fmtBytes(t.bytesSent)} l="sent" />
-        <Tile v={fmtBytes(t.bytesReceived)} l="received" />
+        <Tile v={fmtBytes(t.bytesSent)} l="sent" flow="up" />
+        <Tile v={fmtBytes(t.bytesReceived)} l="received" flow="down" />
         <Tile v={fmtCompact(t.cpu)} l="CPU cycles" title={fmtInt(t.cpu)} />
         <Tile v={fmtDuration(t.presenceSecs)} l="user presence" />
       </div>
@@ -100,8 +108,8 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
       <div className="ov-card">
         <div className="ov-card-title">Network activity</div>
         <div className="prov-legend" style={{ marginBottom: 8 }}>
-          <span className="prov-leg"><span className="prov-swatch" style={{ background: NET_SENT }} />Sent</span>
-          <span className="prov-leg"><span className="prov-swatch" style={{ background: NET_RECV }} />Received</span>
+          <span className="prov-leg net-leg"><span className="prov-swatch" style={{ background: NET_SENT }} /><FlowIcon dir="up" />Sent</span>
+          <span className="prov-leg net-leg"><span className="prov-swatch" style={{ background: NET_RECV }} /><FlowIcon dir="down" />Received</span>
         </div>
         <div className="chart-box" style={{ height: 120 }}>
           {networkByDay.length ? <Chart type="bar" data={netData} options={netOpts} />
@@ -111,13 +119,13 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
         {topNetworkApps.length > 0 && (
           <div className="net-apps">
             {topNetworkApps.map(a => (
-              <div className={'net-app' + (onOpenApp ? ' net-app--open' : '')} key={a.app}
+              <div className={'net-app flow-host' + (onOpenApp ? ' net-app--open' : '')} key={a.app}
                 title={onOpenApp ? 'Open application profile' : a.app}
                 onClick={() => onOpenApp && onOpenApp(a.app)}>
                 <span className="net-app-name" title={a.app}>{a.app}</span>
                 <span className="net-app-vals">
-                  <span style={{ color: NET_SENT }}>&#9650; {fmtBytes(a.sent)}</span>
-                  <span style={{ color: NET_RECV }}>&#9660; {fmtBytes(a.received)}</span>
+                  <FlowBadge dir="up" value={fmtBytes(a.sent)} />
+                  <FlowBadge dir="down" value={fmtBytes(a.received)} />
                 </span>
               </div>
             ))}
@@ -157,7 +165,16 @@ export default function OverviewPanel({ overview, loading, onOpenApp, onOpenInsi
   )
 }
 
-function Tile({ v, l, title }) {
+// `flow` ("up" / "down") gives a data-moving tile the network badge's arrow.
+function Tile({ v, l, title, flow }) {
+  if (flow) {
+    return (
+      <div className="ov-tile ov-tile--flow flow-host" title={title}>
+        <FlowIcon dir={flow} large />
+        <div><span>{v}</span><label>{l}</label></div>
+      </div>
+    )
+  }
   return <div className="ov-tile" title={title}><span>{v}</span><label>{l}</label></div>
 }
 

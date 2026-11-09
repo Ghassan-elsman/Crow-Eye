@@ -625,6 +625,7 @@ class ExportWindow(QtWidgets.QDialog):
         table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        table.setSortingEnabled(False)  # fill rows before any sort, so cells stay in their row
         for r, (name, _stem, rows, err) in enumerate(done):
             table.setItem(r, 0, QtWidgets.QTableWidgetItem(name))
             it = QtWidgets.QTableWidgetItem(err and "failed" or "{:,}".format(rows))

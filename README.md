@@ -8,7 +8,7 @@
 Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually happened</strong> on the timeline, from acquisition all the way to a verdict traceable to its source records.</p>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-![Version](https://img.shields.io/badge/version-0.15.0-brightgreen.svg)
+![Version](https://img.shields.io/badge/version-0.15.1-brightgreen.svg)
 ![Correlation Engine](https://img.shields.io/badge/Correlation%20Engine-1.8.0-8a2be2.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-informational.svg)
 ![Python](https://img.shields.io/badge/python-3.12-blue.svg)
@@ -16,6 +16,74 @@ Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually 
 [![GitHub stars](https://img.shields.io/github/stars/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/stargazers)
 [![GitHub issues](https://img.shields.io/github/issues/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/issues)
 [![Last commit](https://img.shields.io/github/last-commit/Ghassan-elsman/Crow-Eye)](https://github.com/Ghassan-elsman/Crow-Eye/commits)
+
+---
+
+## 📥 Download & Install
+
+> **Recommended:** get the packaged Windows build (**MSI installer / EXE**) from the official website — no Python setup, runs out of the box.
+
+### ▶️ [Download Crow-Eye for Windows → crow-eye.com/download](https://crow-eye.com/download)
+
+The **installed MSI/EXE build is the recommended way to run Crow-Eye**, and it is our **top priority for updates**:
+
+- 🛡️ **Fastest fixes.** When an issue is found or a bug is reported, we release an updated EXE **as soon as possible** — the packaged build is where fixes land first.
+- 🔄 **Built-in auto-update.** In the installed app, open **Settings → Updates** to **check for updates and install them automatically** — no manual reinstall.
+- 📦 **Zero setup.** No Python, Node, or dependency installation required.
+
+> Prefer to run from source? See **[Quick Start](#-quick-start)** below. The from-source build is intended for contributors and **does not include the auto-updater** — use the MSI/EXE for automatic updates.
+
+
+### 📘 [Interactive User Guide → crow-eye.com/user-guide](https://crow-eye.com/user-guide.html)
+
+New to Crow-Eye, or want the deep dive? The **detailed, interactive user guide** walks through every feature — acquisition, parsing, the Timeline, chart dashboards, UBA, the Correlation Engine and Eye — on a **clickable map of the whole application**, so you can jump straight to the part you need.
+
+## 🚀 Quick Start
+
+### Option A — Installed build (recommended)
+Download the **MSI/EXE** from [crow-eye.com/download](https://crow-eye.com/download), install, and launch **Crow-Eye** as Administrator. Create a case and start analyzing.
+
+### Option B — Run from source (developers)
+
+> For contributors and advanced users. This path **does not include the auto-updater** — use the MSI/EXE for automatic updates.
+
+**Requirements** (installed automatically on first run):
+- Python 3.12.4
+- **Node.js & npm** — required for **Timeline Visualization**
+- Key packages: PyQt5, python-registry, pywin32, pandas, streamlit, altair, olefile, windowsprefetch, sqlite3, colorama, setuptools
+
+**Recommended hardware**
+
+| | Minimum | Recommended for large cases |
+|---|---|---|
+| **RAM** | 8 GB | 16 GB+ (MFT/USN sets of millions of records) |
+| **Disk** | 5 GB free | Free space ≥ 2× the size of the evidence being parsed |
+| **CPU** | 4 cores | 8+ cores |
+| **OS** | Windows 10/11 (full) · Linux (offline & image analysis) | — |
+
+> Correlation streams in constant memory for very large datasets, so RAM is rarely the hard limit — disk throughput and free space usually are.
+
+**Launch** (run as Administrator so Crow-Eye can access system artifacts):
+
+```bash
+python "Crow Eye.py"
+```
+
+The main interface opens, you create a case, and all analysis output is organized under that case directory for later review and reporting.
+
+> 🖥️ **Cross-platform note:** on **Linux**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
+
+**On Linux** (tested on Debian 12 with the system Python), install the venv module and Qt's system libraries once, then start Crow-Eye the same way. It creates `crow_eye_venv/` and installs everything else into it:
+
+```bash
+sudo apt install python3-venv libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
+    libxcb-image0 libxcb-render-util0 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
+    libasound2 libpango-1.0-0 libpangoft2-1.0-0
+python3 "Crow Eye.py"
+```
+
+`requirements.txt` lists the same packages for a manual or container install. On a machine with no GPU (a VM without passthrough, a container), web views switch to software rendering on their own.
+
 
 ## Table of Contents
 - [Overview](#overview)
@@ -29,6 +97,7 @@ Crow-Eye doesn't just <em>detect</em> — it <strong>reconstructs what actually 
 - [🔧 Analysis Modes](#-analysis-modes)
   - [📎 Import Evidence (third-party data)](#-import-evidence-third-party-data)
 - [🧠 User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)
+- [🤖 AI Agent Forensics](#-ai-agent-forensics)
 - [🧩 Correlation Engine](#-correlation-engine)
 - [👁️ Eye — The Forensics AI Assistant](#️-eye--the-forensics-ai-assistant)
 - [📖 Eye-Describe — Byte-Level Artifact Knowledge Base](#-eye-describe--byte-level-artifact-knowledge-base)
@@ -55,7 +124,7 @@ That reconstruction-first design is exactly what it takes to **hunt APT and nati
 - 🖥️ **Cross-platform** — full live + offline analysis on **Windows**; **offline analysis and forensic-image parsing on Linux** (live parsers are Windows-only).
 - 🔒 **Private by design** — **0 ms of data sent off-device**; the Eye AI assistant can run fully **air-gapped**.
 - 🧾 **Court-grade** — evidence is cryptographically sealed and every step is auditable.
-- 📦 **Current version:** 0.15.0 · **Correlation Engine:** 1.8.0 · **License:** GPL-3.0.
+- 📦 **Current version:** 0.15.1 · **Correlation Engine:** 1.8.0 · **License:** GPL-3.0.
 
 ## ✨ Highlights
 
@@ -94,6 +163,7 @@ Crow-Eye is built as an integrated loop — each stage feeds the next, from raw 
 | **[Database Search](#-search--export)** | Full-text search across every database in the case, imported evidence included. | ④ Analyse |
 | **[Interactive Timeline](#️-interactive-timeline-visualization)** | Identity-threaded timeline (Heat Map / Week / Day), read straight from the case databases. | ④ Analyse |
 | **[User Behavior Analytics (UBA)](#-user-behavior-analytics-uba)** | Rule-driven, plain-English "what did this user do" activity story — 81 behaviours. | ④ Analyse |
+| **[AI Agent Forensics](#-ai-agent-forensics)** | Every AI coding agent on the machine — prompts, commands (program · exit code · duration), saved file versions and pages driven — each step linked to the Windows artifact that recorded the same act. | ④ Analyse |
 | **[Dynamic Linking](#-dynamic-linking)** | Non-destructive overlay that turns SIDs, MACs and hashes into names inline. | ④ Analyse |
 | **[Correlation Engine](#-correlation-engine)** | Three engines (Time-Window, Identity, Behavioural) and 35 ready Wings, via Feathers · Wings · Engines · Pipelines. | ④ Analyse |
 | **[Shadow Copies & File Browser](#️-architecture)** | Every shadow copy (hidden ones too), what made it, what changed between copies; this machine, a copy, an image or the saved MFT listing browsed with what the case knows about each file. | ② Ingest · ④ Analyse |
@@ -447,66 +517,6 @@ sequenceDiagram
 | **Compliance** | `ProtocolCompliancePanel` | Shows live per-rule GEP status verified from the seal chain and `EYE_Logs/`; **Export Audit JSON** writes `EYE_Logs/audit_trail.json`. |
 | **Living Report** | `report_*` tools | Built by the Eye alone — sections, data tables, images, charts, timelines, heat maps and chain of custody — exported as CSV, JSON or HTML. |
 
-## 📥 Download & Install
-
-> **Recommended:** get the packaged Windows build (**MSI installer / EXE**) from the official website — no Python setup, runs out of the box.
-
-### ▶️ [Download Crow-Eye for Windows → crow-eye.com/download](https://crow-eye.com/download)
-
-The **installed MSI/EXE build is the recommended way to run Crow-Eye**, and it is our **top priority for updates**:
-
-- 🛡️ **Fastest fixes.** When an issue is found or a bug is reported, we release an updated EXE **as soon as possible** — the packaged build is where fixes land first.
-- 🔄 **Built-in auto-update.** In the installed app, open **Settings → Updates** to **check for updates and install them automatically** — no manual reinstall.
-- 📦 **Zero setup.** No Python, Node, or dependency installation required.
-
-> Prefer to run from source? See **[Quick Start](#-quick-start)** below. The from-source build is intended for contributors and **does not include the auto-updater** — use the MSI/EXE for automatic updates.
-
-## 🚀 Quick Start
-
-### Option A — Installed build (recommended)
-Download the **MSI/EXE** from [crow-eye.com/download](https://crow-eye.com/download), install, and launch **Crow-Eye** as Administrator. Create a case and start analyzing.
-
-### Option B — Run from source (developers)
-
-> For contributors and advanced users. This path **does not include the auto-updater** — use the MSI/EXE for automatic updates.
-
-**Requirements** (installed automatically on first run):
-- Python 3.12.4
-- **Node.js & npm** — required for **Timeline Visualization**
-- Key packages: PyQt5, python-registry, pywin32, pandas, streamlit, altair, olefile, windowsprefetch, sqlite3, colorama, setuptools
-
-**Recommended hardware**
-
-| | Minimum | Recommended for large cases |
-|---|---|---|
-| **RAM** | 8 GB | 16 GB+ (MFT/USN sets of millions of records) |
-| **Disk** | 5 GB free | Free space ≥ 2× the size of the evidence being parsed |
-| **CPU** | 4 cores | 8+ cores |
-| **OS** | Windows 10/11 (full) · Linux (offline & image analysis) | — |
-
-> Correlation streams in constant memory for very large datasets, so RAM is rarely the hard limit — disk throughput and free space usually are.
-
-**Launch** (run as Administrator so Crow-Eye can access system artifacts):
-
-```bash
-python "Crow Eye.py"
-```
-
-The main interface opens, you create a case, and all analysis output is organized under that case directory for later review and reporting.
-
-> 🖥️ **Cross-platform note:** on **Linux**, live parsers are disabled automatically and Crow-Eye runs in **offline / forensic-image** mode. Full live acquisition is Windows-only.
-
-**On Linux** (tested on Debian 12 with the system Python), install the venv module and Qt's system libraries once, then start Crow-Eye the same way. It creates `crow_eye_venv/` and installs everything else into it:
-
-```bash
-sudo apt install python3-venv libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-keysyms1 \
-    libxcb-image0 libxcb-render-util0 libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 \
-    libasound2 libpango-1.0-0 libpangoft2-1.0-0
-python3 "Crow Eye.py"
-```
-
-`requirements.txt` lists the same packages for a manual or container install. On a machine with no GPU (a VM without passthrough, a container), web views switch to software rendering on their own.
-
 ## 📂 Supported Artifacts
 
 Crow-Eye parses a broad set of Windows execution, file-system, and user-activity artifacts, both from a **live** system and from **offline** sources (collected folders or forensic images).
@@ -613,8 +623,23 @@ Correlate events across artifacts on a unified temporal grid, with **Heat Map**,
 
 The Timeline reads the case's parsed artifact databases **directly** and is **independent of the [Correlation Engine](#-correlation-engine)** — you do not need to build feathers, author wings, or run a pipeline to use it. It applies its own lightweight temporal grouping (exact-timestamp and time-window correlation, grouping by application, path, or user) to relate events on the grid. Evidence brought in through [Import Evidence](#-import-evidence-third-party-data) also appears on the timeline as the `imported` artifact type, with working time-window filtering and time bounds.
 
+<p align="center">
+  <img src="docs/images/timeline-visualization.png" alt="Crow-Eye Interactive Timeline — scoped 24-hour lane view" width="100%"/>
+</p>
+<p align="center"><em>The identity-threaded Timeline scoped to a single busy day (24-hour detail): the MFT/USN file-system, Browser, AI-Agent and Unified-Artifact lanes side by side, every mark labeled and placed by its exact time. Double-click any day in the Heat Map to zoom into its lanes.</em></p>
+
 ### 📊 Chart Dashboards
 Six dashboards, each opened by the **Charts** button above an artifact table — **SRUM**, **MFT / USN**, **LNK & Jump Lists**, **Prefetch**, **User Activity** and **Browser**. Every one draws a day-by-day heat strip (one cell is always one day, so a quiet stretch shows as one), six months at a time with a whole-range overview to jump through years of activity; drills from a day to an hour to an item; and ends at the item's **full source record**. Insights carry the records behind their counts, so "7 files ran from Temp" opens those seven files. The User Activity dashboard (Shell Items & Registry) covers twenty-seven registry tables — Shellbags, the MRUs, MUICache, User Shell Folders, shell extensions, and what the user ran: UserAssist, BAM, DAM, FeatureUsage, the Compatibility Assistant, file associations and the ProgramsCache — and opens filtered to the table it was launched from. The MFT / USN dashboard puts both sources on one strip: files created and modified from the MFT (counted as files, not rows) and one row per USN reason flag, each in its own colour; every count is taken over all the case's records, and journal-only events keep their names and folders, rebuilt from the journal when the folder is gone from the MFT. Renames read as *old name → new name* (with the folder when the file moved) — in the day's list, in a file's history and as an insight — and every list pages through all its records, down to an *all records* list across every day. A search accepts a path as Windows writes it (`C:\Users\…`).
+
+<p align="center">
+  <img src="docs/images/mftusn-dashboard.png" alt="Crow-Eye MFT/USN dashboard — file-system activity for a day" width="100%"/>
+</p>
+<p align="center"><em>The MFT / USN dashboard for a single day: files created, modified and renamed (<em>old → new</em>, rebuilt from the journal), an <strong>Anomalies &amp; anti-forensics</strong> panel (timestomp candidates, deleted-but-still-in-MFT, alternate data streams), USN records broken down by reason, and the most active directories and file types — every count taken over all the case's records.</em></p>
+
+<p align="center">
+  <img src="docs/images/srum-dashboard.png" alt="Crow-Eye SRUM dashboard — per-app resource and network usage" width="100%"/>
+</p>
+<p align="center"><em>The SRUM dashboard: every application that ran on a day laid out hour by hour, with bytes sent/received per app, CPU cycles, disk bytes and user presence — so network-heavy or off-hours activity stands out at a glance.</em></p>
 
 ### 🔎 Search & Export
 Full-text search across the case database, plus export to **CSV** (spreadsheets), **JSON** (integration with other tools), and **Detailed HTML reports** (full dossiers consolidating every artifact tied to a search term).
@@ -661,6 +686,27 @@ The 81 detections span four severity classes and the full breadth of the parsed 
 - **Absence is stated, not implied.** The *What we can see* report labels every detection for this specific case, so missing data is never silently read as "nothing happened".
 
 > UBA is **rule-driven behavioral correlation and classification**, not statistical/ML anomaly scoring — every finding maps to an explicit, auditable rule. See [`RELEASE_NOTES.md`](RELEASE_NOTES.md) for the full detection catalogue.
+
+## 🤖 AI Agent Forensics
+
+AI coding agents now run programs, change files and drive browsers on Windows machines of their own accord — and they leave a rich trail. Crow-Eye finds **every AI agent on the machine** — Claude Code (CLI and desktop), OpenAI Codex, Gemini CLI, Copilot, Antigravity and the VS Code agents (Roo / Kilo / Cline) — live or inside a forensic image, and reconstructs exactly what each one did.
+
+**What it reads**
+- **Sessions & prompts** — what the agent was asked, and who sent each prompt.
+- **Commands** — every command the agent ran, with the **program** it started, its **exit code** and its **duration**.
+- **File changes & saved versions** — the files an agent wrote or edited, listed and hashed; a button copies the chosen versions into the case, and a setting (off by default) copies them all at parse time.
+- **Browser control** — the web pages an agent drove (claude-in-chrome / computer-use steps).
+- **Permissions & processes** — the permissions and MCP servers in force, and the processes the agent started, matched to their PIDs.
+- The profile owner's **SID** is on every AI table, and credential files are never opened.
+
+**Linked to Windows' own record.** Every AI step is joined to the artifact that recorded the same act — a command to **Prefetch, SRUM, Amcache, ShimCache and EID 4688**; a file change to **MFT, USN** and the saved versions; a page to **browser history** — each link naming its rule and both rows. On the [Timeline](#️-interactive-timeline-visualization) an **AI badge** marks the Windows rows that recorded an AI step, and a dedicated **AI Agents dashboard** shows what the agents ran and changed. The [Correlation Engine](#-correlation-engine) carries AI-agent feathers and Wings, so you can **prove the program an agent asked for really ran, and when**.
+
+**Who drove it.** Alongside the AI trail, Crow-Eye's [UBA](#-user-behavior-analytics-uba) labels every activity as a **person**, a **person working remotely**, a **program on its own**, or **automation** (a script or an AI agent), and says whether a program was the **window in front** while it ran — so you can tell human activity from agent activity at a glance.
+
+<p align="center">
+  <img src="docs/images/ai-agents-dashboard.png" alt="Crow-Eye AI Agents dashboard — what the agents ran and changed" width="100%"/>
+</p>
+<p align="center"><em>The AI Agents dashboard: sessions and acts per day, the <strong>programs the agents started</strong> (each corroborated against Prefetch), insights such as failed commands, approvals-off sessions and lost transcripts, and the full command table — program, time and the exact command line.</em></p>
 
 ## 🧩 Correlation Engine
 
@@ -950,6 +996,11 @@ Identity: malware.exe
 
 **Eye** is Crow-Eye's built-in forensics AI assistant: a skilled forensic investigator backed by a real knowledge base of Windows artifacts. It gives you a natural-language interface to query, correlate, and document everything in a case — Prefetch, MFT, Registry, Event Logs, AmCache, ShimCache, SRUM, and more — while keeping an auditable, tamper-evident record of exactly what it did. Eye can run entirely on your own hardware (including **fully air-gapped**), in keeping with Crow-Eye's **"0 ms data sent off-device"** privacy stance. Full architecture: [`eye/README.md`](eye/README.md).
 
+<p align="center">
+  <img src="docs/images/eye-assistant.png" alt="Crow-Eye Eye — AI forensic assistant with a live Living Report" width="100%"/>
+</p>
+<p align="center"><em>Eye at work: the natural-language conversation on the left, and the auto-built <strong>Living Report</strong> on the right — findings, a generated authentication-patterns chart and a credential-logon table, all traceable to source records.</em></p>
+
 | Capability | What it means for you |
 |---|---|
 | **Natural-language investigation** | Ask in plain English; Eye writes the SQL and searches for you. |
@@ -1151,7 +1202,16 @@ Crow-Eye is more than software — it's an **open research platform** accelerati
 
 ## 📸 Screenshots
 
-A selection of Crow-Eye's interface and analysis views.
+A selection of Crow-Eye's interface and analysis views. See also the [Timeline](#️-interactive-timeline-visualization), [AI Agents](#-ai-agent-forensics), [MFT/USN & SRUM dashboards](#-chart-dashboards) and [Eye](#️-eye--the-forensics-ai-assistant) above.
+
+<p align="center"><img src="docs/images/user-activity-dashboard.png" alt="Crow-Eye User Activity dashboard (Shell Items & Registry)" width="100%"/></p>
+<p align="center"><em>User Activity dashboard — twenty-seven registry tables (Shellbags, the MRUs, MUICache, UserAssist, BAM/DAM, FeatureUsage, file associations) on one timeline of what the user touched and ran.</em></p>
+
+<p align="center"><img src="docs/images/browser-dashboard.png" alt="Crow-Eye Browser Forensics dashboard" width="100%"/></p>
+<p align="center"><em>Browser Forensics dashboard — history, downloads, cookies, cache and more across Chromium and Firefox profiles.</em></p>
+
+<p align="center"><img src="docs/images/prefetch-dashboard.png" alt="Crow-Eye Prefetch dashboard — program execution history" width="100%"/></p>
+<p align="center"><em>Prefetch dashboard — program-execution history: what ran, when, how often, and from where.</em></p>
 
 ![Crow-Eye screenshot](https://github.com/user-attachments/assets/f400d4b3-e8f6-4c57-a59e-7f24107bc9e7)
 

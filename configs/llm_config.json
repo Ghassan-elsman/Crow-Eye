@@ -890,6 +890,7 @@
         "required": [
           "wing_name",
           "wing_category",
+          "host_scope",
           "proves",
                     "reason",
           "related_evidence"
@@ -924,6 +925,11 @@
             "type": "string",
             "enum": ["time", "identity", "behaviour"],
             "description": "REQUIRED. The Wing's category, which decides the one engine that runs it: 'time' (Time-Window engine; no absence/sequence/threshold, nested-group, negated or cross-feather rules), 'identity' (Identity engine; any rule type), or 'behaviour' (Behavioural engine over UBA behaviour events; names no feathers)."
+          },
+          "host_scope": {
+            "type": "string",
+            "enum": ["same_host", "any_host"],
+            "description": "REQUIRED. Where the Wing's rows may come from: 'same_host' (every row from one machine - what almost every Wing means) or 'any_host' (rows may come from different machines, e.g. a sign-in on one host and the program it started on another). A case is one machine, so this matters across a fleet."
           },
           "wing_name": {
             "type": "string",
@@ -1061,6 +1067,11 @@
             "type": "string",
             "enum": ["time", "identity", "behaviour"],
             "description": "Change the Wing's category: 'time', 'identity' or 'behaviour'. Required when the Wing has none yet. A Time Wing cannot carry advanced rules."
+          },
+          "host_scope": {
+            "type": "string",
+            "enum": ["same_host", "any_host"],
+            "description": "Change the Wing's host scope: 'same_host' or 'any_host'. Required when the Wing has none yet."
           },
           "wing_id": {
             "type": "string",

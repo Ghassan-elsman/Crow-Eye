@@ -1356,5 +1356,5 @@ def shipped_behaviour_wings() -> List[WingConfig]:
         if str(data.get("wing_category") or "").lower() != WING_CATEGORY_BEHAVIOUR:
             continue
         with contextlib.redirect_stdout(io.StringIO()):
-            out.append(WingConfig.from_dict(data))
+            out.append(WingConfig.from_dict(data, strict=True))
     return out

@@ -224,11 +224,20 @@ class AnthropicBackend(LLMBackend):
             content = last.get("content")
             blocks = ([{"type": "text", "text": content}] if isinstance(content, str)
                       else [dict(b) for b in (content or [])])
-            # The breakpoint goes on the last block that the NEXT call will send unchanged
-            # (this message as the history keeps it), not on the per-call context after it:
-            # that context never enters the history, so a breakpoint after it is never read.
-            if blocks:
-                blocks[-1]["cache_control"] = {"type": "ephemeral"}
+            # The breakpoint goes on the last message the NEXT call sends unchanged: the
+            # one before this. This message is the step's instruction (never stored as
+            # sent) merged with the newest tool results, and next call those results
+            # stand alone before the reply, so a breakpoint here was never read back
+            # (2026-11-03 review).
+            if len(msgs) >= 2:
+                prev = dict(msgs[-2])
+                pc = prev.get("content")
+                pblocks = ([{"type": "text", "text": pc}] if isinstance(pc, str)
+                           else [dict(b) for b in (pc or [])])
+                if pblocks:
+                    pblocks[-1]["cache_control"] = {"type": "ephemeral"}
+                    prev["content"] = pblocks
+                    msgs = msgs[:-2] + [prev, msgs[-1]]
             if step:
                 blocks.append({"type": "text", "text": "%s (from the Eye, not the investigator)\n%s"
                                                        % (STEP_CONTEXT_HEADING, step)})

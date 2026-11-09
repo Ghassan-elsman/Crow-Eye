@@ -69,6 +69,17 @@ class CorrelationMatch:
     anchor_end_time: Optional[str] = None
     anchor_record_count: Optional[int] = None
 
+    # A run over several machines (engine/partitioned.py, Sentinel 14.4): the
+    # one machine a same_host match came from, the machines an any_host match's
+    # rows came from, and - when they are two or more - how far apart their
+    # clocks may be, in seconds. None on a single case.
+    agent_id: Optional[str] = None
+    hosts: Optional[List[str]] = None
+    max_clock_skew_s: Optional[float] = None
+    # The subjects the match's rows are about, across machines
+    # (engine/fleet_identity.py): {"user": [...], "program": [...]}.
+    subject_keys: Optional[Dict[str, List[str]]] = None
+
     def to_dict(self) -> dict:
         """Convert to dictionary"""
         # Ensure feather_records is JSON-serializable
@@ -114,6 +125,13 @@ class CorrelationMatch:
             'is_duplicate': self.is_duplicate,
             'semantic_data': self.semantic_data
         }
+        # Only from a run over several machines, so a case's output is unchanged.
+        if self.hosts is not None:
+            result['agent_id'] = self.agent_id
+            result['hosts'] = list(self.hosts)
+            result['max_clock_skew_s'] = self.max_clock_skew_s
+        if self.subject_keys is not None:
+            result['subject_keys'] = {k: list(v) for k, v in self.subject_keys.items()}
         
         # Add duplicate_info if present
         if self.duplicate_info:
@@ -182,6 +200,14 @@ class CorrelationResult:
     # Database information for Identity Semantic Phase (streaming mode support)
     database_path: Optional[str] = None # Path to correlation_results.db
     execution_id: Optional[int] = None # Execution ID for database queries
+
+    # How a run over several machines was made (engine/partitioned.py): the
+    # host scope, the agents, passes, workers, the time window asked for and
+    # the one used. None on a single case.
+    partition_info: Optional[Dict[str, Any]] = None
+    # The Wing's absence / threshold / sequence / composition rules judged
+    # across the machines (engine/fleet_rules.py). None on a single case.
+    fleet_rule_hits: Optional[List[Dict[str, Any]]] = None
     
     def add_match(self, match: CorrelationMatch):
         """Add a correlation match - streams to database if in streaming mode"""
@@ -285,7 +311,7 @@ class CorrelationResult:
             matches_data = []
             matches_truncated = True
         
-        return {
+        out = {
             'format_version': '2.0', # Include format version for future compatibility
             'wing_id': self.wing_id,
             'wing_name': self.wing_name,
@@ -310,6 +336,12 @@ class CorrelationResult:
             'warnings': self.warnings,
             'summary': self.get_summary()
         }
+        # Only from a run over several machines, so a case's output is unchanged.
+        if self.partition_info is not None:
+            out['partition_info'] = dict(self.partition_info)
+        if self.fleet_rule_hits is not None:
+            out['fleet_rule_hits'] = list(self.fleet_rule_hits)
+        return out
     
     def to_json(self, indent: int = 2) -> str:
         """Convert to JSON string"""

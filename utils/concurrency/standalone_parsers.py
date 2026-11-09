@@ -509,6 +509,13 @@ def _build_parallel_tasks(case_paths, windows_partition):
         tasks.append((parse_browser_data, (), {
             'case_artifacts_dir': artifacts_dir, 'windows_partition': windows_partition
         }, "Browser data", 11, "browser"))
+
+    # AI agent sessions (Claude Code, Gemini CLI, Codex)
+    from Artifacts_Collectors.AI_Agent_Claw import parse_ai_agent_data
+    if artifacts_dir:
+        tasks.append((parse_ai_agent_data, (), {
+            'case_artifacts_dir': artifacts_dir, 'windows_partition': windows_partition
+        }, "AI agent sessions", 12, "ai_agents"))
     return tasks
 
 

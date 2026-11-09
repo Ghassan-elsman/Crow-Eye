@@ -10,7 +10,9 @@ These tools allow EYE to explore the case environment, query forensic databases,
 ### 1. `query_database`
 *   **Purpose**: Executes raw SQL `SELECT` queries against specified forensic databases.
 *   **Execution Logic**:
-    *   Queries are executed via the `ForensicDatabaseService`.
+    *   Queries are executed through the case's data source (`CaseDataSource`; on the desktop
+        `SqliteCaseDataSource`, `eye/services/case_data_source.py`): one read-only statement,
+        with an `error_kind` on every failure.
     *   **TOON Compression**: If the result set exceeds 1000 rows, the handler automatically applies **Table-Oriented Object Notation (TOON)** compression. The AI receives a statistical summary and sample rows (first 10 + last 10), while the full dataset remains available in the UI Data Viewer.
 *   **Parameters**:
     *   `database_name` (string): The filename of the target database (e.g., `registry_data.db`).

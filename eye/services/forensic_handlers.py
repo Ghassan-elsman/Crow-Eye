@@ -147,34 +147,16 @@ class ForensicHandlers:
         (not by table count) so a successful search can never crash the turn or
         blow the context window.
         """
-        from eye.services.search_service import SearchConfig
         term = params.get("search_term")
         use_regex = params.get("use_regex", False)
 
         if not term:
             return {"success": False, "error": "Missing search_term parameter."}
 
-        config = SearchConfig(search_term=term, use_regex=use_regex)
-        results = self.cm.search_service.search(config)
-
-        MAX_ROWS = 50
-        flattened: List[Dict[str, Any]] = []
-        for table_name, table_results in (results.results or {}).items():
-            for sr in table_results:
-                if len(flattened) >= MAX_ROWS:
-                    break
-                flattened.append({
-                    "database": getattr(sr, "database", None),
-                    "table": getattr(sr, "table_name", table_name),
-                    "row_id": getattr(sr, "row_id", None),
-                    "matched_columns": getattr(sr, "matched_columns", []),
-                    "record": getattr(sr, "record_data", {}),
-                    "relevance": getattr(sr, "relevance_score", 1.0),
-                })
-            if len(flattened) >= MAX_ROWS:
-                break
-
-        total = getattr(results, "total_matches", len(flattened))
+        # Through the case's data source (case_data_source.CaseDataSource).
+        found = self.cm.database_service.text_search(term, use_regex=use_regex, max_results=50)
+        flattened: List[Dict[str, Any]] = list(found.get("results") or [])
+        total = found.get("total_matches", len(flattened))
         return {
             "success": True,
             "results": flattened,
@@ -185,25 +167,18 @@ class ForensicHandlers:
 
     def handle_query_correlation_results(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Query the Crow-eye Correlation Engine output."""
-        if not self.cm.correlation_service or not self.cm.correlation_service.database_exists():
+        ds = self.cm.database_service
+        if not ds.correlation("exists").get("exists"):
             return {
-                "success": False, 
+                "success": False,
                 "error": "Correlation database not found. Run the Correlation Engine in Crow-eye first."
             }
-            
         qtype = params.get("query_type")
-        if qtype == "statistics":
-            return self.cm.correlation_service.get_correlation_statistics()
-        if qtype == "time":
-            return self.cm.correlation_service.query_time_correlations(
-                params.get("start_time"), 
-                params.get("end_time")
-            )
-        if qtype == "identity":
-            return self.cm.correlation_service.query_identity_correlations(
-                params.get("identity_type"), 
-                params.get("identity_value")
-            )
+        if qtype in ("statistics", "time", "identity"):
+            return ds.correlation(qtype, start_time=params.get("start_time"),
+                                  end_time=params.get("end_time"),
+                                  identity_type=params.get("identity_type"),
+                                  identity_value=params.get("identity_value"))
         return {"success": False, "error": f"Unsupported correlation query type: {qtype}"}
 
     def handle_correlate_imported_evidence(self, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -311,8 +286,8 @@ class ForensicHandlers:
         # Consult the Correlation Engine's own output if it exists (separate subsystem).
         note = None
         try:
-            cs = getattr(self.cm, "correlation_service", None)
-            if cs is not None and cs.database_exists():
+            ds = getattr(self.cm, "database_service", None)
+            if ds is not None and ds.correlation("exists").get("exists"):
                 note = ("The Crow-Eye Correlation Engine output is also available — use "
                         "`query_correlation_results` for its precomputed native-artifact correlations.")
         except Exception:
@@ -361,8 +336,7 @@ class ForensicHandlers:
             pass
         # 2. Fall back to name heuristics over the real columns
         try:
-            cols_res = ds.execute_query(dbname, f'PRAGMA table_info("{table}")')
-            cols = [r.get("name") for r in (cols_res.get("data") or []) if r.get("name")]
+            cols = list(ds.table_columns(dbname, table))
         except Exception:
             cols = []
         id_cols = [c for c in id_cols if c in cols]  # keep only real columns
@@ -437,8 +411,7 @@ class ForensicHandlers:
 
     def _table_columns(self, dbname: str, table: str) -> List[str]:
         try:
-            res = self.cm.database_service.execute_query(dbname, f'PRAGMA table_info("{table}")')
-            return [r.get("name") for r in (res.get("data") or []) if r.get("name")]
+            return list(self.cm.database_service.table_columns(dbname, table))
         except Exception:
             return []
 
@@ -560,7 +533,6 @@ class ForensicHandlers:
         belongs to every value under that key and dates none of them, so a
         bounded row can never be the sole support for "X happened at T".
         """
-        import sqlite3
         from datetime import timedelta
 
         try:
@@ -596,6 +568,7 @@ class ForensicHandlers:
 
         rows: List[Dict[str, Any]] = []
         searched, skipped, total = [], [], 0
+        not_applied: List[str] = []         # tables whose row filter the source could not run
 
         for artifact, entries in amap.TIMESTAMP_MAPPINGS.items():
             if wanted and artifact not in wanted:
@@ -604,27 +577,25 @@ class ForensicHandlers:
             if not db_name:
                 continue
             try:
-                conn = db_service._open_ro(db_name)
+                present = set(db_service.list_tables(db_name))
             except Exception:
+                present = set()
+            if not present:
                 skipped.append(db_name)
                 continue
             searched.append(artifact)
-            try:
-                for entry in entries:
-                    table, column = entry[0], entry[1]
-                    bounded = amap.is_key_time(entry)
-                    if bounded and not include_bounded:
-                        continue
-                    got, n = self._timeline_rows(
-                        conn, db_name, artifact, table, column, entry,
-                        bounded, start, end, limit, routine_ids)
-                    total += n
-                    rows.extend(got)
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+            for entry in entries:
+                table, column = entry[0], entry[1]
+                bounded = amap.is_key_time(entry)
+                if bounded and not include_bounded:
+                    continue
+                if table not in present:
+                    continue
+                got, n = self._timeline_rows(
+                    db_service, db_name, artifact, table, column, entry,
+                    bounded, start, end, limit, routine_ids, not_applied)
+                total += n
+                rows.extend(got)
 
         rows.sort(key=lambda r: r.get("timestamp") or "")
         shown = rows[:limit]
@@ -644,7 +615,11 @@ class ForensicHandlers:
                      "and the rest); pass include_routine_events=true for "
                      "every record.")
 
-        return {
+        if not_applied:
+            note += (" The row filter of %s could not be run by this data source, so "
+                     "those tables are shown without it (more rows than on the desktop)."
+                     % ", ".join(sorted(not_applied)))
+        out = {
             "success": True,
             "window": {"start": start, "end": end},
             "events": shown,
@@ -653,6 +628,9 @@ class ForensicHandlers:
             "databases_absent": sorted(set(skipped)),
             "note": note.strip(),
         }
+        if not_applied:
+            out["row_filters_not_applied"] = sorted(not_applied)
+        return out
 
     # ------------------------------------------------------------------ #
     # User Behavior Analytics as a tool
@@ -672,6 +650,11 @@ class ForensicHandlers:
         stamp moved (a re-parse, a rule switched). ``ran_now`` is true only
         when this call ran the analysis rather than loading it.
         """
+        store = getattr(self.cm, "behavior_store", None)
+        if store is not None:
+            # A store the host supplies (case_data_source.BehaviorStore): a
+            # server's own behaviour analysis for this scope.
+            return store.engine()
         import threading
         case = getattr(self.cm, "case_directory", None)
         if not case:
@@ -859,6 +842,15 @@ class ForensicHandlers:
                 "app": e.get("app_name"), "severity": e.get("severity"),
                 "confidence": e.get("confidence"), "caveat": e.get("caveat"),
                 "occurrences": e.get("aggregate_count"),
+                # Who drove it (uba/engine/who_drove.py), with the facts behind it.
+                **({"driven_by": e.get("operator"),
+                    "driven_by_kind": e.get("operator_kind") or None,
+                    "driven_by_basis": e.get("operator_basis") or None}
+                   if e.get("operator") and e.get("operator") != "unknown" else {}),
+                # Was the program the window in front, or running behind, then.
+                **({"program_state": e.get("app_state"),
+                    "program_state_basis": e.get("app_state_basis") or None}
+                   if e.get("app_state") else {}),
                 # An analyst-created behaviour rule (uba_user_rules.json), not a
                 # built-in one: say so when citing it.
                 **({"user_rule": True} if e.get("user_rule") else {}),
@@ -877,7 +869,12 @@ class ForensicHandlers:
                     "activities or severities for the rest." % (len(events), page["total"]))
         note += (" Each event is an interpretation of artifact rows: confirm a claim against its "
                  "evidence rows with query_database before stating it as fact; 'actor_basis' says "
-                 "how the person was attributed, and 'signed_in_user' is only who was signed in.")
+                 "how the person was attributed, and 'signed_in_user' is only who was signed in. "
+                 "'driven_by' says whether a person at the keyboard, a person remotely, a program "
+                 "by itself or automation (a script or other program acting as the user) drove it, and "
+                 "'driven_by_basis' gives the facts; keyboard and mouse input counts input sent "
+                 "by software too, so quote the basis rather than claiming a hand was on the "
+                 "keyboard.")
         out["note"] = note.strip()
         return out
 
@@ -923,56 +920,70 @@ class ForensicHandlers:
                                 "'YYYY-MM-DD HH:MM:SS'.")
         return str(start), str(end), None
 
-    def _timeline_rows(self, conn, db_name, artifact, table, column, entry,
-                       bounded, start, end, limit, routine_ids=None):
+    def _timeline_rows(self, ds, db_name, artifact, table, column, entry,
+                       bounded, start, end, limit, routine_ids=None, not_applied=None):
         """Rows from one (table, column), and how many there were in total.
 
         The count is taken separately from the rows so `total_in_window` is
         honest about what the cap hid - reporting `len(rows)` as the total
         would tell the model it had seen everything.
         """
-        import sqlite3
-
-        try:
-            cols = [r[1] for r in conn.execute(
-                'PRAGMA table_info("%s")' % table)]
-        except sqlite3.Error:
-            return [], 0
+        cols = list(ds.table_columns(db_name, table))
         if not cols or column not in cols:
             return [], 0
 
         name_col = next((c for c in self._NAME_COLUMNS if c in cols), None)
         details = [c for c in self._DETAIL_COLUMNS if c in cols][:3]
+        ai_steps = (table == "ai_agent_steps"
+                    and {"command", "target", "kind"} <= set(cols))
+        if ai_steps:
+            # An AI agent step: who took it, and (as `step_kind`, since the
+            # row's own `kind` is the map's) what it was. Its name is the
+            # command it ran, or the file it wrote or edited - `command` alone
+            # names nothing on a file step.
+            # Then what the record adds, where the case has it: the programs
+            # a command started, its exit code, who let it run and who sent a
+            # prompt - so Eye can say "the agent ran X; it failed; the person
+            # approved it" without a second query.
+            details = [c for c in ("agent", "role", "program", "exit_code", "approval", "origin",
+                                   "session_name", "turn", "ordered_by") if c in cols]
 
-        select = ['rowid as _rowid', '"%s" as _when' % column]
-        if name_col:
-            select.append('"%s" as _name' % name_col)
-        for d in details:
-            select.append('"%s"' % d)
-
-        where = ('WHERE datetime("{c}") BETWEEN datetime(?) AND datetime(?)'
-                 .format(c=column))
-        if routine_ids is not None and "EventID" in cols:
-            # The event log is mostly routine. On this machine one ID alone -
-            # 5379, the credential manager reading its own store - is 22,012
-            # records, and 4798 (a process enumerated a user's group
-            # membership) another 4,077. Returned unfiltered they crowd out
-            # the logon, the process creation and the service install that the
-            # question was actually about, and the model spends its context on
-            # them. `include_routine_events` lifts this.
-            where += " AND EventID IN (%s)" % ", ".join(routine_ids)
-
+        # The row's own `kind` is returned as `step_kind`: `kind` is the map's.
+        columns = list(details) + (["kind"] if ai_steps else [])
+        name_from = ("command", "target") if ai_steps else ((name_col,) if name_col else ())
+        # An AI step's `ts` is stored 'YYYY-MM-DD HH:MM:SS', so the raw text
+        # orders as time and `ix_ai_agent_steps_ts` serves the window. Wrapped
+        # in datetime() it was a pass over all of a 560 MB database (4.3 s for
+        # one hour). The event log is mostly routine. On this machine one ID
+        # alone - 5379, the credential manager reading its own store - is
+        # 22,012 records, and 4798 another 4,077. Returned unfiltered they crowd
+        # out the logon, the process creation and the service install that the
+        # question was actually about. `include_routine_events` lifts this.
+        event_ids = routine_ids if (routine_ids is not None and "EventID" in cols) else None
+        # Which rows of the table are drawn at all - the AI agent steps that
+        # place an actor at a moment, not the 122,000 tool results beside
+        # them. The timeline lane applies the same filter.
         try:
-            total = conn.execute(
-                'SELECT count(*) FROM "%s" %s' % (table, where),
-                (start, end)).fetchone()[0]
-            cur = conn.execute(
-                'SELECT %s FROM "%s" %s ORDER BY "%s" LIMIT %d'
-                % (", ".join(select), table, where, column, limit),
-                (start, end))
-            fetched = [dict(r) for r in cur.fetchall()]
-        except sqlite3.Error:
-            return [], 0
+            from timeline.data import artifact_map as _am
+            row_filter = getattr(_am, "ROW_FILTERS", {}).get(table)
+        except Exception:
+            row_filter = None
+        if row_filter and hasattr(ds, "translate_filter"):
+            # ROW_FILTERS are SQLite SQL; a source in another dialect translates
+            # them, and one that cannot runs without the filter and says so.
+            translated = ds.translate_filter(row_filter)
+            if translated is None:
+                if not_applied is not None and table not in not_applied:
+                    not_applied.append(table)
+                row_filter = None
+            else:
+                row_filter = translated
+        fetched, total = ds.time_window(
+            db_name, table, column, start, end, columns=columns, name_from=name_from,
+            event_ids=event_ids, row_filter=row_filter, text_time=ai_steps, limit=limit)
+        if ai_steps:
+            for r in fetched:
+                r["step_kind"] = r.pop("kind", None)
 
         described = entry[3] if len(entry) > 3 else ""
         is_log = table in ("SystemLogs", "SecurityLogs", "ApplicationLogs")
@@ -1003,6 +1014,8 @@ class ForensicHandlers:
             for d in details:
                 if r.get(d) not in (None, ""):
                     row[d] = r[d]
+            if r.get("step_kind"):
+                row["step_kind"] = r["step_kind"]
             if is_log:
                 # An event log row has no name column; what it IS is its ID.
                 # `4688` tells a reader nothing, so the same table of meanings

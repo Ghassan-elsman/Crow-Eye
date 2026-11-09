@@ -219,6 +219,7 @@ Wings are stored as JSON files with this structure:
   "author": "Investigator",
   "description": "Correlate execution artifacts",
   "proves": "Program execution occurred",
+  "narrative": "{executable_name} ran at {when}; Prefetch recorded it {prefetch.run_count} times",
   "feathers": [
     {
       "feather_id": "prefetch",
@@ -240,6 +241,28 @@ Wings are stored as JSON files with this structure:
   }
 }
 ```
+
+### The narrative
+
+`narrative` (optional) is how a match of the Wing reads, in the author's words
+(Sentinel 21.3, cu-narr). It is a sentence template filled only from the
+match's records:
+
+| Placeholder | Filled with |
+|---|---|
+| `{column}` | the first record in the match that has the column - the anchor's record first |
+| `{feather_id.column}` | that feather's record |
+| `{when}` | the match's time |
+| `{first_time}`, `{last_time}` | the earliest and latest record time in the match |
+| `{records}`, `{feathers}` | how many records it holds, and which feathers matched |
+
+A value the match does not hold reads `[no <name>]`; nothing is guessed. The
+words the author writes are checked against the same list of intent words
+Sentinel's narratives use (`wings/core/narrative.INTENT` = Sentinel's
+`analysis/drift_narrative.INTENT`): a template saying *tried*, *meant*, *in
+order to*, *because*, *malicious* ... is refused by the validator and named
+under the box in the Wing Creator. What a record itself says is quoted, not
+checked. `{feather_id.column}` must name a feather the Wing uses.
 
 ---
 

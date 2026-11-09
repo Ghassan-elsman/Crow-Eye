@@ -8,6 +8,7 @@ settings for DPI, color space, font embedding, and print optimization.
 
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any
+import os
 import re
 import json
 import logging
@@ -132,16 +133,23 @@ class PDFExporter:
             >>> html = "<html><body><h1>Report</h1></body></html>"
             >>> exporter.export(html, "report.pdf", {"title": "Forensic Report"})
         """
-        try:
-            from weasyprint import HTML, CSS
-        except ImportError:
-            raise ImportError(
-                "weasyprint is required for PDF export. "
-                "Install it with: pip install weasyprint"
-            )
-        
         # Convert Chart.js canvas charts to SVG vector graphics
         html_content = self._convert_charts_to_svg(html_content)
+
+        try:
+            from weasyprint import HTML, CSS
+        except (ImportError, OSError) as e:
+            # weasyprint imports, then needs GTK's Pango and Cairo DLLs, which
+            # a Windows machine does not have: the import raises OSError and
+            # every PDF export failed on this machine and on any install
+            # without GTK. Crow-Eye already ships Chromium (QtWebEngine), which
+            # prints the same HTML to PDF with nothing else installed.
+            self.logger.info("weasyprint unavailable (%s); printing the PDF with QtWebEngine",
+                        type(e).__name__)
+            self._export_with_qtwebengine(html_content, output_path)
+            if metadata:
+                self._apply_pdf_metadata(output_path, metadata)
+            return
         
         # Apply color space conversion if needed
         if self.print_optimized or self.color_space == "CMYK":
@@ -227,6 +235,65 @@ class PDFExporter:
         if metadata:
             self._apply_pdf_metadata(output_path, metadata)
     
+    def _export_with_qtwebengine(self, html_content: str, output_path: str,
+                                 timeout_ms: int = 120000) -> None:
+        """Print HTML to an A4 PDF with Chromium (QtWebEngine), on the GUI
+        thread, without blocking it: the load and the print each wait in a
+        local event loop, so the window keeps painting meanwhile. The HTML goes
+        through a temporary file, because setHtml refuses content over 2 MB
+        and a report with tables and charts passes that."""
+        import tempfile
+        from PyQt5.QtCore import QEventLoop, QMarginsF, QThread, QTimer, QUrl
+        from PyQt5.QtGui import QPageLayout, QPageSize
+        from PyQt5.QtWidgets import QApplication
+        from PyQt5.QtWebEngineWidgets import QWebEnginePage
+
+        app = QApplication.instance()
+        if app is None or QThread.currentThread() is not app.thread():
+            raise RuntimeError("PDF export without weasyprint prints with QtWebEngine, "
+                               "which must run on the GUI thread")
+        fd, tmp_html = tempfile.mkstemp(suffix=".html", prefix="crow_eye_report_")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(html_content)
+        page = QWebEnginePage()
+        state = {"loaded": None, "printed": None}
+        try:
+            loop = QEventLoop()
+
+            def loaded(ok):
+                state["loaded"] = ok
+                loop.quit()
+            page.loadFinished.connect(loaded)
+            page.load(QUrl.fromLocalFile(tmp_html))
+            QTimer.singleShot(timeout_ms, loop.quit)
+            loop.exec_()
+            if not state["loaded"]:
+                raise IOError("the report HTML did not load for printing")
+            # Scripts in the report (chart drawing) get a moment to finish.
+            settle = QEventLoop()
+            QTimer.singleShot(500, settle.quit)
+            settle.exec_()
+
+            loop = QEventLoop()
+
+            def printed(_path, ok):
+                state["printed"] = ok
+                loop.quit()
+            page.pdfPrintingFinished.connect(printed)
+            layout = QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait,
+                                 QMarginsF(20, 20, 20, 20), QPageLayout.Millimeter)
+            page.printToPdf(os.path.abspath(output_path), layout)
+            QTimer.singleShot(timeout_ms, loop.quit)
+            loop.exec_()
+            if not state["printed"] or not os.path.isfile(output_path):
+                raise IOError("QtWebEngine could not write the PDF to %s" % output_path)
+        finally:
+            page.deleteLater()
+            try:
+                os.remove(tmp_html)
+            except OSError:
+                pass
+
     def _convert_charts_to_svg(self, html_content: str) -> str:
         """
         Convert Chart.js canvas charts to SVG vector graphics.

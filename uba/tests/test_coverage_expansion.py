@@ -39,7 +39,7 @@ def test_muicache_suffix_stripped(artifacts_dir):
 def test_custom_jumplist_attributed_to_user(artifacts_dir):
     eng = run(artifacts_dir)
     cjl = [e for e in all_events(eng)
-           if e["activity"] == "file_opened" and "recent/pinned" in e["description"]]
+           if e["activity"] == "file_opened" and "jump list" in e["description"]]
     assert cjl
     assert cjl[0]["actor_name"] == "Alice"
 

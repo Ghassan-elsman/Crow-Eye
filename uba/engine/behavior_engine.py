@@ -157,6 +157,11 @@ class BehaviorEngine:
         self.store = UBAEventStore()
         ctx = ExtractorContext(self.db_pool, self.resolver, self.sessions,
                                stats=self.stats)
+        # Rules over what the other rules found (usb_file_copy, files_collected)
+        # read the store, so they run after every other extractor.
+        ctx.store = self.store
+        after = {r["extractor"] for r in self.rules_config["rules"] if r.get("after_extractors")}
+        by_extractor = dict(sorted(by_extractor.items(), key=lambda kv: kv[0] in after))
 
         total = (len(by_extractor) + (1 if table_rules else 0)
                  + (1 if derived_rules else 0)) or 1
@@ -204,6 +209,17 @@ class BehaviorEngine:
                 self._run_user_rule(rule, lambda spec: declarative.derived_rule_events(
                     self.store, spec))
             done += 1
+
+        # Who drove each activity (person / remote person / program /
+        # automation), from input, session and lineage evidence (who_drove.py).
+        report(96, "Analyzing: who was driving")
+        try:
+            from uba.engine import who_drove
+            self.stats["operators"] = who_drove.apply(self.store, self.db_pool, self.sessions)
+            logger.info("UBA: who drove each activity - %s", self.stats["operators"])
+        except Exception as e:
+            logger.exception("UBA: who-drove pass failed: %s", e)
+            self.stats["failed_who_drove"] = str(e)
 
         self.stats["elapsed_seconds"] = round(time.time() - started, 2)
         total_events = self.store.conn.execute(

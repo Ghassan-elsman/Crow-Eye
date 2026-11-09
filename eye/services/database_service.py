@@ -1,5 +1,7 @@
 """
-ForensicDatabaseService - Read-only database access service for EYE AI Assistant.
+SqliteCaseDataSource - the desktop's CaseDataSource (eye/services/case_data_source.py):
+read-only access to a case's SQLite databases for Eye's tools. The older name,
+ForensicDatabaseService, is the same class.
 
 This service provides secure, read-only access to Crow-eye's forensic databases
 with multiple layers of security enforcement:
@@ -14,6 +16,7 @@ import difflib
 import logging
 import re
 import sqlite3
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -21,9 +24,11 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from data.database_manager import DatabaseManager
+from eye.services.case_data_source import (classify_sqlite_error, parse_row_ref as _parse_row_ref,
+                                           row_ref as _row_ref, single_statement)
 
 
-class ForensicDatabaseService:
+class SqliteCaseDataSource:
     """
     Provides read-only access to forensic databases with security enforcement.
     
@@ -241,13 +246,27 @@ class ForensicDatabaseService:
             self.logger.debug(f"cross-database table map skipped: {e}")
         return out
 
-    def execute_query(
+    def execute_query(self, database_name: str, sql_query: str, params: Tuple = (),
+                      timeout: Optional[float] = 30.0, _is_heal_retry: bool = False,
+                      timeout_s: Optional[float] = None) -> Dict[str, Any]:
+        """The query (_execute_query) with every failure given an ``error_kind``
+        (case_data_source.ERROR_KINDS) - what callers and the self-heal key on.
+        ``timeout_s`` bounds the statement: past it SQLite is interrupted and
+        the kind is 'timeout'."""
+        res = self._execute_query(database_name, sql_query, params, timeout, _is_heal_retry,
+                                  timeout_s)
+        if isinstance(res, dict) and not res.get("success") and not res.get("error_kind"):
+            res["error_kind"] = classify_sqlite_error(str(res.get("error") or ""))
+        return res
+
+    def _execute_query(
         self,
         database_name: str,
         sql_query: str,
         params: Tuple = (),
         timeout: Optional[float] = 30.0,
-        _is_heal_retry: bool = False
+        _is_heal_retry: bool = False,
+        timeout_s: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Execute a SQL query with read-only validation.
@@ -271,7 +290,11 @@ class ForensicDatabaseService:
                 - error: Error message if query failed
                 
         """
-        # Validate query is read-only
+        # One statement, and read-only (the deny-list is the second layer).
+        why = single_statement(sql_query)
+        if why:
+            return {"success": False, "data": [], "row_count": 0, "error_kind": "refused",
+                    "error": "Query rejected: %s." % why}
         if not self._is_readonly_query(sql_query):
             error_msg = (
                 f"Query rejected: Contains forbidden keywords. "
@@ -283,6 +306,7 @@ class ForensicDatabaseService:
                 "success": False,
                 "data": [],
                 "row_count": 0,
+                "error_kind": "refused",
                 "error": error_msg
             }
         
@@ -306,6 +330,9 @@ class ForensicDatabaseService:
                 "error": f"Failed to connect to database: {database_name} ({e})",
             }
 
+        if timeout_s:
+            deadline = time.monotonic() + float(timeout_s)
+            conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10000)
         try:
             cur = conn.execute(sql_query, params)
             rows = [dict(r) for r in cur.fetchall()]
@@ -328,18 +355,21 @@ class ForensicDatabaseService:
 
         except Exception as e:
             error_msg = str(e)
-            low = error_msg.lower()
+            kind = classify_sqlite_error(error_msg)
+            if kind == "timeout" and timeout_s:
+                error_msg = "query stopped after %s s (timeout_s)" % timeout_s
 
             # ---- Schema self-heal: discover the real schema and either safely
             # auto-retry an unambiguous near-match, or hand the model the tables/
-            # columns it needs so it corrects itself instead of looping. ----
-            if "no such table" in low and not _is_heal_retry:
+            # columns it needs so it corrects itself instead of looping. Keyed
+            # on the error's kind, never its wording. ----
+            if kind == "no_table" and not _is_heal_retry:
                 healed = self._self_heal_missing_table(
                     database_name, sql_query, error_msg, params, timeout
                 )
                 if healed is not None:
                     return healed
-            elif "no such column" in low:
+            elif kind == "no_column":
                 self.logger.warning(f"Schema mismatch on {database_name}: {error_msg}")
                 return self._self_heal_missing_column(
                     database_name, sql_query, error_msg, params, timeout, _is_heal_retry)
@@ -349,6 +379,7 @@ class ForensicDatabaseService:
                 "success": False,
                 "data": [],
                 "row_count": 0,
+                "error_kind": kind,
                 "error": f"Database Error: {error_msg}"
             }
         finally:
@@ -946,6 +977,140 @@ class ForensicDatabaseService:
             self.logger.debug(f"feather database discovery skipped: {e}")
         return out
     
+    # ------------------------------------------------------ CaseDataSource --
+    # The protocol (eye/services/case_data_source.py) every Eye tool goes
+    # through. This instance's scope is its case; nothing below takes another.
+    correlation_service = None          # set by ContextManager (the case's correlation DB)
+    search_service = None               # made on first use for this case
+
+    def dialect(self) -> str:
+        return "sqlite"
+
+    def row_id_column(self) -> str:
+        return "rowid"
+
+    def translate_filter(self, sqlite_sql: str) -> Optional[str]:
+        """ROW_FILTERS are written in SQLite SQL: here they run as written."""
+        return sqlite_sql
+
+    def list_databases(self) -> List[Dict[str, Any]]:
+        return self.discover_databases()
+
+    def list_tables(self, database: str) -> List[str]:
+        return self._get_tables_safe(database)
+
+    def table_columns(self, database: str, table: str) -> List[str]:
+        return self._get_columns_safe(database, table)
+
+    def table_schema(self, database: str, table: Optional[str] = None) -> Dict[str, Any]:
+        return self.get_schema(database, table)
+
+    def query(self, database: str, sql: str, params=(), timeout_s: Optional[float] = None
+              ) -> Dict[str, Any]:
+        return self.execute_query(database, sql, tuple(params or ()), timeout_s=timeout_s)
+
+    def row_ref(self, database: str, table: str, row_id: Any) -> str:
+        return _row_ref(database, table, row_id)
+
+    def parse_row_ref(self, ref: str):
+        return _parse_row_ref(ref)
+
+    def row_query(self, table: str, row_id: Any) -> str:
+        """The statement that reloads one row by its row_id (an evidence card's source)."""
+        return 'SELECT * FROM "%s" WHERE rowid = %d' % (str(table).replace('"', '""'), int(row_id))
+
+    def fetch_row(self, database: str, table: str, row_id: int) -> Optional[Dict[str, Any]]:
+        res = self.execute_query(database, 'SELECT * FROM "%s" WHERE rowid = ?'
+                                 % str(table).replace('"', '""'), (int(row_id),))
+        rows = (res or {}).get("data") or []
+        return rows[0] if res.get("success") and rows else None
+
+    def text_search(self, term: str, use_regex: bool = False, max_results: int = 50
+                    ) -> Dict[str, Any]:
+        from eye.services.search_service import ForensicSearchService, SearchConfig
+        if self.search_service is None:
+            self.search_service = ForensicSearchService(self.case_directory)
+        results = self.search_service.search(SearchConfig(search_term=term, use_regex=use_regex))
+        flat: List[Dict[str, Any]] = []
+        for table_name, table_results in (results.results or {}).items():
+            for sr in table_results:
+                if len(flat) >= max_results:
+                    break
+                flat.append({
+                    "database": getattr(sr, "database", None),
+                    "table": getattr(sr, "table_name", table_name),
+                    "row_id": getattr(sr, "row_id", None),
+                    "matched_columns": getattr(sr, "matched_columns", []),
+                    "record": getattr(sr, "record_data", {}),
+                    "relevance": getattr(sr, "relevance_score", 1.0),
+                })
+            if len(flat) >= max_results:
+                break
+        return {"results": flat, "total_matches": getattr(results, "total_matches", len(flat))}
+
+    def time_window(self, database: str, table: str, time_column: str, start: str, end: str,
+                    columns=(), name_from=(), event_ids=None, row_filter: Optional[str] = None,
+                    text_time: bool = False, limit: int = 100):
+        """Rows of ``table`` whose ``time_column`` is in [start, end], oldest
+        first: _rowid, _when, _name (the first non-empty of ``name_from``) and
+        ``columns``; and the count in the window. ``text_time``: the column holds
+        'YYYY-MM-DD HH:MM:SS' text, compared as text so its index serves the
+        window. ``row_filter`` is a condition in this source's dialect."""
+        def q(name):
+            return '"%s"' % str(name).replace('"', '""')
+        have = set(self.table_columns(database, table))
+        if time_column not in have:
+            return [], 0
+        select = ["rowid as _rowid", "%s as _when" % q(time_column)]
+        names = [c for c in name_from if c in have]
+        if len(names) > 1:
+            select.append("COALESCE(%s) as _name" % ", ".join("NULLIF(%s, '')" % q(c) for c in names))
+        elif names:
+            select.append("%s as _name" % q(names[0]))
+        select += [q(c) for c in columns if c in have]
+        if text_time:
+            where = "WHERE %s BETWEEN datetime(?) AND datetime(?)" % q(time_column)
+        else:
+            where = "WHERE datetime(%s) BETWEEN datetime(?) AND datetime(?)" % q(time_column)
+        if event_ids is not None and "EventID" in have:
+            where += " AND EventID IN (%s)" % ", ".join(str(int(i)) for i in event_ids)
+        if row_filter:
+            where += " AND %s" % row_filter
+        try:
+            conn = self._open_ro(database)
+        except Exception:
+            return [], 0
+        try:
+            total = conn.execute("SELECT count(*) FROM %s %s" % (q(table), where),
+                                 (start, end)).fetchone()[0]
+            cur = conn.execute("SELECT %s FROM %s %s ORDER BY %s LIMIT %d"
+                               % (", ".join(select), q(table), where, q(time_column), int(limit)),
+                               (start, end))
+            return [dict(r) for r in cur.fetchall()], total
+        except sqlite3.Error:
+            return [], 0
+        finally:
+            conn.close()
+
+    def correlation(self, kind: str, **args) -> Dict[str, Any]:
+        """The correlation engine's results for this case."""
+        svc = self.correlation_service
+        if kind == "exists":
+            return {"success": True, "exists": bool(svc and svc.database_exists())}
+        if not svc or not svc.database_exists():
+            return {"success": False, "error_kind": "no_table",
+                    "error": "Correlation database not found. Run the Correlation Engine in "
+                             "Crow-eye first."}
+        if kind == "statistics":
+            return svc.get_correlation_statistics()
+        if kind == "time":
+            return svc.query_time_correlations(args.get("start_time"), args.get("end_time"))
+        if kind == "identity":
+            return svc.query_identity_correlations(args.get("identity_type"),
+                                                   args.get("identity_value"))
+        return {"success": False, "error_kind": "refused",
+                "error": "Unsupported correlation query type: %s" % kind}
+
     def close_all(self):
         """Close all open database connections."""
         self.db_manager.close_all()
@@ -958,3 +1123,7 @@ class ForensicDatabaseService:
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit - close all connections."""
         self.close_all()
+
+
+# The older name: the same class.
+ForensicDatabaseService = SqliteCaseDataSource

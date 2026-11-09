@@ -40,6 +40,89 @@ export const SEVERITY_STYLE = {
   critical: { color: '#ffffff', bg: '#ff3b56', label: 'Critical' },
 }
 
+// ACTOR COLOURS - what drove an activity, and nothing else (Ghassan,
+// 2026-11-03: every card about people, AI agents or apps and automation wears
+// its toggle's colour; the meaning is kept for later use). One hue per
+// Driven-by toggle:
+//   blue   #4f8eff  people: a person at the keyboard, or a person remotely
+//   cyan   #22d3ee  AI agents: what an agent ran, from its own session record
+//   fuchsia #e879f9 apps and automation: a program by itself, a script
+//   slate  #525b72  not decided by the evidence (no toggle)
+// Never red (urgent) or amber (the "notable" severity); not violet either,
+// which the Sentinel console uses for "waiting" and "held". An actor colour is
+// a stripe, a dot, an outline or text - never a filled background (a blue
+// fill means "selected" there). Agreed with Crow-Eye Sentinel's console,
+// which uses the same values for its actor roles.
+// MEASURE: a number's kind (bytes, seconds, counts) on a fact badge carries no
+// hue - the icon in the unit grey, the value in white; what tells a measure is
+// its icon and card, which keeps colour free for meaning. Agreed with Crow-Eye
+// Sentinel's console (roles "unit" #A3A8B3 and "value").
+export const MEASURE_COLOR = '#a3a8b3'
+export const ACTOR_COLOR = { people: '#4f8eff', ai: '#22d3ee', apps: '#e879f9', unknown: '#525b72' }
+export const OPERATOR_STYLE = {
+  person: { label: 'Person at the keyboard', color: ACTOR_COLOR.people, bg: 'transparent' },
+  remote_person: { label: 'Person, remotely', color: ACTOR_COLOR.people, bg: 'transparent' },
+  program: { label: 'Program by itself', color: ACTOR_COLOR.apps, bg: 'transparent' },
+  automation: { label: 'Automation', color: ACTOR_COLOR.apps, bg: 'transparent' },
+  ai_agent: { label: 'AI agent', color: ACTOR_COLOR.ai, bg: 'transparent' },
+}
+// Whether the program was the window in front, or running behind, at that moment.
+export const APP_STATE_STYLE = {
+  foreground: { label: 'In front', color: '#4f8eff', bg: 'rgba(79,142,255,0.10)' },
+  background: { label: 'In the background', color: '#9aa3b8', bg: 'rgba(154,163,184,0.10)' },
+}
+
+// The same verdict as one key per activity (uba/engine/event_store.py
+// DRIVER_SQL): the Who drove it tab's tiles, rows and bars, and the filter
+// they open. The desktop names an AI agent only from the agent's own session
+// record; cyan, not red - red is for what is urgent.
+export const DRIVERS = ['person', 'remote', 'program', 'script', 'ai_agent', 'unknown']
+export const DRIVER_STYLE = {
+  person: { label: 'Person at the keyboard', short: 'Person', color: ACTOR_COLOR.people, group: 'people' },
+  remote: { label: 'Person, remotely', short: 'Remote', color: ACTOR_COLOR.people, group: 'people' },
+  program: { label: 'Program by itself', short: 'Program', color: ACTOR_COLOR.apps, group: 'apps' },
+  script: { label: 'Script or automation', short: 'Script', color: ACTOR_COLOR.apps, group: 'apps' },
+  ai_agent: { label: 'AI agent (its own session record)', short: 'AI agent', color: ACTOR_COLOR.ai, group: 'ai' },
+  unknown: { label: 'Not decided by the evidence', short: 'Not decided', color: ACTOR_COLOR.unknown, group: '' },
+}
+
+// A colour at a given opacity, for a toggle's tinted fill (QtWebEngine's
+// Chromium has no color-mix()).
+export function tint(hex, a) {
+  const h = String(hex || '#8b8cf8').replace('#', '')
+  const n = parseInt(h.length === 3 ? h.split('').map((c) => c + c).join('') : h, 16)
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
+}
+// The style of a toggle chip in its own colour: on, a tinted fill and border.
+export function chipStyle(color, on) {
+  return { '--c': color, '--t': tint(color, on ? 0.16 : 0.08) }
+}
+
+// The filter bar's "Driven by" toggles: three groups of the drivers above,
+// all on by default. Turning one off hides those activities everywhere.
+export const DRIVER_GROUPS = [
+  { key: 'people', label: 'People', drivers: ['person', 'remote'], color: ACTOR_COLOR.people,
+    title: 'A person at the keyboard, or a person signed in remotely' },
+  { key: 'ai', label: 'AI agents', drivers: ['ai_agent'], color: ACTOR_COLOR.ai,
+    title: "What an AI agent ran, from the agent's own session record" },
+  { key: 'apps', label: 'Apps & automation', drivers: ['program', 'script'], color: ACTOR_COLOR.apps,
+    title: 'A program by itself, or a script or other automation' },
+]
+
+// The driver key of one activity, as event_store.DRIVER_SQL computes it.
+export function driverOf(event) {
+  if (event.rule_id === 'ai_agent_turn' || event.operator_kind === 'ai_agent') return 'ai_agent'
+  return { automation: 'script', person: 'person', remote_person: 'remote', program: 'program' }[event.operator] || 'unknown'
+}
+
+export function operatorLabel(event) {
+  if (driverOf(event) === 'ai_agent') return { ...OPERATOR_STYLE.ai_agent, label: 'AI agent' }
+  const s = OPERATOR_STYLE[event.operator]
+  if (!s) return null
+  if (event.operator === 'automation' && event.operator_kind === 'script') return { ...s, label: 'Script or automation' }
+  return s
+}
+
 // A "flagged" event needs analyst review.
 export function isFlagged(event) {
   return event.severity === 'suspicious' || event.severity === 'critical'
@@ -47,6 +130,16 @@ export function isFlagged(event) {
 
 // activity -> { label } for the category pill. Icon comes from icons.jsx.
 export const ACTIVITY_META = {
+  // 2026-11-03: printing, Remote Desktop out, cloud sync, USB copies, files gathered.
+  printer_added: { label: 'Printer' },
+  remote_desktop_out: { label: 'Remote Desktop' },
+  cloud_sync: { label: 'Cloud sync' },
+  usb_copy: { label: 'USB copy' },
+  files_collected: { label: 'Files gathered' },
+  input: { label: 'Keyboard & mouse' },
+  // AI agent sessions (ai_agents.db): Claude Code, Gemini CLI, Codex.
+  ai_agent_session: { label: 'AI agent session' },
+  ai_agent_command: { label: 'AI agent commands' },
   // Browser databases (browser_analysis.db). web_browsing already existed for
   // the registry-typed-URL rule and is reused by the real history rule.
   file_download: { label: 'Download' },
@@ -170,6 +263,11 @@ const SOURCE_BY_TABLE = {
   USBDevices: 'Registry — USB',
   USBStorageDevices: 'Registry — USB storage',
   InstalledSoftware: 'Registry — installed software',
+  printer_connections: 'Registry — printers',
+  RDPClientMRU: 'Registry — Remote Desktop history',
+  srum_app_timeline: 'SRUM — keyboard, mouse and focus time',
+  ai_agent_sessions: 'AI agent — sessions',
+  ai_agent_steps: 'AI agent — prompts, commands and file changes',
   SystemServices: 'Registry — services',
   AutoStartPrograms: 'Registry — autostart',
   Network_list: 'Registry — networks',

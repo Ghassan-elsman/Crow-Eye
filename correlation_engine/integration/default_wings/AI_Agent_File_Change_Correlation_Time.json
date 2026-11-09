@@ -1,0 +1,232 @@
+{
+  "config_name": "ai_agent_file_change_correlation_time",
+  "wing_name": "AI Agent File Change Correlation (Time)",
+  "wing_id": "default_wing_ai_agent_file_001_time",
+  "wing_category": "time",
+  "host_scope": "same_host",
+  "description": "Puts each file an AI agent wrote, edited or read beside the file system's record of it (MFT/USN), the copy the agent saved before changing it, and the person's own traces of the file (LNK, RecentDocs). Flags reads and changes of credential stores.",
+  "proves": "A file an AI agent changed or read, and the file system's record of it, minutes apart",
+  "narrative": "{ai_steps.agent} ({ai_steps.kind}) touched {ai_steps.file_path} at {ai_steps.timestamp} in session '{ai_steps.session_name}', ordered by {ai_steps.ordered_by}. The file system's records of {file_name}: {records} records from {feathers}, between {first_time} and {last_time}.",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-11-04T00:00:00Z",
+  "last_modified": "2026-11-04T00:00:00Z",
+  "version": "1.0",
+  "feathers": [
+    {
+      "feather_config_name": "AIAgentSteps_CrowEyeFeather",
+      "feather_database_path": "feathers/AIAgentSteps_CrowEyeFeather.db",
+      "artifact_type": "AIAgents",
+      "feather_id": "ai_steps",
+      "weight": 0.35,
+      "tier": 1,
+      "tier_name": "The AI agent's own record of the act"
+    },
+    {
+      "feather_config_name": "AIAgentFileVersions_CrowEyeFeather",
+      "feather_database_path": "feathers/AIAgentFileVersions_CrowEyeFeather.db",
+      "artifact_type": "AIAgents",
+      "feather_id": "ai_versions",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "The copy the agent saved before changing the file"
+    },
+    {
+      "feather_config_name": "MFT_USN_Correlated_CrowEyeFeather",
+      "feather_database_path": "feathers/MFT_USN_Correlated_CrowEyeFeather.db",
+      "artifact_type": "MFT",
+      "feather_id": "mft_usn",
+      "weight": 0.25,
+      "tier": 1,
+      "tier_name": "File system record of the change"
+    },
+    {
+      "feather_config_name": "LNK_CrowEyeFeather",
+      "feather_database_path": "feathers/LNK_CrowEyeFeather.db",
+      "artifact_type": "LNK",
+      "feather_id": "lnk",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "A person opened the file (LNK)"
+    },
+    {
+      "feather_config_name": "RecentDocs_CrowEyeFeather",
+      "feather_database_path": "feathers/RecentDocs_CrowEyeFeather.db",
+      "artifact_type": "Registry",
+      "feather_id": "recentdocs",
+      "weight": 0.05,
+      "tier": 3,
+      "tier_name": "A person opened the file (RecentDocs)"
+    }
+  ],
+  "time_window_minutes": 5,
+  "minimum_matches": 1,
+  "target_application": "",
+  "target_file_path": "",
+  "target_event_id": "",
+  "apply_to": "all",
+  "anchor_priority": [
+    "AIAgents",
+    "MFT",
+    "LNK",
+    "Registry"
+  ],
+  "use_weighted_scoring": true,
+  "scoring": {
+    "enabled": true,
+    "score_interpretation": {
+      "confirmed": {
+        "min": 0.6,
+        "label": "The agent's act and Windows' record agree"
+      },
+      "probable": {
+        "min": 0.35,
+        "label": "Corroborated in part"
+      },
+      "weak": {
+        "min": 0.0,
+        "label": "The agent's record alone"
+      }
+    }
+  },
+  "semantic_rules": [
+    {
+      "rule_id": "ai_file_change",
+      "confidence": 0.5,
+      "name": "AI agent changed a file",
+      "semantic_value": "AI Agent File Change",
+      "description": "The agent wrote or edited this file.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "regex",
+          "value": "^file_(write|edit)$"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_file_change_fs",
+      "confidence": 0.5,
+      "name": "AI change and file system record (AND)",
+      "semantic_value": "AI File Change Corroborated",
+      "description": "The file system records a change to the file the agent wrote or edited.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "regex",
+          "value": "^file_(write|edit)$"
+        },
+        {
+          "feather_id": "mft_usn",
+          "field_name": "fn_filename",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_file_prior_copy",
+      "confidence": 0.5,
+      "name": "The agent's saved copy of the file",
+      "semantic_value": "Prior Version Saved by AI Agent",
+      "description": "The agent kept the file as it was before changing it: the before and after are both in the case.",
+      "conditions": [
+        {
+          "feather_id": "ai_versions",
+          "field_name": "sha1",
+          "operator": "wildcard",
+          "value": "*"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "file_activity",
+      "severity": "info"
+    },
+    {
+      "rule_id": "ai_reads_credentials",
+      "confidence": 0.5,
+      "name": "AI agent read a credential store",
+      "semantic_value": "AI Agent Read Credential Store",
+      "description": "The agent read a file that holds credentials or keys (SSH or cloud keys, browser saved logins or cookies, DPAPI master keys, password vaults, registry hives with secrets).",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "file_path",
+          "operator": "regex",
+          "value": "(?i)(\\\\\\.ssh\\\\|\\\\\\.aws\\\\|\\\\\\.azure\\\\|\\\\\\.kube\\\\|\\\\\\.docker\\\\config\\.json|\\\\\\.git-credentials|\\\\\\.netrc|\\\\Login Data$|\\\\Cookies$|\\\\Web Data$|logins\\.json$|key4\\.db$|\\.kdbx$|id_rsa|id_ed25519|\\\\Microsoft\\\\Credentials\\\\|\\\\Microsoft\\\\Protect\\\\|\\.pfx$|\\.pem$|\\\\\\.env$|SAM$|SECURITY$|NTDS\\.dit$)"
+        },
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "equals",
+          "value": "file_read"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "credential_access",
+      "severity": "high",
+      "technique_id": [
+        "T1552.001",
+        "T1555.003",
+        "T1003"
+      ],
+      "tactic": [
+        "credential_access"
+      ]
+    },
+    {
+      "rule_id": "ai_writes_credentials",
+      "confidence": 0.5,
+      "name": "AI agent changed a credential store",
+      "semantic_value": "AI Agent Changed Credential Store",
+      "description": "The agent wrote or edited a file that holds credentials or keys.",
+      "conditions": [
+        {
+          "feather_id": "ai_steps",
+          "field_name": "file_path",
+          "operator": "regex",
+          "value": "(?i)(\\\\\\.ssh\\\\|\\\\\\.aws\\\\|\\\\\\.azure\\\\|\\\\\\.kube\\\\|\\\\\\.docker\\\\config\\.json|\\\\\\.git-credentials|\\\\\\.netrc|\\\\Login Data$|\\\\Cookies$|\\\\Web Data$|logins\\.json$|key4\\.db$|\\.kdbx$|id_rsa|id_ed25519|\\\\Microsoft\\\\Credentials\\\\|\\\\Microsoft\\\\Protect\\\\|\\.pfx$|\\.pem$|\\\\\\.env$|SAM$|SECURITY$|NTDS\\.dit$)"
+        },
+        {
+          "feather_id": "ai_steps",
+          "field_name": "kind",
+          "operator": "regex",
+          "value": "^file_(write|edit)$"
+        }
+      ],
+      "logic_operator": "AND",
+      "scope": "wing",
+      "category": "credential_access",
+      "severity": "high",
+      "technique_id": [
+        "T1098.004"
+      ],
+      "tactic": [
+        "persistence"
+      ]
+    }
+  ],
+  "tags": [
+    "ai_agent",
+    "file_activity",
+    "credential_access",
+    "default",
+    "weighted"
+  ],
+  "case_types": [
+    "ai_agent",
+    "insider",
+    "intrusion"
+  ]
+}

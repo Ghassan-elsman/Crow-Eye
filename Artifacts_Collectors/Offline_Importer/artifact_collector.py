@@ -75,9 +75,19 @@ except ImportError:  # run with Artifacts_Collectors itself on sys.path
                                browser_source_tag)
 
 try:
+    from Artifacts_Collectors.ai_agent_paths import (
+        AI_AGENT_CASE_DIR, ai_agent_path_info, in_ai_agent_folder)
+except ImportError:  # run with Artifacts_Collectors itself on sys.path
+    from ai_agent_paths import AI_AGENT_CASE_DIR, ai_agent_path_info, in_ai_agent_folder
+
+try:
     from Artifacts_Collectors.user_artifact_paths import PER_USER_TYPES, UserFolderPlacer
 except ImportError:
     from user_artifact_paths import PER_USER_TYPES, UserFolderPlacer
+
+# Types collected as a folder tree per source and user (never flattened by
+# file name, never hash-deduplicated) and reported once per user folder.
+TREE_TYPES = ('Browser', 'AIAgents')
 
 
 class ArtifactCollector:
@@ -123,6 +133,8 @@ class ArtifactCollector:
         self.include_browser_cache = True
         self._browser_base = None
         self._browser_roots = {}    # source file -> (source user folder, case user folder)
+        # The same for AI agent session trees (see _process_ai_agent_file).
+        self._ai_agent_roots = {}
 
         # Per-user files (hives + their logs, LNK, Jump Lists) keep their
         # owner's folder; see user_artifact_paths.
@@ -145,6 +157,9 @@ class ArtifactCollector:
             # Browser profiles keep their tree below this folder (see
             # _browser_tree_destination) - never flattened by file name.
             'Browser': 'Browser',
+            # AI agent session records keep their tree the same way
+            # (<source>/Users/<name>/.claude/projects/...).
+            'AIAgents': AI_AGENT_CASE_DIR,
             'Unknown': 'Unknown'
         }
         
@@ -194,8 +209,9 @@ class ArtifactCollector:
                 # enter the registry either: a Prefetch file that happened to
                 # match a browser file's bytes was being skipped as a
                 # "duplicate". It also spares hashing thousands of cache files
-                # every time a collector is created.
-                if artifact_type == 'Browser':
+                # every time a collector is created. AI agent trees likewise:
+                # two users' identical transcripts are two pieces of evidence.
+                if artifact_type in TREE_TYPES:
                     continue
                 artifact_dir = os.path.join(self.target_artifacts_dir, subdir)
                 if not os.path.exists(artifact_dir):
@@ -347,6 +363,7 @@ class ArtifactCollector:
             "Prefetch Files": "Prefetch",
             "Jump Lists": "link_jumplist",
             "Browsers": "Browser",
+            "AI Agents": "AIAgents",
             "MFT Files": "MFT",
             "USN Journal": "USN",
             "Recycle Bin": "RecycleBin",
@@ -554,7 +571,13 @@ class ArtifactCollector:
             # Detect artifact type
             detection_result = self.detect_artifact_type(file_path)
             self._current_name = os.path.basename(file_path)
-            
+
+            # Inside an agent's folder (.claude / .gemini / .codex) only the
+            # session records are evidence. Nothing else there is collected -
+            # not even as Unknown - and its credential files above all.
+            if detection_result.artifact_type != 'AIAgents' and in_ai_agent_folder(file_path):
+                return None
+
             # Apply filter
             if not self._should_collect_artifact(detection_result.artifact_type, artifact_type_filter):
                 return None
@@ -562,6 +585,9 @@ class ArtifactCollector:
             # Browser files keep their folder tree (see _process_browser_file).
             if detection_result.artifact_type == 'Browser':
                 return self._process_browser_file(file_path, detection_result)
+            # AI agent session records likewise (see _process_ai_agent_file).
+            if detection_result.artifact_type == 'AIAgents':
+                return self._process_ai_agent_file(file_path, detection_result)
 
             # If artifact is Unknown and we are NOT filtering, we should still collect it
             # if the user wants "All Types".
@@ -701,13 +727,14 @@ class ArtifactCollector:
         return CollectedArtifactInfo(destination_path=destination_path, file_hash=file_hash,
                                      collection_status="success", error_message=None, **info)
 
-    def _browser_tree_destination(self, tag: str, rel_path: str) -> Optional[str]:
-        """``live_acquisition/Browser/<tag>/Users/<rel_path>``, or None when the
-        result would not stay inside it (a drive or ``..`` component in an
-        evidence path must never redirect a copy)."""
+    def _browser_tree_destination(self, tag: str, rel_path: str,
+                                  case_dir: str = BROWSER_CASE_DIR) -> Optional[str]:
+        """``live_acquisition/<case_dir>/<tag>/Users/<rel_path>`` (Browser by
+        default), or None when the result would not stay inside it (a drive or
+        ``..`` component in an evidence path must never redirect a copy)."""
         parts = [p for p in rel_path.replace("/", "\\").split("\\")
                  if p and p not in (".", "..") and ":" not in p]
-        root = os.path.abspath(os.path.join(self.target_artifacts_dir, BROWSER_CASE_DIR))
+        root = os.path.abspath(os.path.join(self.target_artifacts_dir, case_dir))
         dest = os.path.abspath(os.path.join(root, tag, "Users", *parts))
         if not os.path.normcase(dest).startswith(os.path.normcase(root) + os.sep):
             return None
@@ -757,21 +784,67 @@ class ArtifactCollector:
             return CollectedArtifactInfo(destination_path="", collection_status="failed", **info)
         return CollectedArtifactInfo(destination_path=destination_path, collection_status="success", **info)
 
+    def _process_ai_agent_file(self, file_path: str, detection_result) -> Optional[CollectedArtifactInfo]:
+        """Copy one AI agent session record to its place in the preserved tree:
+        ``live_acquisition/AIAgents/<source tag>/Users/<name>/.claude/...``.
+
+        The Browser rules exactly (see _process_browser_file): not
+        hash-deduplicated, one folder per source so two machines' profiles
+        never merge, and an existing destination is this same source collected
+        before. Only session records reach here - ArtifactTypeDetector types
+        nothing else in those folders AIAgents, credential files never.
+        """
+        where = ai_agent_path_info(file_path, self._browser_base)
+        if not where:
+            return None
+        rel, src_root, volume_root = where
+        info = dict(source_path=file_path, artifact_type='AIAgents',
+                    file_size=detection_result.file_size, file_hash="",
+                    error_message=None, timestamp=datetime.now())
+        if self.scan_only:
+            self._ai_agent_roots[file_path] = (src_root, None)
+            return CollectedArtifactInfo(destination_path=None, collection_status="success", **info)
+        # A file already inside this case's AIAgents tree stays where it is.
+        case_tree = os.path.normcase(os.path.abspath(
+            os.path.join(self.target_artifacts_dir, AI_AGENT_CASE_DIR))) + os.sep
+        if os.path.normcase(os.path.abspath(file_path)).startswith(case_tree):
+            self._ai_agent_roots[file_path] = (src_root, src_root)
+            return CollectedArtifactInfo(destination_path=file_path, collection_status="success", **info)
+        tag = browser_source_tag(volume_root)
+        destination_path = self._browser_tree_destination(tag, rel, AI_AGENT_CASE_DIR)
+        if not destination_path:
+            info["error_message"] = "AI agent path would leave the case folder"
+            return CollectedArtifactInfo(destination_path="", collection_status="failed", **info)
+        user = rel.replace("/", "\\").split("\\")[0]
+        self._ai_agent_roots[file_path] = (
+            src_root, os.path.join(self.target_artifacts_dir, AI_AGENT_CASE_DIR, tag, "Users", user))
+        if os.path.exists(destination_path):
+            return CollectedArtifactInfo(destination_path=destination_path,
+                                         collection_status="success", **info)
+        if not self._copy_artifact(file_path, destination_path):
+            info["error_message"] = "Failed to copy file"
+            return CollectedArtifactInfo(destination_path="", collection_status="failed", **info)
+        return CollectedArtifactInfo(destination_path=destination_path, collection_status="success", **info)
+
     def _collapse_browser_artifacts(self, artifacts):
-        """One result per browser USER folder instead of one per file.
+        """One result per browser (or AI agent) USER folder instead of one per file.
 
         A profile is thousands of files (LevelDB, IndexedDB, cache). Listing each
         in the scan index made the Parse dialog unreadable; the browser parser
         walks the whole tree anyway, so one entry per user is what it needs.
+        The AI agent parser reads a whole Users tree the same way.
         """
+        roots_by_type = {'Browser': self._browser_roots, 'AIAgents': self._ai_agent_roots}
+        nouns = {'Browser': 'browser', 'AIAgents': 'AI agent'}
         out, groups = [], {}
         for a in artifacts:
-            if a.artifact_type != 'Browser':
+            if a.artifact_type not in TREE_TYPES:
                 out.append(a)
                 continue
-            src_root, dst_root = self._browser_roots.get(a.source_path, (None, None))
-            key = dst_root or src_root or a.source_path
+            src_root, dst_root = roots_by_type[a.artifact_type].get(a.source_path, (None, None))
+            key = (a.artifact_type, dst_root or src_root or a.source_path)
             g = groups.setdefault(key, {"src": src_root or a.source_path, "dst": dst_root,
+                                        "type": a.artifact_type,
                                         "size": 0, "failed": 0, "count": 0, "ts": a.timestamp})
             g["size"] += a.file_size or 0
             g["failed"] += 1 if a.collection_status == "failed" else 0
@@ -780,10 +853,10 @@ class ArtifactCollector:
             out.append(CollectedArtifactInfo(
                 source_path=g["src"],
                 destination_path=None if self.scan_only else g["dst"],
-                artifact_type='Browser', file_size=g["size"], file_hash="",
+                artifact_type=g["type"], file_size=g["size"], file_hash="",
                 collection_status="success" if g["failed"] < g["count"] else "failed",
-                error_message=(f"{g['failed']} of {g['count']} browser file(s) could not be copied"
-                               if g["failed"] else None),
+                error_message=(f"{g['failed']} of {g['count']} {nouns[g['type']]} file(s) "
+                               f"could not be copied" if g["failed"] else None),
                 timestamp=g["ts"]))
         return out
 
@@ -887,6 +960,7 @@ class ArtifactCollector:
         # Browser attribution is clamped to the folder being imported.
         self._browser_base = os.path.abspath(source_dir) if source_dir else None
         self._browser_roots = {}
+        self._ai_agent_roots = {}
 
         if specific_files:
             file_paths = specific_files

@@ -304,6 +304,18 @@ body {
   height: 7px;
   background: var(--lime);
   border-radius: 50%;
+  position: relative;
+}
+
+/* The ring is a scaling circle, not an animated box-shadow: same look (a 7px dot growing
+   to 19px while fading from 0.5 to 0), but transform/opacity run on the compositor, where
+   box-shadow repainted the badge on the main thread at 60 Hz for as long as the page was open. */
+.hero-badge .pulse::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: rgb(190, 242, 100);
   animation: pulse-dot 1.5s infinite;
 }
 
@@ -311,11 +323,13 @@ body {
 
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(190, 242, 100, 0.5);
+    transform: scale(1);
+    opacity: 0.5;
   }
 
   50% {
-    box-shadow: 0 0 0 6px rgba(190, 242, 100, 0);
+    transform: scale(2.714);
+    opacity: 0;
   }
 }
 
@@ -341,6 +355,21 @@ body {
 .hero-logo-wrap img:hover {
   transform: scale(1.06) rotate(-2deg);
   box-shadow: 0 0 80px rgba(99, 102, 241, 0.45);
+}
+
+/* an emblem with its own shape (the Sentinel shield): no framed box, same place and steps */
+.hero-logo-wrap--emblem img {
+  width: 150px;
+  height: 150px;
+  object-fit: contain;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.hero-logo-wrap--emblem img:hover {
+  transform: scale(1.04);
+  box-shadow: none;
 }
 
 .hero-stats {
@@ -1201,17 +1230,25 @@ footer a:hover {
 }
 
 @media (min-width: 961px) {
+  /* The sidebar is a real grid lane beside the content, not a fixed overlay: it sticks
+     while its own container scrolls past and stops with it, so it can never be drawn
+     over the hero title, a heading outside the container, or the footer. */
+  .doc-container {
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    column-gap: 60px;
+    align-items: start;
+  }
+
   .doc-sidebar {
-    position: fixed; /* TRULY FIXED: Never moves during scroll */
-    top: 10rem;
-    left: 5%;
-    width: 300px;
-    height: calc(100vh - 12rem);
+    position: sticky;
+    top: 7rem;
+    align-self: start;
+    max-height: calc(100vh - 8rem);
     overflow-y: auto;
     overflow-x: hidden;
     padding-right: 2rem;
     border-right: 1px solid var(--border);
-    z-index: 100;
     scrollbar-width: thin;
     scrollbar-color: var(--indigo) transparent;
   }
@@ -1226,8 +1263,9 @@ footer a:hover {
   }
 
   .doc-content {
-    margin-left: 360px; /* Lane for the fixed sidebar */
-    width: calc(100% - 360px);
+    margin-left: 0;
+    width: auto;
+    min-width: 0;
     max-width: 1400px;
   }
 }
@@ -2095,8 +2133,32 @@ footer a:hover {
   align-items: stretch;
 }
 
+.dual-engine-comparison.three-engines {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.three-engines .engine-column {
+  padding: 1.75rem 1.5rem;
+}
+
+.three-engines .engine-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.6rem;
+}
+
+.three-engines .engine-header h3 {
+  white-space: nowrap;
+}
+
+.three-engines .engine-badge {
+  white-space: nowrap;
+  font-size: 0.8rem;
+}
+
 @media (max-width: 900px) {
-  .dual-engine-comparison {
+  .dual-engine-comparison,
+  .dual-engine-comparison.three-engines {
     grid-template-columns: 1fr;
   }
 
@@ -2420,6 +2482,12 @@ footer a:hover {
     border-radius: 20px;
   }
 
+  .hero-logo-wrap--emblem img {
+    width: 104px;
+    height: 104px;
+    border-radius: 0;
+  }
+
   .hero-title {
     font-size: clamp(2rem, 10vw, 2.8rem);
   }
@@ -2503,8 +2571,6 @@ footer a:hover {
   /* Documentation & Architecture */
   .doc-container {
     padding: 1.5rem 1rem;
-    gap: 2rem;
-    grid-template-columns: 1fr;
   }
 
   .doc-content h2 {
@@ -2645,6 +2711,11 @@ footer a:hover {
   .hero-logo-wrap img {
     width: 100px;
     height: 100px;
+  }
+
+  .hero-logo-wrap--emblem img {
+    width: 116px;
+    height: 116px;
   }
 }
 
@@ -3062,6 +3133,11 @@ body {
   background: rgba(148, 163, 184, 0.14);
 }
 
+/* home scene containers get a compositor layer only while ceMotion animates them */
+.ce-live {
+  will-change: transform, opacity;
+}
+
 #loop.pin .ce-loop::after {
   content: '';
   position: absolute;
@@ -3143,54 +3219,6 @@ body.sentinel {
 
 body.sentinel #scroll-progress {
   background: linear-gradient(90deg, var(--sentinel), var(--sentinel-2), #fda4af);
-}
-
-/* hero: a full-width wordmark that settles into the headline */
-.s-zoom-mark {
-  width: fit-content;
-  margin: 0 auto;
-  transform-origin: 50% 50%;
-}
-
-.sentinel-hero.pin {
-  height: 230vh;
-  min-height: 0;
-  padding: 0;
-  display: block;
-  transform: none !important;
-  opacity: 1 !important;
-}
-
-.sentinel-hero.pin > .container {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding-top: 4.5rem;
-}
-
-.sentinel-hero.pin .hero-title {
-  animation: none;
-}
-
-.sentinel-hero.pin .s-zoom-mark,
-.sentinel-hero.pin .s-zoom-rest {
-  will-change: transform, opacity;
-}
-
-/* the hint sits on the sticky stage itself, never inside the moving .reveal; the script
-   fades the wrapper, so the hint keeps its own fadeUp entrance */
-.sentinel-hero.pin .s-hint-wrap {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 2rem;
-}
-
-.sentinel-hero.pin .s-hint-wrap .scroll-hint {
-  margin-top: 0;
 }
 
 /* read-along: words light up as the paragraph scrolls past */
@@ -3358,4 +3386,336 @@ body.sentinel #scroll-progress {
 
 #architecture .technical-table th:first-child {
   width: 15%;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   HOME: THE CROW-EYE STACK (cp-stack.js)
+   A contained card: the animation well on the left, four steps on the right.
+   The script sets data-step="1..4" on the card and the matching step brightens;
+   with no data-step (the closing hold, reduced motion, JS off) every step reads
+   at full strength. The icons in the well are HTML the script moves.
+   ══════════════════════════════════════════════════════════════════════════ */
+#stack > .container {
+  max-width: 1440px;
+}
+
+.stack-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+  gap: 3rem;
+  align-items: stretch;
+  padding: 2.5rem;
+  border-radius: 24px;
+  background: rgba(12, 16, 32, 0.97);
+  border: 1px solid rgba(129, 140, 248, 0.18);
+}
+
+.stack-anim {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 680px;
+  border-radius: 16px;
+  background: #0a0c10;
+  overflow: hidden;
+  border: 1px solid rgba(129, 140, 248, 0.16);
+}
+
+/* the stage (canvas + the HTML the script moves) above a caption strip */
+.stk-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  --stk-size: 96px;
+}
+
+.stk-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.stk-node {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.45rem;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.stk-node img {
+  width: var(--stk-size);
+  height: var(--stk-size);
+  object-fit: contain;
+  display: block;
+}
+
+.stk-ce img {
+  border-radius: 22%;
+  border: 1px solid var(--border);
+}
+
+.stk-tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: #a5f3fc;
+  padding: 0.2rem 0.6rem;
+  border: 1px solid rgba(34, 211, 238, 0.4);
+  border-radius: 999px;
+  background: rgba(10, 12, 16, 0.85);
+  opacity: 0;
+}
+
+.stk-tag--sn {
+  color: #fecdd3;
+  border-color: rgba(251, 113, 133, 0.45);
+}
+
+.stk-art {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--text);
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(129, 140, 248, 0.4);
+  border-radius: 6px;
+  background: rgba(15, 18, 30, 0.92);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.stk-art:nth-of-type(4n + 2) { border-color: rgba(34, 211, 238, 0.45); }
+.stk-art:nth-of-type(4n + 3) { border-color: rgba(190, 242, 100, 0.45); }
+.stk-art:nth-of-type(4n + 4) { border-color: rgba(196, 181, 253, 0.45); }
+
+/* one caption per beat, stacked in the same place; the script cross-fades them */
+.stk-caps {
+  position: relative;
+  flex: none;
+  display: grid;
+  min-height: 6.6rem;
+  padding: 1rem 1.4rem 1.2rem;
+  border-top: 1px solid rgba(129, 140, 248, 0.12);
+  background: rgba(15, 18, 30, 0.6);
+}
+
+.stk-cap {
+  grid-area: 1 / 1;
+  margin: 0;
+  align-self: center;
+  color: var(--muted);
+  font-size: 0.98rem;
+  line-height: 1.6;
+  opacity: 0;
+}
+
+.stk-cap:first-child { opacity: 1; }
+
+.stk-cap b {
+  color: var(--text);
+}
+
+.stk-word {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: calc(var(--stk-size) * 0.24);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  color: #6ee7b7;
+  padding: 0.35em 0.9em;
+  border: 1px solid rgba(52, 211, 153, 0.45);
+  border-radius: 10px;
+  background: rgba(10, 12, 16, 0.88);
+}
+
+.stack-text {
+  min-width: 0;
+  align-self: center;
+}
+
+.stack-text .section-label {
+  margin-bottom: 0.9rem;
+}
+
+.stack-card .stack-title {
+  font-size: clamp(1.6rem, 2.3vw, 2.15rem);
+  line-height: 1.12;
+  margin-bottom: 1rem;
+  overflow-wrap: break-word;
+}
+
+.stack-lead {
+  color: var(--muted);
+  font-size: 1.02rem;
+  line-height: 1.65;
+  margin: 0 0 1.2rem;
+}
+
+.stack-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.stack-steps li {
+  display: grid;
+  grid-template-columns: 1.9rem minmax(0, 1fr);
+  column-gap: 0.85rem;
+  padding: 0.55rem 0.75rem 0.55rem 0.65rem;
+  border-left: 2px solid transparent;
+  border-radius: 0 10px 10px 0;
+  transition: opacity 0.45s ease, background-color 0.45s ease, border-color 0.45s ease;
+  --c: 129, 140, 248;
+}
+
+.stack-steps li[data-step="2"] { --c: 251, 113, 133; }
+.stack-steps li[data-step="3"] { --c: 34, 211, 238; }
+.stack-steps li[data-step="4"] { --c: 52, 211, 153; }
+
+.stack-n {
+  grid-row: 1 / span 2;
+  width: 1.9rem;
+  height: 1.9rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: rgb(var(--c));
+  border: 1px solid rgba(var(--c), 0.45);
+  background: rgba(var(--c), 0.08);
+  transition: color 0.45s ease, background-color 0.45s ease, border-color 0.45s ease;
+}
+
+.stack-steps h3 {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  font-size: 1.08rem;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--text);
+  margin: 0.18rem 0 0.25rem;
+}
+
+.stack-steps h3 em {
+  font-style: normal;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgb(var(--c));
+}
+
+.stack-ico {
+  width: 1.5rem;
+  height: 1.5rem;
+  object-fit: contain;
+  flex: none;
+}
+
+.stack-steps p {
+  color: var(--muted);
+  font-size: 0.93rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.stack-card[data-step] .stack-steps li {
+  opacity: 0.6;
+}
+
+.stack-card[data-step="1"] .stack-steps li[data-step="1"],
+.stack-card[data-step="2"] .stack-steps li[data-step="2"],
+.stack-card[data-step="3"] .stack-steps li[data-step="3"],
+.stack-card[data-step="4"] .stack-steps li[data-step="4"] {
+  opacity: 1;
+  background-color: rgba(var(--c), 0.07);
+  border-left-color: rgb(var(--c));
+}
+
+.stack-card[data-step="1"] .stack-steps li[data-step="1"] .stack-n,
+.stack-card[data-step="2"] .stack-steps li[data-step="2"] .stack-n,
+.stack-card[data-step="3"] .stack-steps li[data-step="3"] .stack-n,
+.stack-card[data-step="4"] .stack-steps li[data-step="4"] .stack-n {
+  color: #0a0c10;
+  background-color: rgb(var(--c));
+  border-color: rgb(var(--c));
+}
+
+@media (max-width: 960px) {
+  .stack-card {
+    grid-template-columns: 1fr;
+    gap: 1.75rem;
+    padding: 1.5rem;
+  }
+
+  .stack-anim {
+    min-height: 0;
+  }
+
+  .stk-stage {
+    flex: none;
+    aspect-ratio: 4 / 3;
+  }
+
+  .stk-caps {
+    min-height: 8.5rem;
+    padding: 0.85rem 1rem 1rem;
+  }
+
+  .stk-cap {
+    font-size: 0.9rem;
+  }
+
+  .stk-art {
+    font-size: 0.64rem;
+    padding: 0.18rem 0.45rem;
+  }
+
+  /* one column: the box sits above the steps and scrolls away, so keep every step readable */
+  .stack-card[data-step] .stack-steps li { opacity: 1; }
+}
+
+@media (max-width: 480px) {
+  .stack-card {
+    width: calc(100vw - 32px);
+    margin-left: calc(50% - 50vw + 16px);
+    padding: 0.75rem;
+    border-radius: 18px;
+  }
+
+  .stack-steps li {
+    grid-template-columns: 1.6rem minmax(0, 1fr);
+    column-gap: 0.65rem;
+    padding: 0.5rem 0.3rem 0.5rem 0.4rem;
+  }
+
+  .stack-n {
+    width: 1.6rem;
+    height: 1.6rem;
+    font-size: 0.74rem;
+  }
 }

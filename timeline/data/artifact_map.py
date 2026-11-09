@@ -79,6 +79,12 @@ ARTIFACT_DB_MAPPING = {
     # it was simply never named here, so nothing that reasons from the map knew
     # it existed.
     "MftUsn": "mft_usn_correlated_analysis.db",
+    # AI agent sessions (Claude Code, Gemini CLI, Codex), from
+    # `Artifacts_Collectors/AI_Agent_Claw.py`. A step's time is when the agent
+    # took it, from the agent's own record, so a command row places the agent -
+    # not a person at the keyboard - at that moment. Only some kinds of step
+    # are drawn: see ROW_FILTERS below.
+    "AIAgents": "ai_agents.db",
 }
 
 ARTIFACT_DB_ALTERNATIVES = {
@@ -442,6 +448,42 @@ TIMESTAMP_MAPPINGS = {
         ("SecurityLogs", "EventTimestampUTC", "various", "Security event log"),
         ("ApplicationLogs", "EventTimestampUTC", "various", "Application event log"),
     ],
+    # One row per step an AI agent took. `ts` is the agent's own record of
+    # when it took the step ('YYYY-MM-DD HH:MM:SS' UTC). Which steps count is
+    # ROW_FILTERS["ai_agent_steps"]; `ai_agent_sessions.first_ts / last_ts` are
+    # the first and last of these same steps, so they are not plotted again.
+    "AIAgents": [
+        ("ai_agent_steps", "ts", "various",
+         "AI agent step: a command it ran, a file it wrote or edited, a prompt"),
+    ],
+}
+
+
+# --------------------------------------------------------------------------
+#  Which rows of a table are drawn
+# --------------------------------------------------------------------------
+
+# `{table: SQL boolean expression}` - only rows matching it are plotted, by the
+# timeline lane and by Eye's `query_timeline` sweep alike, so the two agree.
+#
+# `ai_agent_steps`: a real machine holds ~265,000 steps, and most of them are
+# the agent talking to itself - 122,000 tool results, 17,000 answers, 13,000
+# file reads, plus notices and searches. What places an actor at a moment is
+# narrower: a command the agent ran (role assistant), a command the person typed
+# into the session with `!` (role user, kind command), a file the agent wrote or
+# edited, and the person's own prompts (role user, kind prompt - not the prompts
+# an agent wrote for its sub-agents, which are role agent). ~103,000 rows.
+ROW_FILTERS = {
+    # + the agent driving a browser or the screen, and the screenshots it
+    # took of pages it drove (2026-11-04): each places the agent at a moment
+    # as surely as a command does.
+    # + the prompts that set the agent working with no person typing (a
+    # scheduled task, another agent session, a program through claude -p;
+    # role system / agent) - but not a main agent's instructions to its own
+    # sub-agents, which sit in the sub-agent's transcript (is_sidechain = 1).
+    "ai_agent_steps": ("(kind IN ('command', 'file_write', 'file_edit', 'browser', 'computer', "
+                       "'screenshot') OR (kind = 'prompt' AND (role = 'user' OR "
+                       "(role IN ('system', 'agent') AND is_sidechain = 0))))"),
 }
 
 

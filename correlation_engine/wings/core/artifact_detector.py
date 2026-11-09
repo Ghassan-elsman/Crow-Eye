@@ -146,6 +146,12 @@ class ArtifactDetector:
             'exact': ['browser', 'history', 'web_history', 'browser_history'],
             'partial': ['browser', 'history']
         },
+        # AI agent session records (AI_Agent_Claw.py, ai_agents.db): what
+        # Claude Code, Gemini CLI or Codex was asked and ran.
+        'AIAgentSteps': {
+            'exact': ['ai_agent_steps', 'ai_agents'],
+            'partial': ['ai_agent']
+        },
         'ShimCache': {
             'exact': ['shimcache', 'shimcache_entries', 'shim_cache'],
             'partial': ['shimcache', 'shim']
@@ -482,6 +488,12 @@ class ArtifactDetector:
 
             # Log subtypes
             'SecurityLogs', 'SystemLogs', 'ApplicationLogs',
+            # Device evidence channels (Log_Claw.db): a disk arriving and
+            # leaving, with its serial; a UMDF device's PnP requests
+            'partition_diagnostic', 'driver_frameworks_usermode',
+            # setupapi.dev.log (Log_Claw.db): each device install, the first
+            # install of a USB device among them
+            'setupapi_dev_log',
 
             # AmCache subtypes
             'InventoryApplication', 'InventoryApplicationFile', 'InventoryApplicationShortcut',
@@ -495,7 +507,12 @@ class ArtifactDetector:
             'ntfs_integrity_findings',
 
             # Additional types
-            'Registry', 'RecycleBin', 'BrowserHistory'
+            'Registry', 'RecycleBin', 'BrowserHistory',
+
+            # AI agents (ai_agents.db): each step an agent took, the copies it
+            # saved of files before changing them, the processes that ran it;
+            # AIAgents is their category, as the AI Wings name it
+            'AIAgents', 'AIAgentSteps', 'AIAgentSessions', 'AIAgentFileVersions', 'AIAgentProcesses'
         ]
 
         # Combine and remove duplicates while preserving order

@@ -36,8 +36,11 @@ def test_core_is_a_cached_system_block_and_step_context_follows_the_conversation
     assert params["system"] == [{"type": "text", "text": CORE, "cache_control": {"type": "ephemeral"}}]
     assert STEP not in str(params["system"])
     last = params["messages"][-1]["content"]
-    # the breakpoint is on the message as the history will keep it ...
-    assert last[0] == {"type": "text", "text": "Tool results: 20 rows", "cache_control": {"type": "ephemeral"}}
+    # the breakpoint is on the last message the next call sends unchanged (the reply
+    # before this turn); this turn's text is merged with the step's instruction ...
+    assert params["messages"][-2]["content"] == [
+        {"type": "text", "text": "Looking.", "cache_control": {"type": "ephemeral"}}]
+    assert last[0] == {"type": "text", "text": "Tool results: 20 rows"}
     # ... and the per-call context comes after it, uncached
     assert STEP in last[1]["text"] and "cache_control" not in last[1]
     # earlier turns are untouched, so they stay byte-identical across calls

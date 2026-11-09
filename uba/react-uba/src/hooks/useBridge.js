@@ -66,6 +66,10 @@ function waitForBridge(attempt = 1) {
   return bridgePromise
 }
 
+let asyncSeq = 0
+const asyncPending = new Map()
+let asyncHooked = null
+
 export function useBridge() {
   const [bridge, setBridge] = useState(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -94,5 +98,32 @@ export function useBridge() {
     })
   }, [bridge])
 
-  return { bridge, callBridge, isLoading, isDev }
+  // The Who drove it tab's evidence readers run off Crow-Eye's GUI thread
+  // (uba_bridge ASYNC_SLOTS, visualizations/async_bridge.py): the answer comes
+  // back on asyncResult. Anything else, an older bridge and the mock stay the
+  // plain synchronous call.
+  const callAsync = useCallback(async (method, ...args) => {
+    if (!bridge) return null
+    if (!(bridge.callAsync && bridge.asyncResult)) return callBridge(method, ...args)
+    if (asyncHooked !== bridge) {
+      asyncHooked = bridge
+      bridge.asyncResult.connect((id, payload) => {
+        const done = asyncPending.get(id)
+        if (done) { asyncPending.delete(id); done(payload) }
+      })
+    }
+    const id = `${method}#${++asyncSeq}`
+    const raw = await new Promise((resolve) => {
+      asyncPending.set(id, resolve)
+      bridge.callAsync(method, id, JSON.stringify(args))
+    })
+    const out = JSON.parse(raw || 'null')
+    if (out && typeof out === 'object' && out.__asyncError) {
+      console.error(`[bridge] ${method}: ${out.__asyncError}`)
+      return null
+    }
+    return out
+  }, [bridge, callBridge])
+
+  return { bridge, callBridge, callAsync, isLoading, isDev }
 }

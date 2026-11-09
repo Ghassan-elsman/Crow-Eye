@@ -14,12 +14,14 @@ from typing import Optional, Tuple
 
 try:
     from Artifacts_Collectors.browser_paths import browser_relative_path
+    from Artifacts_Collectors.ai_agent_paths import ai_agent_relative_path
 except ImportError:  # run with Artifacts_Collectors itself on sys.path
     import sys as _sys
     _ac = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     if _ac not in _sys.path:
         _sys.path.insert(0, _ac)
     from browser_paths import browser_relative_path
+    from ai_agent_paths import ai_agent_relative_path
 
 
 @dataclass
@@ -181,6 +183,19 @@ class ArtifactTypeDetector:
         except Exception:
             file_size = 0
         
+        # AI agent session records (Claude Code, Gemini CLI, Codex): only by
+        # location - Users/<name>/.claude/projects, .gemini/tmp/*/chats,
+        # .codex/sessions, archived_sessions, state_*.sqlite. Anything else
+        # in those folders (credential files above all) is not one.
+        if ai_agent_relative_path(file_path):
+            return ArtifactDetectionResult(
+                file_path=file_path,
+                artifact_type='AIAgents',
+                confidence=0.9,
+                detection_method='path',
+                file_size=file_size
+            )
+
         # Browser profile trees first: identified by location, before the
         # filename rules (which would call a profile's .url / SRU* / *.pf-like
         # files something else).

@@ -504,7 +504,9 @@ class SearchWorker(QObject):
                 start_time=self.start_time,
                 end_time=self.end_time,
                 timeout_seconds=self.timeout_seconds,
-                progress_callback=progress_callback
+                progress_callback=progress_callback,
+                # The dialog saves this search itself, with its time filter.
+                record_history=False
             )
 
             print(f"[WORKER] Received {len(results) if results else 0} SearchResults objects from search engine")
@@ -553,14 +555,34 @@ class UISearchResult:
     Static class to hold search result data for the UI.
     Replaces dynamic type creation to avoid potential crashes.
     """
-    def __init__(self, database, table, row_id, matched_columns, row_data, match_preview, matched_timestamps):
+    def __init__(self, database, table, row_id, matched_columns, row_data, match_preview,
+                 matched_timestamps, preview_fn=None):
         self.database = database
         self.table = table
         self.row_id = row_id
         self.matched_columns = matched_columns
         self.row_data = row_data
-        self.match_preview = match_preview
+        self._match_preview = match_preview
+        self._preview_fn = preview_fn
         self.matched_timestamps = matched_timestamps
+
+    # Built the first time it is read: the rows the table draws, or Export.
+    # Building one per result as the search finished ran on the GUI thread
+    # for every match, shown or not.
+    @property
+    def match_preview(self):
+        if self._match_preview is None and self._preview_fn is not None:
+            fn, self._preview_fn = self._preview_fn, None
+            try:
+                self._match_preview = fn()
+            except Exception:
+                self._match_preview = ""
+        return self._match_preview
+
+    @match_preview.setter
+    def match_preview(self, value):
+        self._match_preview = value
+        self._preview_fn = None
 
 
 class DatabaseSearchDialog(QtWidgets.QDialog):
@@ -973,7 +995,20 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         self.history_combo.addItem("-- Select recent --")
         self.history_combo.setToolTip("Select from your recent searches to quickly repeat them")
         search_layout.addWidget(self.history_combo)
-        
+
+        # Saved searches: both handlers were written (_on_save_search_clicked,
+        # _on_saved_searches_clicked) and nothing on screen called them, so a
+        # search could not be saved and the saved list could not be opened.
+        self.save_search_button = QtWidgets.QPushButton("Save")
+        self.save_search_button.setMinimumHeight(20)
+        self.save_search_button.setToolTip(
+            "Save this search under a name: the term, the options, the databases and the period")
+        search_layout.addWidget(self.save_search_button)
+        self.saved_searches_button = QtWidgets.QPushButton("Saved")
+        self.saved_searches_button.setMinimumHeight(20)
+        self.saved_searches_button.setToolTip("Open a saved search, or delete one")
+        search_layout.addWidget(self.saved_searches_button)
+
         # Search label
         search_label = QtWidgets.QLabel("Search:")
         search_label.setMinimumWidth(50)
@@ -1201,7 +1236,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
         
         # History
         self.history_combo.currentIndexChanged.connect(self._on_history_selected)
-        
+        self.save_search_button.clicked.connect(self._on_save_search_clicked)
+        self.saved_searches_button.clicked.connect(self._on_saved_searches_clicked)
+
         # Note: Search-as-type feature removed
         
         # Filter change signals for updating summary AND auto-triggering search
@@ -2121,6 +2158,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
     # Results Display (Task 4.3)
     # ========================================================================
     
+    # Rows the results table draws; Export writes every result.
+    RESULTS_SHOWN = 5000
+
     def _populate_results_table(self, results: List[SearchResult], search_time: float, truncated: bool = False, time_filter_active: bool = False, start_time=None, end_time=None):
         """
         Populate the results table with search results, including timestamp display when time filtering is active.
@@ -2161,80 +2201,61 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             
             self.results_info_label.setText(info_text)
             
-            # Populate table
-            for idx, result in enumerate(results):
-                self.logger.debug(f"Processing result {idx}: {type(result)}")
-                try:
-                    row = self.results_table.rowCount()
-                    self.results_table.insertRow(row)
-                    self.logger.debug(f"Inserted row {row}")
-                    
-                    # Database column - with defensive checks
-                    db_name = str(result.database) if hasattr(result, 'database') and result.database else "Unknown"
-                    db_item = QtWidgets.QTableWidgetItem(db_name)
-                    db_item.setData(Qt.UserRole, result)  # Store full result object
-                    self.results_table.setItem(row, 0, db_item)
-                    self.logger.debug(f"Set database: {db_name}")
-                    
-                    # Table column - with defensive checks
-                    table_name = str(result.table) if hasattr(result, 'table') and result.table else "Unknown"
-                    table_item = QtWidgets.QTableWidgetItem(table_name)
-                    self.results_table.setItem(row, 1, table_item)
-                    self.logger.debug(f"Set table: {table_name}")
-                    
-                    # Matched columns - with defensive checks
-                    if hasattr(result, 'matched_columns') and result.matched_columns and isinstance(result.matched_columns, list):
-                        matched_cols = ", ".join(str(col) for col in result.matched_columns[:3])
-                        if len(result.matched_columns) > 3:
-                            matched_cols += f" (+{len(result.matched_columns) - 3} more)"
-                    else:
-                        matched_cols = "N/A"
-                    matched_item = QtWidgets.QTableWidgetItem(matched_cols)
-                    self.results_table.setItem(row, 2, matched_item)
-                    self.logger.debug(f"Set matched columns: {matched_cols}")
-                    
-                    # Timestamp column - only populate if time filtering is active
-                    if time_filter_active:
-                        timestamp_item = self._create_timestamp_item(result)
-                        self.results_table.setItem(row, 3, timestamp_item)
-                        self.logger.debug(f"Set timestamp: {timestamp_item.text()}")
-                    
-                    # Preview - with defensive checks
+            # Populate table. At most RESULTS_SHOWN rows are drawn; the rest stay
+            # in current_results, which Export writes in full. Every row used to
+            # be inserted one at a time with five debug lines and an info line
+            # written to the case and app logs, repaints on, and no cap: a
+            # broad search froze the window for as long as the rows took.
+            shown = results[:self.RESULTS_SHOWN]
+            if len(results) > len(shown):
+                self.results_info_label.setText(
+                    info_text + " - showing the first %s; Export writes all %s"
+                    % (format(len(shown), ","), format(len(results), ",")))
+            table = self.results_table
+            table.setUpdatesEnabled(False)
+            try:
+                table.setRowCount(len(shown))
+                for row, result in enumerate(shown):
                     try:
-                        preview = ""
-                        if hasattr(result, 'match_preview') and result.match_preview:
-                            preview = str(result.match_preview)
+                        db_name = str(result.database) if getattr(result, 'database', None) else "Unknown"
+                        db_item = QtWidgets.QTableWidgetItem(db_name)
+                        db_item.setData(Qt.UserRole, result)  # Store full result object
+                        table.setItem(row, 0, db_item)
+                        table_name = str(result.table) if getattr(result, 'table', None) else "Unknown"
+                        table.setItem(row, 1, QtWidgets.QTableWidgetItem(table_name))
+                        cols = getattr(result, 'matched_columns', None)
+                        if cols and isinstance(cols, list):
+                            matched_cols = ", ".join(str(col) for col in cols[:3])
+                            if len(cols) > 3:
+                                matched_cols += f" (+{len(cols) - 3} more)"
                         else:
-                            # If no preview, create one from row_data
-                            if hasattr(result, 'row_data') and result.row_data:
-                                matched_cols = getattr(result, 'matched_columns', [])
-                                preview = self._create_preview_from_data(result.row_data, matched_cols)
-                        
-                        # Don't truncate preview in table - let it show full text
+                            matched_cols = "N/A"
+                        table.setItem(row, 2, QtWidgets.QTableWidgetItem(matched_cols))
+                        # Timestamp column - only populate if time filtering is active
+                        if time_filter_active:
+                            table.setItem(row, 3, self._create_timestamp_item(result))
+                        try:
+                            preview = ""
+                            if getattr(result, 'match_preview', None):
+                                preview = str(result.match_preview)
+                            elif getattr(result, 'row_data', None):
+                                preview = self._create_preview_from_data(
+                                    result.row_data, getattr(result, 'matched_columns', []))
+                        except Exception as preview_error:
+                            self.logger.error(f"Error setting preview: {preview_error}")
+                            preview = ""
+                        # Column index is always 4 for Preview, even with the
+                        # timestamp column (3) hidden.
                         preview_item = QtWidgets.QTableWidgetItem(preview)
-                        
-                        # Set full preview as tooltip
                         if preview:
                             preview_item.setToolTip(preview)
-                        
-                        # Column index is always 4 for Preview
-                        # Even if timestamp column (3) is hidden, the model index remains 4
-                        preview_col = 4
-                        self.results_table.setItem(row, preview_col, preview_item)
-                        self.logger.debug(f"Set preview: {preview[:50] if preview else '(empty)'}...")
-                    except Exception as preview_error:
-                        self.logger.error(f"Error setting preview: {preview_error}")
-                        # Set empty preview on error
-                        preview_col = 4
-                        self.results_table.setItem(row, preview_col, QtWidgets.QTableWidgetItem(""))
-                    
-                    self.logger.info(f"Successfully added result {idx} to row {row}")
-                    
-                except Exception as e:
-                    self.logger.error(f"Error adding result {idx} to table: {e}", exc_info=True)
-                    # Continue with next result instead of crashing
-                    continue
-            
+                        table.setItem(row, 4, preview_item)
+                    except Exception as e:
+                        self.logger.error(f"Error adding result {row} to table: {e}", exc_info=True)
+                        continue
+            finally:
+                table.setUpdatesEnabled(True)
+
             # Enable sorting
             self.results_table.setSortingEnabled(True)
             
@@ -2714,8 +2735,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                     # Get matched columns
                     matched_columns = getattr(result, 'matched_columns', [])
                     
-                    # Create preview from row_data and matched_columns
-                    preview = self._create_preview_from_data(row_data, matched_columns)
+                    # The preview is built when first read (UISearchResult.match_preview)
+                    preview_fn = (lambda rd=row_data, mc=matched_columns:
+                                  self._create_preview_from_data(rd, mc))
                     
                     # Get table name - handle both 'table' and 'table_name' attributes
                     table_name = getattr(result, 'table', None)
@@ -2736,8 +2758,9 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                         row_id=row_id,
                         matched_columns=matched_columns,
                         row_data=row_data,
-                        match_preview=preview,
-                        matched_timestamps=matched_timestamps
+                        match_preview=None,
+                        matched_timestamps=matched_timestamps,
+                        preview_fn=preview_fn
                     )
                     flat_results.append(converted_result)
             
@@ -3000,6 +3023,16 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
             
             # Show the detail dialog
             detail_dialog = RowDetailDialog(enhanced_data, title, row_name, row_number, self)
+            # The result's own row in its tab. Double-click only ever showed
+            # these details; the navigation path behind navigate_to_result was
+            # never connected to anything that emitted it.
+            tools = getattr(getattr(self, 'main_ui', None), 'investigator_tools', None)
+            if tools is not None and row_id not in (None, '', 'N/A') and \
+                    tools.table_view_for(table_name) is not None:
+                detail_dialog.add_action(
+                    "Show in table", "Open this row in its tab in the main window",
+                    lambda _c=False, d=db_name, t=table_name, r=row_id:
+                        self._show_in_table(tools, d, t, r))
             detail_dialog.show()
             
             self.logger.info(f"Opened detail dialog for: {title}")
@@ -3012,6 +3045,22 @@ class DatabaseSearchDialog(QtWidgets.QDialog):
                 f"Failed to show detail dialog:\n{str(e)}"
             )
     
+    def _show_in_table(self, tools, db_name, table, row_id):
+        try:
+            ok, why = tools.show_row(str(db_name), str(table), row_id)
+        except Exception as e:
+            self.logger.error(f"Show in table failed: {e}", exc_info=True)
+            ok, why = False, str(e)
+        if not ok:
+            QtWidgets.QMessageBox.information(self, "Show in table", why)
+            return False
+        win = tools.main_window
+        if win.isMinimized():
+            win.showNormal()
+        win.raise_()
+        win.activateWindow()
+        return True
+
     def _on_filter_changed(self, *args):
         """
         Handle filter changes - update summary only.

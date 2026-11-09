@@ -342,6 +342,29 @@ class WingsCreatorWindow(QMainWindow):
         self.category_note.setWordWrap(True)
         _look(self.category_note, role="note", status="warn")
         layout.addWidget(self.category_note)
+
+        # Host scope: whether the Wing's rows must all come from one machine.
+        # Declared, never assumed; the Wing does not save without one.
+        from ...config.wing_config import HOST_SCOPES, HOST_SCOPE_LABELS
+        scope_layout = QHBoxLayout()
+        scope_label = QLabel("Host scope:")
+        scope_label.setMinimumWidth(120)
+        self.host_scope_combo = QComboBox()
+        self.host_scope_combo.addItem("Scope not declared - choose one...", None)
+        for key in HOST_SCOPES:
+            self.host_scope_combo.addItem(HOST_SCOPE_LABELS[key], key)
+        self.host_scope_combo.setToolTip(
+            "On one case this changes nothing: a case is one machine. Across a fleet "
+            "(Crow-Eye Sentinel) a same-host Wing never pairs rows from two machines.")
+        self.host_scope_combo.currentIndexChanged.connect(self.on_host_scope_changed)
+        scope_layout.addWidget(scope_label)
+        scope_layout.addWidget(self.host_scope_combo)
+        scope_layout.addStretch()
+        layout.addLayout(scope_layout)
+        self.host_scope_note = QLabel("")
+        self.host_scope_note.setWordWrap(True)
+        _look(self.host_scope_note, role="note", status="warn")
+        layout.addWidget(self.host_scope_note)
         
         # Description
         desc_label = QLabel("Description:")
@@ -440,6 +463,7 @@ class WingsCreatorWindow(QMainWindow):
             description=self.wing.description,
             proves=self.wing.proves,
             author=self.wing.author,
+            narrative=getattr(self.wing, 'narrative', '') or '',
             feathers=feather_refs,
             time_window_minutes=self.wing.correlation_rules.time_window_minutes,
             minimum_matches=self.wing.correlation_rules.minimum_matches,
@@ -451,6 +475,7 @@ class WingsCreatorWindow(QMainWindow):
             use_weighted_scoring=self.enable_weighted_scoring_cb.isChecked(),
             scoring=scoring_config,
             wing_category=self.wing.wing_category,
+            host_scope=self.wing.host_scope,
             rules_edited=self._mark_rules_edited(),
             tags=list(getattr(meta, 'tags', []) or []),
             case_types=list(getattr(meta, 'case_types', []) or []),
@@ -471,6 +496,32 @@ class WingsCreatorWindow(QMainWindow):
         def scope(rule):
             return rule.get('scope') if isinstance(rule, dict) else getattr(rule, 'scope', None)
         return [r for r in rules if isinstance(r, dict) and scope(r) != 'global']
+
+    def on_host_scope_changed(self, _index=None):
+        self.wing.host_scope = self.host_scope_combo.currentData()
+        self._apply_host_scope_ui()
+
+    def _set_host_scope_combo(self, scope):
+        from ...config.wing_config import normalize_host_scope, WingScopeError
+        try:
+            scope = normalize_host_scope(scope)
+        except WingScopeError:
+            scope = None
+        index = self.host_scope_combo.findData(scope)
+        blocked = self.host_scope_combo.blockSignals(True)
+        self.host_scope_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.host_scope_combo.blockSignals(blocked)
+        self.wing.host_scope = scope
+        self._apply_host_scope_ui()
+
+    def _apply_host_scope_ui(self):
+        if not hasattr(self, 'host_scope_note'):
+            return
+        self.host_scope_note.setText(
+            "" if self.wing.host_scope else
+            "Scope not declared. Choose same host or any host - the Wing cannot be saved "
+            "until it says whether its rows may come from different machines.")
+        self.host_scope_note.setVisible(bool(self.host_scope_note.text()))
 
     def on_category_changed(self, _index=None):
         """Keep the Wing and the editor in step with the chosen category."""
@@ -749,6 +800,35 @@ class WingsCreatorWindow(QMainWindow):
         proves_layout.addWidget(proves_label)
         proves_layout.addWidget(self.proves_input)
         layout.addLayout(proves_layout)
+
+        # Narrative: how a match of this Wing reads, in the author's words.
+        # Filled only from the match's records; a word of intent is refused
+        # (wings.core.narrative - the same list Sentinel's server checks).
+        narrative_layout = QHBoxLayout()
+        narrative_label = QLabel("Narrative:")
+        narrative_label.setMinimumWidth(120)
+        narrative_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.narrative_input = QTextEdit()
+        self.narrative_input.setAcceptRichText(False)
+        self.narrative_input.setFixedHeight(64)
+        self.narrative_input.setPlaceholderText(
+            "How a match reads, e.g. {executable_name} ran at {when}; Prefetch recorded it "
+            "({Prefetch.run_count} runs). Optional.")
+        self.narrative_input.setToolTip(
+            "A sentence filled only from the match's records.\n"
+            "{column} - the first record in the match that has it (the anchor's first)\n"
+            "{feather_id.column} - that feather's record\n"
+            "{when} {first_time} {last_time} {records} {feathers} - the match itself\n"
+            "Say what the records show (who, which program, when, what followed), never why:\n"
+            "words of intent (tried, meant, in order to, because, malicious...) are refused.")
+        self.narrative_input.textChanged.connect(self.on_narrative_changed)
+        narrative_layout.addWidget(narrative_label)
+        narrative_layout.addWidget(self.narrative_input)
+        layout.addLayout(narrative_layout)
+        self.narrative_status = QLabel("")
+        self.narrative_status.setObjectName("narrative_status")
+        self.narrative_status.setWordWrap(True)
+        layout.addWidget(self.narrative_status)
         
         # Minimum matches
         matches_layout = QHBoxLayout()
@@ -1470,6 +1550,25 @@ class WingsCreatorWindow(QMainWindow):
     def on_proves_changed(self, text):
         """Handle proves change"""
         self.wing.proves = text
+
+    def on_narrative_changed(self):
+        """The narrative as typed, checked as typed: a word of intent or a
+        placeholder naming a feather this Wing does not use is named under
+        the box (and the validator refuses the Wing until it is fixed)."""
+        text = self.narrative_input.toPlainText().strip()
+        self.wing.narrative = text
+        if not text:
+            self.narrative_status.setText("")
+            return
+        from correlation_engine.wings.core.narrative import problems
+        ids = [getattr(f, 'feather_id', '') for f in (self.wing.feathers or [])]
+        found = problems(text, [i for i in ids if i] or None)
+        if found:
+            self.narrative_status.setStyleSheet("color: #fbbf24;")
+            self.narrative_status.setText(" ".join(found))
+        else:
+            self.narrative_status.setStyleSheet("color: #94a3b8;")
+            self.narrative_status.setText("Filled only from each match's records.")
     
     def on_time_window_changed(self, value):
         """Handle time window change"""
@@ -2697,6 +2796,7 @@ class WingsCreatorWindow(QMainWindow):
             use_weighted_scoring=use_weighted_scoring,
             scoring=scoring,
             wing_category=getattr(wing_config, 'wing_category', None),
+            host_scope=getattr(wing_config, 'host_scope', None),
             # A Behaviour Wing's steps, time range, subject and alert.
             **behaviour_fields_of(wing_config)
         )
@@ -2723,6 +2823,7 @@ class WingsCreatorWindow(QMainWindow):
         self.description_input.setPlainText(self.wing.description)
         self.author_input.setText(self.wing.author)
         self.proves_input.setText(self.wing.proves)
+        self.narrative_input.setPlainText(getattr(self.wing, 'narrative', '') or '')
         
         # Load correlation rules
         self.time_window_spin.setValue(self.wing.correlation_rules.time_window_minutes)
@@ -2837,6 +2938,7 @@ class WingsCreatorWindow(QMainWindow):
         self._load_scoring_to_ui()
 
         self._set_category_combo(getattr(self.wing, 'wing_category', None))
+        self._set_host_scope_combo(getattr(self.wing, 'host_scope', None))
         if ask_category:
             self._ask_category_if_missing()
 
@@ -2888,6 +2990,12 @@ class WingsCreatorWindow(QMainWindow):
         
         # Validate wing first
         self._sync_behaviour_to_wing()
+        # No "save anyway" for a missing host scope: it is never defaulted.
+        from ...config.wing_config import host_scope_problems
+        scope_problems = host_scope_problems(self.wing.host_scope)
+        if scope_problems:
+            QMessageBox.warning(self, "Host scope", " ".join(scope_problems))
+            return
         is_valid, errors = WingValidator.validate_wing(self.wing)
         if not is_valid:
             reply = QMessageBox.question(
@@ -3069,6 +3177,7 @@ class WingsCreatorWindow(QMainWindow):
             self.description_input.setPlainText(config.description)
             self.author_input.setText(config.author)
             self.proves_input.setText(config.proves)
+            self.narrative_input.setPlainText(getattr(config, 'narrative', '') or '')
             
             # Load correlation rules
             self.time_window_spin.setValue(config.time_window_minutes)
@@ -3189,6 +3298,7 @@ class WingsCreatorWindow(QMainWindow):
             self.current_config = config
             self.status_bar.showMessage(f"Configuration loaded: {config_name}")
             self._set_category_combo(getattr(config, 'wing_category', None))
+            self._set_host_scope_combo(getattr(config, 'host_scope', None))
             self._ask_category_if_missing()
             
         except Exception as e:

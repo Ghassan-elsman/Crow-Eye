@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { normalizeForensicName, getForensicName, getForensicTimestamps, getForensicId, cleanForensicDate } from '../utils/formatters';
 import { heuristicFlatten } from '../utils/dataUtils';
-import { laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart } from '../utils/laneSources';
+import { laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart, srumPrevEnds } from '../utils/laneSources';
 
 /**
  * Hook to compute cross-lane analytical links between different artifacts.
@@ -70,21 +70,23 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
     };
 
     if (activeArtifacts.srum_app && Array.isArray(data.srum_app)) {
+      const appPrev = srumPrevEnds(data.srum_app, r => r.app_name);
       data.srum_app.forEach((item, idx, arr) => {
         const name = getForensicName(item);
         add(item, 'srum_app', item.timestamp, name, 'timestamp');
         const faceMs = item.face_time ? Number(item.face_time) * 1000 : 0;
-        addBandStart(item, 'srum_app', srumBandStart(arr, idx, faceMs, r => r.app_name), name);
+        addBandStart(item, 'srum_app', srumBandStart(arr, idx, faceMs, r => r.app_name, appPrev), name);
       });
     }
 
     if (activeArtifacts.srum_net && data.srum_net) {
       const connectivity = Array.isArray(data.srum_net.connectivity) ? data.srum_net.connectivity : [];
+      const netPrev = srumPrevEnds(connectivity, r => r.app_name || r.app_id);
       connectivity.forEach((item, idx, arr) => {
         const name = getForensicName(item);
         add(item, 'srum_net', item.timestamp, name, 'timestamp');
         const durMs = (parseFloat(item.connected_time) || 0) * 1000;
-        addBandStart(item, 'srum_net', srumBandStart(arr, idx, durMs, r => r.app_name || r.app_id), name);
+        addBandStart(item, 'srum_net', srumBandStart(arr, idx, durMs, r => r.app_name || r.app_id, netPrev), name);
       });
       processItems(data.srum_net.data_usage, 'srum_usage');
     }
@@ -101,12 +103,9 @@ export function useLinks(data, activeArtifacts, rangeStartIso, rangeEndIso) {
     // The artifacts lane, from the lane's own source list (utils/laneSources.js), so
     // every event here carries the id the lane gave its mark: same types (registry
     // tables by name, 'event_logs'), the same timestamps (Prefetch last-access included),
-    // same salvaged objects. A pill switched off keeps its events out, as before.
-    const TOGGLE = { dam: 'bam', amcache: 'amcache', event_logs: 'event_logs', key_times: 'key_times' };
-    const toggleOf = (type) => TOGGLE[type] ||
-      (['prefetch', 'lnk', 'bam', 'shimcache', 'recyclebin', 'imported'].includes(type) ? type : 'registry');
+    // same salvaged objects. A pill switched off keeps its events out:
+    // laneVisibleSources applies every pill (pillOf), for the lane and here alike.
     laneVisibleSources(data, activeArtifacts).forEach(src => {
-      if (src.type !== 'imported' && activeArtifacts[toggleOf(src.type)] === false) return;
       heuristicFlatten(src.items).forEach(item => {
         const name = getForensicName(item);
         getForensicTimestamps(item).forEach(ts => {

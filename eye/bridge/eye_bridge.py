@@ -424,6 +424,20 @@ class EYEBridge(QObject):
     status_updated = pyqtSignal(str)  # Status update message (thinking/searching)
     dialogue_updated = pyqtSignal(str)  # Eye<->LLM conversation entry (live transcript)
     reflow_charts = pyqtSignal()      # Trigger chart alignment reflow
+    # Off-GUI-thread calls (callAsync): the answer arrives as asyncResult(id, json).
+    asyncResult = pyqtSignal(str, str)
+    _finished = pyqtSignal(str, str)      # from the worker; re-emitted on the GUI thread
+
+    # Slots the page may run off the GUI thread: read-only data, no widgets, no
+    # shared state but a per-call read-only connection. The Narrative Map's
+    # evidence popup re-runs the Eye's stored SQL through query_database, and
+    # one LIKE over a 3.9 M-row MFT/USN table held the GUI thread - all of
+    # Crow-Eye, not just the Eye - for 10 s.
+    # The window's log readers too: each reads a whole .jsonl from the case's
+    # EYE_Logs when the window opens, and a long investigation's dialogue log
+    # (up to 4 KB per tool result) grows past what the GUI thread should parse.
+    _ASYNC_SLOTS = frozenset(("query_database", "get_step_history", "get_dialogue_history",
+                              "get_gep_turns", "get_reasoning_turns"))
     
     def __init__(
         self,
@@ -444,6 +458,10 @@ class EYEBridge(QObject):
             parent: Parent QObject (optional)
         """
         super().__init__(parent)
+        from PyQt5.QtCore import QThreadPool
+        self._async_pool = QThreadPool(self)
+        self._async_pool.setMaxThreadCount(2)
+        self._finished.connect(self._deliver_async, Qt.QueuedConnection)
         self.context_manager = context_manager
         self.database_service = database_service
         self.search_service = search_service
@@ -456,6 +474,34 @@ class EYEBridge(QObject):
                 logger.debug(f"Could not register narrative map update callback: {e}")
         logger.info("EYEBridge initialized")
     
+    @pyqtSlot(str, str)
+    def _deliver_async(self, request_id, payload):
+        self.asyncResult.emit(request_id, payload)
+
+    @pyqtSlot(str, str, str)
+    def callAsync(self, method, request_id, args_json):
+        """Run slot ``method`` (one of _ASYNC_SLOTS) on a worker thread with the
+        JSON list ``args_json`` as its arguments; the answer comes back through
+        ``asyncResult(request_id, json)`` (visualizations/async_bridge.py, the
+        dashboards' pattern). The page falls back to the plain call when this
+        slot is absent."""
+        if method not in self._ASYNC_SLOTS:
+            self.asyncResult.emit(request_id, json.dumps(
+                {"__asyncError": "not callable off the GUI thread: %r" % (method,)}))
+            return
+        try:
+            args = json.loads(args_json) if args_json else []
+            if not isinstance(args, list):
+                args = [args]
+        except ValueError:
+            args = [args_json]
+        from visualizations.async_bridge import _Call
+        self._async_pool.start(_Call(self, method, request_id, args))
+
+    def wait_for_async_calls(self, msecs=30000):
+        """Tests and window shutdown: wait for the calls in flight."""
+        return self._async_pool.waitForDone(msecs)
+
     def _emit_report_updated(self, report_json: str):
         """Emits report_updated signal with size safety checks."""
         MAX_REPORT_PAYLOAD = 10 * 1024 * 1024 # 10MB
@@ -964,6 +1010,35 @@ class EYEBridge(QObject):
             })
         except Exception as e:
             logger.error(f"Error getting history: {e}", exc_info=True)
+            return safe_json_dumps({"success": False, "data": None, "error": str(e)})
+
+    @pyqtSlot(int, result=str)
+    def get_recent_message_ids(self, count: int) -> str:
+        """The last `count` messages' id, role and metadata, nothing else.
+
+        What the chat needs after each answer to line its message ids up with
+        the history's (pin and unpin find a message by id). It used to read
+        get_conversation_history: every message of the session with its
+        stored transcript, thinking backfilled, serialised and parsed again
+        on the GUI thread after every answer, a cost that grew with the
+        conversation."""
+        try:
+            if not self.context_manager:
+                return safe_json_dumps({"success": False, "data": None,
+                                        "error": "ContextManager not initialized"})
+            history = list(self.context_manager.conversation_history or [])
+            n = max(1, min(int(count or 0), 200))
+            out = []
+            for m in history[-n:]:
+                if not isinstance(m, dict):
+                    continue
+                meta = m.get("metadata") if isinstance(m.get("metadata"), dict) else {}
+                out.append({"id": m.get("id"), "role": m.get("role"),
+                            "metadata": {k: v for k, v in meta.items()
+                                         if k not in ("transcript", "thinking", "dialogue")}})
+            return safe_json_dumps({"success": True, "data": out, "error": None})
+        except Exception as e:
+            logger.error(f"Error getting recent message ids: {e}", exc_info=True)
             return safe_json_dumps({"success": False, "data": None, "error": str(e)})
 
     @pyqtSlot(str, result=str)
@@ -2475,7 +2550,9 @@ class EYEBridge(QObject):
         from pathlib import Path
         
         # Path to custom semantic rules file
-        rules_file = Path("configs/semantic_rules_custom.json")
+        # Where SemanticMappingManager reads them, not the working folder
+        from utils.path_utils import PathUtils
+        rules_file = PathUtils.get_executable_dir() / "configs" / "semantic_rules_custom.json"
         
         # Ensure configs directory exists
         rules_file.parent.mkdir(parents=True, exist_ok=True)
@@ -2514,8 +2591,9 @@ class EYEBridge(QObject):
         from pathlib import Path
         
         # Paths to semantic rules files
-        custom_rules_file = Path("configs/semantic_rules_custom.json")
-        default_rules_file = Path("configs/semantic_rules_default.json")
+        from utils.path_utils import PathUtils
+        custom_rules_file = PathUtils.get_executable_dir() / "configs" / "semantic_rules_custom.json"
+        default_rules_file = PathUtils.get_app_root() / "configs" / "semantic_rules_default.json"
         
         # Try to update in custom rules first
         updated = False

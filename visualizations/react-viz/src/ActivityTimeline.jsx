@@ -4,6 +4,7 @@ import {
   Chart as ChartJS, LinearScale, CategoryScale, PointElement, Tooltip, ScatterController,
 } from 'chart.js'
 import { fmtBytes, fmtInt, fmtDuration, fmtDay } from './format.js'
+import { htmlTooltip, tipFlow, tipLine } from './chartTip.js'
 
 ChartJS.register(LinearScale, CategoryScale, PointElement, Tooltip, ScatterController)
 
@@ -145,22 +146,22 @@ export default function ActivityTimeline({ data, onSelectApp, selectedApp }) {
     plugins: {
       legend: { display: false },
       tooltip: {
-        // Sent (▲) and Received (▼) are two datasets over the SAME record; keep
-        // one tooltip item per underlying point so the detail block isn't doubled.
-        filter: (item, i, arr) => arr.findIndex(x => x.raw?._p === item.raw?._p) === i,
-        callbacks: {
-          title: (items) => { const p = items[0]?.raw?._p; return p ? `${p.app}` : '' },
-          label: (item) => {
-            const p = item.raw?._p; if (!p) return ''
-            return [
-              `User: ${p.user}`,
-              `Hour: ${String(p.h).padStart(2, '0')}:00`,
-              `Sent: ${fmtBytes(p.bytesSent)}   Received: ${fmtBytes(p.bytesReceived)}`,
-              `CPU cycles: ${fmtInt(p.cpu)}   Disk: ${fmtBytes(p.disk)}`,
-              `Battery: ${p.battery || 0}%   Focus: ${fmtDuration(p.focusS)}   Keyboard: ${fmtDuration(p.keyboardS)}`,
-            ]
-          },
-        },
+        // Sent (▲) and Received (▼) are two datasets over the SAME record, so the
+        // box is built from the first item's record only and never doubled.
+        // Drawn as HTML (chartTip.js) so sent / received wear the network badge.
+        enabled: false,
+        external: htmlTooltip((tt) => {
+          const p = tt.dataPoints?.[0]?.raw?._p
+          if (!p) return null
+          return { title: p.app, rows: [
+            tipLine('User', p.user),
+            tipLine('Hour', `${String(p.h).padStart(2, '0')}:00`),
+            tipFlow([['up', fmtBytes(p.bytesSent)], ['down', fmtBytes(p.bytesReceived)]]),
+            tipLine('CPU cycles', fmtInt(p.cpu)), tipLine('Disk', fmtBytes(p.disk)),
+            tipLine('Battery', `${p.battery || 0}%`), tipLine('Focus', fmtDuration(p.focusS)),
+            tipLine('Keyboard', fmtDuration(p.keyboardS)),
+          ] }
+        }),
       },
     },
     scales: {

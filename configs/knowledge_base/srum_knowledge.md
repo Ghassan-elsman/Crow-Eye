@@ -122,3 +122,31 @@ strong evidence a person was present.
   WHERE app_name = 'python.exe'
   GROUP BY pe_link_time, pe_checksum ORDER BY first_seen;
   ```
+
+## Who was driving: the input record (tested 2026-11-03)
+
+`srum_app_timeline` holds, per program and account, the seconds of focus (`in_focus_s`), keyboard
+(`keyboard_input_s`) and mouse (`mouse_input_s`) input in a stretch of about an hour, and a finer
+record of the last minutes of that stretch.
+
+**Input sent by software counts as keyboard input.** On a test machine a script typed by SendInput
+for 3 x 30 s into its own window. SRUM recorded 84 s of keyboard input for it, the same way it
+recorded 107 s for a person typing in Notepad. Remote control (RDP, AnyDesk) delivers input the same
+way. So input in SRUM means that input reached the program, not that a hand was on the keyboard. Say
+"received keyboard input", never "the person typed", unless other evidence (sign-in type, the
+program's parent, no automation tools) supports it. **No input at all is the strong fact:** nothing
+typed or clicked in that program at that time.
+
+**The 4-second record.** These parts were decoded and checked against the scripted run; the decoded
+times fell within about 8 s of the real ones:
+- `timeline_end` is Unix time counted in 4096 ms units.
+- Each `*_timeline` column (`user_input_timeline`, `keyboard_input_timeline`, `in_focus_timeline`) is
+  a bitmap of up to 64 slots of 4096 ms. Bit 0 is the slot ending at `timeline_end`, and bit i ends
+  i slots earlier.
+- Together they cover the last ~4.4 minutes of the stretch at ~4-second resolution.
+
+**What Crow-Eye does with it.** User Behavior's "Used the keyboard or mouse" activity lists the
+programs that received input in each stretch. Every activity also gets "who drove it": a person at
+the keyboard, a person remotely, a program by itself, or automation (a script or another program acting as the user, such
+as Claude Code or Codex). The verdict comes with the facts behind it (`driven_by_basis` in
+`query_user_behavior`). Quote those facts.

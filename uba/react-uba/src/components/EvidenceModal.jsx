@@ -3,15 +3,19 @@ import { ACTOR_STYLE, SEVERITY_STYLE, CONFIDENCE_LABEL, actorLabel, displayUser,
 
 const ROLE_LABEL = { primary: 'Direct evidence', corroborating: 'Supporting evidence' }
 
-export default function EvidenceModal({ eventId, callBridge, onClose, bridge }) {
+// eventId: an activity's evidence. rows ({db, table, rowids, title}): rows of
+// one source table, opened from the Who drove it tab - the same modal.
+export default function EvidenceModal({ eventId, rows, callBridge, onClose, bridge }) {
   const [data, setData] = useState(null)
   const [offset, setOffset] = useState(0)
 
   useEffect(() => {
-    callBridge('getEvidence', JSON.stringify({ event_id: eventId, offset, page_size: 50 }))
-      .then((r) => { if (r && !r.pending) setData(r) })
+    const call = rows
+      ? callBridge('getRowEvidence', JSON.stringify({ ...rows, offset, page_size: 50 }))
+      : callBridge('getEvidence', JSON.stringify({ event_id: eventId, offset, page_size: 50 }))
+    call.then((r) => { if (r && !r.pending) setData(r) })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [eventId, offset])
+  }, [eventId, rows, offset])
 
   useEffect(() => {
     const onKey = (e) => { if (e.key === 'Escape') onClose() }

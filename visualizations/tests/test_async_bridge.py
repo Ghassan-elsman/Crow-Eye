@@ -104,6 +104,31 @@ class AsyncBridgeTests(unittest.TestCase):
         # The slot slept 0.6 s; the heartbeat never stopped for that long.
         self.assertLess(gap, 0.3)
 
+    def test_closing_a_dashboard_does_not_wait_for_its_running_query(self):
+        # The pool was the bridge's child: deleting the dialog destroyed it,
+        # and QThreadPool's destructor waits for every running call, so a
+        # dashboard closed during a 7 s MFT/USN search froze Crow-Eye for the
+        # rest of it. The pool now outlives the dialog until its calls end.
+        from visualizations import async_bridge
+        dialog = QtWidgets.QWidget()
+        bridge = FakeBridge(dialog)
+        bridge.callAsync("getSlow", "close-1", json.dumps([json.dumps({"x": 1})]))
+        deadline = time.time() + 2
+        while not bridge.threads and time.time() < deadline:
+            APP.processEvents(); time.sleep(0.01)
+        self.assertTrue(bridge.threads, "the call never started")
+        t0 = time.monotonic()
+        dialog.deleteLater()
+        APP.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+        APP.processEvents()
+        took = time.monotonic() - t0
+        self.assertLess(took, 0.3, "closing waited %.2f s for the running call" % took)
+        # The retired pool is released once its call has finished.
+        deadline = time.time() + 5
+        while async_bridge._RETIRED and time.time() < deadline:
+            APP.processEvents(); time.sleep(0.02)
+        self.assertEqual(async_bridge._RETIRED, set())
+
     def test_a_raising_slot_answers_an_error_marker(self):
         out, _ = ask(self.bridge, "getBroken", ["{}"])
         self.assertIn("__asyncError", out)
@@ -153,7 +178,7 @@ class AsyncBridgeTests(unittest.TestCase):
         pages = [os.path.join(root, "visualizations", d, "src", "bridge.js")
                  for d in os.listdir(os.path.join(root, "visualizations")) if d.startswith("react-")]
         pages.append(os.path.join(root, "timeline", "react-timeline", "src", "hooks", "useBridge.js"))
-        self.assertEqual(len(pages), 7)
+        self.assertEqual(len(pages), 8)
         for page in pages:
             text = open(page, encoding="utf-8").read()
             self.assertIn("bridge.callAsync(method, id, JSON.stringify(args))", text, page)

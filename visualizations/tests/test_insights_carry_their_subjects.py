@@ -52,6 +52,8 @@ BRIDGES = [
      "getSrumOverview", {"busiestApp", "users"}, "insights"),
     ("visualizations.browser_bridge", "BrowserBridge",
      "getBrowserOverview", {"domains", "activeDays"}, "insights"),
+    ("visualizations.aiagents_bridge", "AiAgentsBridge",
+     "getAiOverview", set(), "insights"),
 ]
 
 
@@ -155,6 +157,7 @@ class TheDetailModalDoesNotDependOnADay(unittest.TestCase):
         "react-lnkjl": ("TargetDetailPanel", "DaySection.jsx"),
         "react-shellitems": ("ItemDetailPanel", "DaySection.jsx"),
         "react-mftusn": ("FileDetailPanel", "WindowSection.jsx"),
+        "react-aiagents": ("SessionDetailPanel", "DaySection.jsx"),
     }
     VIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

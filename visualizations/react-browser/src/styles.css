@@ -714,3 +714,13 @@ body { margin: 0; background: var(--bg); }
 .fr-rec-h { color: var(--tx2); font-family: var(--mono); font-size: 11px; font-weight: 700;
   letter-spacing: 0.03em; padding: 4px 4px 2px; border-bottom: 1px solid var(--border2, var(--border)); }
 .fr-rec .fr-list { max-height: none; margin-top: 4px; }
+
+/* ---- download badge (FlowBadge.jsx): a file landing on the machine ---- */
+/* margins, not gap: Qt 5.15's Chromium 83 ignores gap on a flexbox, so the
+   domain, the badge and the time ran into each other. */
+.ov-dl-sub { align-items: center; flex-wrap: wrap; row-gap: 3px; }
+.ov-dl-sub > * { white-space: nowrap; margin-right: 10px; }
+.ov-dl-sub .flowb { height: 20px; }
+.dd-flow-h { display: inline-flex; align-items: center; }
+.dd-flow-h .flowb-ico { margin-right: 5px; }
+.dd-table td .flowb { height: 20px; }

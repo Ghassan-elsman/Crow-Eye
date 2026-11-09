@@ -3,6 +3,7 @@
   "wing_name": "Ransomware Mass-Encryption Burst (Behaviour)",
   "wing_id": "default_behaviour_ransomware_burst_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "Rebuilt from the Identity Wing's rw_mass_write_burst threshold, which counted USN rows of ONE file identity and so could not see a burst across many files. Here: at least 100 files changed or renamed within 5 minutes - UBA's file_edited and file_renamed events, each counting its files (aggregate_count). A burst lasting longer than 5 minutes is counted at its average rate, and the hit says so. A second rule, rw_renamed_to_encrypted_extension, fires on 10 or more files renamed into an archive or encrypted-looking extension (.zip .7z .enc .locked .crypt ...) within 10 minutes. Only the user's document folders count (Desktop, Documents, Downloads, Pictures, Videos, Music, OneDrive), as UBA labels each burst's folder: application caches, Program Files, ProgramData and Windows churn constantly and are left out.",
   "proves": "Files were changed or renamed in bulk within minutes, consistent with encryption",
   "author": "Crow-Eye Team",
@@ -51,6 +52,7 @@
       "description": "10 or more file renames whose final name has an archive or encrypted-looking extension within 10 minutes (UBA file_renamed events that keep each file's rename chain).",
       "rule_type": "threshold",
       "threshold": {
+        "denominator": "per_host",
         "conditions": [
           {
             "feather_id": "any",

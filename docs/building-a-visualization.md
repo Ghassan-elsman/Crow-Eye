@@ -29,7 +29,7 @@ stale bundle.
 
 ## 2. What you will be duplicating, and why that is accepted
 
-The six dashboards share **class names, not code**. There is no `shared/`, no component library and
+The seven dashboards share **class names, not code**. There is no `shared/`, no component library and
 no common stylesheet: `styles.css` is six divergent forks of one file that still line up
 line-for-line. A fix applied to one is a fix applied to one.
 
@@ -38,7 +38,15 @@ These files are duplicated deliberately and **must stay byte-identical** — gua
 `tests/test_dense_time_axis.py`:
 
 `Icons.jsx` · `DateDropdown.jsx` · `DayAxis.jsx` · `InsightPanel.jsx` · `FullRecordSection.jsx` ·
-`LoadingOverlay.jsx`
+`LoadingOverlay.jsx` · `FlowBadge.jsx`
+
+`FlowBadge.jsx` is also copied, identically, into `timeline/react-timeline/src/components/`. It is
+how every view shows data moving in or out (network bytes sent / received, a file downloaded): the
+User Behavior window's fact badge, an arrow in a rounded square (up = sent, down = received), the
+value in white, a faint label, and **no hue** - sent and received are told apart by the arrow, and a
+chart's series colours stay what they are. It carries its own stylesheet, and `flowBadgeHtml()` gives
+the same markup for a chart tooltip (`react-viz/src/chartTip.js` draws Chart.js tooltips as HTML for
+that). Never draw a coloured triangle or arrow character beside bytes again.
 
 `DayAxis.jsx` is the one that carries behaviour rather than markup: it owns the strip's geometry
 and window (`useStripFit`, `useStripWindow`, `windowFor`, `WINDOW_DAYS`), the `StripNavigator`,
@@ -150,6 +158,11 @@ search and date picker stay usable while a filter change runs.
 ## 4. Traps that fail quietly
 
 Each of these looks like success, or like a different problem entirely.
+
+**`gap` on a flexbox does nothing in the dialogs.** Qt 5.15's QtWebEngine is Chromium 83, and flex
+`gap` arrived in Chromium 84 (grid `gap` works). Items simply touch - a domain ran into its download
+badge, a legend's "Sent" into the next swatch - while a desktop browser shows them spaced. Use
+margins (`.x + .x { margin-left }`) in a flex row.
 
 **A slot that runs on the GUI thread freezes the whole window, overlay included.** A QWebChannel
 slot runs where its QObject lives. Every dashboard did its SQL there, so the window went "Not

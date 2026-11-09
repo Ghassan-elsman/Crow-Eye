@@ -279,6 +279,14 @@ class EVTXParser:
 
             channel_elem = system.find('evt:Channel', ns)
             channel = channel_elem.text if channel_elem is not None else None
+
+            # A device-evidence event goes to its own table, read by the same
+            # function the live parser uses (WinLog_Claw.device_event_row).
+            from Artifacts_Collectors.WinLog_Claw import DEVICE_CHANNELS, device_event_row
+            if (channel or '').strip() in DEVICE_CHANNELS:
+                device = device_event_row(root)
+                if device is not None:
+                    return {'_device': device, '_channel': channel}
             
             # Build event data dictionary
             event_data = {
@@ -527,6 +535,10 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         cursor.execute(SYSTEM_LOGS_SCHEMA)
         cursor.execute(APPLICATION_LOGS_SCHEMA)
         cursor.execute(SECURITY_LOGS_SCHEMA)
+        # The device-evidence channels (Partition/Diagnostic,
+        # DriverFrameworks-UserMode): the live parser's own tables.
+        from Artifacts_Collectors.WinLog_Claw import create_device_tables
+        create_device_tables(conn)
         
         conn.commit()
         logger.info("Database schema created successfully")
@@ -688,6 +700,15 @@ def process_evtx_files(evtx_dir: str, conn: sqlite3.Connection, cursor: sqlite3.
             # Parse events and insert into database
             event_count = 0
             for event_data in parser.parse_events():
+                if event_data.get('_device') is not None:
+                    from Artifacts_Collectors.WinLog_Claw import insert_device_rows
+                    from utils.dedupe_insert import Tally
+                    if _RUN["tally"] is None:
+                        _RUN["tally"] = Tally()
+                    dev_table, dev_row = event_data['_device']
+                    insert_device_rows(conn, dev_table, [dev_row], _RUN["tally"])
+                    event_count += 1
+                    continue
                 if not parser.log_type_known:
                     table_name = channel_table(event_data.get('_channel'))
                 try:
@@ -829,6 +850,44 @@ def insert_event(cursor: sqlite3.Cursor, table_name: str, event_data: Dict[str, 
         raise
 
 
+def image_zone_converter(case_path, scanned_dir):
+    """(naive local -> aware UTC function, time_basis) by the zone rules in the
+    evidence's SYSTEM hive, or (None, why) when no single hive says."""
+    try:
+        from utils.parse_status import _offline_system_hive
+        from utils.time_utils import windows_zone_to_utc
+        hive = _offline_system_hive(case_path, [scanned_dir])
+        if not hive:
+            return None, "local time; UTC not given - no single SYSTEM hive in the case"
+        from Registry import Registry
+        reg = Registry.Registry(hive)
+        current = reg.open("Select").value("Current").value()
+        key = reg.open("ControlSet%03d\\Control\\TimeZoneInformation" % current)
+        vals = {v.name(): v.value() for v in key.values()}
+        convert = windows_zone_to_utc(vals.get("Bias", 0), vals.get("StandardBias", 0),
+                                      vals.get("DaylightBias", 0), vals.get("StandardStart"),
+                                      vals.get("DaylightStart"))
+        return convert, ("local time converted by the image's time zone (%s, its current rules)"
+                         % (vals.get("TimeZoneKeyName") or vals.get("StandardName") or "unnamed"))
+    except Exception as exc:                                  # noqa: BLE001
+        return None, "local time; UTC not given - the image's time zone was not read (%s)" % exc
+
+
+def process_setupapi_logs(evtx_dir, conn, case_path):
+    """setupapi.dev*.log collected beside the event logs, into setupapi_dev_log."""
+    from Artifacts_Collectors.WinLog_Claw import read_setupapi_logs, setupapi_files
+    from utils.dedupe_insert import Tally
+    if not setupapi_files(evtx_dir):
+        return 0
+    to_utc, basis = image_zone_converter(case_path, evtx_dir)
+    if _RUN["tally"] is None:
+        _RUN["tally"] = Tally()
+    n = read_setupapi_logs(conn, _RUN["tally"], folder=evtx_dir, to_utc=to_utc, time_basis=basis)
+    conn.commit()
+    logger.info("setupapi.dev.log: %d section(s) (%s)", n, basis)
+    return n
+
+
 def main(evtx_dir: Optional[str] = None, case_path: Optional[str] = None):
     """
     Main entry point for offline event log parsing.
@@ -876,6 +935,7 @@ def main(evtx_dir: Optional[str] = None, case_path: Optional[str] = None):
             
             tally = begin_event_run(conn)
             stats = process_evtx_files(evtx_dir, conn, cursor)
+            stats['total_events'] += process_setupapi_logs(evtx_dir, conn, case_path)
             stats['counts'] = tally.as_result()
             logger.info("Events read: %d - new: %d, already in the database: %d"
                         % (stats['counts']['records'], stats['counts']['inserted'],

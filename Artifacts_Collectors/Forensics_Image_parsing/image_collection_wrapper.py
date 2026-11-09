@@ -116,38 +116,14 @@ class ImageArtifactCollector(ArtifactCollector):
 
         accessor = FileSystemAccessor(img_info)
 
-        # Discover VSS snapshots for fallback
-        vss_accessors = []
-        try:
-            # Check for VSS snapshots in the target
-            from dissect.target import Target
-            # We already have strategy.get_img_info() but Target might be needed for VSS plugin
-            # In many dissect setups, Target.open(path) handles VSS discovery
-            target = Target.open(primary_path)
-            if hasattr(target, 'vss'):
-                logger.info(f"Found {len(target.vss)} VSS snapshots for fallback.")
-                for snapshot in target.vss:
-                    try:
-                        # Create an accessor for each snapshot
-                        snapshot_accessor = FileSystemAccessor(snapshot)
-                        # We need to open the partition in the snapshot too
-                        # Usually snapshots are of a specific volume, so offset 0
-                        snapshot_accessor.open_partition(0)
-                        vss_accessors.append(snapshot_accessor)
-                    except Exception as exc:
-                        logger.warning("A shadow copy could not be opened: %s", exc)
-            self._vss_accessors = vss_accessors # Store for fallback method
-        except Exception as e:
-            self._vss_accessors = []
-            if "can't find plugin" in str(e).lower():
-                # dissect has no shadow-copy reader for this target - a fact
-                # about the tooling, not the evidence; nothing to report.
-                logger.info("No shadow-copy support for this image: %s", e)
-            else:
-                logger.warning("VSS discovery failed: %s", e)
-                issue = make_issue("vss_unavailable", "%s: %s" % (type(e).__name__, e))
-                if issue is not None:
-                    self.session_issues.append(issue)
+        # The shadow copies of the partition being scanned are the fallback
+        # for a file the volume itself cannot give back. They are read by
+        # Crow-Eye's own VSS reader, per partition and only when first needed
+        # (_shadow_accessors). This used to ask dissect.target for a `vss`
+        # plugin, which it does not have: the lookup raised, and the fallback
+        # never had a copy to read.
+        self._vss_accessors = []
+        self._vss_volume = None
 
         collected_artifacts = []
 
@@ -178,6 +154,9 @@ class ImageArtifactCollector(ArtifactCollector):
                     if issue is not None:
                         self.session_issues.append(issue)
                     continue
+                part_size = next((p.size_bytes for p in partitions_info
+                                  if p.partition_number == partition_num), None)
+                self._use_partition_shadows(img_info, part_offset, part_size)
 
                 # For each artifact definition
                 for art_def in all_artifact_defs:
@@ -225,11 +204,7 @@ class ImageArtifactCollector(ArtifactCollector):
         finally:
             # Always ensure resources are closed properly to avoid locked files
             accessor.close()
-            for vss_accessor in getattr(self, '_vss_accessors', []):
-                try:
-                    vss_accessor.close()
-                except:
-                    pass
+            self._close_shadow_accessors()
             if hasattr(strategy, '_close_image'):
                 strategy._close_image()
 
@@ -398,10 +373,20 @@ class ImageArtifactCollector(ArtifactCollector):
         """
         try:
             from Artifacts_Collectors.browser_paths import browser_dir_skipped, browser_root_excluded
+            from Artifacts_Collectors.ai_agent_paths import ai_agent_file_wanted
         except ImportError:
             from browser_paths import browser_dir_skipped, browser_root_excluded
+            from ai_agent_paths import ai_agent_file_wanted
         include_cache = bool(self.include_browser_cache)
         type_name = art_def.artifact_type.value
+        # AI agent session trees: only the records the parser reads are taken
+        # from those folders (never a credential file), and no folder or root
+        # is excluded by the browser rules (a profile named TEMP is a profile).
+        keep_file = None
+        if type_name == 'AIAgents':
+            keep_file = ai_agent_file_wanted
+            browser_dir_skipped = lambda _name, _include_cache: False  # noqa: E731
+            browser_root_excluded = lambda _root: False  # noqa: E731
         subdir = self.artifact_directories.get(type_name, type_name)
         # Partition AND image: partition 3 of a second image in the same case
         # must not land in (and be skipped as already present in) the first's.
@@ -429,11 +414,11 @@ class ImageArtifactCollector(ArtifactCollector):
                     stats[0] += 1
                     continue
                 files, size, failed = self._copy_tree(accessor, root, vol_root, include_cache,
-                                                      browser_dir_skipped)
+                                                      browser_dir_skipped, keep_file)
                 stats[0] += files
                 stats[1] += size
                 stats[2] += failed
-                self._report_progress(f"Browser: {root}", stats[0], 0)
+                self._report_progress(f"{type_name}: {root}", stats[0], 0)
 
         results = []
         for user_key, (files, size, failed) in sorted(per_user.items()):
@@ -453,10 +438,11 @@ class ImageArtifactCollector(ArtifactCollector):
         return results
 
     def _copy_tree(self, accessor: FileSystemAccessor, root: str, vol_root: str,
-                   include_cache: bool, skipped) -> tuple:
+                   include_cache: bool, skipped, keep_file=None) -> tuple:
         """Copy ``root`` from the image to ``vol_root/<root>``, skipping folders
-        ``skipped(name, include_cache)`` rejects. Returns (files, bytes, failed);
-        files already present from an earlier run count as collected."""
+        ``skipped(name, include_cache)`` rejects and, with ``keep_file``, files
+        whose path from the volume root it rejects. Returns (files, bytes,
+        failed); files already present from an earlier run count as collected."""
         files = size = failed = 0
         stack = [root]
         while stack:
@@ -473,6 +459,8 @@ class ImageArtifactCollector(ArtifactCollector):
             except Exception:
                 is_dir = False
             if not is_dir:
+                if keep_file is not None and not keep_file(current):
+                    continue
                 dest = os.path.join(vol_root, *current.strip('/').split('/'))
                 try:
                     os.makedirs(os.path.dirname(dest), exist_ok=True)
@@ -495,7 +483,7 @@ class ImageArtifactCollector(ArtifactCollector):
                     files += 1
                 except Exception as exc:
                     failed += 1
-                    logger.warning(f"Browser file not extracted: {current}: {exc}")
+                    logger.warning(f"Tree file not extracted: {current}: {exc}")
                 continue
             try:
                 entries = list(node.scandir())
@@ -631,6 +619,28 @@ class ImageArtifactCollector(ArtifactCollector):
                 success = self._try_vss_fallback(entry_path, destination_path, is_dir)
                 if success:
                     logger.info(f"Successfully recovered {entry_path} from VSS.")
+                else:
+                    # Neither the volume nor a shadow copy gave the file's
+                    # bytes. It fell through to "success" below with an empty
+                    # copy, which a parser then read as evidence of nothing.
+                    # It is a failure, and the empty file is not kept.
+                    if not is_dir and os.path.isfile(destination_path) \
+                            and os.path.getsize(destination_path) == 0:
+                        try:
+                            os.remove(destination_path)
+                        except OSError:
+                            pass
+                    return CollectedArtifactInfo(
+                        source_path=f"image:{entry_path}",
+                        destination_path=destination_path,
+                        artifact_type=artifact_type,
+                        file_size=0,
+                        file_hash="",
+                        collection_status="failed",
+                        error_message=("the volume gave 0 of %d bytes and no shadow copy holds "
+                                       "the file" % file_size),
+                        timestamp=datetime.now()
+                    )
 
         except Exception as e:
             # Even on exception, try fallback
@@ -696,21 +706,78 @@ class ImageArtifactCollector(ArtifactCollector):
         )
 
     def _try_vss_fallback(self, entry_path: str, dest_path: str, is_dir: bool) -> bool:
-        """Attempt to extract an artifact from discovered VSS snapshots."""
-        if not hasattr(self, '_vss_accessors') or not self._vss_accessors:
-            return False
-
-        for fallback_accessor in self._vss_accessors:
+        """Attempt to extract an artifact from the partition's shadow copies, newest first."""
+        for fallback_accessor in self._shadow_accessors():
             try:
                 if is_dir:
                     num = fallback_accessor.read_directory_recursive(entry_path, dest_path)
                     if num > 0: return True
                 else:
                     written = fallback_accessor.read_file_streaming(entry_path, dest_path)
-                    if written > 0: return True
-            except:
+                    if written > 0:
+                        store = getattr(fallback_accessor, "shadow_copy", None)
+                        logger.info("%s read from shadow copy %s (created %s UTC)", entry_path,
+                                    getattr(store, "copy_id", "?"), getattr(store, "created", "?"))
+                        return True
+            except Exception:
                 continue
         return False
+
+    # ---- shadow copies of the partition being scanned -------------------------------------
+    def _use_partition_shadows(self, img_info, offset: int, size: Optional[int]):
+        """Point the fallback at this partition. Its copies are opened on first need."""
+        self._close_shadow_accessors()
+        self._vss_volume = (img_info, offset, size)
+        self._vss_accessors = None              # not looked for yet
+
+    def _shadow_accessors(self) -> list:
+        if getattr(self, "_vss_accessors", None) is None:
+            volume = getattr(self, "_vss_volume", None)
+            self._vss_accessors = self._open_shadow_accessors(*volume) if volume else []
+        return self._vss_accessors
+
+    def _open_shadow_accessors(self, img_info, offset: int, size: Optional[int]) -> list:
+        """One FileSystemAccessor per readable shadow copy of the partition at `offset`, newest
+        first, each copy rebuilt by vss_reader and its file system opened as any partition's."""
+        try:
+            from Artifacts_Collectors import shadow_copies, vss_reader
+            from dissect.target.filesystem import open as open_fs
+            if not size:
+                img_info.seek(0, os.SEEK_END)
+                size = img_info.tell() - offset
+            vss = shadow_copies.open_vss(shadow_copies.VolumeSlice(img_info, offset, size))
+        except Exception as e:
+            if type(e).__name__ == "VssError":
+                logger.info("The partition at offset %s holds no shadow copies", offset)
+                return []
+            logger.warning("Shadow copies of the partition at offset %s could not be read: %s",
+                           offset, e)
+            issue = make_issue("vss_unavailable", "%s: %s" % (type(e).__name__, e))
+            if issue is not None:
+                self.session_issues.append(issue)
+            return []
+        out = []
+        for store in reversed(vss.stores):
+            if not store.readable:
+                continue
+            try:
+                fallback = FileSystemAccessor(None)
+                fallback.fs_info = open_fs(shadow_copies.snapshot_stream(store))
+                fallback.shadow_copy = store
+                out.append(fallback)
+            except Exception as exc:
+                logger.warning("Shadow copy %s could not be opened: %s", store.copy_id, exc)
+        logger.info("%d shadow copies of the partition at offset %s are ready for fallback",
+                    len(out), offset)
+        return out
+
+    def _close_shadow_accessors(self):
+        for fallback in getattr(self, "_vss_accessors", None) or []:
+            try:
+                fallback.close()
+            except Exception:
+                pass
+        self._vss_accessors = []
 
     def _generate_partition_metadata(self, img_info, image_path: str):
         """Generate partition_info.json for Crow-Claw parity (Task 3)."""

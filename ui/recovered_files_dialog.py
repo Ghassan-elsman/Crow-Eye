@@ -186,12 +186,15 @@ class RecoveredFilesDialog(QtWidgets.QDialog):
     def load(self):
         self._runs = runs_in(self.case_root)
         self.runs.setRowCount(len(self._runs))
+        was_sorting = self.runs.isSortingEnabled()
+        self.runs.setSortingEnabled(False)
         for r, run in enumerate(self._runs):
             what = run["kind"] + (": " + run["name"] if run["kind"] == "Program acquired" and run["name"] else "")
             files = "%d" % run["files"] + (" (%d not)" % run["failed"] if run["failed"] else "")
             for c, v in enumerate([run["when"], what, run["source"], files, run["status"],
                                    os.path.relpath(run["folder"], self.case_root)]):
                 self.runs.setItem(r, c, QtWidgets.QTableWidgetItem(str(v)))
+        self.runs.setSortingEnabled(was_sorting)
         self.runs.resizeColumnsToContents()
         total = sum(r["files"] for r in self._runs)
         self.count.setText("%d run(s), %d file(s)" % (len(self._runs), total) if self._runs
@@ -208,9 +211,12 @@ class RecoveredFilesDialog(QtWidgets.QDialog):
         run = self._current()
         items = run["items"] if run else []
         self.files.setRowCount(len(items))
+        was_sorting = self.files.isSortingEnabled()
+        self.files.setSortingEnabled(False)
         for r, f in enumerate(items):
             for c, v in enumerate([f["path"], _size(f["size"]), f["note"], f["sha256"] or "", f["copy"] or ""]):
                 self.files.setItem(r, c, QtWidgets.QTableWidgetItem(str(v or "")))
+        self.files.setSortingEnabled(was_sorting)
         self.files.resizeColumnsToContents()
         self.folder_btn.setEnabled(bool(run))
         self.custody_btn.setEnabled(bool(run and run["custody"] and os.path.exists(run["custody"])))

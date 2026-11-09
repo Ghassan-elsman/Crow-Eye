@@ -43,8 +43,12 @@ def parse_results(content: str) -> Optional[List[Dict[str, Any]]]:
     i = text.find(RESULTS_MARKER)
     if i < 0:
         return None
+    # raw_decode reads the JSON and ignores what follows it: the evidence anchors
+    # HistoryManager appends to a flagged message (`<evidence anchor=...>` lines).
+    # json.loads failed on them, so nearly every result compacted to "(unparsed)"
+    # with no id and recall_result found nothing (2026-11-03 review).
     try:
-        data = json.loads(text[i + len(RESULTS_MARKER):])
+        data, _end = json.JSONDecoder().raw_decode(text[i + len(RESULTS_MARKER):].lstrip())
     except ValueError:
         return None
     return data if isinstance(data, list) else None
@@ -136,3 +140,62 @@ def find_result(history: List[Dict[str, Any]], rid: str) -> Optional[Dict[str, A
             if isinstance(r, dict) and result_id(r) == rid:
                 return r
     return None
+
+
+# ---- Earlier questions --------------------------------------------------------
+# Every earlier question used to go to the model whole: its tool results, the step
+# and nudge messages, and the ~45K-character synthesis prompt. One conversation of
+# 12 questions cost $0.18 on the first and about $2 on the last (2026-11-02 eval).
+# Now an earlier question goes out as the question, ONE digest of its tool results
+# (ids for recall_result) and its answer. The stored, sealed history keeps every
+# message; only the outgoing copy is folded. The fold of a question never changes
+# once that question is over, so the prefix stays stable for prompt caches.
+
+FOLD_HEAD = ("[Tool results of the question above, folded to save context. Each line is "
+             "one result; call recall_result with its [id] to read it in full.]\n")
+
+
+def _meta(m) -> Dict[str, Any]:
+    md = m.get("metadata")
+    return md if isinstance(md, dict) else {}
+
+
+def is_question(m) -> bool:
+    """A message that starts a question: marked when stored, or (older histories)
+    a user message that is neither internal nor a tool result."""
+    md = _meta(m)
+    if md.get("question_start"):
+        return True
+    return (m.get("role") == "user" and not md.get("internal") and not md.get("is_tool_result")
+            and RESULTS_MARKER not in str(m.get("content") or ""))
+
+
+def fold_earlier_questions(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The outgoing history with every question before the current one folded."""
+    starts = [i for i, m in enumerate(history) if is_question(m)]
+    if len(starts) < 2:
+        return history
+    out = list(history[:starts[0]])
+    bounds = starts + [len(history)]
+    for q in range(len(starts) - 1):
+        seg = history[bounds[q]:bounds[q + 1]]
+        out.append(seg[0])
+        lines = []
+        for m in seg[1:]:
+            if is_tool_message(m):
+                results = parse_results(m.get("content"))
+                if results is None:
+                    lines.append(digest_message(m.get("content")).split("\n", 1)[-1])
+                else:
+                    lines.extend(digest_result(r) for r in results if isinstance(r, dict))
+        if lines:
+            out.append({"role": "user", "content": FOLD_HEAD + "\n".join(lines),
+                        "metadata": {"folded": True, "internal": True}})
+        kept = [m for m in seg[1:] if m.get("role") == "system" or _meta(m).get("pinned")]
+        out.extend(kept)
+        answer = next((m for m in reversed(seg[1:]) if m.get("role") == "assistant"
+                       and str(m.get("content") or "").strip()), None)
+        if answer is not None:
+            out.append(answer)
+    out.extend(history[starts[-1]:])
+    return out

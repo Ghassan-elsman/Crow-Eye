@@ -133,11 +133,13 @@ class EveryPanelCarriesTheRecordsBehindIt(unittest.TestCase):
         "shellitems_bridge.py": "getShellItemsItemDetail",
         "prefetch_bridge.py": "getPrefetchProgramDetail",
         "mftusn_bridge.py": "getMftUsnFileDetail",
+        "aiagents_bridge.py": "getAiSessionDetail",
     }
     MANY_ROWS = {
         "lnkjl_bridge.py": "getLnkTargetDetail",
         "viz_bridge.py": "getSrumAppDetail",
         "browser_bridge.py": "getBrowserDomainDetail",
+        "aiagents_bridge.py": "getAiProgramDetail",
     }
 
     def _slot(self, name, slot):
@@ -172,6 +174,7 @@ class EveryPanelCarriesTheRecordsBehindIt(unittest.TestCase):
             "react-lnkjl": "TargetDetailPanel.jsx",
             "react-viz": "AppDetailPanel.jsx",
             "react-browser": "DomainDetailPanel.jsx",
+            "react-aiagents": "SessionDetailPanel.jsx",
         }
         for dash, panel in panels.items():
             with open(os.path.join(VIZ, dash, "src", panel), encoding="utf-8") as fh:

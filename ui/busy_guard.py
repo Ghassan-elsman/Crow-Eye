@@ -38,12 +38,19 @@ _pending = {}           # key -> fn, insertion-ordered
 _listeners = []         # called with (busy: bool) when the state flips
 
 
-def begin(reason, alive=None):
-    """Mark work as running. Returns the token to hand to end()."""
+def begin(reason, alive=None, writer=True):
+    """Mark work as running. Returns the token to hand to end().
+
+    `writer=True` (the default) means the section writes the case or fills its
+    GUI tables and so must exclude everything - parses, case open/create,
+    import, correlation. `writer=False` marks a read-only section (loading
+    already-written data into the GUI, counting rows for a badge): it still
+    makes the app "busy", but read-only views may open alongside it (is_writing).
+    """
     with _lock:
         was = _busy_locked()
         token = next(_ids)
-        _sections[token] = [str(reason or "Working"), time.monotonic(), alive]
+        _sections[token] = [str(reason or "Working"), time.monotonic(), alive, bool(writer)]
     if not was:
         _notify(True)
     return token
@@ -63,8 +70,8 @@ def end(token):
 
 
 @contextlib.contextmanager
-def busy(reason, alive=None):
-    token = begin(reason, alive)
+def busy(reason, alive=None, writer=True):
+    token = begin(reason, alive, writer)
     try:
         yield token
     finally:
@@ -73,7 +80,7 @@ def busy(reason, alive=None):
 
 def _prune_locked():
     now = time.monotonic()
-    for token, (_reason, started, alive) in list(_sections.items()):
+    for token, (_reason, started, alive, _writer) in list(_sections.items()):
         dead = now - started > MAX_AGE_S
         if not dead and alive is not None:
             try:
@@ -100,20 +107,35 @@ def is_busy(exclude=None):
     return busy_now
 
 
+def _writing_locked(exclude=None):
+    _prune_locked()
+    return any(_sections[t][3] for t in _sections if t != exclude)
+
+
+def is_writing(exclude=None):
+    """Is a section that WRITES the case or fills its GUI tables running?
+
+    Read-only views gate on this instead of is_busy(), so a view may open while
+    another read-only section runs (a GUI load, a badge count) but still waits
+    for a parse / case-open / import to finish."""
+    with _lock:
+        return _writing_locked(exclude)
+
+
 def current(exclude=None):
     """(reason, elapsed seconds) of the oldest running section, or (None, 0)."""
     with _lock:
         if not _busy_locked(exclude):
             return None, 0.0
         token = min(t for t in _sections if t != exclude)
-        reason, started, _alive = _sections[token]
+        reason, started, _alive, _writer = _sections[token]
         return reason, time.monotonic() - started
 
 
 def reasons():
     with _lock:
         _prune_locked()
-        return [r for r, _s, _a in (_sections[t] for t in sorted(_sections))]
+        return [r for r, _s, _a, _w in (_sections[t] for t in sorted(_sections))]
 
 
 def sections():

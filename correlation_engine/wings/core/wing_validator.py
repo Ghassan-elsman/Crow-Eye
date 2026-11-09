@@ -19,7 +19,8 @@ class WingValidator:
             Tuple of (is_valid, list_of_errors)
         """
         from ...config.wing_config import (
-            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of)
+            WING_CATEGORY_BEHAVIOUR, category_problems, behaviour_fields_of,
+            host_scope_problems)
         errors = []
 
         # Validate basic fields
@@ -32,6 +33,8 @@ class WingValidator:
         category = getattr(wing, 'wing_category', None)
         errors.extend(category_problems(category, wing.semantic_rules, wing.feathers,
                                         behaviour=behaviour_fields_of(wing)))
+        # Where its rows may come from: declared, never assumed (14.2).
+        errors.extend(host_scope_problems(getattr(wing, 'host_scope', None)))
 
         # A Behaviour Wing names no Feathers and has no correlation window
         # over them, so the Feather and correlation checks do not apply.
@@ -52,6 +55,14 @@ class WingValidator:
         if not wing.wing_id:
             errors.append("Wing ID is required")
         
+        # The narrative, when written: no word of intent, and no placeholder
+        # naming a feather this Wing does not use.
+        if getattr(wing, 'narrative', ''):
+            from correlation_engine.wings.core.narrative import problems as _narrative_problems
+            ids = [getattr(f, 'feather_id', '') for f in (getattr(wing, 'feathers', None) or [])]
+            for problem in _narrative_problems(wing.narrative, [i for i in ids if i]):
+                errors.append("Narrative: " + problem)
+
         if not wing.proves or wing.proves.strip() == "":
             errors.append("'Proves' field is required - what does this wing prove?")
         

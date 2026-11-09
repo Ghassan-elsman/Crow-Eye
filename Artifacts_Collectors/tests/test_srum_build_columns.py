@@ -47,9 +47,14 @@ class TheSplit(unittest.TestCase):
 
 
 def _row(app_name, link, checksum, cycles=5):
-    n = APP_TIMELINE_INSERT.count("?")
-    row = ["2026-11-01 10:00:00", app_name, "", "", "S-1-5-18", "SYSTEM"] + [None] + [cycles] * (n - 9)
-    return tuple(row + [link, checksum])
+    # Placed by column name: the insert grows (auto_inc_id joined it after
+    # pe_checksum), and a row built by position put the build in the wrong place.
+    cols = [c.strip() for c in SRUM_Claw._INSERT_RE.search(APP_TIMELINE_INSERT).group(2).split(",")
+            if c.strip()]
+    fixed = {"timestamp": "2026-11-01 10:00:00", "app_name": app_name, "app_path": "",
+             "hosted_services": "", "user_sid": "S-1-5-18", "user_name": "SYSTEM", "end_time": None,
+             "pe_link_time": link, "pe_checksum": checksum, "auto_inc_id": None}
+    return tuple(fixed[c] if c in fixed else cycles for c in cols)
 
 
 class TheReparse(unittest.TestCase):

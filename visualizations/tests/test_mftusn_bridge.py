@@ -291,5 +291,161 @@ class TestMftUsnBridgeRealShape(unittest.TestCase):
         self.assertEqual(mig["eventsTotal"], 3)
 
 
+class TestAllFilesWalk(unittest.TestCase):
+    """The All-files list with no filter walks idx_corr_si_modified from the
+    previous page's last file instead of grouping every file again for each
+    page (about 7 s a page on 3.3 M files). Each page must be the one the
+    GROUP BY gives: every file once, in the same order, across two volumes,
+    shared timestamps and a file repeated once per USN event."""
+
+    N = 1300                                   # three pages of 500
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.mkdtemp()
+        cls.db = os.path.join(cls.tmp, "mft_usn_correlated_analysis.db")
+        con = sqlite3.connect(cls.db)
+        con.execute("CREATE TABLE mft_usn_correlated (%s)" % ", ".join(FULL_COLS))
+        rows = []
+        for i in range(cls.N):
+            vol = "CD"[i % 2]
+            si = "2026-10-%02d 10:%02d:00" % (1 + i % 9, i % 7)     # many ties
+            for k in range(1 + i % 3):                               # 1-3 rows per file
+                rows.append(_full(vol, 1000 + i // 2, 1, "f%d.txt" % i, "./f%d.txt" % i,
+                                  reason="DATA_EXTEND", t="2026-10-10 00:00:%02d" % k,
+                                  un="f%d.txt" % i, si_c=si))
+        con.executemany("INSERT INTO mft_usn_correlated VALUES (%s)" % ",".join("?" * len(FULL_COLS)),
+                        [tuple(r[c] for c in FULL_COLS) for r in rows])
+        con.execute("CREATE INDEX idx_corr_si_modified ON mft_usn_correlated"
+                    "(si_modification_time, volume_letter, mft_record_number) WHERE has_mft_record = 1")
+        con.commit()
+        cls.con = con
+
+    def _reference(self, order, offset):
+        o = order.upper()
+        return [(v, r, t) for v, r, t in self.con.execute(
+            "SELECT volume_letter vol, mft_record_number rec, si_modification_time t "
+            "FROM mft_usn_correlated WHERE has_mft_record=1 GROUP BY vol, rec "
+            "ORDER BY t %s, vol %s, rec %s LIMIT 500 OFFSET %d" % (o, o, o, offset))]
+
+    def _page(self, b, order, offset, **extra):
+        r = json.loads(b.getMftUsnAll(json.dumps(dict(kind="files", order=order,
+                                                      offset=offset, **extra))))
+        return r, [parse_file_id(f["id"])[:2] + (f["t"],) for f in r["rows"]]
+
+    def test_load_more_pages_match_the_group_by(self):
+        b = MftUsnBridge(self.tmp)
+        grouped = []
+        b._mft_files = lambda *a, **k: grouped.append(a) or {"total": 0, "files": []}
+        for order in ("desc", "asc"):
+            seen = set()
+            for offset in (0, 500, 1000):
+                r, got = self._page(b, order, offset)
+                self.assertEqual(got, self._reference(order, offset), (order, offset))
+                self.assertEqual(r["total"], self.N)
+                seen.update(g[:2] for g in got)
+            self.assertEqual(len(seen), self.N)
+        self.assertEqual(grouped, [])          # the walk answered every page
+
+    def test_a_date_range_and_a_volume_are_walked_too(self):
+        b = MftUsnBridge(self.tmp)
+        grouped = []
+        real = b._mft_files
+        b._mft_files = lambda *a, **k: grouped.append(a) or real(*a, **k)
+        for flt, sql in (({"start": "2026-10-03", "end": "2026-10-06"},
+                          "si_modification_time >= '2026-10-03' AND "
+                          "si_modification_time < date('2026-10-06', '+1 day')"),
+                         ({"volume": "D"}, "volume_letter = 'D'"),
+                         ({"start": "2026-10-02", "volume": "C"},
+                          "si_modification_time >= '2026-10-02' AND volume_letter = 'C'")):
+            for order in ("desc", "asc"):
+                o = order.upper()
+                ref = [(v, r, t) for v, r, t in self.con.execute(
+                    "SELECT volume_letter vol, mft_record_number rec, si_modification_time t "
+                    "FROM mft_usn_correlated WHERE has_mft_record=1 AND %s GROUP BY vol, rec "
+                    "ORDER BY t %s, vol %s, rec %s" % (sql, o, o, o))]
+                self.assertGreater(len(ref), 0)
+                got, offset = [], 0
+                while True:
+                    r, page = self._page(b, order, offset, **flt)
+                    self.assertEqual(r["total"], len(ref), flt)
+                    got += page
+                    if len(page) < 500:
+                        break
+                    offset += 500
+                self.assertEqual(got, ref, (flt, order))
+        self.assertEqual(grouped, [])
+
+    def test_a_searchs_later_pages_resume_from_the_group_by_page(self):
+        # A search's page 0 is the GROUP BY page (sparse matches can make the
+        # walk's residual scan cost as much as one grouping), and it plants a
+        # cursor: every "load more" after it is walked, applying the same
+        # term test to each index entry, instead of grouping every matching
+        # file again (~7 s a page on 3.3 M files).
+        b = MftUsnBridge(self.tmp)
+        ref = MftUsnBridge(self.tmp)               # the plain GROUP BY, for parity
+        groupings = []
+        real = b._mft_files
+        b._mft_files = lambda *a, **k: groupings.append(a) or real(*a, **k)
+        args = {"terms": ["f"], "mode": "or"}      # every fixture file matches
+        where, params = ref._where(args, extra="has_mft_record=1")
+        for order in ("desc", "asc"):
+            seen = set()
+            for offset in (0, 500, 1000):
+                r, got = self._page(b, order, offset, **args)
+                want = ref._mft_files(where, params, "si_modification_time",
+                                      offset, 500, order.upper())
+                self.assertEqual(got, [parse_file_id(f["id"])[:2] + (f["t"],)
+                                       for f in want["files"]], (order, offset))
+                self.assertEqual(r["total"], self.N)
+                seen.update(g[:2] for g in got)
+            self.assertEqual(len(seen), self.N)
+        # one grouping per order: page 0 only; the later pages were walked
+        self.assertEqual(len(groupings), 2)
+
+    def test_a_searchs_walked_page_matches_what_the_term_matches(self):
+        # A term most files do NOT match: the walk must skip the gaps and
+        # still agree with the GROUP BY, page by page.
+        b = MftUsnBridge(self.tmp)
+        ref = MftUsnBridge(self.tmp)
+        args = {"terms": ["f1"], "mode": "or"}     # f1, f1x, f10xx... a sparse subset
+        where, params = ref._where(args, extra="has_mft_record=1")
+        total = None
+        for order in ("desc", "asc"):
+            offset, got_all = 0, []
+            while True:
+                r, got = self._page(b, order, offset, **args)
+                want = ref._mft_files(where, params, "si_modification_time",
+                                      offset, 500, order.upper())
+                self.assertEqual(got, [parse_file_id(f["id"])[:2] + (f["t"],)
+                                       for f in want["files"]], (order, offset))
+                total = r["total"]
+                got_all += got
+                if len(got) < 500:
+                    break
+                offset += 500
+            self.assertEqual(len(got_all), total)
+            self.assertTrue(0 < total < self.N)
+
+    def test_a_jump_or_a_filter_is_answered_by_the_group_by(self):
+        b = MftUsnBridge(self.tmp)
+        r, got = self._page(b, "desc", 700)    # no page ever ends at 700: no cursor
+        self.assertEqual(got, self._reference("desc", 700))
+        r, got = self._page(b, "desc", 0, terms=["f1"])
+        self.assertTrue(got and all(name.startswith("f1") for name in
+                                    (f["name"] for f in r["rows"])))
+
+    def test_without_the_index_the_group_by_answers(self):
+        tmp = tempfile.mkdtemp()
+        con = sqlite3.connect(os.path.join(tmp, "mft_usn_correlated_analysis.db"))
+        con.execute("ATTACH ? AS src", (self.db,))
+        con.execute("CREATE TABLE mft_usn_correlated AS SELECT * FROM src.mft_usn_correlated")
+        con.commit(); con.close()
+        b = MftUsnBridge(tmp)
+        self.assertIsNone(b._all_files_keyset(0, "DESC"))
+        r, got = self._page(b, "asc", 0)
+        self.assertEqual(got, self._reference("asc", 0))
+
+
 if __name__ == "__main__":
     unittest.main()

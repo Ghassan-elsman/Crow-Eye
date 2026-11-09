@@ -240,15 +240,21 @@ def _config_dir():
         return os.path.join(appdata, 'CrowEye', 'config') if appdata else None
 
 
-def load_key(case_dir=None):
+def load_key(case_dir=None, folder=None):
     """The map's secret: (key, where it is held).
 
     Held by DPAPI for the Windows user, in Crow-Eye's per-user config folder,
     and created there on first use. Where DPAPI is not available (not
     Windows, no pywin32) a key file in ``<case>/state`` is used instead - and
     ``store`` says so, because a key next to the map protects it only from
-    accidents."""
-    folder = _config_dir()
+    accidents.
+
+    ``folder``: a caller's own folder for the DPAPI-held key (Sentinel's
+    agent keeps it in its data directory). Given, it is the only place
+    tried: a key that fell back into a per-run case folder would be a new
+    key every cycle, and every map sealed with the last one unreadable."""
+    explicit = folder is not None
+    folder = folder or _config_dir()
     if folder:
         path = os.path.join(folder, _KEY_FILE)
         try:
@@ -262,6 +268,9 @@ def load_key(case_dir=None):
                 fh.write(blob)
             return key, 'dpapi'
         except Exception as e:                           # noqa: BLE001
+            if explicit:
+                raise RuntimeError("the integrity map key could not be held by DPAPI in %s: %s"
+                                   % (folder, e))
             logger.info("DPAPI key unavailable (%s); using a key file in the case folder", e)
     if not case_dir:
         raise RuntimeError("no DPAPI and no case folder for the integrity map key")
@@ -461,8 +470,19 @@ def map_id(identity: dict) -> str:
     change with an unchanged record count is a full-parse reason, not a new
     map."""
     parts = [str(identity.get(k) or '') for k in ('source', 'serial', 'volume_object_id', 'label')]
+    # Sentinel keys the map by its agent too (decision 132). Only when one is
+    # given, so every desktop case keeps the map it already has.
+    if identity.get('agent_id'):
+        parts.append('agent=%s' % identity['agent_id'])
     return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()[:16]
 
 
-def map_path(case_dir: str, identity: dict) -> str:
-    return os.path.join(case_dir, 'state', 'ntfs_map_%s.bin' % map_id(identity))
+def map_path(case_dir: str, identity: dict, folder: str = None) -> str:
+    """``<case>/state/ntfs_map_<id>.bin``, or the same name in ``folder``
+    when the caller keeps its maps elsewhere (outside a folder it deletes)."""
+    return os.path.join(folder or os.path.join(case_dir, 'state'), 'ntfs_map_%s.bin' % map_id(identity))
+
+
+def pending_path(path: str) -> str:
+    """Where a map waits until the caller says the run it describes arrived."""
+    return path + '.pending'

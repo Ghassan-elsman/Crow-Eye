@@ -207,7 +207,7 @@ def _sql_blocks():
         name, sql, tail = m.group(1), m.group(2), m.group(3)
         if "SELECT" not in sql.upper():
             continue
-        db = re.search(r'_query(?:_db|_time_sliced)\(\s*"([^"]+)"', tail)
+        db = re.search(r'_(?:query_db|query_time_sliced|sliced_rows)\(\s*"([^"]+)"', tail)
         db_name = db.group(1) if db else "registry_data.db"
 
         # One statement is a `.format()` template covering every key-time
@@ -220,6 +220,18 @@ def _sql_blocks():
         # against every table that uses it - running the template itself would
         # only prove that a format string is a format string.
         if "{selected}" in sql:
+            continue
+
+        # An indexed-range template (`_ts_range_sql`, `_ts_order`): filled
+        # with the bridge's own range over the column it names, so the
+        # statement that runs is the one the bridge sends.
+        if "{where}" in sql:
+            from timeline.timeline_bridge import TimelineBridge
+            # the column of the nearest `_ts_range("col", ...)` before it
+            named = re.findall(r'_ts_range\(\s*"(\w+)"', src[max(0, m.start() - 600):m.start()])
+            col = named[-1] if named else "timestamp"
+            blocks.append((name, sql.format(where=TimelineBridge._ts_range_sql(col),
+                                            order=TimelineBridge._ts_order(col)), db_name))
             continue
 
         if "{table}" in sql:

@@ -8,6 +8,8 @@ import {
 } from 'chart.js'
 import { fmtBytes, fmtInt, fmtCompact, fmtDuration, fmtDay } from './format.js'
 import { IconSearch } from './Icons.jsx'
+import FlowBadge, { FlowIcon } from './FlowBadge.jsx'
+import { htmlTooltip, tipFlow, tipLine } from './chartTip.js'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, BarController, LineElement,
   LineController, PointElement, RadarController, RadialLinearScale, Filler, Tooltip, Legend)
@@ -62,7 +64,15 @@ export default function AppDetailPanel({ app, detail, loading, onClose }) {
     responsive: true, maintainAspectRatio: false, animation: false,
     interaction: { mode: 'index', intersect: false },
     plugins: { legend: { labels: { color: '#cbd5e1', usePointStyle: true, pointStyleWidth: 12, boxHeight: 8, font: { size: 12 } } },
-      tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.dataset.label.startsWith('Battery') ? c.parsed.y + '%' : c.dataset.label === 'CPU' ? fmtInt(c.parsed.y) : fmtBytes(c.parsed.y)}` } } },
+      // Sent / received as the network badge; CPU and battery as plain lines.
+      tooltip: { enabled: false, external: htmlTooltip((tt) => {
+        const h = hourly[tt.dataPoints?.[0]?.dataIndex]
+        if (!h) return null
+        return { title: hourLabel(h.hour), rows: [
+          tipFlow([['up', fmtBytes(h.bytesSent)], ['down', fmtBytes(h.bytesReceived)]]),
+          tipLine('CPU', fmtInt(h.cpu)), tipLine('Battery', (h.battery || 0) + '%'),
+        ] }
+      }) } },
     scales: {
       x: { ticks: { color: '#94a3b8', font: { size: 12 }, maxRotation: 0, autoSkip: true }, grid: { display: false } },
       y: { position: 'left', ticks: { color: '#94a3b8', font: { size: 12 }, callback: (v) => fmtBytes(v) }, grid: { color: 'rgba(99,102,241,0.10)' } },
@@ -111,8 +121,8 @@ export default function AppDetailPanel({ app, detail, loading, onClose }) {
 
       <div className="detail-body">
         <div className="totals-strip">
-          <div className="tot"><span>{fmtBytes(totals.bytesSent)}</span><label>sent</label></div>
-          <div className="tot"><span>{fmtBytes(totals.bytesReceived)}</span><label>received</label></div>
+          <div className="tot tot--flow flow-host"><FlowIcon dir="up" large /><div><span>{fmtBytes(totals.bytesSent)}</span><label>sent</label></div></div>
+          <div className="tot tot--flow flow-host"><FlowIcon dir="down" large /><div><span>{fmtBytes(totals.bytesReceived)}</span><label>received</label></div></div>
           <div className="tot" title={fmtInt(totals.cpu)}><span>{fmtCompact(totals.cpu)}</span><label>CPU cycles</label></div>
           <div className="tot"><span>{fmtDuration(totals.focusS)}</span><label>in focus</label></div>
         </div>
@@ -129,10 +139,10 @@ export default function AppDetailPanel({ app, detail, loading, onClose }) {
             return net.length ? (
               <div className="net-times">
                 {net.map((h, i) => (
-                  <div className="net-time" key={i}>
+                  <div className="net-time flow-host" key={i}>
                     <span className="net-time-t">{hourLabel(h.hour)}</span>
-                    <span className="net-time-v" style={{ color: '#4aa8ff' }}>&#9650; {fmtBytes(h.bytesSent)}</span>
-                    <span className="net-time-v" style={{ color: '#7fb3e6' }}>&#9660; {fmtBytes(h.bytesReceived)}</span>
+                    <span className="net-time-v"><FlowBadge dir="up" value={fmtBytes(h.bytesSent)} /></span>
+                    <span className="net-time-v"><FlowBadge dir="down" value={fmtBytes(h.bytesReceived)} /></span>
                   </div>
                 ))}
               </div>

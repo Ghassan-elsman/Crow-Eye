@@ -15,6 +15,38 @@ from .wing_config import WingConfig
 from .pipeline_config import PipelineConfig
 from correlation_engine.config.centralized_score_config import CentralizedScoreConfig
 
+
+def resolve_config_directory(config_directory="configs") -> Path:
+    """Where the default "configs" really is, whatever the working folder.
+
+    The correlation engine's managers took a relative "configs", so their
+    integrated_config.json, cases/ and saved feathers, wings and pipelines
+    landed in whatever folder the process happened to start in - beside the
+    EXE instead of in its bundled configs, and in the Sentinel server's own
+    folder under its analysis child. The default now means the app's configs
+    folder, found from this file (or the frozen bundle), as the Eye's
+    _default_config_dir finds it; a tree that has none (an engine snapshot)
+    uses the per-user folder, never the working directory. A path given
+    explicitly is used as given.
+    """
+    if str(config_directory) != "configs":
+        return Path(config_directory)
+    import sys
+    candidates = []
+    if getattr(sys, "frozen", False):
+        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(sys.executable)
+        candidates.append(Path(base) / "configs")
+        candidates.append(Path(os.path.dirname(sys.executable)) / "configs")
+    candidates.append(Path(__file__).resolve().parents[2] / "configs")
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    try:
+        from config.case_history_manager import default_config_dir
+        return Path(default_config_dir()) / "configs"
+    except Exception:
+        return Path.home() / ".crow-eye" / "configs"
+
 logger = logging.getLogger(__name__)
 
 
@@ -149,7 +181,7 @@ class ConfigManager:
         Args:
             config_directory: Root directory for storing configurations
         """
-        self.config_dir = Path(config_directory)
+        self.config_dir = resolve_config_directory(config_directory)
         self.feather_dir = self.config_dir / "feathers"
         self.wing_dir = self.config_dir / "wings"
         self.pipeline_dir = self.config_dir / "pipelines"

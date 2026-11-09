@@ -2,6 +2,57 @@
 
 ---
 
+## Version 0.15.1
+
+**Release date:** 2026-11-09
+
+---
+
+### Overview
+
+AI agents now run programs, change files and drive browsers on Windows machines of their own accord. This release reads everything those agents leave behind, ties each AI action to the Windows record of the same act, and says — for every piece of activity on the machine — whether a person, a person working remotely, a program on its own, or an AI agent was behind it.
+
+Around that, the application tells a day as a story, reads large cases far faster with its heavy work off the interface, and carries new device, NTFS and RDP evidence. As in 0.15.0, several of these tools were built for Crow-Eye Sentinel, our paid enterprise platform, and are given to the community in the open-source Crow-Eye, free.
+
+### Highlights
+
+- **AI agent forensics.** A new AI Agents view and parser find every AI coding agent on the machine — Claude Code, Codex, Gemini CLI and more — online or inside a forensic image, and read what each was asked, the commands it ran (with the program each command started, its exit code and how long it took), the files it changed and the versions it kept, the pages it drove, the permissions in force and the processes it started. The profile owner's SID is on every AI table, and credential files are never opened.
+- **Linked to Windows' own record.** Each AI step is joined to the artifact that recorded the same act — a command to Prefetch, SRUM, Amcache, ShimCache and 4688; a file change to MFT, USN and the saved versions; a page to browser history — each link naming its rule and both rows. An AI badge marks those rows on the Timeline, with a count where a row carries many links, and the AI Agents dashboard shows what the agents ran and changed. AI-agent feathers, artifact types and Wings bring it into the correlation engine.
+- **Who drove it.** User Behavior labels every activity a person, a person working remotely, a program on its own, or automation, with Driven-by toggles, actor colours on every card and an organised filter bar; and every program activity now says whether that program was the window in front while it ran.
+- **The Activity Story.** The day told as plain sentences — printing, outbound RDP, cloud sync, USB copies, files gathered — and as a clickable strip of icons across a 00–24 h line.
+- **More evidence.** Device records in the event logs (Partition/Diagnostic 1006, DriverFrameworks-UserMode 2003/2100), the SetupAPI device log, RDPClientMRU dated per server, and NTFS integrity history with journal rollbacks.
+- **Faster on large cases.** Heavy reads run off the interface across case-open, User Behavior, Database Search, the Timeline, the dashboards and Eye; large tables are paged by index; the Timeline reads a day from indexed ranges and a day map rather than full scans; and times are shown as UTC, not shifted by the examiner's zone.
+- **The analysis surfaces open together.** The Correlation Engine now prepares itself in the background as a case loads — the way User Behavior and Eye come up with the case — so it opens ready instead of doing its heavy preparation on the click, and the launch buttons show their progress while a surface is loading.
+- **A clearer User Behavior story.** The first 100 activities load by default; each activity's time now rides the rail beside its dot so the times line up in one column, and every tag sits on the left in one row.
+- **Fleet correlation (built for Sentinel).** Every Wing declares the machines it reasons over; the rules — absence, threshold, sequence and composition — say what they mean across machines; one identity key covers each account and program fleet-wide; and the engine can read several machines in one call.
+
+### User Behavior
+
+**User Behavior → Activity Story / Who drove it.**
+
+- **Who drove each step.** Every activity is read as a person, a person working remotely, a program on its own, or automation (a script or an AI agent), from the input layer. Driven-by toggles narrow the view to one kind of actor; actor colours, fact badges and an organised filter bar are on every card.
+- **Foreground or background.** Each program activity says whether the program was the window in front while it ran.
+- **The day in short.** A day opens with plain sentences — printing, outbound RDP, cloud sync, USB copies, files gathered — and a strip of icons across a 00–24 h line that opens the card on a click.
+- **A tidier card.** The first 100 activities load straight away; each activity's time sits on the left rail beside its dot, aligned in one column with the others, and the actor and status tags all sit on the left in a single row.
+
+### AI Agents
+
+**User Behavior → AI Agents**, and **Offline Analysis** for an image.
+
+- **Every agent on the machine.** Claude Code (CLI and desktop), Codex, Gemini CLI and others, found on this machine or inside a forensic image.
+- **What each one did.** The prompts it was given and who sent them; every command, with the program it started, its exit code and how long it took; the files it changed and the versions it kept, listed and hashed; the web pages it drove; the permissions and MCP servers in force; and the processes it started, matched to their PIDs.
+- **Saved file versions** are listed and hashed; a button copies the chosen versions into the case, and a setting (off by default) copies them all at parse time.
+- **Everywhere it belongs:** the AI Agents dashboard, an AI badge on the Timeline, AI-agent feathers and Wings in the correlation engine, the AI tables in Database Search, and AI-agent knowledge in Eye.
+
+### Across the application
+
+- **Every table** carries a status bar, a filter, a right-click menu, copy-with-headers and **Go to tab**; **Show in table** reaches a row from the Timeline and Database Search; **Ctrl+L** opens the case's logs.
+- **Database Search** runs on threads and handles Regex, wildcards, Exact Match and saved searches.
+- **Sent and received** network figures wear one upload/download badge everywhere.
+- **Eye** keeps each answer for the session, runs its evidence and log reads off the interface, exports a PDF without extra system libraries, and draws on one shared data source for every evidence tool.
+
+---
+
 ## Version 0.15.0 — Sentinel Glance
 
 **Release date:** 2026-11-02 · Figures are measured on the build machine and the cases named.

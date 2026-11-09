@@ -1,6 +1,6 @@
 {
-  "version": "3",
-  "comment": "Master Behavioral Timeline Correlation Matrix \u2014 declarative rule metadata. Each rule names a Python extractor (uba/engine/extractors/*) that implements the query + correlation; rules added 2026-09-03 cover the artifacts the registry parsers collect but no rule read - scheduled tasks, Defender exclusions, UserChoice handlers, COM in-process servers and the per-user device and document MRUs.",
+  "version": "6",
+  "comment": "Master Behavioral Timeline Correlation Matrix — declarative rule metadata. Each rule names a Python extractor (uba/engine/extractors/*) that implements the query + correlation; rules added 2026-09-03 cover the artifacts the registry parsers collect but no rule read - scheduled tasks, Defender exclusions, UserChoice handlers, COM in-process servers and the per-user device and document MRUs.",
   "rules": [
     {
       "id": "interactive_logon",
@@ -1599,6 +1599,150 @@
         }
       },
       "how": "The browser's media history: sites that played audio or video, with the watch time it recorded, per user, browser and day."
+    },
+    {
+      "id": "printer_added",
+      "behavior_class": "user",
+      "activity": "printer_added",
+      "title": "Printer added",
+      "extractor": "printer_added",
+      "severity": "routine",
+      "color_token": "class_device",
+      "requires": {
+        "tables": {
+          "registry": [
+            "printer_connections"
+          ]
+        }
+      },
+      "matrix_row": 48
+    },
+    {
+      "id": "rdp_outbound",
+      "behavior_class": "user",
+      "activity": "remote_desktop_out",
+      "title": "Connected to another computer over Remote Desktop",
+      "extractor": "rdp_outbound",
+      "severity": "notable",
+      "color_token": "class_network",
+      "requires": {
+        "tables": {
+          "registry": [
+            "RDPClientMRU"
+          ]
+        }
+      },
+      "matrix_row": 49
+    },
+    {
+      "id": "cloud_sync_client",
+      "behavior_class": "application",
+      "activity": "cloud_sync",
+      "title": "Cloud sync app on the computer",
+      "extractor": "cloud_sync_client",
+      "severity": "notable",
+      "color_token": "class_application",
+      "requires": {
+        "any_tables": {
+          "registry": [
+            "InstalledSoftware"
+          ],
+          "amcache": [
+            "InventoryApplication"
+          ]
+        }
+      },
+      "matrix_row": 50
+    },
+    {
+      "id": "usb_file_copy",
+      "behavior_class": "user",
+      "activity": "usb_copy",
+      "title": "Files written to a USB drive",
+      "extractor": "usb_file_copy",
+      "severity": "notable",
+      "color_token": "class_device",
+      "after_extractors": true,
+      "requires": {
+        "tables": {
+          "registry": [
+            "USBStorageVolumes"
+          ]
+        }
+      },
+      "matrix_row": 51
+    },
+    {
+      "id": "files_collected",
+      "behavior_class": "user",
+      "activity": "files_collected",
+      "title": "Files gathered into one folder",
+      "extractor": "files_collected",
+      "severity": "notable",
+      "color_token": "class_files",
+      "after_extractors": true,
+      "requires": {
+        "any_tables": {
+          "usn": [
+            "journal_events"
+          ],
+          "mft_usn_correlated": [
+            "mft_usn_correlated"
+          ]
+        }
+      },
+      "matrix_row": 52
+    },
+    {
+      "id": "input_activity",
+      "behavior_class": "user",
+      "activity": "input",
+      "title": "Used the keyboard or mouse",
+      "extractor": "input_activity",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "tables": {
+          "srum": [
+            "srum_app_timeline"
+          ]
+        }
+      },
+      "matrix_row": 53
+    },
+    {
+      "id": "ai_agent_session",
+      "behavior_class": "user",
+      "activity": "ai_agent_session",
+      "title": "Worked with an AI agent",
+      "extractor": "ai_agent_sessions",
+      "severity": "routine",
+      "color_token": "class_user",
+      "requires": {
+        "tables": {
+          "ai_agents": [
+            "ai_agent_sessions"
+          ]
+        }
+      },
+      "matrix_row": 54
+    },
+    {
+      "id": "ai_agent_turn",
+      "behavior_class": "application",
+      "activity": "ai_agent_command",
+      "title": "An AI agent ran commands or changed files",
+      "extractor": "ai_agent_turns",
+      "severity": "routine",
+      "color_token": "class_application",
+      "requires": {
+        "tables": {
+          "ai_agents": [
+            "ai_agent_steps"
+          ]
+        }
+      },
+      "matrix_row": 55
     }
   ],
   "requires_collection": [

@@ -153,7 +153,8 @@ class IntegratedConfigurationManager:
         Args:
             config_directory: Root directory for storing configurations
         """
-        self.config_dir = Path(config_directory)
+        from correlation_engine.config.config_manager import resolve_config_directory
+        self.config_dir = resolve_config_directory(config_directory)
         self.global_config_path = self.config_dir / "integrated_config.json"
         self.case_configs_dir = self.config_dir / "cases"
         

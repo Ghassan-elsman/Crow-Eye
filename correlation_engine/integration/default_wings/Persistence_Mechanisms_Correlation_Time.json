@@ -3,6 +3,7 @@
   "wing_name": "Persistence Mechanisms Correlation (Time)",
   "wing_id": "default_wing_persistence_001_time",
   "wing_category": "time",
+  "host_scope": "same_host",
   "description": "Detects adversary autostart and persistence on the host by correlating Run/RunOnce keys, scheduled services, and the actual on-disk + run-time evidence that the persistent binary lives and executes. Uses a tiered approach with autostart-registry evidence (AutoStartPrograms, SystemServices) weighted highest, supporting execution evidence (Prefetch, Amcache InventoryApplication) next, and drop-time + service-install audit events as confirming context.",
   "proves": "An adversary established a persistent autostart on the host",
   "author": "Crow-Eye Team",

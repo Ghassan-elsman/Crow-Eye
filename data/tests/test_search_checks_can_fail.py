@@ -116,7 +116,10 @@ class TheSearchChecksCanFail(unittest.TestCase):
     def test_reading_a_file_twice_is_caught(self):
         """Six logical names, six reads - what both search paths used to do."""
         import data.unified_search_engine as mod
-        real = mod.UnifiedDatabaseSearchEngine._one_entry_per_file
+        # From __dict__: through the class a staticmethod comes back as a plain
+        # function, and putting THAT back made every later call pass `self`
+        # (the next test to search the case failed with a TypeError).
+        real = mod.UnifiedDatabaseSearchEngine.__dict__["_one_entry_per_file"]
 
         def no_dedupe(infos, tables):
             return list(infos), tables, {i.name: [i.name] for i in infos}

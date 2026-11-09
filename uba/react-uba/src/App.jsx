@@ -10,12 +10,14 @@ import SignInsView from './components/SignInsView.jsx'
 import CoveragePanel from './components/CoveragePanel.jsx'
 import RulesView from './components/RulesView.jsx'
 import EvidenceModal from './components/EvidenceModal.jsx'
+import WhoDroveView from './components/WhoDroveView.jsx'
 
 // actor_sids: the person key (one SID matches every name that person had).
 // Set by an initial filter from another window, or by picking a user chip.
 const EMPTY_FILTERS = {
   actors: [], actor_sids: [], apps: [], rules: [], classes: [], severities: [],
   activities: [], confidences: [], search: '', start: '', end: '',
+  drivers: [], app_states: [],
   include_session_user: false, order: 'desc',
 }
 
@@ -35,7 +37,7 @@ function filtersFromInitial(f) {
 }
 
 export default function App() {
-  const { bridge, callBridge, isLoading, isDev } = useBridge()
+  const { bridge, callBridge, callAsync, isLoading, isDev } = useBridge()
   const [status, setStatus] = useState(null)
   const [phase, setPhase] = useState({ percent: 0, label: 'Starting…' })
   const [summary, setSummary] = useState(null)
@@ -51,6 +53,9 @@ export default function App() {
   const [view, setView] = useState('storyline')
   const [filters, setFilters] = useState(EMPTY_FILTERS)
   const [modalEventId, setModalEventId] = useState(null)
+  // Rows of one source table, opened from the Who drove it tab (a mark, a program).
+  const [modalRows, setModalRows] = useState(null)
+  const [driversDay, setDriversDay] = useState('')
   // Bumped when the Behaviour Rule Creator saves or deletes a rule, so the
   // Rules view reads the list again.
   const [rulesVersion, setRulesVersion] = useState(0)
@@ -119,29 +124,33 @@ export default function App() {
     setStatus((prev) => ({ ...(prev || {}), analysis_done: true, parsed_data_available: true }))
     const [u, a, r, sess, cov] = await Promise.all([
       callBridge('getUsers'), callBridge('getApps'), callBridge('getRules'),
-      callBridge('getSessions'), callBridge('getCoverage')])
+      // getSessions reads the registry/logs - run it off the GUI thread.
+      callAsync('getSessions'), callBridge('getCoverage')])
     if (u) setUsers(u.users || [])
     if (a) setApps(a.apps || [])
     if (r && !r.pending) setRules(r.rules || [])
     if (sess && !sess.pending) setSessionsReport(sess)
     if (cov) setCoverage(cov)
-    callBridge('getSummary', JSON.stringify(EMPTY_FILTERS)).then((s) => {
+    // Off Crow-Eye's GUI thread (uba_bridge ASYNC_SLOTS): 0.4 s on a real case.
+    callAsync('getSummary', JSON.stringify(EMPTY_FILTERS)).then((s) => {
       if (s && !s.pending) { setBaseSummary(s); setSummary(s) }
       // A filter set before the analysis finished (an initial filter): its
       // own summary, after the whole-case one, so the tiles match the story.
       const f = filtersRef.current
-      if (f !== EMPTY_FILTERS) {
-        callBridge('getSummary', JSON.stringify(f)).then((fs) => {
-          if (fs && !fs.pending) setSummary(fs)
-        })
-      }
+      if (f !== EMPTY_FILTERS) refreshSummary(f)
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [callBridge])
+  }, [callBridge, callAsync])
 
+  // The newest request wins: answers arrive off the GUI thread and out of
+  // order when filters change quickly.
+  const summarySeq = useRef(0)
   const refreshSummary = useCallback((f) => {
-    callBridge('getSummary', JSON.stringify(f)).then((s) => { if (s && !s.pending) setSummary(s) })
-  }, [callBridge])
+    const id = ++summarySeq.current
+    callAsync('getSummary', JSON.stringify(f)).then((s) => {
+      if (id === summarySeq.current && s && !s.pending) setSummary(s)
+    })
+  }, [callAsync])
 
   const onFiltersChange = useCallback((next) => {
     setFilters(next)
@@ -184,6 +193,21 @@ export default function App() {
   }, [callBridge])
   rerunRef.current = rerunAnalysis
 
+  // From the Who drove it tab: the Activity Story narrowed to what a tile,
+  // a bar or a cell counted - the same filter its number came from.
+  const openDrivers = useCallback((patch) => {
+    const next = { ...filters, drivers: [], app_states: [], ...patch, order: patch.start ? 'asc' : filters.order }
+    setFilters(next)
+    refreshSummary(next)
+    setView('storyline')
+  }, [filters, refreshSummary])
+
+  // From the day summary's "Who drove it" line: that day on the Who drove it tab.
+  const openDriversDay = useCallback((day) => {
+    setDriversDay(day)
+    setView('drivers')
+  }, [])
+
   const focusRule = useCallback((ruleId) => {
     const next = { ...EMPTY_FILTERS, rules: [ruleId] }
     setFilters(next)
@@ -213,11 +237,16 @@ export default function App() {
       <div className="body">
         <div className="main">
           {view === 'storyline' && (
-            <StorylineView filters={filters} summary={summary} callBridge={callBridge}
+            <StorylineView filters={filters} summary={summary} callBridge={callBridge} callAsync={callAsync}
               railSummary={baseSummary || summary}
               sessions={sessionsReport ? sessionsReport.sessions : []}
               onFiltersChange={onFiltersChange}
-              onOpenEvidence={setModalEventId} />
+              onOpenEvidence={setModalEventId}
+              onOpenDrivers={openDrivers} onOpenDriversDay={openDriversDay} />
+          )}
+          {view === 'drivers' && (
+            <WhoDroveView summary={summary} filters={filters} callBridge={callBridge} callAsync={callAsync}
+              onOpenStory={openDrivers} onOpenRows={setModalRows} initialDay={driversDay} />
           )}
           {view === 'map' && (
             <ActivityMapView summary={summary} onCellSelect={(f) => onFiltersChange({ ...filters, ...f })} />
@@ -233,8 +262,12 @@ export default function App() {
           )}
         </div>
       </div>
+      {modalRows && (
+        <EvidenceModal rows={modalRows} callBridge={callAsync || callBridge}
+          onClose={() => setModalRows(null)} bridge={bridge} />
+      )}
       {modalEventId && (
-        <EvidenceModal eventId={modalEventId} callBridge={callBridge}
+        <EvidenceModal eventId={modalEventId} callBridge={callAsync || callBridge}
           onClose={() => setModalEventId(null)} bridge={bridge} />
       )}
     </div>

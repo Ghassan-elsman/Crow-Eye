@@ -14,7 +14,7 @@ from PyQt5.QtCore import Qt, pyqtSignal, QUrl
 from PyQt5.QtWebEngineWidgets import QWebEngineView
 from PyQt5.QtWebChannel import QWebChannel
 
-from timeline.timeline_bridge import TimelineBridge
+from timeline.timeline_bridge import TimelineBridge, SOURCE_KEYS
 from timeline.utils.error_handler import ErrorHandler
 from timeline.utils.loading_indicator import LoadingOverlay
 from ui.row_detail_dialog import RowDetailDialog
@@ -129,6 +129,9 @@ class TimelineDialog(QDialog):
 
         # Connect the detail dialog signal
         self.bridge.show_event_detail.connect(self._open_event_detail_dialog)
+        # A link's "Show in table" (an AI step, or the Windows row beside it)
+        self.bridge.show_in_table.connect(
+            lambda db, table, rid: self.show_in_table(db, table, rid))
 
         # Register the bridge object. In JS this will be accessible as `channel.objects.bridge`.
         self.web_channel.registerObject("bridge", self.bridge)        
@@ -192,11 +195,36 @@ class TimelineDialog(QDialog):
         """Open the native RowDetailDialog with data from React."""
         try:
             event_data = json.loads(event_json)
+            # The lane's source row, if its query named one (TimelineBridge
+            # _query_db): kept for "Show in table", never shown as a field.
+            source = tuple(event_data.pop(k, None) for k in SOURCE_KEYS)
+            if None in source and event_data.get('db') and event_data.get('table') \
+                    and event_data.get('row_id') not in (None, ''):
+                source = (event_data['db'], event_data['table'], event_data['row_id'])
             # Find a suitable title and row name
             title = event_data.get('source', event_data.get('type', 'Event Detail'))
-            
+            label = None
+
+            # A mark that names its source row (`db`, `table`, `row_id` - the
+            # AI agents lane) opens THAT row, every column of it, rather than
+            # the trimmed copy the lane drew from. The lane leaves a step's
+            # `text` in the database; this is where it is read. One row by
+            # rowid, through the bridge's own allow-listed lookup.
+            if event_data.get('db') and event_data.get('table') and \
+                    event_data.get('row_id') not in (None, ''):
+                try:
+                    full = json.loads(self.bridge.getEventDetail(
+                        str(event_data['db']), str(event_data['table']),
+                        str(event_data['row_id'])))
+                except Exception as exc:
+                    full = {'error': str(exc)}
+                if isinstance(full, dict) and 'error' not in full:
+                    label = event_data.get('ai_label') or event_data.get('name')
+                    title = event_data.get('table') or title
+                    event_data = dict(full)
+
             # Extract common identifier fields
-            row_name = (event_data.get('name') or 
+            row_name = (label or event_data.get('name') or
                         event_data.get('app_name') or 
                         event_data.get('filename') or 
                         event_data.get('executable_name') or 
@@ -211,10 +239,48 @@ class TimelineDialog(QDialog):
                 row_name=str(row_name), 
                 parent=self
             )
+            if all(v not in (None, '') for v in source) and self.has_table_tab(source[1]):
+                self.current_detail_dialog.add_action(
+                    "Show in table",
+                    "Open this row in its tab in the main window",
+                    lambda _c=False, s=source: self.show_in_table(*s))
             self.current_detail_dialog.show()
         except Exception as e:
             logger.error(f"Error opening event detail dialog: {e}")
             QMessageBox.warning(self, "Error", f"Failed to open event detail: {str(e)}")
+
+    def _tools(self):
+        ui = getattr(self.main_window, 'ui', None)
+        return getattr(ui, 'investigator_tools', None)
+
+    def has_table_tab(self, table):
+        """True when a main-window tab shows `table`. No button that leads
+        nowhere."""
+        tools = self._tools()
+        return tools is not None and tools.table_view_for(table) is not None
+
+    def show_in_table(self, db_name, table, row_id):
+        """Select the row in its main-window tab (InvestigatorTools.show_row)
+        and bring the main window forward. The Timeline stays open behind it
+        (it is not modal), so the analyst can come back."""
+        tools = self._tools()
+        if tools is None:
+            return False
+        try:
+            ok, why = tools.show_row(str(db_name), str(table), row_id)
+        except Exception as e:
+            logger.error(f"Show in table failed: {e}")
+            ok, why = False, str(e)
+        if not ok:
+            QMessageBox.information(self, "Show in table", why)
+            return False
+        win = self.main_window
+        if win is not None:
+            if win.isMinimized():
+                win.showNormal()
+            win.raise_()
+            win.activateWindow()
+        return True
 
     def _get_case_directory(self) -> str:
         """Get the Target_Artifacts directory of the current case."""

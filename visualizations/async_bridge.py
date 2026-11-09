@@ -25,7 +25,7 @@ import logging
 import threading
 import time
 
-from PyQt5.QtCore import QObject, QRunnable, QThreadPool, Qt, pyqtSignal, pyqtSlot
+from PyQt5.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, pyqtSignal, pyqtSlot
 
 logger = logging.getLogger("crow_eye.visualizations")
 
@@ -52,11 +52,81 @@ def cached_slot(name, db_paths):
     return deco
 
 
+# ANSWERS KEPT FOR THE SESSION, NOT THE DIALOG. Each dashboard kept its
+# answers on its bridge, and a bridge dies with its dialog, so closing and
+# reopening a dashboard asked every question again (the MFT/USN overview 10 s
+# and its strip 9 s on a 3.9 M-row case, every opening). They are kept here,
+# keyed by the bridge's class, the databases it read and their state.
+_SHARED = {}
+_SHARED_LOCK = threading.RLock()
+_SHARED_MAX = 512
+
+
+def db_state(paths):
+    """(path, size, mtime) of each database and of its WAL: what a kept
+    answer depends on. The WAL is part of it because a parse in WAL mode
+    writes there and leaves the database file's own mtime alone until a
+    checkpoint - keyed on the .db alone, an answer kept for the session would
+    outlive a re-parse."""
+    import os
+    out = []
+    for path in paths or ():
+        for p in ((path, path + "-wal") if path else (path,)):
+            try:
+                st = os.stat(p)
+                out.append((p, st.st_size, st.st_mtime))
+            except (OSError, TypeError):
+                out.append((p, None, None))
+    return tuple(out)
+
+
+def shared_get(key):
+    with _SHARED_LOCK:
+        return _SHARED.get(key)
+
+
+def shared_put(key, value):
+    with _SHARED_LOCK:
+        if len(_SHARED) >= _SHARED_MAX:
+            _SHARED.clear()
+        _SHARED[key] = value
+
+
 def _drop_queue(pool):
     try:
         pool.clear()
     except RuntimeError:
         pass                              # the bridge was deleted before its dialog
+
+
+# Pools whose dashboard has closed, kept until their running calls end.
+# QThreadPool's destructor waits for every running call, and the pool used to
+# be the bridge's Qt child, so deleting a dashboard during a slow query (a 7 s
+# MFT/USN search) froze all of Crow-Eye until the query finished. The pool now
+# has no Qt parent: closing drops its queue and parks it here, and a timer on
+# the GUI thread lets it go - destroyed with nothing left to wait for - once
+# its last call has returned. A call that finishes after its dialog has gone
+# answers nobody; _Call already ignores the deleted bridge.
+_RETIRED = set()
+
+
+def _sweep_retired():
+    for pool in list(_RETIRED):
+        try:
+            idle = pool.activeThreadCount() == 0
+        except RuntimeError:
+            idle = True
+        if idle:
+            _RETIRED.discard(pool)
+    if _RETIRED:
+        QTimer.singleShot(250, _sweep_retired)
+
+
+def _retire(pool):
+    _drop_queue(pool)
+    if pool not in _RETIRED:
+        _RETIRED.add(pool)
+        QTimer.singleShot(250, _sweep_retired)
 
 
 class _Call(QRunnable):
@@ -95,17 +165,17 @@ class AsyncBridge(QObject):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._pool = QThreadPool(self)
+        # No Qt parent: see _RETIRED. The bridge holds it while it lives.
+        self._pool = QThreadPool()
         # A few at once: a dashboard opens with 3-5 calls, and one slow call
         # (a search over 3.8 M rows) must not hold up the others.
         self._pool.setMaxThreadCount(3)
         self._cache_lock = threading.RLock()
         self._finished.connect(self._deliver, Qt.QueuedConnection)
-        # The pool dies with the dialog, and its destructor waits for every
-        # queued call too: drop the queue first, so closing a dashboard
-        # waits at most for the calls already running.
+        # When the dialog goes, its queued calls are dropped and the running
+        # ones finish on their own, without the close waiting for them.
         if parent is not None:
-            parent.destroyed.connect(lambda *_a, p=self._pool: _drop_queue(p))
+            parent.destroyed.connect(lambda *_a, p=self._pool: _retire(p))
 
     @pyqtSlot(str, str)
     def _deliver(self, request_id, payload):
@@ -133,37 +203,27 @@ class AsyncBridge(QObject):
 
     def cached_result(self, name, args_json, compute, db_paths, limit=48):
         """``compute(args_json)``, kept per filters while the databases are
-        unchanged (their mtimes are in the key, so a re-parse refreshes it).
-        The answer is computed outside the lock; the cache is touched under it.
-        """
-        import os
-        stamps = []
-        for path in db_paths or ():
-            try:
-                stamps.append(os.path.getmtime(path) if path else None)
-            except OSError:
-                stamps.append(None)
+        unchanged (their paths, sizes and mtimes, WAL included, are in the
+        key, so a re-parse refreshes it), for the whole session: a reopened
+        dashboard is answered from it (_SHARED). The answer is computed
+        outside the lock. `limit` is kept for callers; the session store has
+        its own bound."""
         try:
             norm = json.dumps(json.loads(args_json or "{}"), sort_keys=True)
         except (ValueError, TypeError):
             norm = str(args_json)
-        key = (name, norm, tuple(stamps))
-        with self._cache_lock:
-            cache = self.__dict__.setdefault("_async_cache", {})
-            hit = cache.get(key)
+        key = (type(self).__name__, name, norm, db_state(db_paths))
+        hit = shared_get(key)
         if hit is not None:
             return hit
         value = compute(args_json)
-        with self._cache_lock:
-            if len(cache) >= limit:
-                cache.clear()
-            cache[key] = value
+        shared_put(key, value)
         return value
 
     def clear_cache(self):
         """Forget every kept answer (tests that change a module constant)."""
-        with self._cache_lock:
-            self.__dict__.pop("_async_cache", None)
+        with _SHARED_LOCK:
+            _SHARED.clear()
 
     def wait_for_calls(self, msecs=30000):
         """Tests and dialog shutdown: wait for the calls in flight."""

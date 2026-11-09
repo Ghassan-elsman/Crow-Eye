@@ -182,6 +182,16 @@
       "anchor_priority": 12,
       "category": "supporting_evidence",
       "forensic_strength": "medium"
+    },
+    {
+      "id": "AIAgents",
+      "name": "AI Agents",
+      "description": "What AI agents (Claude Code, Codex, Gemini CLI, Copilot, Roo/Kilo, Antigravity) recorded doing: commands and the programs they started, files changed, pages driven",
+      "default_weight": 0.25,
+      "default_tier": 1,
+      "anchor_priority": 18,
+      "category": "primary_evidence",
+      "forensic_strength": "high"
     }
   ]
 }

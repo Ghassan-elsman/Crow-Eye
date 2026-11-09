@@ -45,7 +45,7 @@ License: GPL-3.0
 # Module-level version constants. Crow-Eye and its Correlation Engine
 # can be released independently; the engine version surfaces in the
 # About menu so analysts can tell which engine build they're running.
-__version__ = "0.15.0"  # Single source of truth — read by the About menu, the update
+__version__ = "0.15.1"  # Single source of truth — read by the About menu, the update
                         # check, and the MSI build (build_exe.py parses this literal).
 CORRELATION_ENGINE_VERSION = "1.8.0" # Time-window scan: timestamp parsing memoised, ISO fast path
 
@@ -981,6 +981,13 @@ def validate_dependencies():
             elif dep == 'PyQt5':
                 from PyQt5 import QtCore
                 print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
+            elif dep == 'pandas':
+                # Found, not imported: nothing in Crow-Eye imports pandas, and
+                # importing it only to check cost 2.2 s of every cold start.
+                import importlib.util
+                if importlib.util.find_spec(dep) is None:
+                    raise ImportError(dep)
+                print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
             else:
                 __import__(dep)
                 print(Fore.GREEN + f"[+] {dep}: OK ({purpose})" + Fore.RESET)
@@ -1064,7 +1071,10 @@ def _trim_to_arity(fn):
     return sum(1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)) - 1
 
 
-def busy_section(reason):
+def busy_section(reason, writer=True):
+    """`writer=False` marks a read-only section (filling GUI tables from data a
+    parse already wrote, a badge count): it makes the app busy but lets
+    read-only views open alongside it (busy_guard.is_writing)."""
     def deco(fn):
         limit = _trim_to_arity(fn)
 
@@ -1072,7 +1082,7 @@ def busy_section(reason):
         def wrapper(self, *args, **kwargs):
             if limit is not None:
                 args = args[:max(0, limit)]
-            with busy_guard.busy(reason):
+            with busy_guard.busy(reason, writer=writer):
                 return fn(self, *args, **kwargs)
         return wrapper
     return deco
@@ -1130,6 +1140,7 @@ _NEEDS_LNK = ("LnkDB.db",)
 _NEEDS_PREFETCH = ("prefetch_data.db",)
 _NEEDS_REGISTRY = ("registry_data.db",)
 _NEEDS_BROWSER = ("browser_analysis.db",)
+_NEEDS_AI_AGENTS = ("ai_agents.db",)
 
 # Ordered (db_table_name, display_label) pairs for the Browser Forensics tab.
 # Drives both the sub-tab construction and the data loader, so adding a browser
@@ -1179,6 +1190,19 @@ BROWSER_TABS = [
     ("browser_gecko_credentials", "Firefox Logins"),
     ("browser_gecko_localstorage", "Firefox Local Storage"),
     ("browser_gecko_sessions", "Firefox Sessions"),
+]
+
+# (db_table_name, display_label, order) for the AI Agents tab
+# (Artifacts_Collectors/AI_Agent_Claw.py -> ai_agents.db). Drives the sub-tabs
+# and the loader, like BROWSER_TABS; the widget of each is AIAgents_<x>_table
+# (utils/table_sources.py). Below validate_dependencies() for the same reason.
+AI_AGENT_DB = "ai_agents.db"
+AI_AGENT_TABS = [
+    ("ai_agent_sessions", "Sessions", "last_ts DESC"),
+    ("ai_agent_steps", "Steps", "ts DESC"),
+    ("ai_agent_file_versions", "File Versions", "saved_at DESC"),
+    ("ai_agent_processes", "Processes", "started_at DESC"),
+    ("ai_agent_settings", "Settings", "agent, scope, setting"),
 ]
 
 # ============================================================================
@@ -3316,6 +3340,121 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             short_name = table_name.replace("browser_", "", 1)
             setattr(self, f"Browser_{short_name}_table", table_widget)
 
+    def create_ai_agent_table_tabs(self):
+        """One sub-tab per AI agent table (AI_AGENT_TABS), built like the browser
+        tabs: a placeholder QTableWidget swapped for a VirtualTableWidget on load."""
+        self.ai_agent_table_widgets = {}
+        self.ai_agent_tab_pages = {}
+        self.ai_agent_tab_layouts = {}
+        self.ai_agent_tab_overlays = {}
+
+        for table_name, tab_label, _order in AI_AGENT_TABS:
+            page = QtWidgets.QWidget()
+            page.setObjectName(f"ai_agent_page_{table_name}")
+
+            layout = QtWidgets.QVBoxLayout(page)
+            layout.setObjectName(f"ai_agent_layout_{table_name}")
+
+            table_widget = QtWidgets.QTableWidget(page)
+            table_widget.setObjectName(f"ai_agent_tbl_{table_name}")
+            table_widget.setMinimumSize(QtCore.QSize(2, 2))
+            self.setup_standard_table(table_widget, 8, False, 300, 190)
+
+            if table_name == "ai_agent_file_versions":
+                layout.addLayout(self._ai_versions_toolbar(page))
+            layout.addWidget(table_widget)
+            self.AIAgents_tab_widget.addTab(page, tab_label)
+
+            self.ai_agent_table_widgets[table_name] = table_widget
+            self.ai_agent_tab_pages[table_name] = page
+            self.ai_agent_tab_layouts[table_name] = layout
+            # Named attribute (AIAgents_sessions_table / AIAgents_steps_table):
+            # the "Why empty?" button and Anatomy links resolve tables by name.
+            short_name = table_name.replace("ai_agent_", "", 1)
+            setattr(self, f"AIAgents_{short_name}_table", table_widget)
+
+
+    def _ai_versions_toolbar(self, page):
+        """The File Versions tab's buttons: save the selected saved copies into
+        the case, and show a copy in Explorer (selected, never opened - a saved
+        .bat or .ps1 would run)."""
+        row = QtWidgets.QHBoxLayout()
+        note = QtWidgets.QLabel(
+            "The copy an AI agent saved of each file before changing it. Listed and hashed; "
+            "kept in the case only when saved (Settings: copy them all at parse time).")
+        note.setWordWrap(True)
+        note.setObjectName("aiVersionsNote")
+        save = QtWidgets.QPushButton("Save selected into the case")
+        save.setToolTip("Copy the selected versions into <case>\\AI_Agents\\file_versions, "
+                        "each checked against its SHA-1 after the copy")
+        save.clicked.connect(lambda _c=False: self.save_selected_ai_versions())
+        show = QtWidgets.QPushButton("Show the saved copy")
+        show.setToolTip("Select the copy (in the case if saved, else in the profile) in Explorer")
+        show.clicked.connect(lambda _c=False: self.show_ai_version_copy())
+        try:
+            from ui.app_theme import set_variant
+            set_variant(save, "ghost")
+            set_variant(show, "ghost")
+        except Exception:
+            pass
+        row.addWidget(note, 1)
+        row.addWidget(save)
+        row.addWidget(show)
+        self.ai_versions_save_button = save
+        return row
+
+    def _selected_ai_versions(self):
+        view = getattr(self, "AIAgents_file_versions_table", None)
+        if view is None or not hasattr(view, "get_selected_records"):
+            return []
+        return view.get_selected_records()
+
+    def save_selected_ai_versions(self):
+        """Copy the selected saved versions into the case, off the GUI thread."""
+        records = self._selected_ai_versions()
+        if not records:
+            QMessageBox.information(self.main_window, "Save into the case",
+                                    "Select one or more versions in the table first.")
+            return
+        db_path = os.path.join(self.case_paths.get('artifacts_dir', ''), AI_AGENT_DB) \
+            if getattr(self, 'case_paths', None) else ""
+        if not os.path.isfile(db_path):
+            return
+        from Artifacts_Collectors.AI_Agent_Claw import save_versions_into_case
+        worker = FunctionWorker(save_versions_into_case, db_path, None, records)
+        self._ai_versions_worker = worker
+        self.ai_versions_save_button.setEnabled(False)
+
+        def done(result):
+            copied, failed = result if isinstance(result, tuple) else (0, 0)
+            self.ai_versions_save_button.setEnabled(True)
+            view = getattr(self, "AIAgents_file_versions_table", None)
+            if view is not None and hasattr(view, "load_initial_data"):
+                view.load_initial_data()
+            QMessageBox.information(
+                self.main_window, "Save into the case",
+                "%d version(s) saved into the case%s. Versions with no saved copy "
+                "(the file was new) or already in the case are skipped."
+                % (copied, (", %d failed the hash check or could not be copied" % failed) if failed else ""))
+
+        worker.result.connect(done)
+        worker.error.connect(lambda e: (self.ai_versions_save_button.setEnabled(True),
+                                        print("[AI Agents] save failed: %s" % e)))
+        worker.start()
+
+    def show_ai_version_copy(self):
+        records = self._selected_ai_versions()
+        if not records:
+            return
+        rec = records[0]
+        path = rec.get("in_case_path") or rec.get("backup_path") or ""
+        if not path or not os.path.exists(path):
+            QMessageBox.information(self.main_window, "Saved copy",
+                                    "No saved copy exists for this version: the agent created the "
+                                    "file new, or the copy is no longer in the profile.")
+            return
+        import subprocess
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
 
     def _load_amcache_data_worker(self, progress_callback, cancellation_check):
         """Worker-compatible method for loading Amcache data - ONLY loads data, does NOT touch widgets"""
@@ -3347,6 +3486,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # Check if database exists
             if not os.path.exists(db_path):
                 raise FileNotFoundError(f"Database not found at: {db_path}. Please run Amcache analysis first to create the database")
+            # for the paged tables, opened on the GUI thread once this returns
+            self._amcache_db_path = db_path
             
             # Connect to database
             conn = sqlite3.connect(db_path)
@@ -3356,8 +3497,11 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
             tables = cursor.fetchall()
             
-            # Filter out sqlite_sequence
-            table_names = [table[0] for table in tables if table[0] != 'sqlite_sequence']
+            # Filter out sqlite_sequence, and the tables shown paged
+            # (_page_tables): their rows are never read here.
+            paged = {t for t, _a in self.PAGED_AMCACHE_TABLES}
+            table_names = [table[0] for table in tables
+                           if table[0] != 'sqlite_sequence' and table[0] not in paged]
             total_tables = len(table_names)
             loaded_data = {}
             
@@ -3409,6 +3553,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         from ui.gui_workers import DataLoadingWorker
         from PyQt5.QtCore import QEventLoop
         
+        self._amcache_db_path = None
         try:
             # Create worker
             worker = DataLoadingWorker(
@@ -3432,6 +3577,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Clean up
             worker.wait()
+            if self._amcache_db_path:
+                self._page_tables(self._amcache_db_path, self.PAGED_AMCACHE_TABLES,
+                                  'amcache_paged_loader')
             
         except Exception as e:
             print(f"[Amcache] Error loading data: {str(e)}")
@@ -3483,6 +3631,40 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             table_widget.setUpdatesEnabled(was_updates_enabled)
             
             print(f"[Amcache] Successfully loaded {len(rows)} records from {table_name} table")
+
+    def _open_counting_in_background(self, vtable):
+        """load_initial_data() with the table's COUNT(*) taken off the GUI thread.
+
+        A paged table counts its rows on opening (VirtualTableWidget._plan).
+        The Browser (37 tables), SRUM, AI agent and Event Log tabs each did it
+        on the GUI thread for every table at case open. Marked as counting
+        first, the table opens on its rowid-range estimate instead; the exact
+        counts follow from one background worker per database, started once
+        the current burst of tables is set up.
+        """
+        path = getattr(getattr(vtable, 'data_loader', None), 'db_path', None)
+        if not path or getattr(vtable, 'where_clause', None):
+            return vtable.load_initial_data()
+        pending = self.__dict__.setdefault('_pending_counts', {})
+        if not pending:
+            QtCore.QTimer.singleShot(0, self._start_pending_counts)
+        pending.setdefault(str(path), {})[vtable.table_name] = vtable
+        if getattr(vtable, '_count_worker', None) is None:
+            vtable._count_worker = 'pending'
+        return vtable.load_initial_data()
+
+    def _start_pending_counts(self):
+        """One counting worker per database for the tables queued above."""
+        pending = self.__dict__.pop('_pending_counts', None) or {}
+        from ui.virtual_table_widget import count_rows_in_background
+        for path, widgets in pending.items():
+            try:
+                count_rows_in_background(path, widgets)
+            except Exception as e:
+                print(f"[Tables] Background count not started for {path}: {e}")
+                for w in widgets.values():
+                    if getattr(w, '_count_worker', None) == 'pending':
+                        w._count_worker = None
 
     def _call_progress_callback(self, progress_callback, message):
         """Helper method to handle both signal objects and direct method calls"""
@@ -3620,6 +3802,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
                     if order:
                         vtable.set_order_by(order)
+                    # A header click sorts every row in SQL (the paged table's own sort,
+                    # cancellable while it runs). These large tables had no way to sort.
+                    vtable.enable_header_sort(order or "rowid ASC")
                     CrowEyeStyles.apply_table_styles(vtable)
                     layout.addWidget(vtable)
                     setattr(self, attr, vtable)
@@ -3739,8 +3924,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 return
             
             # Get table statistics
-            stats = usn_loader.get_table_statistics('journal_events')
-            total_records = stats.get('row_count', 0)
+            # The rowid range, as the MFT tables do: the COUNT(*) here ran on
+            # the GUI thread over every USN record at each case open. The
+            # exact count follows off the GUI thread (count_rows_in_background).
+            total_records = usn_loader.estimate_row_count('journal_events')
             
             print(f"[USN] Found {total_records:,} USN records, using virtual scrolling for efficient loading")
             self._call_progress_callback(progress_callback, f"[USN] Initializing virtual table for {total_records:,} USN records...")
@@ -3780,6 +3967,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 # volume, so read per volume - and idx_journal_volume serves
                 # this order directly (no temporary sort of every row).
                 self.USN_table.set_order_by('volume_letter, usn')
+                # A header click sorts every row in SQL (the paged table's own sort,
+                # cancellable while it runs). These large tables had no way to sort.
+                self.USN_table.enable_header_sort('volume_letter, usn')
                 
                 # Apply Crow Eye table styles
                 CrowEyeStyles.apply_table_styles(self.USN_table)
@@ -3803,6 +3993,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.USN_loading_overlay.show_loading("Loading USN records...")
                 self.USN_table.set_known_row_count(total_records)
                 success = self.USN_table.load_initial_data()
+                from ui.virtual_table_widget import count_rows_in_background
+                count_rows_in_background(db_path, {'journal_events': self.USN_table})
                 
                 if success:
                     loaded_rows = self.USN_table.get_loaded_row_count()
@@ -3890,8 +4082,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 return
             
             # Get table statistics
-            stats = corr_loader.get_table_statistics('mft_usn_correlated')
-            total_records = stats.get('row_count', 0)
+            # The rowid range, then the exact count off the GUI thread, as USN
+            # and the MFT tables: 3.9 M rows were counted here at case open.
+            total_records = corr_loader.estimate_row_count('mft_usn_correlated')
             
             print(f"[Correlated] Found {total_records:,} correlated records, using virtual scrolling for efficient loading")
             self._call_progress_callback(progress_callback, f"[Correlated] Initializing virtual table for {total_records:,} correlated records...")
@@ -3924,6 +4117,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.Correlated_table.set_order_by('timestamp DESC')
                 elif 'mft_record_number' in columns:
                     self.Correlated_table.set_order_by('mft_record_number ASC')
+                # A header click sorts every row in SQL (the paged table's own sort,
+                # cancellable while it runs). These large tables had no way to sort.
+                self.Correlated_table.enable_header_sort(
+                    self.Correlated_table.order_by or 'rowid ASC')
                 
                 # Apply Crow Eye table styles
                 CrowEyeStyles.apply_table_styles(self.Correlated_table)
@@ -3947,6 +4144,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.Correlated_loading_overlay.show_loading("Loading correlated records...")
                 self.Correlated_table.set_known_row_count(total_records)
                 success = self.Correlated_table.load_initial_data()
+                from ui.virtual_table_widget import count_rows_in_background
+                count_rows_in_background(db_path, {'mft_usn_correlated': self.Correlated_table})
                 
                 if success:
                     loaded_rows = self.Correlated_table.get_loaded_row_count()
@@ -5234,6 +5433,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             was_signals = table_widget.blockSignals(True)
             try:
                 enriched_count = 0
+                # One answer per distinct text: the same path, user or value
+                # repeats down a column, and each lookup tokenises the cell
+                # (324,183 calls, 1.8 s on the GUI thread at one case open).
+                seen = {}
                 for r in range(row_count):
                     if r % 200 == 0:
                         # Up to 200k cells on the GUI thread: keep the loading
@@ -5246,7 +5449,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         raw = item.text()
                         if not raw:
                             continue
-                        new_text = self._enrich_text_value(raw, mappings)
+                        new_text = seen.get(raw)
+                        if new_text is None:
+                            new_text = seen[raw] = self._enrich_text_value(raw, mappings)
                         if new_text != raw:
                             item.setText(new_text)
                             enriched_count += 1
@@ -5493,9 +5698,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "Browser_search_engines_table",
         }
 
+        # Every AI Agents table tab gets a Charts button opening the AI Agents
+        # dashboard (what the agents ran and changed, beside Windows' record).
+        AIAGENTS_VIZ_TABLES = {"AIAgents_sessions_table", "AIAgents_steps_table",
+                               "AIAgents_file_versions_table", "AIAgents_processes_table",
+                               "AIAgents_settings_table"}
+
         placed, skipped = 0, []
         for attr in list(ANATOMY_LINKS) + [t for t in SHELLITEMS_VIZ_TABLES
-                                           if t not in ANATOMY_LINKS]:
+                                           if t not in ANATOMY_LINKS] + \
+                [t for t in sorted(AIAGENTS_VIZ_TABLES) if t not in ANATOMY_LINKS]:
             table = getattr(self, attr, None)
             if table is None:
                 continue                      # not built yet, or not built at all
@@ -5659,6 +5871,29 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 br_button.clicked.connect(
                     lambda _checked=False: self.open_browser_dialog())
                 bar.addWidget(br_button)
+
+            # AI Agents tables: a Charts button opening the AI Agents dashboard.
+            if attr in AIAGENTS_VIZ_TABLES:
+                ai_button = QtWidgets.QToolButton(row)
+                ai_button.setObjectName(attr + "_viz_button")
+                ai_button.setText(" Charts")
+                ai_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+                ai_button.setCursor(QtCore.Qt.PointingHandCursor)
+                ai_button.setToolTip("Open the AI Agents dashboard: what the agents ran and changed, "
+                                     "and what Windows recorded of it")
+                ai_button.setAutoRaise(True)
+                try:
+                    from correlation_engine.gui.crow_eye_icons import CrowEyeIcons
+                    for _name in ("chart", "bar_chart", "activity", "timeline", "link"):
+                        _factory = getattr(CrowEyeIcons, _name, None)
+                        if callable(_factory):
+                            ai_button.setIcon(_factory())
+                            break
+                except Exception:
+                    pass
+                ai_button.clicked.connect(
+                    lambda _checked=False: self.open_aiagents_dialog())
+                bar.addWidget(ai_button)
 
             if attr in ANATOMY_LINKS:
                 button = QtWidgets.QToolButton(row)
@@ -6060,6 +6295,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             except Exception as e:
                 print(f"[Parse Status] indicator refresh failed: {e}")
         case_root = self._parse_status_case_root() if show_pending else None
+        # Prepare the Correlation Engine for this case in the background, so it
+        # opens ready with the case the way User Behavior and Eye do, with
+        # progress on its button meanwhile. Scheduled whether or not a parse
+        # report is pending; it never blocks case-open.
+        try:
+            _warm_root = case_root or self._parse_status_case_root()
+            if _warm_root:
+                QtCore.QTimer.singleShot(0, lambda r=_warm_root: self._warm_up_correlation(r))
+        except Exception as _warm_err:
+            print("[Correlation] warm-up not scheduled: %s" % _warm_err)
         if not case_root:
             QtCore.QTimer.singleShot(0, _indicators)
             return
@@ -6124,6 +6369,114 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             QtCore.QTimer.singleShot(20000, _show)
         else:
             QtCore.QTimer.singleShot(delay_ms, _show)
+
+    def _button_loading(self, button, label):
+        """Flash a 'loading' label on a launch button while its window builds.
+
+        Returns a context manager; the original text and enabled-state are put
+        back when the block exits, even on an exception, and a button that has
+        been deleted is ignored. So every launch button can show it is working.
+        """
+        import contextlib
+
+        @contextlib.contextmanager
+        def _ctx():
+            prev, ok = None, button is not None
+            if ok:
+                try:
+                    prev = button.text()
+                    button.setText(label)
+                    button.setEnabled(False)
+                    QtWidgets.QApplication.processEvents(
+                        QtCore.QEventLoop.ExcludeUserInputEvents, 30)
+                except RuntimeError:
+                    ok = False
+            try:
+                yield
+            finally:
+                if ok:
+                    try:
+                        button.setText(prev if prev is not None else label)
+                        button.setEnabled(True)
+                    except RuntimeError:
+                        pass
+        return _ctx()
+
+    def _warm_up_correlation(self, case_root):
+        """Prepare the Correlation Engine for this case in the background.
+
+        The engine's heavy step is CaseInitializer.initialize_case - it
+        generates feather configs from the parsed data, copies the default
+        wings and creates the default pipeline. Done on the click, it makes the
+        window open slowly and feel like it loads differently from User
+        Behavior and Eye. Done here, on a worker thread when the case finishes
+        loading, the engine opens ready, and its button says "Preparing
+        Correlation..." while the work runs.
+
+        Pure file and SQLite work on its own connections - no Qt - so it is
+        safe off the GUI thread. It never blocks case-open: if it fails, the
+        click path initialises the case exactly as before.
+        """
+        integ = getattr(self, 'correlation_integration', None)
+        btn = getattr(self, 'correlation_button', None)
+        if integ is None or not case_root:
+            return
+        # Already prepared for this exact case, or a warm-up is still running.
+        if getattr(integ, '_warmed_case_root', None) == case_root:
+            return
+        existing = getattr(self, '_corr_warm_thread', None)
+        if existing is not None:
+            try:
+                if existing.isRunning():
+                    return
+            except RuntimeError:
+                pass
+
+        class _Warm(QtCore.QThread):
+            done = QtCore.pyqtSignal(bool, str)
+
+            def run(self):
+                try:
+                    from correlation_engine.integration.case_initializer import CaseInitializer
+                    from pathlib import Path as _P
+                    res = CaseInitializer.initialize_case(_P(case_root))
+                    self.done.emit(bool(getattr(res, 'success', True)), "")
+                except Exception as exc:
+                    self.done.emit(False, str(exc))
+
+        if btn is not None:
+            try:
+                self._corr_btn_text = btn.text()
+                btn.setText("Preparing Correlation...")
+            except RuntimeError:
+                btn = None
+
+        worker = _Warm()
+        self._corr_warm_thread = worker
+
+        def _finished(ok, err):
+            if btn is not None:
+                try:
+                    btn.setText(getattr(self, '_corr_btn_text', None) or "Correlation Engine")
+                except RuntimeError:
+                    pass
+            if ok:
+                try:
+                    integ._warmed_case_root = case_root
+                except Exception:
+                    pass
+                print("[Correlation] Case warmed up on open - the engine opens ready")
+            else:
+                print("[Correlation] Warm-up skipped (the engine still "
+                      "initialises on the click): %s" % err)
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+            self._corr_warm_thread = None
+
+        worker.done.connect(_finished)
+        worker.start()
 
     def _open_gui_load_dialog(self, rows, source="Filling the tables from the parsed databases"):
         """A fresh LOADING DATA INTO THE GUI dialog, with one checklist row per step.
@@ -6236,8 +6589,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         if rec is None:
             return
         try:
-            from utils.parse_status import artifact_db_rowcount, classify_result
-            rows_after = artifact_db_rowcount(self._parse_status_case_root(), artifact)
+            from utils.parse_status import classify_result
+            rows_after = state.get("rows_after")
             o = classify_result(artifact, state.get("value"), rows_before=state.get("rows_before"),
                                 rows_after=rows_after,
                                 log_excerpt=list(getattr(state.get("run"), "excerpt", None) or []))
@@ -6336,6 +6689,22 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     rec.add_failure(label, "%s: %s" % (type(e).__name__, e), method="parse")
                 raise
             finally:
+                # The counts the outcome needs, taken here on the worker
+                # thread: on the GUI thread they were two COUNT(*) passes over
+                # every table of the artifact's databases.
+                try:
+                    from utils.parse_status import (artifact_db_records,
+                                                    artifact_db_rowcount, probe_sources)
+                    case_root = self._parse_status_case_root()
+                    if case_root:
+                        state["rows_after"] = artifact_db_rowcount(case_root, artifact)
+                        state["db_records"] = artifact_db_records(case_root, artifact,
+                                                                  since=started)
+                        state["counted"] = True
+                    if mode == "live":
+                        state["probe"] = probe_sources(artifact, "live", partition)
+                except Exception as e:
+                    print(f"[Parse Status] Counts after the parse not taken: {e}")
                 self._custody_counts(rec, artifact, state)
                 self._end_single_custody(rec, status, started)
 
@@ -6351,13 +6720,16 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 try:
                     from utils.parse_status import ParseStatusStore, collect_live_outcome
                     # Probing this machine says nothing about offline evidence.
-                    probe = None if mode == "live" else {"sources": [], "status": None,
-                                                         "message": ""}
+                    probe = (state.get("probe") if mode == "live"
+                             else {"sources": [], "status": None, "message": ""})
                     outcome = collect_live_outcome(
                         artifact, case_root, partition, raw_result=value, exc=raised,
                         started=started, probe=probe, cancelled=cancelled,
                         rows_before=state.get("rows_before"),
-                        log_excerpt=list(getattr(state.get("run"), "excerpt", None) or []))
+                        log_excerpt=list(getattr(state.get("run"), "excerpt", None) or []),
+                        db_records=state.get("db_records"),
+                        rows_after=state.get("rows_after"),
+                        counted=bool(state.get("counted")))
                     outcome.mode = mode
                     ParseStatusStore(case_root).record(
                         outcome, getattr(self, '_parse_status_run_id', None))
@@ -6439,7 +6811,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         if offer_ready:
             ready = box.addButton("Open when ready", QtWidgets.QMessageBox.AcceptRole)
         ok = box.addButton("OK", QtWidgets.QMessageBox.RejectRole)
-        box.setDefaultButton(ok)
+        # "Open when ready" is the natural action (it opens by itself when the
+        # blocker ends), so make it the default when it is offered.
+        box.setDefaultButton(ready if ready is not None else ok)
         try:
             from ui.app_theme import apply_theme as _apply_theme
             _apply_theme(box)
@@ -6488,7 +6862,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         """True if `feature` may open now; otherwise say why and return False."""
         # "the Timeline" reads mid-sentence; a sentence opening on it needs a capital.
         Feature = feature[:1].upper() + feature[1:]
-        if busy_guard.is_busy():
+        # A read-only view waits only for a WRITER (a parse / case-write would
+        # hand it half-written data); it may open while another read-only
+        # section runs (a GUI load, a badge count). Work and silent wait for all.
+        blocked = (busy_guard.is_busy() if kind in ("work", "silent")
+                   else busy_guard.is_writing())
+        if blocked:
             if kind == "silent":
                 return False
             reason, elapsed = busy_guard.current()
@@ -6496,16 +6875,17 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             if kind == "work":
                 self._show_gate_message(
                     "Crow-Eye is busy",
-                    "Another operation is still running: %s.\n\n"
-                    "%s can start once it has finished." % (what, Feature))
+                    "%s can't start while another operation is running.\n\n"
+                    "Running now: %s.\n\n"
+                    "Start it again once that has finished." % (Feature, what))
                 return False
             if self._show_gate_message(
-                    "Data is still loading",
-                    "Crow-Eye is still working: %s.\n\n"
-                    "%s will be available when the data has finished parsing and "
-                    "loading. Opening it now could read half-written data.\n\n"
-                    "Choose \"Open when ready\" to open it automatically as soon as "
-                    "the work finishes." % (what, Feature),
+                    "Crow-Eye is busy",
+                    "%s will open as soon as the current work finishes.\n\n"
+                    "Running now: %s.\n\n"
+                    "Choose \"Open when ready\" and it opens by itself the moment "
+                    "that finishes. Opening it now could read half-written data."
+                    % (Feature, what),
                     offer_ready=retry is not None) and retry is not None:
                 busy_guard.when_idle(feature, retry)
                 print("[Busy guard] %s queued until the current work finishes" % feature)
@@ -6960,6 +7340,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         ("SystemLogs", "SystemLogs_table", "System Logs"),
         ("ApplicationLogs", "AppLogs_table", "Application Logs"),
         ("SecurityLogs", "SecurityLogs_table", "Security Logs"),
+        # Device evidence (WinLog_Claw.DEVICE_CHANNELS): when a disk arrived
+        # and left, with its model and serial.
+        ("partition_diagnostic", "PartitionDiagnostic_table", "Partition Diagnostic"),
+        ("driver_frameworks_usermode", "DriverFrameworks_table", "Driver Frameworks"),
+        # setupapi.dev.log: each device / driver installation, local and UTC.
+        ("setupapi_dev_log", "SetupAPI_table", "SetupAPI Dev Log"),
     )
     EVENT_LOG_LABELS = {
         "EventID": "Event ID", "Source": "Source", "EventType": "Event Type",
@@ -6969,6 +7355,20 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # The event's EventRecordID: what tells two identical-looking events
         # apart, and what a re-parse matches on to add only new ones.
         "RecordNumber": "Record Number",
+        # The device channels' own field names.
+        "DiskNumber": "Disk Number", "BusType": "Bus Type", "SerialNumber": "Serial Number",
+        "ParentId": "Parent ID", "PartitionStyle": "Partition Style",
+        "PartitionCount": "Partition Count", "DiskId": "Disk ID", "AdapterId": "Adapter ID",
+        "RegistryId": "Registry ID", "UserRemovalPolicy": "User Removal Policy",
+        "EventData": "Event Data", "InstanceId": "Instance ID", "LifetimeId": "Lifetime ID",
+        "MajorCode": "Major Code", "MinorCode": "Minor Code",
+        "section_start_local": "Section Start (local)", "section_start_utc": "Section Start (UTC)",
+        "section_end_local": "Section End (local)", "section_end_utc": "Section End (UTC)",
+        "boot_session_local": "Boot Session (local)", "device_instance_id": "Device Instance ID",
+        "section_title": "Section Title", "section_kind": "Section Kind",
+        "section_subject": "Section Subject", "serial_number": "Serial Number",
+        "exit_status": "Exit Status", "time_basis": "Time Basis", "source_file": "Source File",
+        "parsed_at": "Parsed At",
     }
 
     def load_all_logs(self):
@@ -7035,7 +7435,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     vt.enable_header_sort("rowid ASC")
                 vt.setHorizontalHeaderLabels(
                     [self.EVENT_LOG_LABELS.get(c, c.replace('_', ' ')) for c in columns])
-                vt.load_initial_data()
+                self._open_counting_in_background(vt)
                 vt.fit_columns()
                 keep_alive()
                 print(f"[{title}] {vt.get_total_rows():,} records (paged)")
@@ -7339,6 +7739,116 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
         print(f"[Prefetch] Populated {len(rows)} records into table")
     
+    # The registry tables that grow with the hive rather than with what the
+    # user did: shown paged (VirtualTableWidget), never cell by cell. Filled as
+    # QTableWidgets they were the longest stall at case open - 43,073 carved
+    # values and 11,467 carved keys, 81% of the registry's 725,740 cells, each
+    # one a widget item made on the GUI thread (3.9 s on this machine).
+    PAGED_REGISTRY_TABLES = (
+        ("registry_carved_values", "RegistryCarvedValues_table"),
+        ("registry_carved_keys", "RegistryCarvedKeys_table"),
+        ("registry_security_descriptors", "RegistrySecurity_table"),
+        ("registry_class_names", "RegistryClassNames_table"),
+        ("registry_key_times", "RegistryKeyTimes_table"),
+        # The user-activity tables that grow with the machine. Filling them
+        # cell-by-cell on the GUI thread at case-open was the largest remaining
+        # freeze (Shellbags alone can be thousands of rows). Paged, they read
+        # only the rows on screen and count off the GUI thread.
+        ("Shellbags", "Shellbags_table"),
+        ("UserAssist", "UserAssist_table"),
+        ("MUICache", "MUICache_table"),
+        ("RecentDocs", "RecentDocs_table"),
+        ("AutoStartPrograms", "AutoStartPrograms_table"),
+        ("BAM", "Bam_table"),
+        ("DAM", "Dam_table"),
+    )
+
+    # AmCache's one table that grows with the machine (9,521 rows x 26 columns
+    # here, 75% of AmCache's cells), and the carved tables, which an image
+    # can fill. Shown paged for the same reason as PAGED_REGISTRY_TABLES.
+    PAGED_AMCACHE_TABLES = tuple(
+        (t, "Amcache_%s_table" % t) for t in
+        ("InventoryApplicationFile", "AmcacheCarvedKeys", "AmcacheCarvedValues"))
+
+    def _registry_labels(self, db_table, columns):
+        labels = nice_column_headers(columns, db_table)
+        return [PARSE_TIME_LABEL if is_parse_time_column(c, db_table) else l
+                for c, l in zip(columns, labels)]
+
+    def _page_registry_tables(self, db_path):
+        return self._page_tables(db_path, self.PAGED_REGISTRY_TABLES,
+                                 'registry_paged_loader', self._registry_labels)
+
+    def _page_tables(self, db_path, pairs, loader_attr, labels=None):
+        """Show `pairs` [(db table, widget attribute)] as paged tables.
+
+        The same in-place swap as load_all_logs: the tab's QTableWidget is
+        replaced (layout.replaceWidget, so the Anatomy row and "Why empty?"
+        keep their places) by a VirtualTableWidget that reads only the rows on
+        screen, sorts by header in SQL, filters and searches in the database,
+        and exports every row. A second case re-points the same widget.
+        `labels(db_table, columns)` names the headers; the column names by
+        default. Returns how many tables it showed.
+        """
+        from data.base_loader import BaseDataLoader
+        from ui.virtual_table_widget import VirtualTableWidget
+        old_loader = getattr(self, loader_attr, None)
+        loader = BaseDataLoader(db_path)
+        if not loader.connect():
+            print(f"[Paged tables] Could not open {db_path}")
+            return 0
+        setattr(self, loader_attr, loader)
+        shown = 0
+        for db_table, attr in pairs:
+            current = getattr(self, attr, None)
+            if current is None:
+                continue
+            try:
+                if not loader.table_exists(db_table):
+                    if isinstance(current, VirtualTableWidget):
+                        current.clear_data()
+                    continue
+                columns = loader.get_columns(db_table)
+                if isinstance(current, VirtualTableWidget):
+                    vt = current
+                    vt.data_loader = loader
+                    vt.table_name = db_table
+                    vt.columns = columns
+                    vt.where_clause, vt.where_params = None, ()
+                    vt.reset_sort()
+                else:
+                    holder = current.parentWidget()
+                    layout = holder.layout() if holder is not None else None
+                    if layout is None:
+                        continue
+                    vt = VirtualTableWidget(data_loader=loader, table_name=db_table,
+                                            columns=columns, parent=holder)
+                    vt.setObjectName(attr)
+                    vt.setMinimumSize(current.minimumSize())
+                    layout.replaceWidget(current, vt)
+                    current.hide()
+                    current.setParent(None)
+                    current.deleteLater()
+                    setattr(self, attr, vt)
+                    vt.searchable = True
+                    vt.enable_header_sort("rowid ASC")
+                vt.time_column = next((c for c in ("key_last_write", "last_written")
+                                       if c in columns), None)
+                vt.setHorizontalHeaderLabels(
+                    labels(db_table, columns) if labels else list(columns))
+                self._open_counting_in_background(vt)
+                vt.fit_columns()
+                keep_alive()
+                shown += 1
+            except Exception as e:
+                print(f"[Paged tables] {db_table}: paged view failed: {e}")
+        if old_loader is not None and old_loader is not loader:
+            try:
+                old_loader.disconnect()
+            except Exception:
+                pass
+        return shown
+
     def _load_registry_data_worker(self, progress_callback, cancellation_check):
         """Worker-compatible method for loading registry data - ONLY loads data, does NOT touch widgets"""
         try:
@@ -7402,10 +7912,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             available_tables = [table[0] for table in cursor.fetchall()]
             
+            # Shown paged (_page_registry_tables): their rows are never read here.
+            paged = {t for t, _a in self.PAGED_REGISTRY_TABLES}
+            table_names = [t for t in table_names if t not in paged]
             total_tables = len([t for t in table_names if t in available_tables])
             processed_tables = 0
             loaded_data = {}
-            
+
             for db_table in table_names:
                 # Check for cancellation
                 if cancellation_check():
@@ -7491,11 +8004,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Use QEventLoop to wait without blocking GUI
             loop.exec_()
-            
+
             # Clean up
             worker.wait()
+            db_path = self.get_registry_db_path() if hasattr(self, 'get_registry_db_path') else None
+            if db_path and os.path.exists(db_path):
+                self._page_registry_tables(db_path)
             return True
-            
+
         except Exception as e:
             print(f"[Registry Error] Couldn't load registry data: {str(e)}")
             return False
@@ -8253,6 +8769,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         # Hide on non-Windows systems
         if not IS_WINDOWS:
             self.BrowserButton.setVisible(False)
+
+        # AI Agents: Claude Code / Gemini CLI / Codex session records in the profiles.
+        self.AIAgentsButton = QtWidgets.QPushButton(self.side_fram)
+        self.setup_parse_button(self.AIAgentsButton, True, True, True)
+        self.AIAgentsButton.setObjectName("AIAgentsButton")
+        self.verticalLayout_3.addWidget(self.AIAgentsButton)
+        if not IS_WINDOWS:
+            self.AIAgentsButton.setVisible(False)
 
         self.PartitionButton = QtWidgets.QPushButton(self.side_fram)
         self.setup_parse_button(self.PartitionButton, True, True, True)
@@ -9728,6 +10252,24 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.SystemLogs_table.setObjectName("SystemLogs_table")
         self.verticalLayout_30.addWidget(self.SystemLogs_table)
         self.tabWidget.addTab(self.SystemLogs_tab, "")
+        # Device evidence: Partition/Diagnostic and DriverFrameworks-UserMode
+        # (WinLog_Claw.DEVICE_CHANNELS), paged like the logs above once a case
+        # loads (load_all_logs swaps each placeholder for a VirtualTableWidget).
+        for _tab, _table, _cols in (("PartitionDiagnostic_tab", "PartitionDiagnostic_table", 20),
+                                    ("DriverFrameworks_tab", "DriverFrameworks_table", 12),
+                                    ("SetupAPI_tab", "SetupAPI_table", 14)):
+            _page = QtWidgets.QWidget()
+            _page.setObjectName(_tab)
+            _layout = QtWidgets.QVBoxLayout(_page)
+            _layout.addLayout(QtWidgets.QHBoxLayout())
+            _widget = QtWidgets.QTableWidget(_page)
+            _widget.setMinimumSize(QtCore.QSize(2, 2))
+            self.setup_standard_table(_widget, _cols, False, 300, 190)
+            _widget.setObjectName(_table)
+            _layout.addWidget(_widget)
+            setattr(self, _tab, _page)
+            setattr(self, _table, _widget)
+            self.tabWidget.addTab(_page, "")
         self.verticalLayout_27.addWidget(self.tabWidget)
         self.main_tab.addTab(self.Logs_tab, "")
         
@@ -9909,6 +10451,18 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.verticalLayout_browser_main.addWidget(self.Browser_tab_widget)
         self.main_tab.addTab(self.Browser_main_tab, "")
 
+        # AI Agents main tab (ai_agents.db): Sessions and Steps.
+        self.AIAgents_main_tab = QtWidgets.QWidget()
+        self.AIAgents_main_tab.setObjectName("AIAgents_main_tab")
+        self.verticalLayout_ai_agents_main = QtWidgets.QVBoxLayout(self.AIAgents_main_tab)
+        self.verticalLayout_ai_agents_main.setObjectName("verticalLayout_ai_agents_main")
+        self.AIAgents_tab_widget = QtWidgets.QTabWidget(self.AIAgents_main_tab)
+        self.AIAgents_tab_widget.setObjectName("AIAgents_tab_widget")
+        self.AIAgents_tab_widget.setStyleSheet(CrowEyeStyles.UNIFIED_TAB_STYLE)
+        self.create_ai_agent_table_tabs()
+        self.verticalLayout_ai_agents_main.addWidget(self.AIAgents_tab_widget)
+        self.main_tab.addTab(self.AIAgents_main_tab, "")
+
         self.verticalLayout.addWidget(self.main_tab)
         self.horizontalLayout_2.addWidget(self.info_frame)
         # Give all stretch to content and none to sidebar
@@ -9995,6 +10549,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.RecycleBinButton.setText(_translate("Crow_Eye", "Recycle Bin"))
         self.SRUMButton.setText(_translate("Crow_Eye", "SRUM"))
         self.BrowserButton.setText(_translate("Crow_Eye", "Browsers"))
+        self.AIAgentsButton.setText(_translate("Crow_Eye", "AI Agents"))
         self.Offline_analysis.setText(_translate("Crow_Eye", "Offline analysis"))
         self.CrowClawButton.setText(_translate("Crow_Eye", "Crow-Claw Collector"))
         self.AppAcquisitionButton.setText(_translate("Crow_Eye", "Offline App Acquisition"))
@@ -11149,7 +11704,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 self.main_tab.indexOf(self.Browser_main_tab),
                 _translate("Crow_Eye", "Browsers")
             )
-        
+
+        if hasattr(self, 'AIAgents_main_tab') and hasattr(self, 'main_tab'):
+            self.main_tab.setTabText(
+                self.main_tab.indexOf(self.AIAgents_main_tab),
+                _translate("Crow_Eye", "AI Agents")
+            )
+
         
         # Set tab text for SRUM sub-tabs
         if hasattr(self, 'SRUM_tab_widget'):
@@ -11670,7 +12231,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.LNK_table.setColumnCount(49) # Extended: +Target Source
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
-                "Time_Creation", "Time_modefication", "app_Type", "App_ID",
+                "Time_Creation", "Time_Modification", "app_Type", "App_ID",
                 "Artifact", "Dataflag", "Local_Path", "Common Path", "Location_Flags",
                 "Volume_Label", "Local_Base_Path", "Relative_Path", "Working_Dir",
                 "Command_Line_Arguments", "Icon_Location", "Show_Window_Command",
@@ -11725,7 +12286,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.AJL_table.setColumnCount(49) # Same as LNK table, +Target Source
             headers = [
                 "Source_Name", "Source_path", "Owner UID", "Owner GID", "Time_Access",
-                "Time_Creation", "Time_modefication", "app_Type", "App_ID",
+                "Time_Creation", "Time_Modification", "app_Type", "App_ID",
                 "Artifact", "Dataflag", "Local_Path", "Common Path", "Location_Flags",
                 "Volume_Label", "Local_Base_Path", "Relative_Path", "Working_Dir",
                 "Command_Line_Arguments", "Icon_Location", "Show_Window_Command",
@@ -11834,6 +12395,12 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     self.tabWidget.indexOf(self.SystemLogs_tab),
                     _translate("Crow_Eye", "System Logs")
                 )
+        for _tab, _title in (("PartitionDiagnostic_tab", "Partition Diagnostic"),
+                             ("DriverFrameworks_tab", "Driver Frameworks"),
+                             ("SetupAPI_tab", "SetupAPI Dev Log")):
+            if hasattr(self, 'tabWidget') and hasattr(self, _tab):
+                self.tabWidget.setTabText(self.tabWidget.indexOf(getattr(self, _tab)),
+                                          _translate("Crow_Eye", _title))
         
         # Set main tab text for Logs tab if it exists
         if hasattr(self, 'main_tab') and hasattr(self, 'Logs_tab'):
@@ -11858,6 +12425,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self.RecycleBinButton.clicked.connect(self.run_recyclebin_analysis)
         self.SRUMButton.clicked.connect(self.run_srum_analysis)
         self.BrowserButton.clicked.connect(self.run_browser_analysis)
+        self.AIAgentsButton.clicked.connect(self.run_ai_agent_analysis)
         self.export_json_CSV.clicked.connect(self.export_all_tables)
         
         # Connect correlation button
@@ -11894,6 +12462,14 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         
         # Initialize EYE AI Assistant
         self._init_eye_assistant()
+
+        # Every table: status bar, filter box (Ctrl+F), right-click menu,
+        # Ctrl+C with headers, full-text tooltips; Go to tab (Ctrl+K).
+        try:
+            from ui.investigator_tools import InvestigatorTools
+            self.investigator_tools = InvestigatorTools(self, self.main_window).install()
+        except Exception as e:
+            print(f"[Warning] Investigator tools not installed: {e}")
 
 
 
@@ -11947,6 +12523,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # Settings (Ctrl+,): the Settings button's tooltip promised it and nothing bound it.
             self.settings_shortcut = QShortcut(QKeySequence("Ctrl+,"), self.main_window)
             self.settings_shortcut.activated.connect(self.open_settings_dialog)
+            # Logs (Ctrl+L): Settings opened on its Logs page.
+            self.logs_shortcut = QShortcut(QKeySequence("Ctrl+L"), self.main_window)
+            self.logs_shortcut.activated.connect(lambda: self.open_settings_dialog(panel="logs"))
 
             # Initialize eye_tab as None (will be created on first use)
             self.eye_tab = None
@@ -12190,6 +12769,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'recyclebin': os.path.join(artifacts_dir, 'recyclebin_analysis.db'),
                     'srum': os.path.join(artifacts_dir, 'srum_data.db'),
                     'browser': os.path.join(artifacts_dir, 'browser_analysis.db'),
+                    'ai_agents': os.path.join(artifacts_dir, 'ai_agents.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -12282,6 +12862,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'recyclebin': os.path.join(self.case_paths['artifacts_dir'], 'recyclebin_analysis.db'),
                     'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
                     'browser': os.path.join(self.case_paths['artifacts_dir'], 'browser_analysis.db'),
+                    'ai_agents': os.path.join(self.case_paths['artifacts_dir'], 'ai_agents.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -12603,7 +13184,19 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         """Clear all data from all tables in the application"""
         try:
             print("[System] Clearing all application data...")
-            
+
+            # 0. The Timeline is not modal; it shows the case being cleared.
+            tl = getattr(self, '_timeline_window', None)
+            self._timeline_window = None
+            if tl is not None:
+                try:
+                    tl.close()
+                except RuntimeError:
+                    pass
+            tools = getattr(self, 'investigator_tools', None)
+            if tools is not None:
+                tools.forget_case()
+
             # 1. Clear search results first
             self.clear_search_results()
             
@@ -12641,7 +13234,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             # 2c. Drop the cached loaders so nothing can repopulate a tab from
             # the case that was just closed.
             for attr in ('mft_loader', 'usn_loader', 'corr_loader', 'srum_loader',
-                         'browser_loader', 'registry_loader', 'eventlog_loader'):
+                         'browser_loader', 'ai_agent_loader', 'registry_loader', 'eventlog_loader'):
                 if hasattr(self, attr):
                     try:
                         setattr(self, attr, None)
@@ -12828,6 +13421,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'amcache': os.path.join(artifacts_dir, 'amcache.db'),
                     'srum': os.path.join(artifacts_dir, 'srum_data.db'),
                     'browser': os.path.join(artifacts_dir, 'browser_analysis.db'),
+                    'ai_agents': os.path.join(artifacts_dir, 'ai_agents.db'),
                     'mft': os.path.join(artifacts_dir, 'mft_claw_analysis.db'),
                     'usn': os.path.join(artifacts_dir, 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(artifacts_dir, 'mft_usn_correlated_analysis.db')
@@ -12857,6 +13451,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     'amcache': os.path.join(self.case_paths['artifacts_dir'], 'amcache.db'),
                     'srum': os.path.join(self.case_paths['artifacts_dir'], 'srum_data.db'),
                     'browser': os.path.join(self.case_paths['artifacts_dir'], 'browser_analysis.db'),
+                    'ai_agents': os.path.join(self.case_paths['artifacts_dir'], 'ai_agents.db'),
                     'mft': os.path.join(self.case_paths['artifacts_dir'], 'mft_claw_analysis.db'),
                     'usn': os.path.join(self.case_paths['artifacts_dir'], 'USN_journal.db'),
                     'mft_usn_correlated': os.path.join(self.case_paths['artifacts_dir'], 'mft_usn_correlated_analysis.db')
@@ -13007,8 +13602,8 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             else: # Exit button or dialog closed
                 sys.exit(0)
     
-    def open_settings_dialog(self):
-        """Open the settings dialog."""
+    def open_settings_dialog(self, panel=None):
+        """Open the settings dialog (on `panel`, "logs", when given)."""
         try:
             from ui.settings_dialog import show_settings_dialog
             
@@ -13019,13 +13614,15 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             
             # Show settings dialog
             if hasattr(self, 'case_history_manager') and self.case_history_manager:
-                show_settings_dialog(
-                    self.case_history_manager,
-                    current_case_path,
-                    self.main_window,
-                    clone_case_callback=self.import_case_data_into_current,
-                    app_version=__version__
-                )
+                with self._button_loading(getattr(self, 'settings_button', None), "Loading..."):
+                    show_settings_dialog(
+                        self.case_history_manager,
+                        current_case_path,
+                        self.main_window,
+                        clone_case_callback=self.import_case_data_into_current,
+                        app_version=__version__,
+                        start_panel=panel
+                    )
             else:
                 QMessageBox.warning(
                     self.main_window,
@@ -13921,7 +14518,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
     # Busy for the whole load: only the dialog's creation was marked before,
     # so the tables were filled with Crow-Eye reporting itself idle.
-    @busy_section("Loading parsed data into the GUI")
+    @busy_section("Loading parsed data into the GUI", writer=False)
     def refresh_gui_tabs_after_parsing(self, artifact_types=None):
         """
         Refresh GUI tabs after parsing offline artifacts.
@@ -14005,6 +14602,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         # load_allReg_data / load_files_activity only refilled the same
                         # tables first - identical cells, measured on a real case.
                         ('Registry Database', self.load_registry_data_from_db),
+                        # A SYSTEM hive is parsed for ShimCache too (ParserInvoker),
+                        # but the scan index still calls that file 'Registry'.
+                        ('ShimCache Data', self.load_shimcache_data),
                     ],
                     'Prefetch': [
                         ('Prefetch Data', self.load_data_from_Prefetch)
@@ -14044,6 +14644,9 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     ],
                     'Browser': [
                         ('Browser Data', self.load_browser_data)
+                    ],
+                    'AIAgents': [
+                        ('AI Agent Data', self.load_ai_agent_data)
                     ]
                 }
                 
@@ -14053,7 +14656,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     loaders = artifact_loaders.get(artifact_type, [])
                     if not loaders:
                         print(f"[Warning] No loader found for artifact type: {artifact_type}")
-                    plan.extend(loaders)
+                    plan.extend(l for l in loaders if l[0] not in {p[0] for p in plan})
                 if 'MFT' in artifact_types or 'USN' in artifact_types:
                     plan.append(('Correlated MFT-USN Data', self.load_correlated_data))
 
@@ -14199,7 +14802,17 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         self._run_single_artifact("browser", "Parsing Browser Artifacts...", self.parse_browser,
                                   [self.load_browser_data])
         self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.Browser_main_tab))
-    
+
+    @gated("AI agent parsing", kind="work")
+    def run_ai_agent_analysis(self):
+        """Parse the AI agent sessions (Claude Code, Gemini CLI, Codex) and switch to the AI Agents tab.
+
+        The parse runs on the worker thread _run_single_artifact starts; the tab
+        is filled on the GUI thread afterwards, like the Browsers button."""
+        self._run_single_artifact("ai_agents", "Parsing AI Agent Sessions...", self.parse_ai_agents,
+                                  [self.load_ai_agent_data])
+        self.main_tab.setCurrentIndex(self.main_tab.indexOf(self.AIAgents_main_tab))
+
     def parse_LNK_files(self):
         """Parse LNK files and Jump Lists"""
         try:
@@ -14570,6 +15183,26 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             traceback.print_exc()
             raise
 
+    def parse_ai_agents(self):
+        """Parse the AI agent session records in every user profile into ai_agents.db."""
+        try:
+            print("[AI Agents] Starting AI agent session collection...")
+            from Artifacts_Collectors.AI_Agent_Claw import parse_ai_agent_data
+            artifacts_dir = self.case_paths.get('artifacts_dir') if hasattr(self, 'case_paths') and self.case_paths else None
+            if not artifacts_dir:
+                raise Exception("No artifacts directory available for AI agent parsing")
+            result = parse_ai_agent_data(case_artifacts_dir=artifacts_dir,
+                                         windows_partition=self.get_windows_partition())
+            if isinstance(result, dict):
+                print(f"[AI Agents] Done: {result.get('records', 0)} record(s), "
+                      f"{result.get('inserted', 0)} new")
+            return result
+        except Exception as e:
+            print(f"[AI Agents Error] {str(e)}")
+            import traceback
+            traceback.print_exc()
+            raise
+
     def load_recyclebin_data(self):
         """Load RecycleBin data from the recyclebin database"""
         try:
@@ -14648,6 +15281,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             "security_id": "Security ID",
             "file_attributes": "File Attributes",
             "record_length": "Record Length",
+            "usn_journal_id": "USN Journal ID",
         }
         return [mapping.get(col, PARSE_TIME_LABEL if is_parse_time_column(col, 'journal_events')
                             else col.replace('_', ' ').title())
@@ -14657,6 +15291,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
         """Map SQLite snake_case column names to nice title-cased UI header labels"""
         mapping = {
             "id": "ID",
+            "auto_inc_id": "AutoIncId",
             "timestamp": "Timestamp",
             "app_name": "App Name",
             "app_path": "App Path",
@@ -14865,7 +15500,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         [c.replace('_', ' ').title() for c in columns])
                     if overlay:
                         overlay.show_loading(f"Loading {_label}...")
-                    ok = vtable.load_initial_data()
+                    ok = self._open_counting_in_background(vtable)
                     if overlay:
                         overlay.hide_loading()
                     if ok:
@@ -14875,6 +15510,102 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             print(f"[Browser] Loaded {loaded} browser table(s)")
         except Exception as e:
             print(f"[Browser] Error loading browser data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def load_ai_agent_data(self):
+        """Load ai_agents.db into the AI Agents tab: Sessions (newest last step
+        first) and Steps (newest first).
+
+        Same pattern as load_browser_data: each placeholder is swapped for a
+        VirtualTableWidget (page_size 5000), so the steps table - hundreds of
+        thousands of rows with long text - is paged, never read whole.
+        """
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                print("[AI Agents] No case paths available")
+                return
+            artifacts_dir = self.case_paths.get('artifacts_dir')
+            if not artifacts_dir:
+                print("[AI Agents] No artifacts directory available")
+                return
+            db_path = os.path.join(artifacts_dir, AI_AGENT_DB)
+            if not os.path.exists(db_path):
+                print(f"[AI Agents] Database not found at: {db_path}")
+                return
+
+            from PyQt5.QtCore import QThread
+            if QThread.currentThread() != QtWidgets.QApplication.instance().thread():
+                print("[AI Agents] ERROR: load_ai_agent_data() must run on the main thread")
+                return
+
+            from data.base_loader import BaseDataLoader
+            loader = BaseDataLoader(db_path)
+            if not loader.connect():
+                print("[AI Agents] Failed to connect to the AI agent database")
+                return
+            self.ai_agent_loader = loader
+
+            from ui.virtual_table_widget import VirtualTableWidget
+            from ui.progress_indicator import TableLoadingOverlay
+            from styles import CrowEyeStyles
+
+            loaded = 0
+            for table_name, label, order in AI_AGENT_TABS:
+                try:
+                    if not loader.table_exists(table_name):
+                        continue
+                    columns = loader.get_columns(table_name)
+                    current = self.ai_agent_table_widgets.get(table_name)
+                    page = self.ai_agent_tab_pages.get(table_name)
+                    layout = self.ai_agent_tab_layouts.get(table_name)
+                    if page is None or layout is None:
+                        continue
+                    if isinstance(current, VirtualTableWidget):
+                        vtable = current
+                        # A re-parse or a case switch: clear_data() drops the
+                        # loader on case close, so point the table at this one.
+                        vtable.data_loader = loader
+                        vtable.columns = columns
+                        overlay = self.ai_agent_tab_overlays.get(table_name)
+                    else:
+                        if current is not None:
+                            layout.removeWidget(current)
+                            current.deleteLater()
+                        vtable = VirtualTableWidget(
+                            data_loader=loader,
+                            table_name=table_name,
+                            columns=columns,
+                            page_size=5000,
+                            buffer_size=10000,
+                            parent=page,
+                        )
+                        CrowEyeStyles.apply_table_styles(vtable)
+                        layout.addWidget(vtable)
+                        self.ai_agent_table_widgets[table_name] = vtable
+                        # The name "Why empty?", Show in table and Database
+                        # Search find the table by: it pointed at the deleted
+                        # placeholder after this swap.
+                        short_name = table_name.replace("ai_agent_", "", 1)
+                        vtable.setObjectName(f"AIAgents_{short_name}_table")
+                        setattr(self, f"AIAgents_{short_name}_table", vtable)
+                        overlay = TableLoadingOverlay(vtable)
+                        self.ai_agent_tab_overlays[table_name] = overlay
+                    vtable.set_order_by(order)
+                    vtable.setHorizontalHeaderLabels(
+                        [c.replace('_', ' ').title() for c in columns])
+                    if overlay:
+                        overlay.show_loading(f"Loading {label}...")
+                    ok = self._open_counting_in_background(vtable)
+                    if overlay:
+                        overlay.hide_loading()
+                    if ok:
+                        loaded += 1
+                except Exception as te:
+                    print(f"[AI Agents] Error loading table {table_name}: {te}")
+            print(f"[AI Agents] Loaded {loaded} AI agent table(s)")
+        except Exception as e:
+            print(f"[AI Agents] Error loading AI agent data: {str(e)}")
             import traceback
             traceback.print_exc()
 
@@ -14907,6 +15638,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
                     
                     self.SRUM_application_usage_table.set_order_by('id ASC')
+                    # Sortable by any header, and in the toolbar search
+                    # (a few hundred thousand rows, unlike MFT/USN).
+                    self.SRUM_application_usage_table.enable_header_sort('id ASC')
+                    self.SRUM_application_usage_table.searchable = True
                     from styles import CrowEyeStyles
                     CrowEyeStyles.apply_table_styles(self.SRUM_application_usage_table)
                     layout.addWidget(self.SRUM_application_usage_table)
@@ -14929,7 +15664,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 # Load initial data chunk
                 self.SRUM_app_usage_overlay.show_loading("Loading application usage records...")
-                success = self.SRUM_application_usage_table.load_initial_data()
+                success = self._open_counting_in_background(self.SRUM_application_usage_table)
                 self.SRUM_app_usage_overlay.hide_loading()
                 
                 if success:
@@ -14973,6 +15708,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
                     
                     self.SRUM_network_connectivity_table.set_order_by('id ASC')
+                    # Sortable by any header, and in the toolbar search
+                    # (a few hundred thousand rows, unlike MFT/USN).
+                    self.SRUM_network_connectivity_table.enable_header_sort('id ASC')
+                    self.SRUM_network_connectivity_table.searchable = True
                     from styles import CrowEyeStyles
                     CrowEyeStyles.apply_table_styles(self.SRUM_network_connectivity_table)
                     layout.addWidget(self.SRUM_network_connectivity_table)
@@ -14995,7 +15734,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 # Load initial data chunk
                 self.SRUM_net_conn_overlay.show_loading("Loading network connectivity records...")
-                success = self.SRUM_network_connectivity_table.load_initial_data()
+                success = self._open_counting_in_background(self.SRUM_network_connectivity_table)
                 self.SRUM_net_conn_overlay.hide_loading()
                 
                 if success:
@@ -15039,6 +15778,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
                     
                     self.SRUM_network_data_table.set_order_by('id ASC')
+                    # Sortable by any header, and in the toolbar search
+                    # (a few hundred thousand rows, unlike MFT/USN).
+                    self.SRUM_network_data_table.enable_header_sort('id ASC')
+                    self.SRUM_network_data_table.searchable = True
                     from styles import CrowEyeStyles
                     CrowEyeStyles.apply_table_styles(self.SRUM_network_data_table)
                     layout.addWidget(self.SRUM_network_data_table)
@@ -15061,7 +15804,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 # Load initial data chunk
                 self.SRUM_net_data_overlay.show_loading("Loading network data usage records...")
-                success = self.SRUM_network_data_table.load_initial_data()
+                success = self._open_counting_in_background(self.SRUM_network_data_table)
                 self.SRUM_net_data_overlay.hide_loading()
                 
                 if success:
@@ -15105,6 +15848,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
                     
                     self.SRUM_energy_usage_table.set_order_by('id ASC')
+                    # Sortable by any header, and in the toolbar search
+                    # (a few hundred thousand rows, unlike MFT/USN).
+                    self.SRUM_energy_usage_table.enable_header_sort('id ASC')
+                    self.SRUM_energy_usage_table.searchable = True
                     from styles import CrowEyeStyles
                     CrowEyeStyles.apply_table_styles(self.SRUM_energy_usage_table)
                     layout.addWidget(self.SRUM_energy_usage_table)
@@ -15127,7 +15874,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 
                 # Load initial data chunk
                 self.SRUM_energy_overlay.show_loading("Loading energy usage records...")
-                success = self.SRUM_energy_usage_table.load_initial_data()
+                success = self._open_counting_in_background(self.SRUM_energy_usage_table)
                 self.SRUM_energy_overlay.hide_loading()
                 
                 if success:
@@ -15179,6 +15926,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     )
 
                     self.SRUM_app_timeline_table.set_order_by('id ASC')
+                    # Sortable by any header, and in the toolbar search
+                    # (a few hundred thousand rows, unlike MFT/USN).
+                    self.SRUM_app_timeline_table.enable_header_sort('id ASC')
+                    self.SRUM_app_timeline_table.searchable = True
                     from styles import CrowEyeStyles
                     CrowEyeStyles.apply_table_styles(self.SRUM_app_timeline_table)
                     layout.addWidget(self.SRUM_app_timeline_table)
@@ -15201,7 +15952,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
                 # Load initial data chunk
                 self.SRUM_app_timeline_overlay.show_loading("Loading application timeline records...")
-                success = self.SRUM_app_timeline_table.load_initial_data()
+                success = self._open_counting_in_background(self.SRUM_app_timeline_table)
                 self.SRUM_app_timeline_overlay.hide_loading()
 
                 if success:
@@ -15503,6 +16254,27 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             if cancellation_check():
                 return
 
+            # Step 11 (cont.): AI agent sessions (Claude Code, Gemini CLI, Codex)
+            try:
+                log_callback("[AI Agents] Collecting AI agent sessions...")
+                from Artifacts_Collectors.AI_Agent_Claw import parse_ai_agent_data
+                artifacts_dir = case_paths.get('artifacts_dir') if case_paths else None
+                if artifacts_dir:
+                    result = parse_ai_agent_data(case_artifacts_dir=artifacts_dir,
+                                                 windows_partition=windows_partition)
+                    log_callback(f"[AI Agents] {result.get('records', 0)} record(s), "
+                                 f"{result.get('inserted', 0)} new")
+                else:
+                    log_callback("[AI Agents] No artifacts directory available, skipping")
+            except Exception as e:
+                import traceback
+                error_details = traceback.format_exc()
+                log_callback(f"[AI Agents Error] {str(e)}")
+                print(f"[AI Agents Error] {str(e)}\n{error_details}")
+
+            if cancellation_check():
+                return
+
             # Step 12, 13, 14: MFT and USN Journal data
             step_callback(12, "PARSING MASTER FILE TABLE (MFT)")
             step_callback(13, "PARSING USN JOURNAL")
@@ -15770,7 +16542,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 "Collecting Amcache data",
                 "Collecting RecycleBin artifacts",
                 "Collecting SRUM network & execution data",
-                "Collecting browser data (Chromium, Firefox, Electron)",
+                "Collecting browser data and AI agent sessions",
                 "Parsing Master File Table (MFT)",
                 "Parsing USN Journal",
                 "Correlating MFT & USN Data",
@@ -15787,6 +16559,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 ("prefetch", "Prefetch"), ("evtx", "Event Logs"),
                 ("shimcache", "ShimCache"), ("amcache", "Amcache"),
                 ("recyclebin", "Recycle Bin"), ("srum", "SRUM"), ("browser", "Browser"),
+                ("ai_agents", "AI Agents"),
                 ("mft", "Master File Table (MFT)"), ("usn", "USN Journal"),
                 ("mft_usn_correlation", "MFT & USN correlation"),
                 # No "loading" row: the load has its own dialog (load_all_data).
@@ -16020,7 +16793,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
 
             print("[Open Case] Full live analysis and data loading completed.")
     
-    @busy_section("Loading case data into the GUI")
+    @busy_section("Loading case data into the GUI", writer=False)
     @no_reentry
     def load_all_data(self, loading_dialog=None):
         """Load all data with enhanced loading dialog"""
@@ -16076,6 +16849,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                     ("LOADING RECYCLEBIN DATA",         self.load_recyclebin_data),
                     ("LOADING SRUM DATA",               self.load_srum_data),
                     ("LOADING BROWSER DATA",            self.load_browser_data),
+                    ("LOADING AI AGENT DATA",           self.load_ai_agent_data),
                     ("LOADING MFT DATA",                lambda: self.load_mft_data(dialog.add_log_message)),
                     ("LOADING USN JOURNAL DATA",        lambda: self.load_usn_data(dialog.add_log_message)),
                     ("LOADING CORRELATED MFT-USN DATA", lambda: self.load_correlated_data(dialog.add_log_message)),
@@ -16087,7 +16861,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                         .replace("Mft-Usn", "MFT-USN").replace("Mft", "MFT").replace("Usn", "USN") \
                         .replace("Srum", "SRUM").replace("Amcache", "AmCache") \
                         .replace("Shimcache", "ShimCache").replace("Recyclebin", "Recycle Bin") \
-                        .replace(" And ", " and ")
+                        .replace(" And ", " and ").replace("Ai Agent", "AI Agent")
                 dialog.set_checklist([("load_%d" % i, _row_label(label))
                                       for i, (label, _) in enumerate(load_steps)])
 
@@ -16171,7 +16945,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             else:
                 self.run_analysis_with_loading("Loading All Data...", self.load_all_data_internal, run_in_thread=True)
     
-    @busy_section("Loading data into the GUI")
+    @busy_section("Loading data into the GUI", writer=False)
     def load_all_data_internal(self):
         """Internal function to load all data (called by the loading screen)"""
         try:
@@ -16248,6 +17022,13 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self.load_browser_data()
         except Exception as e:
             print(f"[Browser Error] Couldn't load browser data: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+        try:
+            self.load_ai_agent_data()
+        except Exception as e:
+            print(f"[AI Agents Error] Couldn't load AI agent data: {str(e)}")
             import traceback
             traceback.print_exc()
 
@@ -16836,8 +17617,10 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 )
                 return
             
-            # Show correlation dialog
-            self.correlation_integration.show_correlation_dialog()
+            # Show correlation dialog; the button shows it is working while the
+            # engine window builds (the heavy case prep already ran on open).
+            with self._button_loading(getattr(self, 'correlation_button', None), "Loading..."):
+                self.correlation_integration.show_correlation_dialog()
             
         except Exception as e:
             QMessageBox.critical(
@@ -16849,7 +17632,7 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             traceback.print_exc()
             
     @gated("Dynamic Linking", needs="any")
-    @busy_section("Applying Dynamic Linking")
+    @busy_section("Applying Dynamic Linking", writer=False)
     def _count_linked_rows(self, widget, budget_s=4.0):
         """How many of a table's rows Dynamic Linking gave a name, and from where.
 
@@ -17163,9 +17946,44 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             if not hasattr(self.main_window, 'ui'):
                 self.main_window.ui = self
             
-            # Create and show timeline dialog with main_window as parent
-            timeline_dialog = TimelineDialog(self.main_window)
-            timeline_dialog.exec_()
+            # One Timeline window per case, not modal: its "Show in table"
+            # selects a row in the main window, which a modal window would
+            # leave unreachable. Asking again brings the open one forward;
+            # opening another case closes it (_close_case_windows).
+            existing = getattr(self, '_timeline_window', None)
+            try:
+                if existing is not None and existing.isVisible() and \
+                        getattr(existing, '_case_root', None) == self.case_paths.get('case_root'):
+                    if existing.isMinimized():
+                        existing.showMaximized()
+                    existing.raise_()
+                    existing.activateWindow()
+                    return
+            except RuntimeError:
+                pass
+            with self._button_loading(getattr(self, 'timeline_search_button', None), "Loading..."):
+                timeline_dialog = TimelineDialog(self.main_window)
+            timeline_dialog._case_root = self.case_paths.get('case_root')
+            timeline_dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+            self._timeline_window = timeline_dialog
+            # Modal, it could never be open while a parse wrote the case;
+            # left open, it would show the case as it was. A parse closes it.
+            try:
+                from ui import busy_guard
+
+                def _close_when_busy(busy, w=timeline_dialog):
+                    if busy:
+                        try:
+                            w.close()
+                        except RuntimeError:
+                            pass
+
+                busy_guard.add_listener(_close_when_busy)
+                timeline_dialog.destroyed.connect(
+                    lambda *_a, f=_close_when_busy: busy_guard.remove_listener(f))
+            except Exception as e:
+                print(f"[Timeline] busy listener not set: {e}")
+            timeline_dialog.show()
             
         except Exception as e:
             print(f"[Timeline Error] Failed to open timeline: {str(e)}")
@@ -17194,16 +18012,22 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
                 )
                 return
 
-            if hasattr(self, 'case_paths') and 'case_root' in self.case_paths:
-                self.main_window.case_dir = self.case_paths['case_root']
-
-            from uba.uba_dialog import UBADialog
+            case_root = self.case_paths.get('case_root')
+            if case_root:
+                self.main_window.case_dir = case_root
 
             if not hasattr(self.main_window, 'ui'):
                 self.main_window.ui = self
 
-            uba_dialog = UBADialog(self.main_window)
-            uba_dialog.exec_()
+            # Non-modal, window-reusing opener (like the Timeline): the rest of
+            # the app stays usable while User Behavior is open, and "Show in
+            # table" can reach the main window. It was opened modal (exec_),
+            # which froze everything for the life of the window.
+            from uba.uba_dialog import open_user_behavior
+            import os as _os
+            artifacts_dir = _os.path.join(case_root, "Target_Artifacts") if case_root else None
+            with self._button_loading(getattr(self, 'uba_button', None), "Loading..."):
+                open_user_behavior(self.main_window, artifacts_dir)
 
         except Exception as e:
             print(f"[UBA Error] Failed to open User Behavior Analytics: {str(e)}")
@@ -17333,6 +18157,31 @@ class Ui_Crow_Eye(QtCore.QObject): # This should be a proper Qt class, not just 
             self._prefetch_dialog.show()
         except Exception as e:
             print(f"[Visualization Error] Failed to open Prefetch visualization: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(
+                self.main_window, "Visualization Error",
+                f"Failed to open the visualization: {str(e)}")
+
+    @gated("the AI Agents charts", needs=_NEEDS_AI_AGENTS)
+    def open_aiagents_dialog(self):
+        """Open the AI Agents dashboard: what the agents (Claude Code, Codex,
+        Gemini CLI, Copilot, Antigravity, Roo/Kilo/Cline) were asked, ran and
+        changed, and what Windows recorded of it. From the Charts button on
+        every AI Agents table tab, and the Timeline's AI detail."""
+        try:
+            if not hasattr(self, 'case_paths') or not self.case_paths:
+                QMessageBox.warning(
+                    self.main_window, "No Case Loaded",
+                    "Please load a case before opening the visualization.")
+                return
+            from visualizations.aiagents_dialog import AiAgentsDialog
+            if not hasattr(self.main_window, 'ui'):
+                self.main_window.ui = self
+            self._aiagents_dialog = AiAgentsDialog(self.main_window)
+            self._aiagents_dialog.show()
+        except Exception as e:
+            print(f"[Visualization Error] Failed to open AI Agents visualization: {str(e)}")
             import traceback
             traceback.print_exc()
             QMessageBox.critical(

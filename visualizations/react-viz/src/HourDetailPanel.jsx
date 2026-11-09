@@ -1,5 +1,6 @@
 import React, { useMemo } from 'react'
 import { fmtBytes, fmtInt, fmtDuration, fmtDay, PROVIDERS } from './format.js'
+import FlowBadge, { FlowIcon } from './FlowBadge.jsx'
 
 // Drill-down for a single hour of the selected day. Built entirely from the
 // already-loaded day activity points (no bridge call).
@@ -46,14 +47,14 @@ export default function HourDetailPanel({ hour, day, activity, companion, onClos
           {rows.length ? (
             <div className="hour-table">
               <div className="hour-row hour-head">
-                <span>App</span><span>User</span><span>&#9650; Sent</span><span>&#9660; Recv</span><span>CPU</span><span>Focus</span>
+                <span>App</span><span>User</span><span className="hour-flow-h"><FlowIcon dir="up" />Sent</span><span className="hour-flow-h"><FlowIcon dir="down" />Received</span><span>CPU</span><span>Focus</span>
               </div>
               {rows.map((r, i) => (
-                <div className="hour-row" key={i}>
+                <div className="hour-row flow-host" key={i}>
                   <span className="hour-app" title={r.app}>{r.app}</span>
                   <span className="hour-user" title={r.user}>{r.user}</span>
-                  <span>{fmtBytes(r.sent)}</span>
-                  <span>{fmtBytes(r.received)}</span>
+                  <span><FlowBadge dir="up" value={fmtBytes(r.sent)} label={false} title={`sent: ${fmtBytes(r.sent)}`} /></span>
+                  <span><FlowBadge dir="down" value={fmtBytes(r.received)} label={false} title={`received: ${fmtBytes(r.received)}`} /></span>
                   <span>{fmtInt(r.cpu)}</span>
                   <span>{fmtDuration(r.focusS)}</span>
                 </div>

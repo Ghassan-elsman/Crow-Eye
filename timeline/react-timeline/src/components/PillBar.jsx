@@ -15,7 +15,7 @@ function PillBar({ state, data }) {
       sessions: 0, srum_app: 0, srum_net: 0, mft_usn: 0,
       prefetch: 0, lnk: 0, bam: 0, registry: 0, amcache: 0,
       shimcache: 0, recyclebin: 0, key_times: 0, event_logs: 0,
-      all_event_ids: 0, browser: 0
+      all_event_ids: 0, browser: 0, ai_agents: 0
     };
 
     const countDots = (arr) => {
@@ -32,6 +32,7 @@ function PillBar({ state, data }) {
     c.srum_net = countDots(data.srum_net?.connectivity) + countDots(data.srum_net?.data_usage);
     c.mft_usn = countDots(data.mft_usn);
     c.browser = countDots(data.browser);
+    c.ai_agents = countDots(data.ai_agents);
 
     // 2. Artifact Lane - Global Discovery Summation
     const sources = getArtifactSources(data);

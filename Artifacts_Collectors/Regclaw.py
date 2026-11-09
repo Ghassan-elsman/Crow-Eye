@@ -5218,13 +5218,30 @@ def main_live_reg(db_filename='registry_data.db'):
                          (_uname, "MRU", str(vd), "", TSC + r"\Default", cov_stamp),
                          ["user_name", "entry_type", "server"])
                 for s in _csubs(_root, TSC + r"\Servers"):
-                    hint, _p = _cv(_root, TSC + r"\Servers\\" + s, "UsernameHint")
+                    _srv = TSC + "\\Servers\\" + s
+                    hint, _p = _cv(_root, _srv, "UsernameHint")
                     _ins("RDPClientMRU",
                          ["user_name", "entry_type", "server", "username_hint",
                           "key_path", "parsed_at"],
-                         (_uname, "Server", s, str(hint or ""), TSC + r"\Servers",
-                          cov_stamp),
+                         (_uname, "Server", s, str(hint or ""), _srv, cov_stamp),
                          ["user_name", "entry_type", "server"])
+                    if hint:
+                        # A row an older build stored without the hint it
+                        # could not read gets it now.
+                        cursor.execute(
+                            "UPDATE RDPClientMRU SET username_hint = ? WHERE user_name = ? AND "
+                            "entry_type = 'Server' AND server = ? AND COALESCE(username_hint, '') = ''",
+                            (str(hint), _uname, s))
+
+                # A server row names its own key (Servers\<server>), so the
+                # key-time pass dates it by that key's last write - when the
+                # client last saved that server (its first connection, or a
+                # later one that updated the hint). Rows stored by a build
+                # that named the Servers container are moved to their key.
+                cursor.execute(
+                    "UPDATE RDPClientMRU SET key_path = key_path || ? || server "
+                    "WHERE entry_type = 'Server' AND key_path LIKE ? AND user_name = ?",
+                    ("\\", "%\\Servers", _uname))
 
                 # Office: files opened, and files the user ENABLED CONTENT for.
                 OFF = _pfx + r"Software\Microsoft\Office"

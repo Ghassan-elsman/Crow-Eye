@@ -498,7 +498,12 @@ def shellbags_browsing(ctx, rules) -> List[BehaviorEvent]:
            + " FROM Shellbags")
     for rowid, name, parent, accessed, modified, views, owner in _rows(
             ctx, "registry", sql):
-        folder = "{}\\{}".format(parent, name) if parent else (name or "")
+        if str(name or "").strip().lower() in ("", "(unnamed shell item)"):
+            name = ""
+        folder = "{}\\{}".format(parent, name) if (parent and name) else (name or "")
+        if not folder:
+            folder = ("a folder in {}".format(parent) if parent
+                      else "a folder whose name Windows did not keep")
         ts = normalize_ts(accessed) or normalize_ts(modified)
         actor = _hive_actor(ctx, "the folder-view (ShellBags) record", owner)
         who = actor[1] or "this user profile"
@@ -535,7 +540,7 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
             "Volume_Type, Network_Share_Name, "
             + _owner_column(ctx, "lnk", "LNK_Files", "Source_Path")
             + " FROM LNK_Files"):
-        target = local_path or source_name or ""
+        target = _expanded(ctx, local_path or source_name or "")
         ts = normalize_ts(t_access) or normalize_ts(t_mod)
         actor = _hive_actor(ctx, "the Windows shortcut record", source_path=src)
         doc = description.app_display_name(target) if target else "(unknown file)"
@@ -591,6 +596,8 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
                 + _owner_column(ctx, "lnk", "Custom_JumpLists", "Source_Path")
                 + " FROM Custom_JumpLists"):
             app = app_desc or app_name
+            if str(app or "").strip().lower() in ("unknown", "(unknown)"):
+                app = ""          # the jump list's app id was not resolved
             if not app and not local_path:
                 continue
             ts = normalize_ts(t_access)
@@ -599,8 +606,11 @@ def file_open_artifacts(ctx, rules) -> List[BehaviorEvent]:
             what = description.app_display_name(local_path) if local_path else (app or "an item")
             events.append(_mk(
                 rule, ctx, ts, actor,
-                "{} used {}'s recent/pinned items ('{}')".format(
-                    actor[1] or "A user of this profile", app or "an application", what),
+                ("{} opened '{}' from {}'s jump list (its recent or pinned items)".format(
+                    actor[1] or "A user of this profile", what, app) if app else
+                 "{} opened '{}' from a program's jump list (its recent or pinned items; "
+                 "the program was not identified)".format(
+                    actor[1] or "A user of this profile", what)),
                 [EvidenceRef(db="lnk", table="Custom_JumpLists",
                              rowids=[rowid], count=1)],
                 caveat=CAVEAT_FILE_OPEN,
@@ -685,6 +695,16 @@ def _usb_is_storage(device_id, desc_text, friendly) -> bool:
     return any(_USB_STORAGE_DRIVER.search(str(v or "")) for v in (desc_text, friendly))
 
 
+def _inf_label(text) -> str:
+    """'@usbhub3.inf,%usbhub3.roothubdevicedesc%;USB Root Hub (USB 3.0)' ->
+    'USB Root Hub (USB 3.0)': Windows stores a driver resource reference in
+    front of the readable name, and that reference is no name to a reader."""
+    t = str(text or "").strip()
+    if t.startswith("@") and ";" in t:
+        t = t.rsplit(";", 1)[1].strip()
+    return t
+
+
 def usb_devices(ctx, rules) -> List[BehaviorEvent]:
     rule = rules[0]
     events = []
@@ -692,12 +712,19 @@ def usb_devices(ctx, rules) -> List[BehaviorEvent]:
             ctx, "registry",
             "SELECT rowid, device_id, description, friendly_name, last_connected "
             "FROM USBDevices"):
-        label = friendly or desc_text or device_id or "a USB device"
+        label = (_inf_label(friendly) or _inf_label(desc_text) or device_id
+                 or "a USB device")
         ts = normalize_ts(last_connected)
+        built_in = str(device_id or "").upper().startswith("ROOT_HUB")
+        if built_in:
+            text = ("The computer's own USB controller '{}' is recorded (part of the "
+                    "computer, not a device someone plugged in)".format(label))
+        else:
+            text = "The USB device '{}' was plugged into this computer".format(label)
         events.append(_mk(
-            rule, ctx, ts, ("", "", ""),
-            "The USB device '{}' was plugged into this computer".format(label),
+            rule, ctx, ts, ("", "", ""), text,
             [EvidenceRef(db="registry", table="USBDevices", rowids=[rowid], count=1)],
+            severity="routine" if built_in else None,
             details={"device": label, "device_id": device_id,
                      "storage": "yes" if _usb_is_storage(device_id, desc_text, friendly)
                      else "no"}))
@@ -1413,6 +1440,15 @@ def com_inprocserver(ctx, rules) -> List[BehaviorEvent]:
     return events
 
 
+_FEATURE_USAGE_WORDS = {
+    "AppLaunch": "{who} started {app} from the taskbar {n} times",
+    "AppSwitched": "{who} switched to {app} on the taskbar {n} times",
+    "ShowJumpView": "{who} opened {app}'s jump list {n} times",
+    "AppBadgeUpdated": "{app} showed a notification badge on {who}'s taskbar {n} times",
+    "TrayButtonClicked": "{who} clicked the taskbar's {app} button {n} times",
+}
+
+
 def feature_usage(ctx, rules) -> List[BehaviorEvent]:
     """Explorer's own per-application usage counters."""
     rule = rules[0]
@@ -1424,10 +1460,17 @@ def feature_usage(ctx, rules) -> List[BehaviorEvent]:
         ts = normalize_ts(last_written)
         when, caveat = _time_phrase(ts, basis)
         who = user or "a user"
-        text = ("Explorer counted {} {} for '{}' by {}{}".format(
-            count if count is not None else "some",
-            str(usage_type or "interactions").replace("_", " "),
-            program or "(unnamed)", who, " " + when if when else ""))
+        app = "'{}'".format(program) if program else "an unnamed program"
+        n = count if count is not None else "some"
+        pattern = _FEATURE_USAGE_WORDS.get(str(usage_type or ""))
+        if pattern:
+            times = "once" if n == 1 else ("twice" if n == 2 else "{} times".format(n))
+            text = pattern.format(n=n, app=app, who=who).replace("{} times".format(n), times)
+        else:
+            text = "Explorer counted {} {} for {}, for {}".format(
+                n, str(usage_type or "interactions").replace("_", " "), app, who)
+        if when:
+            text += " (counted " + when + ")"
         events.append(_mk(
             rule, ctx, ts, ("", "", ""), text,
             [EvidenceRef(db="registry", table="FeatureUsage",
@@ -1486,13 +1529,13 @@ def file_dialog_history(ctx, rules) -> List[BehaviorEvent]:
         if not file_name:
             continue
         ts = normalize_ts(key_last_write)
-        who = user or "a user"
-        text = ("The file '{}' was chosen in a File Open/Save dialog by {}"
-                .format(file_name, who))
+        actor = _hive_actor(ctx, "the user's Open/Save dialog history", owner=user or None)
+        who = actor[1] or user or "A user"
+        text = "{} chose '{}' in an Open/Save dialog".format(who, file_name)
         if file_path:
             text += " (in {})".format(file_path)
         events.append(_mk(
-            rule, ctx, ts, ("", "", ""), text,
+            rule, ctx, ts, actor, text,
             [EvidenceRef(db="registry", table="OpenSaveMRU",
                          rowids=[rowid], count=1)],
             caveat=CAVEAT_MRU_KEY_TIME,

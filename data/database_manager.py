@@ -204,6 +204,13 @@ class DatabaseManager:
             "category": "Browser Activity",
             "display_name": "Browser Data",
             "description": "Chromium / Firefox / Electron history, downloads, cookies, credentials, storage and cache"
+        },
+        "ai_agents.db": {
+            "category": "AI Agents",
+            "display_name": "AI Agents",
+            "description": "What AI agents (Claude Code, Codex, Gemini CLI, Copilot, Antigravity, Roo/Kilo) "
+                           "were asked and did: prompts, commands and the programs they started, files "
+                           "changed and their saved copies, pages driven, processes, settings"
         }
     }
     
@@ -285,6 +292,9 @@ class DatabaseManager:
         # Browser Activity
         "browser_analysis.db": ["browser_history", "browser_downloads", "browser_cookies",
                                 "browser_credentials", "browser_local_storage", "browser_cache"],
+        # AI Agents
+        "ai_agents.db": ["ai_agent_sessions", "ai_agent_steps", "ai_agent_file_versions",
+                         "ai_agent_processes", "ai_agent_settings"],
     }
     
     def __init__(self, case_directory: Union[str, Path]):
@@ -485,6 +495,12 @@ class DatabaseManager:
             # correlation RESULTS are consulted separately via CorrelationService.)
             parts_lower = {p.lower() for p in cand.parts}
             if "feathers" in parts_lower and "correlation" in parts_lower:
+                continue
+            # The Timeline's day map (timeline/day_index.py) is an index of
+            # row ids, not evidence: Database Search spent a second scanning
+            # its WITHOUT ROWID tables (and errored on them), and Eye would
+            # list it as a "Custom" database.
+            if cand.name.lower() == "day_index.db" and cand.parent.name.lower() == "timeline":
                 continue
 
             cand_abs = str(cand.absolute()).lower()

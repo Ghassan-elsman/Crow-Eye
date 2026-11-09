@@ -1592,6 +1592,7 @@ class PipelineBuilderWidget(QWidget):
                             use_weighted_scoring=getattr(wing_config, 'use_weighted_scoring', True),
                             scoring=getattr(wing_config, 'scoring', None) or {},
                             wing_category=getattr(wing_config, 'wing_category', None),
+                            host_scope=getattr(wing_config, 'host_scope', None),
                             # A Behaviour Wing's steps, time range, subject, alert.
                             **behaviour_fields_of(wing_config)
                         )

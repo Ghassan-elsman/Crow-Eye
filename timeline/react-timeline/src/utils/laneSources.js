@@ -10,7 +10,7 @@
  * were computed and never drawn, and the detail panel never listed them. One list
  * now; the lane plots the last-access time too, and links it.
  */
-import { cleanForensicDate } from './formatters';
+import { parseForensicMs } from './formatters';
 
 /** Every source the artifacts lane plots, as {items, type}. */
 export function laneArtifactSources(data) {
@@ -41,15 +41,31 @@ export function laneArtifactSources(data) {
 }
 
 /**
- * The sources the lane actually draws: registry KEY write times only when the
- * analyst turns them on (an upper bound, ~2,200 of them on install day), the event
- * log only while its pill is on.
+ * The pill that shows and hides a source of the artifacts lane. Every registry
+ * table answers to the Registry pill; DAM to BAM's. Imported evidence has no
+ * pill and is always drawn.
+ */
+const PILL_OF = { dam: 'bam', amcache: 'amcache', event_logs: 'event_logs', key_times: 'key_times' };
+export function pillOf(type) {
+  if (type === 'imported') return null;
+  return PILL_OF[type] ||
+    (['prefetch', 'lnk', 'bam', 'shimcache', 'recyclebin'].includes(type) ? type : 'registry');
+}
+
+/**
+ * The sources the lane actually draws: each only while its pill is on. Registry
+ * KEY write times (and AmCache's) start off - an upper bound, ~2,200 of them on
+ * install day - as does the wider event log. The lane used to consult only those
+ * two pills, so switching Prefetch, LNK, BAM, AmCache, ShimCache, Recycle Bin or
+ * Registry off hid their links and kept every one of their marks on screen.
  */
 export function laneVisibleSources(data, activeArtifacts = {}) {
-  return laneArtifactSources(data).filter(
-    src => (src.type !== 'key_times' || activeArtifacts.key_times)
-        && (src.type !== 'event_logs' || activeArtifacts.event_logs)
-  );
+  return laneArtifactSources(data).filter(src => {
+    const pill = pillOf(src.type);
+    if (!pill) return true;
+    if (pill === 'key_times' || pill === 'event_logs') return !!activeArtifacts[pill];
+    return activeArtifacts[pill] !== false;
+  });
 }
 
 /**
@@ -72,20 +88,44 @@ export function laneSkipsTimestamp(type, field) {   // eslint-disable-line no-un
  * durations: background_cycle_time is a CPU cycle count, and connected_time has
  * read 592,606 hours on a real case - a band "starting" in 1958.
  */
-export function srumBandStart(rows, idx, durationMs, keyOf) {
+export function srumBandStart(rows, idx, durationMs, keyOf, prevEnds) {
   const row = rows[idx];
-  let start = new Date(cleanForensicDate(row.timestamp)).getTime() - Math.max(20000, durationMs || 0);
+  let start = parseForensicMs(row.timestamp) - Math.max(20000, durationMs || 0);
+  if (prevEnds) {
+    // srumPrevEnds, computed once for the whole array
+    const prevEnd = prevEnds[idx];
+    if (prevEnd !== null && start < prevEnd) start = prevEnd;
+    return start;
+  }
   const key = keyOf(row);
   for (let i = idx - 1; i >= 0; i--) {
     if (keyOf(rows[i]) === key) {
       // cleaned like the row's own time: a bare SRUM timestamp is UTC (parsed
       // raw it was local time, so the clamp moved with the viewer's zone)
-      const prevEnd = new Date(cleanForensicDate(rows[i].timestamp)).getTime();
+      const prevEnd = parseForensicMs(rows[i].timestamp);
       if (start < prevEnd) start = prevEnd;
       break;
     }
   }
   return start;
+}
+
+/**
+ * For every row, the time of the nearest EARLIER row of the same app (keyOf),
+ * or null: what srumBandStart's backward scan finds, in one pass. The scan per
+ * row walked back past every other app's rows, O(n^2) over a day of SRUM with
+ * many apps, and it ran twice per row (face and background time). Pass the
+ * result as srumBandStart's prevEnds.
+ */
+export function srumPrevEnds(rows, keyOf) {
+  const last = new Map();
+  const out = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    const key = keyOf(rows[i]);
+    out[i] = last.has(key) ? last.get(key) : null;
+    last.set(key, parseForensicMs(rows[i].timestamp));
+  }
+  return out;
 }
 
 /** Malformed (object, not list) payloads the lane salvages, with the type it plots them as. */

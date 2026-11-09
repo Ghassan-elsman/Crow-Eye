@@ -10,6 +10,7 @@ Common conventions:
 """
 
 import logging
+import re
 from collections import defaultdict
 from typing import List
 
@@ -90,7 +91,7 @@ def _subject_actor(ctx, keywords, user, label):
     SubjectUserSid as their first payload field. Reading it resolves the actor
     to a profile SID - or to LOCAL SERVICE, which is who changes the clock on
     most machines. The row's `User` column is the fallback: a display name
-    ('Ghass', or a Microsoft-account e-mail), resolved case-insensitively.
+    ('analyst', or a Microsoft-account e-mail), resolved case-insensitively.
     """
     first = (str(keywords or "").split(",", 1)[0]).strip()
     if first.startswith("S-1-"):
@@ -239,6 +240,10 @@ def process_creation_4688(ctx, rules) -> List[BehaviorEvent]:
 
 
 # --------------------------------------------------------------------- #
+_SERVICE_INSTALLED = re.compile(r"Service name:\s*(.+?)\.\s+Service file:\s*(.+?)(?:\.\s+(?:Service )?[Tt]ype:|$)", re.S)
+_START_TYPE_CHANGED = re.compile(r"The start type of the (.+?) service was changed from (.+?) to (.+?)\.")
+
+
 def service_installed(ctx, rules) -> List[BehaviorEvent]:
     """System 7045. The parsed SystemLogs rows carry no payload (Keywords
     'N/A'), so the service name is unknown; the registry SystemServices
@@ -257,10 +262,20 @@ def service_installed(ctx, rules) -> List[BehaviorEvent]:
             evidence.append(EvidenceRef(
                 db="registry", table="SystemServices", role="corroborating",
                 rowids=[], count=0))
+        m = _SERVICE_INSTALLED.search(str(desc or ""))
+        if m:
+            kind = str(keywords or "").lower()
+            noun = "driver" if "kernel mode driver" in kind or "file system driver" in kind \
+                else "background service"
+            text = "A new {} '{}' was installed (file {})".format(
+                noun, m.group(1).strip(), m.group(2).strip().rstrip("."))
+            details = {"service": m.group(1).strip(), "file": m.group(2).strip().rstrip(".")}
+        else:
+            text = "A new background service was installed on the computer"
+            details = {}
         events.append(_mk(
             rule, ts, ("System", "Windows", "recorded by the Service Control Manager"),
-            "A new background service was installed on the computer",
-            evidence, confidence=confidence, ctx=ctx))
+            text, evidence, confidence=confidence, ctx=ctx, details=details))
     return events
 
 
@@ -736,6 +751,13 @@ def app_error(ctx, rules) -> List[BehaviorEvent]:
     return events
 
 
+def _start_words(kind) -> str:
+    k = str(kind or "").strip().lower()
+    return {"auto start": "automatically with Windows", "demand start": "only when asked for",
+            "disabled": "never (disabled)", "boot start": "with the boot loader",
+            "system start": "with the system"}.get(k, k or "differently")
+
+
 def service_state_changed(ctx, rules) -> List[BehaviorEvent]:
     """A service's start type was changed (System EID 7040). The payload
     carries no service name, so this is a system-configuration signal."""
@@ -744,11 +766,24 @@ def service_state_changed(ctx, rules) -> List[BehaviorEvent]:
     for rowid, eid, ts, source, user, keywords, desc in _system_rows(
             ctx, [7040], source_like="%Service Control Manager%"):
         ts = normalize_ts(ts)
+        m = _START_TYPE_CHANGED.search(str(desc or ""))
+        if m:
+            name = m.group(1)
+            noun = "" if name.lower().endswith("service") else " service"
+            if m.group(3).strip().lower() == "disabled":
+                text = "The {}{} was disabled (it started {} before)".format(
+                    name, noun, _start_words(m.group(2)))
+            else:
+                text = "The {}{} was set to start {} (it started {} before)".format(
+                    name, noun, _start_words(m.group(3)), _start_words(m.group(2)))
+            details = {"service": m.group(1), "from": m.group(2), "to": m.group(3)}
+        else:
+            text = "A Windows service's start type was changed"
+            details = {}
         events.append(_mk(
             rule, ts, ("System", "Windows", "recorded by the Service Control Manager"),
-            "A Windows service's start type was changed",
-            [EvidenceRef(db="logs", table="SystemLogs", rowids=[rowid], count=1)],
-            ctx=ctx))
+            text, [EvidenceRef(db="logs", table="SystemLogs", rowids=[rowid], count=1)],
+            ctx=ctx, details=details))
     return events
 
 

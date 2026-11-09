@@ -1,0 +1,52 @@
+{
+  "config_name": "ai_agent_turn_then_log_clear_behaviour",
+  "wing_name": "AI Agent Turn, Then an Event Log Cleared (Behaviour)",
+  "wing_id": "default_behaviour_ai_log_clear_001",
+  "wing_category": "behaviour",
+  "host_scope": "same_host",
+  "description": "An AI agent worked on a request, and within 30 minutes an event log was cleared (1102 / 104).",
+  "proves": "An event log was cleared while an AI agent was working",
+  "author": "Crow-Eye Team",
+  "created_date": "2026-11-04T00:00:00Z",
+  "last_modified": "2026-11-04T00:00:00Z",
+  "version": "1.0",
+  "feathers": [],
+  "steps": [
+    {
+      "label": "An AI agent worked on a request",
+      "rule_id": "ai_agent_turn",
+      "actor": "any"
+    },
+    {
+      "label": "Event log cleared",
+      "rule_id": "log_cleared",
+      "actor": "any"
+    }
+  ],
+  "ordered": true,
+  "within_minutes": 30,
+  "subject": {
+    "scope": "everyone",
+    "include_service_accounts": false
+  },
+  "alert": {
+    "severity": "high",
+    "technique_id": [
+      "T1070.001"
+    ],
+    "tactic": [
+      "defense_evasion"
+    ]
+  },
+  "semantic_rules": [],
+  "tags": [
+    "ai_agent",
+    "anti_forensics",
+    "behaviour"
+  ],
+  "case_types": [
+    "ai_agent",
+    "insider",
+    "intrusion"
+  ]
+}

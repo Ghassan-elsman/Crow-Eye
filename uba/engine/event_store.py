@@ -9,6 +9,7 @@ dedicated flag so the UI can render its "activity without exact time" strip.
 
 import json
 import sqlite3
+import threading
 from typing import Iterable, Optional
 
 from uba.engine.models import BehaviorEvent
@@ -36,8 +37,14 @@ CREATE TABLE events (
     user_rule INTEGER NOT NULL DEFAULT 0,
     aggregate_count INTEGER NOT NULL DEFAULT 1,
     details_json TEXT,
-    evidence_json TEXT
+    evidence_json TEXT,
+    operator TEXT NOT NULL DEFAULT '',
+    operator_kind TEXT NOT NULL DEFAULT '',
+    operator_basis TEXT NOT NULL DEFAULT '',
+    app_state TEXT NOT NULL DEFAULT '',
+    app_state_basis TEXT NOT NULL DEFAULT ''
 );
+CREATE INDEX idx_events_operator ON events(operator);
 CREATE INDEX idx_events_ts ON events(ts_start);
 CREATE INDEX idx_events_rule ON events(rule_id);
 CREATE INDEX idx_events_actor ON events(actor_name);
@@ -54,7 +61,23 @@ _COLUMNS = [
     "actor_type", "actor_name", "actor_basis", "description", "severity",
     "confidence", "session_context", "caveat", "session_user", "app_name",
     "actor_sid", "host", "user_rule", "aggregate_count", "details_json", "evidence_json",
+    "operator", "operator_kind", "operator_basis", "app_state", "app_state_basis",
 ]
+
+
+# Who drove an event, as one key (who_drove.py writes operator / operator_kind):
+#   ai_agent  the agent's own session record says it ran it (rule ai_agent_turn),
+#             or Crow-Eye Sentinel's signals named it (operator_kind ai_agent)
+#   script    automation of any other kind
+#   person / remote / program, or unknown when nothing decided it.
+# The desktop names an AI agent only from its session record (decision 602:
+# the other agent signals are Sentinel's).
+DRIVERS = ("person", "remote", "program", "script", "ai_agent", "unknown")
+DRIVER_SQL = ("(CASE WHEN rule_id = 'ai_agent_turn' OR operator_kind = 'ai_agent' THEN 'ai_agent' "
+              "WHEN operator = 'automation' THEN 'script' "
+              "WHEN operator = 'person' THEN 'person' "
+              "WHEN operator = 'remote_person' THEN 'remote' "
+              "WHEN operator = 'program' THEN 'program' ELSE 'unknown' END)")
 
 
 class UBAEventStore:
@@ -63,8 +86,24 @@ class UBAEventStore:
         self.conn.row_factory = sqlite3.Row
         if create_schema:
             self.conn.executescript(_SCHEMA)
+            # The two-column index is built here, not in _SCHEMA: the schema
+            # readers (Sentinel's extract-schema, test parser_schema) take the
+            # comma inside `(ts_start, event_id)` for a column of `events`.
+            self.ensure_indexes()
         # create_schema=False is for persisted_store.load(), which copies a
         # stored database (schema, rows and indexes) into this one.
+        # One reader at a time: the UBA window runs its heavier reads off the
+        # GUI thread (uba_bridge ASYNC_SLOTS), and this one connection is
+        # shared with the slots that stay on it.
+        self.lock = threading.RLock()
+
+    def ensure_indexes(self):
+        """Indexes added after a store was first written. A stored analysis
+        is copied in whole (persisted_store.load), so an older one lacks
+        them; building one over the copy in memory is cheap."""
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_events_ts_id "
+                          "ON events(ts_start, event_id)")
+        self.conn.commit()
 
     # ------------------------------------------------------------------ #
     def add_events(self, events: Iterable[BehaviorEvent]) -> int:
@@ -84,6 +123,15 @@ class UBAEventStore:
         return self.conn.total_changes - before
 
     # ------------------------------------------------------------------ #
+    def events_for_day(self, day: str, limit: int = 20000) -> list:
+        """Every timed event of one UTC day, oldest first, as dicts (the day
+        summary reads them; story_digest)."""
+        rows = self.conn.execute(
+            "SELECT * FROM events WHERE ts_start >= ? AND ts_start < ? "
+            "ORDER BY ts_start, event_id LIMIT ?",
+            (day + " 00:00:00", day + " 99", int(limit))).fetchall()
+        return [dict(r) for r in rows]
+
     def query_events(self, filters: Optional[dict] = None,
                      cursor: Optional[str] = None,
                      page_size: int = 200) -> dict:
@@ -109,9 +157,12 @@ class UBAEventStore:
             if cursor and "|" in cursor:
                 ts, eid = cursor.split("|", 1)
                 comparison = ">" if ascending else "<"
-                where.append("(ts_start {0} ? OR (ts_start = ? AND event_id {0} ?))"
-                             .format(comparison))
-                params.extend([ts, ts, eid])
+                # A row value, so the (ts_start, event_id) index answers it.
+                # Written as an OR the planner made a multi-index OR and then
+                # sorted: 0.23 s for every page after the first, on 38,611
+                # activities, against 0.003 s.
+                where.append("(ts_start, event_id) {0} (?, ?)".format(comparison))
+                params.extend([ts, eid])
 
         where_sql = " AND ".join(where) if where else "1=1"
         if timeless:
@@ -167,7 +218,20 @@ class UBAEventStore:
             "SELECT MIN(ts_start), MAX(ts_end) FROM events "
             "WHERE ts_start IS NOT NULL AND {}".format(where_sql), params).fetchone()
 
+        # Who drove it (who_drove.py): one key per event, the same expression
+        # the "drivers" filter matches, so a tile's number is what it opens.
+        driver_heatmap = [
+            {"day": r["d"], "hour": r["h"], "driver": r["k"], "events": r["n"]}
+            for r in self.conn.execute(
+                "SELECT substr(ts_start, 1, 10) AS d, "
+                "CAST(substr(ts_start, 12, 2) AS INTEGER) AS h, {} AS k, COUNT(*) AS n "
+                "FROM events WHERE ts_start IS NOT NULL AND {} "
+                "GROUP BY d, h, k".format(DRIVER_SQL, where_sql), params)
+        ]
         return {
+            "by_driver": _group(DRIVER_SQL, "driver"),
+            "by_app_state": _group("app_state", "app_state"),
+            "driver_heatmap": driver_heatmap,
             "by_class": _group("behavior_class", "behavior_class"),
             "by_rule": _group("rule_id", "rule_id"),
             "by_severity": _group("severity", "severity"),
@@ -202,6 +266,8 @@ class UBAEventStore:
         # under. "" is not accepted here - an unresolved SID is not a person.
         _in("actor_sid", [s for s in (filters.get("actor_sids") or []) if s])
         _in("host", filters.get("hosts"))
+        _in("({})".format(DRIVER_SQL), filters.get("drivers"))
+        _in("app_state", filters.get("app_states"))
 
         actors = filters.get("actors")
         if actors:

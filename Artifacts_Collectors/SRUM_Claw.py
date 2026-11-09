@@ -130,7 +130,11 @@ def _custody_repair_note(path, before, ok):
 # from, and a case parsed before they existed holds NULL in both: in the
 # identity, every timeline row of such a case would be stored a second time on
 # its next parse.
-SRUM_DERIVED_COLUMNS = frozenset(("user_name", "pe_link_time", "pe_checksum"))
+# auto_inc_id is SRUDB.dat's own record number (Sentinel P4): kept with the row,
+# but never its identity - a case parsed before it holds NULL there, and SRUM
+# writes some records more than once under different numbers, which were always
+# stored once (dedupe_exact).
+SRUM_DERIVED_COLUMNS = frozenset(("user_name", "pe_link_time", "pe_checksum", "auto_inc_id"))
 
 _INSERT_RE = re.compile(r"INSERT\s+INTO\s+(\w+)\s*\((.*?)\)\s*VALUES", re.S | re.I)
 
@@ -209,7 +213,7 @@ def _backfill_build(conn, table, cols, rows, ident_cols):
                            for r in rows if r[at[0]] or r[at[1]]))
 
 
-def dedupe_exact(rows):
+def dedupe_exact(rows, ignore_last=False):
     """Drop byte-for-byte identical row tuples, preserving order.
 
     SRUM writes some records more than once (notably energy rows, whose
@@ -223,7 +227,9 @@ def dedupe_exact(rows):
     seen = set()
     out = []
     for r in rows:
-        key = tuple(r)
+        # ignore_last: the row ends with auto_inc_id, SRUDB.dat's record number,
+        # which differs between copies of the same record
+        key = tuple(r[:-1]) if ignore_last else tuple(r)
         if key in seen:
             continue
         seen.add(key)
@@ -588,6 +594,43 @@ def _app_id_build(tokens, exe):
     return format_forensic_timestamp(stamp), "0x%08X" % value
 
 
+def auto_inc_id_of(value):
+    """SRUDB.dat's AutoIncId as an int, or None."""
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def ensure_auto_inc_id_columns(cursor) -> None:
+    """Add auto_inc_id to the five SRUM tables of a case that predates it.
+
+    AutoIncId is assigned when SRUM inserts a record, so a late flush of an older
+    interval still gets a higher number: Crow-Eye Sentinel marks what it has read
+    by it (P4). Shared by the live and the offline parser, and written as five
+    statements on purpose: Sentinel's extract-schema.js reads a list of (name,
+    type) pairs in a parser as a table definition.
+    """
+    try:
+        present = {}
+        for table in ("srum_application_usage", "srum_network_connectivity",
+                      "srum_network_data_usage", "srum_energy_usage", "srum_app_timeline"):
+            cursor.execute("PRAGMA table_info(%s)" % table)
+            present[table] = {row[1] for row in cursor.fetchall()}
+        if present["srum_application_usage"] and "auto_inc_id" not in present["srum_application_usage"]:
+            cursor.execute("ALTER TABLE srum_application_usage ADD COLUMN auto_inc_id INTEGER")
+        if present["srum_network_connectivity"] and "auto_inc_id" not in present["srum_network_connectivity"]:
+            cursor.execute("ALTER TABLE srum_network_connectivity ADD COLUMN auto_inc_id INTEGER")
+        if present["srum_network_data_usage"] and "auto_inc_id" not in present["srum_network_data_usage"]:
+            cursor.execute("ALTER TABLE srum_network_data_usage ADD COLUMN auto_inc_id INTEGER")
+        if present["srum_energy_usage"] and "auto_inc_id" not in present["srum_energy_usage"]:
+            cursor.execute("ALTER TABLE srum_energy_usage ADD COLUMN auto_inc_id INTEGER")
+        if present["srum_app_timeline"] and "auto_inc_id" not in present["srum_app_timeline"]:
+            cursor.execute("ALTER TABLE srum_app_timeline ADD COLUMN auto_inc_id INTEGER")
+    except sqlite3.Error as e:
+        logger.warning("Could not add the auto_inc_id columns: %s", e)
+
+
 def ensure_timeline_build_columns(cursor) -> None:
     """Add pe_link_time and pe_checksum to a timeline table that predates them.
 
@@ -631,8 +674,9 @@ APP_TIMELINE_INSERT = """
         audio_out_timeline, cpu_timeline, disk_timeline, network_timeline,
         mbb_timeline, display_required_timeline, keyboard_input_timeline,
         cycles_breakdown, cycles_attr_breakdown, cycles_wob_breakdown,
-        mbb_tail_raw, mbb_bytes_raw, pe_link_time, pe_checksum
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        mbb_tail_raw, mbb_bytes_raw, pe_link_time, pe_checksum,
+        auto_inc_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Named like APP_TIMELINE_INSERT so the batched and trailing inserts share one
@@ -641,8 +685,9 @@ NET_DATA_INSERT = """
     INSERT INTO srum_network_data_usage (
         timestamp, app_name, app_path, user_sid, user_name,
         interface_luid, l2_profile_id, bytes_sent, bytes_received,
-        wake_count, l2_profile_flags
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        wake_count, l2_profile_flags,
+        auto_inc_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 ENERGY_INSERT = """
@@ -650,8 +695,9 @@ ENERGY_INSERT = """
         timestamp, app_name, app_path, user_sid, user_name,
         event_timestamp, state_transition, charge_level, cycle_count,
         designed_capacity, full_charged_capacity, battery_count,
-        configuration_hash, battery_charge_limited
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        configuration_hash, battery_charge_limited,
+        auto_inc_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # The two inserts that were written inline in save_to_database, named beside
@@ -665,16 +711,18 @@ APP_USAGE_INSERT = """
         foreground_num_read_operations, foreground_num_write_operations,
         foreground_number_of_flushes, background_bytes_read,
         background_bytes_written, background_num_read_operations,
-        background_num_write_operations, background_number_of_flushes
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        background_num_write_operations, background_number_of_flushes,
+        auto_inc_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 NET_CONN_INSERT = """
     INSERT INTO srum_network_connectivity (
         timestamp, app_name, app_path, user_sid, user_name,
         interface_luid, l2_profile_id, l2_profile_flags,
-        connected_time, connect_start_time
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        connected_time, connect_start_time,
+        auto_inc_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Special System IDs that don't have entries in SruDbIdMapTable
@@ -1296,10 +1344,16 @@ class SRUMParser:
         self.recovery_info = {
             'jfm_collected': 0, 'jfm_path': '', 'jfm_size': 0, 'jfm_modified': '',
             'log_files_collected': 0, 'db_state': 'clean', 'recovery_notes': '',
+            # Where the set was read: 'shadow_copy' (the caller's snapshot) or
+            # 'live' (FileAccessor's ladder on the running volume).
+            'acquired_from': 'live',
         }
         self._recovery_files = []  # working-copy paths of the collected .jfm/.chk/logs
+        self._source_path = None    # the SRUDB.dat the working copy came from
+        self._retake_done = False   # the one whole-set retake has been tried
         self._file_accessor = None  # lazily-built FileAccessor (StandardCopy/VSS/RawDisk)
         self._copy_failures = {}    # source path -> why each copy method failed
+        self._shadow_root = None    # the caller's shadow copy the set was read from
         
         # JET API handles
         self.instance = JET_INSTANCE()
@@ -1442,6 +1496,17 @@ class SRUMParser:
                 'Database was in dirty shutdown; the collected transaction logs '
                 '(SRU*.log) were replayed to recover activity not yet flushed '
                 'into SRUDB.dat before reading.')
+        elif self._retake_set_by_extents() and self._esentutl_recover():
+            # The files were first copied one by one while the service kept
+            # writing, so the logs could miss a generation the database needs.
+            # Read once more as one set, back to back from the clusters, before
+            # /p is allowed to discard pages (Sentinel P5).
+            self.recovery_info['db_state'] = 'recovered'
+            self.recovery_info['recovery_notes'] = (
+                'Database was in dirty shutdown and the first copy of its logs '
+                'could not be replayed; the whole set (SRUDB.dat, SRU.chk, '
+                'SRU*.log, reserves) was read again in one pass from its clusters '
+                'and replayed, before any repair.')
         elif self._esentutl_repair():
             self.recovery_info['db_state'] = 'repaired'
             self.recovery_info['recovery_notes'] = (
@@ -1798,6 +1863,8 @@ class SRUMParser:
         def _record(method, result=None):
             if times is None or _custody is None or _custody.active() is None:
                 return
+            if self._shadow_root and os.path.normcase(src).startswith(os.path.normcase(self._shadow_root)):
+                method = "vss"      # read from the caller's frozen snapshot
             try:
                 _custody.active().add_source(
                     src, copy=dst, method=method, times=times,
@@ -1915,6 +1982,61 @@ class SRUMParser:
         except Exception as e:
             logger.debug(f"Recovery-set collection skipped: {e}")
 
+    def _retake_set_by_extents(self) -> bool:
+        """Read SRUDB.dat and its whole recovery set again, in one pass.
+
+        Every file is read from its clusters (utils.locked_file_extents), back
+        to back, into a fresh folder; only when all of them were read are they
+        moved over the first copies, so a failed retake leaves those as they
+        were. Needs administrator rights (a volume read). Each copy is written
+        to the custody record. Returns True when the set was replaced."""
+        src = getattr(self, "_source_path", None)
+        if self._retake_done or not src or not self.temp_dir or not self.working_copy:
+            return False
+        self._retake_done = True
+        try:
+            from utils.locked_file_extents import copy_by_extents
+        except Exception as exc:
+            logger.info("SRUM set not read again: %s", exc)
+            return False
+        src_dir = os.path.dirname(src)
+        names = [os.path.basename(src)] + sorted(
+            n for n in os.listdir(src_dir)
+            if n.lower() != os.path.basename(src).lower()
+            and n.lower().endswith(('.jfm', '.chk', '.log', '.jrs')))
+        stage = tempfile.mkdtemp(prefix="retake_", dir=self.temp_dir)
+        taken = []
+        try:
+            for name in names:
+                copy_by_extents(os.path.join(src_dir, name), os.path.join(stage, name))
+                taken.append(name)
+        except Exception as exc:
+            logger.info("SRUM set not read again from its clusters (%s): %s",
+                        taken and names[len(taken)] or names[0], exc)
+            shutil.rmtree(stage, ignore_errors=True)
+            return False
+        try:
+            from utils import custody as _custody
+            rec = _custody.active()
+        except Exception:
+            rec = None
+        self._recovery_files = []
+        for name in names:
+            dst = self.working_copy if name == names[0] else os.path.join(self.temp_dir, name)
+            os.replace(os.path.join(stage, name), dst)
+            if name != names[0]:
+                self._recovery_files.append(dst)
+            if rec is not None:
+                try:
+                    rec.add_source(os.path.join(src_dir, name), copy=dst, method="raw_disk:extents",
+                                   note="SRUM set read again in one pass after soft recovery "
+                                        "failed; the copy was temporary")
+                except Exception as exc:
+                    logger.debug("custody entry for %s not written: %s", name, exc)
+        shutil.rmtree(stage, ignore_errors=True)
+        logger.info("SRUM set read again in one pass from its clusters: %d file(s)", len(names))
+        return True
+
     def _esentutl_recover(self) -> bool:
         """Soft-recover the working copy by replaying the collected logs.
 
@@ -1990,7 +2112,34 @@ class SRUMParser:
             logger.warning(f"esentutl repair error: {e}")
             return False
 
-    def copy_srum_database(self, source_path: str = None, windows_partition: str = "C:") -> str:
+    def _copy_from_shadow(self, source_path: str, dest_path: str, shadow_root: str) -> bool:
+        """SRUDB.dat and its recovery set from the caller's shadow copy.
+
+        A shadow copy is frozen and flushed: nothing holds its files open, and
+        the database and its logs are one consistent moment, which a copy of
+        the running volume - the database first, the logs after - is not. It
+        is still crash-consistent, so soft recovery (/r) runs as for any copy.
+        False when the snapshot does not hold the file or it cannot be read;
+        the live ladder is then used.
+        """
+        tail = os.path.splitdrive(source_path)[1].lstrip("\\/")
+        shadow_src = os.path.join(shadow_root, tail)
+        if not os.path.isfile(shadow_src):
+            logger.info("SRUM: the shadow copy holds no %s; reading the live volume", tail)
+            return False
+        self._shadow_root = shadow_root
+        if not self._robust_copy(shadow_src, dest_path):
+            logger.info("SRUM: %s could not be read from the shadow copy; reading the live volume",
+                        shadow_src)
+            self._shadow_root = None
+            return False
+        self.recovery_info['acquired_from'] = 'shadow_copy'
+        self.recovery_info['shadow_root'] = shadow_root
+        self._collect_recovery_set(shadow_src)
+        return True
+
+    def copy_srum_database(self, source_path: str = None, windows_partition: str = "C:",
+                           shadow_root: str = None) -> str:
         """Copy SRUDB.dat from its system location to a temporary working copy.
 
         The file is held open by the DPS service, so it is copied through
@@ -2016,10 +2165,21 @@ class SRUMParser:
         dest_path = os.path.join(self.temp_dir, "SRUDB.dat")
         logger.info(f"Copying SRUDB.dat from {source_path} to {dest_path}")
 
+        # The caller's shadow copy first (Sentinel P5): one frozen moment for
+        # the database and its logs. `_source_path` stays the live file, so
+        # the one whole-set retake by extents still reads the volume.
+        if shadow_root and self._copy_from_shadow(source_path, dest_path, shadow_root):
+            self.working_copy = dest_path
+            self._source_path = source_path
+            logger.info("Copied SRUDB.dat and its recovery set from the shadow copy (%s bytes)",
+                        format(os.path.getsize(dest_path), ","))
+            return dest_path
+
         if self._robust_copy(source_path, dest_path):
             size = os.path.getsize(dest_path)
             logger.info(f"Successfully copied SRUDB.dat ({size:,} bytes)")
             self.working_copy = dest_path
+            self._source_path = source_path
             self._collect_recovery_set(source_path)
             return dest_path
 
@@ -2181,6 +2341,8 @@ class SRUMParser:
                     )
                     
                     count += 1
+                    srum_record.auto_inc_id = auto_inc_id_of(
+                        self._get_column_value(record, 'AutoIncId'))
                     yield srum_record
                 
                 except Exception as e:
@@ -2251,6 +2413,8 @@ class SRUMParser:
                     )
                     
                     count += 1
+                    srum_record.auto_inc_id = auto_inc_id_of(
+                        self._get_column_value(record, 'AutoIncId'))
                     yield srum_record
                 
                 except Exception as e:
@@ -2318,6 +2482,8 @@ class SRUMParser:
                     )
 
                     count += 1
+                    srum_record.auto_inc_id = auto_inc_id_of(
+                        self._get_column_value(record, 'AutoIncId'))
                     yield srum_record
 
                 except Exception as e:
@@ -2388,6 +2554,8 @@ class SRUMParser:
                     )
 
                     count += 1
+                    srum_record.auto_inc_id = auto_inc_id_of(
+                        self._get_column_value(record, 'AutoIncId'))
                     yield srum_record
                 
                 except Exception as e:
@@ -2476,6 +2644,8 @@ class SRUMParser:
                     )
 
                     count += 1
+                    srum_record.auto_inc_id = auto_inc_id_of(
+                        self._get_column_value(record, 'AutoIncId'))
                     yield srum_record
 
                 except Exception as e:
@@ -2675,6 +2845,7 @@ class SRUMParser:
             self._drop_retired_columns(cursor)
             self._ensure_extra_columns(cursor)
             ensure_timeline_build_columns(cursor)
+            ensure_auto_inc_id_columns(cursor)
 
             conn.commit()
             conn.close()
@@ -2788,7 +2959,12 @@ class SRUMParser:
 
     @staticmethod
     def _row(key, record):
-        """One parsed record as the tuple its table's INSERT takes."""
+        """One parsed record as the tuple its table's INSERT takes, ending with
+        SRUDB.dat's AutoIncId (set on the record by the reader)."""
+        return SRUMParser._row_fields(key, record) + (getattr(record, "auto_inc_id", None),)
+
+    @staticmethod
+    def _row_fields(key, record):
         if key == 'application_usage':
             return (
                 format_forensic_timestamp(record.timestamp) if record.timestamp else None,
@@ -2940,7 +3116,7 @@ class SRUMParser:
         for record in records:
             read += 1
             row = self._row(key, record)
-            if not dedupe.is_new(row):
+            if not dedupe.is_new(row[:-1]):     # not auto_inc_id: see dedupe_exact
                 continue
             batch.append(row)
             if len(batch) >= batch_size:
@@ -2979,7 +3155,10 @@ class SRUMParser:
                 self.recovery_info.get('log_files_collected', 0),
                 self.recovery_info.get('db_state', 'clean'),
                 self.recovery_info.get('recovery_notes', ''),
-                metadata.get('notes', 'Parsed by Crow Eye SRUM Parser')
+                metadata.get('notes', 'Parsed by Crow Eye SRUM Parser') + (
+                    '; SRUDB.dat and its logs read from a shadow copy (%s)'
+                    % self.recovery_info.get('shadow_root', '')
+                    if self.recovery_info.get('acquired_from') == 'shadow_copy' else '')
             ))
             conn.commit()
             logger.info("Metadata saved successfully")
@@ -3237,7 +3416,8 @@ class SRUMParser:
 
 
 
-def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callable] = None, windows_partition: str = "C:") -> Dict[str, any]:
+def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callable] = None,
+                    windows_partition: str = "C:", shadow_root: Optional[str] = None) -> Dict[str, any]:
     """Main entry point for SRUM parsing called by Crow Eye application.
     
     This function:
@@ -3253,7 +3433,12 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         case_artifacts_dir (str): Path to Target_Artifacts folder
         progress_callback (callable, optional): Callback for progress updates
         windows_partition (str, optional): Windows partition letter (e.g., "C:", "D:"). Defaults to "C:".
-    
+        shadow_root (str, optional): the root of a shadow copy of that partition
+            the caller already holds (its device path, as the shadow copy API
+            returns it for HarddiskVolumeShadowCopyN).
+            SRUDB.dat and its logs are read from it first; the result's
+            ``acquired_from`` says which was used ('shadow_copy' or 'live').
+
     Returns:
         dict: Dictionary with parsing results
             Keys: 'success', 'statistics', 'errors', 'warnings', 'output_db'
@@ -3301,7 +3486,8 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         # Copy SRUDB.dat to temporary location (file is locked by Windows)
         logger.info("Copying SRUDB.dat to temporary location (file is locked by Windows)")
         try:
-            temp_srudb_path = parser.copy_srum_database(srudb_path, windows_partition)
+            temp_srudb_path = parser.copy_srum_database(srudb_path, windows_partition,
+                                                        shadow_root=shadow_root)
             logger.info(f"Successfully copied SRUDB.dat to: {temp_srudb_path}")
         except SRUMFileAccessError as copy_error:
             error_msg = f"Failed to copy SRUDB.dat: {str(copy_error)}"
@@ -3380,6 +3566,12 @@ def parse_srum_data(case_artifacts_dir: str, progress_callback: Optional[Callabl
         result['inserted'] = _tot['inserted']
         result['duplicates'] = _tot['duplicates']
         result['tables'] = parser.tally.tables
+        # How the database was opened: 'clean', 'recovered' or 'repaired'. A
+        # repaired copy (esentutl /p) may have lost pages, so Crow-Eye Sentinel
+        # keeps its previous mark for such a run (P5).
+        result['db_state'] = parser.recovery_info.get('db_state', 'clean')
+        result['repaired'] = result['db_state'] == 'repaired'
+        result['acquired_from'] = parser.recovery_info.get('acquired_from', 'live')
         logger.info("[SRUM] %d rows read: %d new, %d already in the database",
                     _tot['parsed'], _tot['inserted'], _tot['duplicates'])
 

@@ -2,6 +2,7 @@ import logo from '../assets/crow-eye-logo.png'
 
 const VIEWS = [
   { id: 'storyline', label: 'Activity Story' },
+  { id: 'drivers', label: 'Who drove it' },
   { id: 'map', label: 'Activity Map' },
   { id: 'signins', label: 'Sign-ins' },
   { id: 'coverage', label: 'What we can see' },

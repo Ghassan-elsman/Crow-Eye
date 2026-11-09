@@ -1,5 +1,7 @@
 import { memo } from 'react';
-import { formatTime, formatBytes, formatDuration, formatCycleTime } from '../utils/formatters';
+import { formatTime, formatBytes, formatDuration, formatCycleTime, cleanForensicDate } from '../utils/formatters';
+import FlowBadge from './FlowBadge';
+import { buildAiIndex, aiHitsFor, linksOfStep, AI_COLOR } from '../utils/aiLinks';
 
 const USN_REASONS = {
   0x00000001: 'Data Extend',
@@ -117,6 +119,42 @@ function DetailPanel({ state, data, links, callBridge }) {
              <Field label="Duration" val={formatDuration(duration)} />
            )}
            
+           {/* An AI agent step: who took it, what it was, where, in which
+               session. "Open Original" reads the whole row, `text` included. */}
+           {selectedEvent.type === 'ai_agent' && (
+             <>
+               <div className="detail-panel__section">AI Agent Step</div>
+               <Field label="Agent" val={selectedEvent.agent ? `${selectedEvent.agent}${selectedEvent.is_sidechain ? ' (sub-agent)' : ''}` : null} />
+               <Field label="Step" val={selectedEvent.ai_what || selectedEvent.kind} />
+               <Field label="Session" val={selectedEvent.session_name} />
+               <Field label="Order in the session" val={selectedEvent.seq ? `step ${selectedEvent.seq}${selectedEvent.turn ? `, answering instruction ${selectedEvent.turn}` : ''}` : null} />
+               <Field label="Ordered by" val={selectedEvent.kind !== 'prompt' ? selectedEvent.ordered_by : null} />
+               <Field label="The instruction" val={selectedEvent.kind !== 'prompt' ? selectedEvent.instruction : null} />
+               <Field label="Command" val={selectedEvent.command} />
+               <Field label="Command length" val={selectedEvent.command_length > 1000 ? `${selectedEvent.command_length} characters - the first 1000 are shown; Open Original reads it whole` : null} />
+               <Field label="File / Target" val={selectedEvent.kind !== 'command' ? selectedEvent.target : null} />
+               <Field label="Description" val={selectedEvent.kind === 'command' ? selectedEvent.target : null} />
+               <Field label="Prompt (opening)" val={selectedEvent.prompt_preview} />
+               <Field label="Sent by" val={selectedEvent.kind === 'prompt' ? selectedEvent.origin : null} />
+               <Field label="Programs started" val={selectedEvent.program} />
+               <Field label="Allowed" val={selectedEvent.approval} />
+               <Field label="Exit code" val={selectedEvent.exit_code !== null && selectedEvent.exit_code !== undefined ? String(selectedEvent.exit_code) : null} />
+               <Field label="Took" val={selectedEvent.duration_ms ? (selectedEvent.duration_ms >= 1000 ? `${(selectedEvent.duration_ms / 1000).toFixed(1)} s` : `${selectedEvent.duration_ms} ms`) : null} />
+               <Field label="Working Folder" val={selectedEvent.cwd} />
+               <Field label="User" val={selectedEvent.user_name} />
+               <Field label="Session id" val={selectedEvent.session_id} />
+               <Field label="Tool" val={selectedEvent.tool} />
+               <Field label="Status" val={selectedEvent.status === 'rejected' ? 'rejected - the call was refused and did not run' : selectedEvent.status} />
+               {selectedEvent.output ? (
+                 <div className="detail-panel__field">
+                   <div className="detail-panel__label">Output{selectedEvent.output_length > 600 ? ' (opening; Open Original reads the whole result)' : ''}</div>
+                   <pre className="detail-panel__output">{selectedEvent.output}</pre>
+                 </div>
+               ) : null}
+               <Field label="Source" val={selectedEvent.db && selectedEvent.table ? `${selectedEvent.db} / ${selectedEvent.table} #${selectedEvent.row_id}` : null} />
+             </>
+           )}
+
            <div className="detail-panel__section">Identification</div>
            <Field label="App / File" val={selectedEvent.app_name || selectedEvent.fn_filename || selectedEvent.fileName || selectedEvent.file_name || selectedEvent.filename || selectedEvent.Source_Name || selectedEvent.name || selectedEvent.executable_name} />
            <Field label="Path" val={selectedEvent.program_path || selectedEvent.network_name || selectedEvent.app_path || selectedEvent.reconstructed_path || selectedEvent.Source_Path || selectedEvent.lower_case_long_path || selectedEvent.path || selectedEvent.target_path || selectedEvent.file_path} />
@@ -132,8 +170,15 @@ function DetailPanel({ state, data, links, callBridge }) {
            <Field label="Source" val={selectedEvent.source_db || selectedEvent.source_table} />
            <Field label="File Size" val={(selectedEvent.FileSize || selectedEvent.File_Size || selectedEvent.file_size) ? formatBytes(selectedEvent.FileSize || selectedEvent.File_Size || selectedEvent.file_size) : null} />
            <Field label="Run Count" val={selectedEvent.run_count || selectedEvent.execution_count || selectedEvent.ExecutionCount} />
-           <Field label="Bytes Sent" val={selectedEvent.bytes_sent ? formatBytes(selectedEvent.bytes_sent) : null} />
-           <Field label="Bytes Recv" val={selectedEvent.bytes_received ? formatBytes(selectedEvent.bytes_received) : null} />
+           {(Number(selectedEvent.bytes_sent) > 0 || Number(selectedEvent.bytes_received) > 0) && (
+             <div className="detail-panel__field">
+               <div className="detail-panel__label">Network</div>
+               <div className="detail-panel__value detail-panel__flow flow-host">
+                 {Number(selectedEvent.bytes_sent) > 0 && <FlowBadge dir="up" value={formatBytes(Number(selectedEvent.bytes_sent))} />}
+                 {Number(selectedEvent.bytes_received) > 0 && <FlowBadge dir="down" value={formatBytes(Number(selectedEvent.bytes_received))} />}
+               </div>
+             </div>
+           )}
            <Field label="CPU Cycles" val={selectedEvent.cpu_cycles ? formatCycleTime(selectedEvent.cpu_cycles) : null} />
            <Field label="Face Time" val={selectedEvent.face_time ? formatDuration(selectedEvent.face_time) : null} />
            <Field label="Background Time" val={selectedEvent.background_time ? formatDuration(selectedEvent.background_time) : (selectedEvent.background_cycle_time ? formatDuration(selectedEvent.background_cycle_time) : null)} />
@@ -144,6 +189,8 @@ function DetailPanel({ state, data, links, callBridge }) {
            <Field label="IP Address" val={selectedEvent.ip_address} />
            <Field label="MAC Address" val={selectedEvent.mac_address} />
            <Field label="GUID / SID" val={selectedEvent.guid || selectedEvent.sid} />
+
+           <AiLinksSection event={selectedEvent} aiLinks={data?.ai_links} callBridge={callBridge} />
 
            {relatedEvents.length > 0 && (
              <>
@@ -176,6 +223,48 @@ function DetailPanel({ state, data, links, callBridge }) {
         </div>
       )}
     </div>
+  );
+}
+
+// An AI step and the Windows record of the same act, both openable in their
+// own tab. On a Windows mark: which AI agent's step this was. On an AI step:
+// what Windows recorded of it. Each line names the rule that matched them.
+function AiLinksSection({ event, aiLinks, callBridge }) {
+  if (!event || !aiLinks || aiLinks.length === 0) return null;
+  const isStep = event.type === 'ai_agent';
+  const found = isStep ? linksOfStep(event, aiLinks) : (aiHitsFor(event, buildAiIndex(aiLinks)) || []);
+  if (found.length === 0) return null;
+  const show = (db, table, rid) => callBridge && callBridge('showInTable', db, table, String(rid));
+  const btn = { padding: '1px 6px', fontSize: 9, marginTop: 4, marginRight: 6 };
+  return (
+    <>
+      <div className="detail-panel__section" style={{ color: AI_COLOR }}>
+        {isStep ? `What Windows recorded of this step (${found.length})` : 'Done by an AI agent'}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+        {found.slice(0, 40).map((l, i) => (
+          <div key={i} className="detail-panel__ai-link"
+            style={{ border: `1px solid ${AI_COLOR}55`, borderRadius: 4, padding: '6px 8px', background: 'var(--bg-elevated)' }}>
+            <div style={{ fontSize: 10, color: AI_COLOR, fontWeight: 700, textTransform: 'uppercase' }}>
+              {isStep ? l.source : `${l.ai_agent} - ${l.ai_kind}`}
+            </div>
+            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', wordBreak: 'break-all', color: 'var(--text-primary)' }}>
+              {isStep ? `${l.name}${l.detail ? '  (' + l.detail + ')' : ''}` : (l.ai_text || '')}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+              {isStep ? formatTime(cleanForensicDate(l.ts), 'short') : `step at ${formatTime(cleanForensicDate(l.ai_ts), 'short')}`}
+              {l.delta_s !== null && l.delta_s !== undefined ? `  ·  ${l.delta_s > 0 ? '+' : ''}${l.delta_s} s` : ''}
+            </div>
+            <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: 2 }}>{l.rule_text}</div>
+            <div>
+              <button className="modal__btn" style={btn} onClick={() => show('ai_agents.db', 'ai_agent_steps', l.ai_rowid)}>AI step in table</button>
+              <button className="modal__btn" style={btn} onClick={() => show(l.db, l.table, l.rowid)}>{l.source} in table</button>
+            </div>
+          </div>
+        ))}
+        {found.length > 40 && <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{found.length - 40} more</div>}
+      </div>
+    </>
   );
 }
 

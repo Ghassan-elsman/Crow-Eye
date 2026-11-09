@@ -27,17 +27,28 @@ from .feather_mappings import get_feather_mappings
 
 
 def source_fingerprint(path) -> str:
-    """Size and modification time of a source database and its WAL file: what
-    changes when a parser writes to it. Recorded in feather_metadata so a
-    feather built from an older parse is known to be stale."""
-    parts = []
-    for p in (Path(path), Path(str(path) + '-wal')):
-        try:
-            st = p.stat()
-            parts.append('%d:%d' % (st.st_size, st.st_mtime_ns))
-        except OSError:
-            parts.append('-')
-    return '/'.join(parts)
+    """The SIZE of a source database. A parser only ever ADDS rows
+    (dedupe_insert is append-only), so a real re-parse grows the file, while
+    merely opening and reading the case never changes its size. Recorded in
+    feather_metadata and compared through _fingerprint_size, so the exact format
+    of an older recorded value does not matter - only the size does.
+
+    mtime and the -wal file are excluded by design: a loader opens a source DB
+    read-write and its connection checkpoints the WAL on close, which bumps both
+    even on a pure read - and keying on them rebuilt the 280 MB MFT feather and
+    the ~1-min UBA analysis on every open with no new data."""
+    try:
+        return '%d' % Path(path).stat().st_size
+    except OSError:
+        return '-'
+
+
+def _fingerprint_size(fp) -> str:
+    """The size component of a recorded fingerprint, in any version it was
+    written: 'SIZE', 'SIZE:counter', or the legacy 'SIZE:mtime_ns/-wal'. So a
+    feather recorded by an older build is not rebuilt just because the format
+    changed - only a real size change (a re-parse) rebuilds it."""
+    return str(fp or '').split(':', 1)[0].split('/', 1)[0]
 
 
 def stale_feathers(feathers_dir) -> List[str]:
@@ -60,15 +71,12 @@ def stale_feathers(feathers_dir) -> List[str]:
             continue
         recorded = meta.get('source_fingerprint')
         source = meta.get('source_database')
-        if source and Path(source).parent.name == 'UBA':
-            evidence = Path(source).parent.parent / 'Target_Artifacts'
-            try:
-                built = db.stat().st_mtime
-                if any(p.stat().st_mtime > built for p in evidence.glob('*.db')):
-                    out.append(db.stem)
-                    continue
-            except OSError:
-                pass
+        # The UBA feather's source is the UBA analysis store, which the UBA
+        # engine rebuilds only when its own sources change (persisted_store's
+        # size-based stamp), so the generic size fingerprint below covers it.
+        # The old check here compared the raw mtime of EVERY Target_Artifacts
+        # database against the feather, and merely opening the case bumped those
+        # mtimes - so the UBA feather rebuilt on every open with no new data.
         if not recorded or not source:
             out.append(db.stem)
         elif recorded == 'missing':
@@ -76,8 +84,10 @@ def stale_feathers(feathers_dir) -> List[str]:
             # parse has produced it (never rebuilt on every load).
             if Path(source).exists():
                 out.append(db.stem)
-        elif Path(source).exists() and source_fingerprint(source) != recorded:
-            # A source that is gone leaves the feather as built: rebuilding it
+        elif Path(source).exists() and source_fingerprint(source) != _fingerprint_size(recorded):
+            # Compared by SIZE only (and format-tolerant for older recorded
+            # values): a re-parse grows the source, a mere read does not. A
+            # source that is gone leaves the feather as built - rebuilding it
             # would throw its rows away.
             out.append(db.stem)
     return out

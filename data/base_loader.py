@@ -4,7 +4,58 @@ import os
 from typing import Any, Dict, List, Optional, Tuple, Union, Iterator
 from pathlib import Path
 import json
+import re
+import functools
 from dynamic_mapping.enrichment.enrichment_mixin import EnrichmentMixin
+
+
+@functools.lru_cache(maxsize=64)
+def _compiled(pattern):
+    return re.compile(pattern)
+
+
+def _sqlite_regexp(pattern, value):
+    """SQLite's `value REGEXP pattern`, which calls regexp(pattern, value).
+    SQLite has no REGEXP of its own: without this function the operator is
+    an error, and the search's except turns that into zero hits."""
+    if value is None:
+        return 0
+    try:
+        return 1 if _compiled(pattern).search(str(value)) else 0
+    except re.error:
+        return 0
+
+
+def regex_pattern(term, case_sensitive, exact_match):
+    """The pattern REGEXP and value_matcher run: case folded with (?i)
+    unless case-sensitive, and the whole value when Exact Match is on."""
+    pattern = r"\A(?:%s)\Z" % term if exact_match else term
+    return pattern if case_sensitive else "(?i)" + pattern
+
+
+def escape_glob(term):
+    """A literal term inside GLOB: its own wildcards * ? [ each as a
+    one-character class. LIKE's escaping (a backslash before % and _) means
+    nothing to GLOB, so a case-sensitive search for a term holding a
+    backslash, _, % or [ looked for the backslashes and found nothing."""
+    return re.sub(r"[\[*?]", lambda m: "[%s]" % m.group(0), term)
+
+
+def value_matcher(term, case_sensitive=False, exact_match=False, use_regex=False):
+    """fn(value) -> bool, the same test search_table writes in SQL, for a
+    caller that has the rows already (the time-filtered search)."""
+    if use_regex:
+        rx = _compiled(regex_pattern(term, case_sensitive, exact_match))
+        return lambda v: v is not None and rx.search(str(v)) is not None
+    if exact_match:
+        if case_sensitive:
+            return lambda v: v is not None and str(v) == term
+        low = term.lower()
+        return lambda v: v is not None and str(v).lower() == low
+    if case_sensitive:
+        return lambda v: v is not None and term in str(v)
+    low = term.lower()
+    return lambda v: v is not None and low in str(v).lower()
 
 class BaseDataLoader(EnrichmentMixin):
     """
@@ -91,6 +142,27 @@ class BaseDataLoader(EnrichmentMixin):
             self.logger.error(f"Error connecting to database {self.db_path}: {str(e)}")
             return False
             
+    def interrupt(self):
+        """Stop whatever this connection is running, from any thread, on
+        purpose: Database Search stops a slice of a table once the slices
+        before it hold the table's cap (unified_search_engine). Every query
+        then fails with "interrupted"; the search path logs that at debug,
+        since nothing went wrong (_log_error)."""
+        self._interrupted = True
+        conn = self.connection
+        if conn is not None:
+            try:
+                conn.interrupt()
+            except Exception:
+                pass
+
+    def _log_error(self, message):
+        """logger.error, or logger.debug once interrupt() stopped this loader."""
+        if getattr(self, "_interrupted", False):
+            self.logger.debug("(interrupted) %s", message)
+        else:
+            self.logger.error(message)
+
     def disconnect(self):
         """Close the database connection if it's open."""
         if self.connection:
@@ -203,7 +275,7 @@ class BaseDataLoader(EnrichmentMixin):
                 except Exception:
                     pass
         except sqlite3.Error as e:
-            self.logger.error(f"Error executing query: {str(e)}\nQuery: {query}")
+            self._log_error(f"Error executing query: {str(e)}\nQuery: {query}")
             return []
             
     def get_table_names(self) -> List[str]:
@@ -219,6 +291,26 @@ class BaseDataLoader(EnrichmentMixin):
             self.logger.error(f"Error getting table names: {str(e)}")
             return []
             
+    def _rowid_select(self, table_name: str) -> str:
+        """`rowid as _rowid_`, or `NULL as _rowid_` for a WITHOUT ROWID table.
+
+        A WITHOUT ROWID table has no rowid to select, and asking for one made
+        every read of it an error ("no such column: rowid") that searches
+        reported as no matches. Its rows are still read; a row found in one
+        is then shown by its values (show_row's QTableWidget path), never by
+        a rowid it does not have."""
+        cache = self.__dict__.setdefault("_no_rowid", {})
+        if table_name not in cache:
+            try:
+                row = self.connection.execute(
+                    "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                    (table_name,)).fetchone()
+                cache[table_name] = bool(row and row[0] and re.search(
+                    r"\)\s*WITHOUT\s+ROWID\b", row[0], re.IGNORECASE))
+            except sqlite3.Error:
+                cache[table_name] = False
+        return "NULL as _rowid_" if cache[table_name] else "rowid as _rowid_"
+
     def table_exists(self, table_name: str) -> bool:
         """Check if a table exists in the database."""
         if not self.connection:
@@ -232,7 +324,7 @@ class BaseDataLoader(EnrichmentMixin):
             )
             return cursor.fetchone() is not None
         except sqlite3.Error as e:
-            self.logger.error(f"Error checking if table exists: {str(e)}")
+            self._log_error(f"Error checking if table exists: {str(e)}")
             return False
 
     def iterate_query(self, query: str, params: Tuple = (), page_size: int = 5000) -> Iterator[Dict[str, Any]]:
@@ -347,7 +439,7 @@ class BaseDataLoader(EnrichmentMixin):
             cursor.execute(f"PRAGMA table_info({table_name})")
             return [row[1] for row in cursor.fetchall()]  # name is at index 1
         except sqlite3.Error as e:
-            self.logger.error(f"Error getting columns for table '{table_name}': {e}")
+            self._log_error(f"Error getting columns for table '{table_name}': {e}")
             return []
 
     def index_exists(self, index_name: str) -> bool:
@@ -503,7 +595,7 @@ class BaseDataLoader(EnrichmentMixin):
             row = cursor.fetchone()
             return int(row[0]) if row and row[0] is not None else 0
         except sqlite3.Error as e:
-            self.logger.error(f"Error executing count query: {e}\nQuery: {query}")
+            self._log_error(f"Error executing count query: {e}\nQuery: {query}")
             return 0
 
     def attach_database(self, alias: str, db_path: Union[str, Path]) -> bool:
@@ -569,10 +661,27 @@ class BaseDataLoader(EnrichmentMixin):
         columns: Optional[List[str]] = None,
         where: Optional[str] = None,
         where_params: Tuple = (),
-        order_by: Optional[str] = None
+        order_by: Optional[str] = None,
+        count_only_past_page: bool = False,
+        rowid_range: Optional[Tuple[int, int]] = None,
+        exact_total: bool = True
     ) -> Dict[str, Any]:
         """
         Fetch paginated results from a table.
+
+        `rowid_range` (lo, hi): only rows whose rowid is in it, inclusive -
+        one slice of a large table, so Database Search reads the slices of
+        one table on several threads (unified_search_engine). `exact_total`
+        False (with count_only_past_page): when the page overflows, the
+        total is reported as page_size + 1, a lower bound, instead of a
+        second full scan to count it; a caller that only asks "any match?"
+        never reads more than that.
+
+        `count_only_past_page` (a search's first page): skip the separate
+        COUNT(*) and read one row more than the page; the total is then
+        counted only when that extra row exists. A search WHERE is an OR of
+        LIKEs over every column, so the count was a second full scan of the
+        table, half of every table's search time.
         
         Args:
             table_name: Name of the table to query
@@ -611,12 +720,21 @@ class BaseDataLoader(EnrichmentMixin):
             
         try:
             # Build count query
+            range_sql = ""
+            if rowid_range is not None and where:
+                # The search WHERE is an OR of LIKEs: unbracketed, the slice
+                # would bind to its last LIKE alone.
+                where = "(%s)" % where
             count_query = f"SELECT COUNT(*) FROM {table_name}"
             if where:
                 count_query += f" WHERE {where}"
+            if rowid_range is not None:
+                range_sql = "BETWEEN %d AND %d" % (int(rowid_range[0]), int(rowid_range[1]))
+                count_query += (" AND " if where else " WHERE ") + "rowid " + range_sql
             
-            # Get total count
-            total_count = self.count_query(count_query, where_params)
+            lazy_total = bool(count_only_past_page and page == 1)
+            # Get total count (later, and only if needed, when lazy)
+            total_count = 0 if lazy_total else self.count_query(count_query, where_params)
             
             # Calculate pagination metadata
             total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
@@ -641,7 +759,7 @@ class BaseDataLoader(EnrichmentMixin):
                 self.attach_intelligence_db(cursor)
                 
                 # Use the magic query from EnrichmentMixin
-                base_select = f'SELECT rowid as _rowid_, {select_cols} FROM "{table_name}"'
+                base_select = f'SELECT {self._rowid_select(table_name)}, {select_cols} FROM "{table_name}"'
                 data_query = self.get_enrichment_query(base_select, table_name, enrichment_col)
                 
                 # Diagnostic: Let the user know we're looking
@@ -658,37 +776,55 @@ class BaseDataLoader(EnrichmentMixin):
                     search_cols = columns if columns else self.get_columns(table_name)
                     if search_cols:
                         for col in search_cols:
+                            # A column may arrive quoted ("exists" is a
+                            # keyword) or bare; either way it leaves quoted.
                             prefixed_where = re.sub(
-                                rf'\b{re.escape(col)}\b',
-                                f'"{alias}".{col}',
+                                rf'"?\b{re.escape(col)}\b"?',
+                                f'"{alias}"."{col}"',
                                 prefixed_where
                             )
                     data_query += f" WHERE {prefixed_where}"
+                if range_sql:
+                    # The enriched query joins Intel.Mapping: the slice is
+                    # the artifact table's own rowid, named by its alias.
+                    data_query += (" AND " if where else " WHERE ") + f'"{alias}".rowid ' + range_sql
                 if order_by:
                     prefixed_order = order_by
                     search_cols = columns if columns else self.get_columns(table_name)
                     if search_cols:
                         for col in search_cols:
                             prefixed_order = re.sub(
-                                rf'\b{re.escape(col)}\b',
-                                f'"{alias}".{col}',
+                                rf'"?\b{re.escape(col)}\b"?',
+                                f'"{alias}"."{col}"',
                                 prefixed_order
                             )
                     data_query += f" ORDER BY {prefixed_order}"
             else:
                 # Default data retrieval query
-                data_query = f'SELECT rowid as _rowid_, {select_cols} FROM "{table_name}"'
+                data_query = f'SELECT {self._rowid_select(table_name)}, {select_cols} FROM "{table_name}"'
                 if where:
                     data_query += f" WHERE {where}"
+                if range_sql:
+                    data_query += (" AND " if where else " WHERE ") + "rowid " + range_sql
                 if order_by:
                     data_query += f" ORDER BY {order_by}"
             
             # Calculate offset
             offset = (page - 1) * page_size
-            data_query += f" LIMIT {page_size} OFFSET {offset}"
+            data_query += f" LIMIT {page_size + 1 if lazy_total else page_size} OFFSET {offset}"
             
             # Execute data query
             data = self.execute_query(data_query, where_params)
+            if lazy_total:
+                if len(data) > page_size:
+                    data = data[:page_size]
+                    total_count = (self.count_query(count_query, where_params)
+                                   if exact_total else page_size + 1)
+                else:
+                    total_count = len(data)
+                total_pages = (total_count + page_size - 1) // page_size if total_count > 0 else 0
+                has_next = page < total_pages
+                has_prev = page > 1
             
             # --- Verification Logging: Report exactly what was enriched ---
             if data:
@@ -711,7 +847,7 @@ class BaseDataLoader(EnrichmentMixin):
             }
             
         except sqlite3.Error as e:
-            self.logger.error(f"Error fetching paginated data from '{table_name}': {e}")
+            self._log_error(f"Error fetching paginated data from '{table_name}': {e}")
             return {
                 'data': [],
                 'total_count': 0,
@@ -810,6 +946,38 @@ class BaseDataLoader(EnrichmentMixin):
         pattern = pattern.replace(']', '\\]')
         return pattern
 
+    def match_where(self, columns, search_term, case_sensitive=False,
+                    exact_match=False, use_regex=False):
+        """(where, params): any of `columns` matching the term, the one
+        definition both searches use. Columns are quoted here: AmCache alone
+        has columns named `exists`, `value`, `class` and `state`, and one
+        unquoted keyword made the whole table's search a syntax error -
+        silently, zero hits."""
+        cols = ['"%s"' % str(c).replace('"', '""') for c in columns]
+        if use_regex:
+            if self.connection is not None:
+                self.connection.create_function("REGEXP", 2, _sqlite_regexp,
+                                                deterministic=True)
+            pattern = regex_pattern(search_term, case_sensitive, exact_match)
+            return (" OR ".join("%s REGEXP ?" % c for c in cols),
+                    tuple([pattern] * len(cols)))
+        if exact_match:
+            # NOCASE folds ASCII exactly as LOWER() does, without a function
+            # call on every value of every row.
+            how = "COLLATE BINARY" if case_sensitive else "COLLATE NOCASE"
+            return (" OR ".join("%s = ? %s" % (c, how) for c in cols),
+                    tuple([search_term] * len(cols)))
+        if case_sensitive:
+            value = "*%s*" % escape_glob(search_term)
+            return (" OR ".join("%s GLOB ?" % c for c in cols),
+                    tuple([value] * len(cols)))
+        # SQLite's LIKE already ignores ASCII case, which is all LOWER()
+        # changed: the same rows, without two function calls per value
+        # (3.6 s -> 1.5 s over 690,000 USN rows).
+        value = "%%%s%%" % self._escape_like_pattern(search_term)
+        return (" OR ".join("%s LIKE ? ESCAPE '\\'" % c for c in cols),
+                tuple([value] * len(cols)))
+
     def search_table(
         self,
         table_name: str,
@@ -818,10 +986,17 @@ class BaseDataLoader(EnrichmentMixin):
         case_sensitive: bool = False,
         exact_match: bool = False,
         page: int = 1,
-        page_size: int = 1000
+        page_size: int = 1000,
+        rowid_range: Optional[Tuple[int, int]] = None,
+        exact_total: bool = True,
+        use_regex: bool = False
     ) -> Dict[str, Any]:
         """
         Search within a table and return paginated results.
+
+        `rowid_range` and `exact_total` as fetch_paginated takes them: one
+        slice of the table, and a total that may be a lower bound once the
+        page overflows.
         
         Args:
             table_name: Name of the table to search
@@ -860,7 +1035,7 @@ class BaseDataLoader(EnrichmentMixin):
         
         # Check if table exists
         if not self.table_exists(table_name):
-            self.logger.error(f"Table '{table_name}' does not exist")
+            self._log_error(f"Table '{table_name}' does not exist")
             return {
                 'data': [],
                 'total_count': 0,
@@ -879,7 +1054,7 @@ class BaseDataLoader(EnrichmentMixin):
                 columns = self.get_columns(table_name)
             
             if not columns:
-                self.logger.error(f"No columns found for table '{table_name}'")
+                self._log_error(f"No columns found for table '{table_name}'")
                 return {
                     'data': [],
                     'total_count': 0,
@@ -892,28 +1067,8 @@ class BaseDataLoader(EnrichmentMixin):
                     'table_name': table_name
                 }
             
-            # Escape the search term for LIKE queries
-            escaped_term = self._escape_like_pattern(search_term)
-            
-            # Build WHERE clause for search
-            if exact_match:
-                # Exact match: column = 'term'
-                if case_sensitive:
-                    where_conditions = [f"{col} = ? COLLATE BINARY" for col in columns]
-                else:
-                    where_conditions = [f"LOWER({col}) = LOWER(?)" for col in columns]
-                search_params = tuple([search_term] * len(columns))
-            else:
-                # Partial match with LIKE
-                if case_sensitive:
-                    # Use GLOB for case-sensitive pattern matching
-                    where_conditions = [f"{col} GLOB ?" for col in columns]
-                    search_params = tuple([f"*{escaped_term}*" for _ in columns])
-                else:
-                    where_conditions = [f"LOWER({col}) LIKE LOWER(?) ESCAPE '\\'" for col in columns]
-                    search_params = tuple([f"%{escaped_term}%" for _ in columns])
-            
-            where_clause = " OR ".join(where_conditions)
+            where_clause, search_params = self.match_where(
+                columns, search_term, case_sensitive, exact_match, use_regex)
             
             # Use fetch_paginated with the search WHERE clause
             result = self.fetch_paginated(
@@ -921,7 +1076,10 @@ class BaseDataLoader(EnrichmentMixin):
                 page=page,
                 page_size=page_size,
                 where=where_clause,
-                where_params=search_params
+                where_params=search_params,
+                count_only_past_page=True,
+                rowid_range=rowid_range,
+                exact_total=exact_total
             )
             
             # Add search metadata
@@ -931,7 +1089,7 @@ class BaseDataLoader(EnrichmentMixin):
             return result
             
         except sqlite3.Error as e:
-            self.logger.error(f"Error searching table '{table_name}': {e}")
+            self._log_error(f"Error searching table '{table_name}': {e}")
             return {
                 'data': [],
                 'total_count': 0,

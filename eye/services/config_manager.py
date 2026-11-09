@@ -39,6 +39,70 @@ def _default_config_dir() -> Path:
     return Path("configs")
 
 
+# ---- The investigator's own settings -----------------------------------------
+# eye_config.json and the model probe cache used to live in the folder above, which
+# in the EXE is `_internal\configs`: an MSI upgrade removes the old product's files,
+# so every upgrade sent the investigator back to first-run setup (2026-11-03). They
+# now live in Crow-Eye's per-user folder (%APPDATA%\CrowEye\config, the one that
+# already holds the case history), which no install or upgrade touches. Shipped
+# files (schema, presets, llm_config.json, knowledge base) stay with the app.
+
+USER_CONFIG_NAME = "eye_config.json"
+_REQUIRED_KEYS = ("integration_type", "backend", "model_name")
+
+
+def user_config_dir() -> Path:
+    """Crow-Eye's per-user settings folder (created on demand)."""
+    from config import case_history_manager
+    d = Path(case_history_manager.default_config_dir())
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return d
+
+
+def _legacy_config_candidates():
+    """Where earlier versions kept eye_config.json, best first."""
+    out = []
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            out.append(Path(meipass) / "configs" / USER_CONFIG_NAME)
+    out.append(Path(__file__).resolve().parents[2] / "configs" / USER_CONFIG_NAME)
+    if getattr(sys, "frozen", False):
+        # an old ContextWindowConfigManager wrote a partial copy beside the exe: last
+        out.append(Path(os.path.dirname(sys.executable)) / "configs" / USER_CONFIG_NAME)
+    return out
+
+
+def _usable_legacy(path: Path) -> bool:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and all(data.get(k) for k in _REQUIRED_KEYS)
+
+
+def user_config_path() -> Path:
+    """The investigator's eye_config.json. The first time it is missing, the setup
+    from the old location is copied over once (the old file is left as it was)."""
+    target = user_config_dir() / USER_CONFIG_NAME
+    if not target.exists():
+        for old in _legacy_config_candidates():
+            try:
+                if old.resolve() == target.resolve() or not old.is_file() or not _usable_legacy(old):
+                    continue
+                import shutil
+                shutil.copy2(old, target)
+                logger.info("Eye settings moved to %s (copied from %s)", target, old)
+                break
+            except OSError as e:
+                logger.warning("Could not copy Eye settings from %s: %s", old, e)
+    return target
+
+
 class ConfigManager:
     """
     Manages EYE configuration with JSON schema validation.
@@ -59,7 +123,9 @@ class ConfigManager:
                         directory still finds the real configuration.
         """
         self.config_dir = Path(config_dir) if config_dir else _default_config_dir()
-        self.config_path = self.config_dir / "eye_config.json"
+        # A folder given explicitly (tests, tools) holds both files; otherwise the
+        # settings are the investigator's own and the schema ships with the app.
+        self.config_path = (self.config_dir / "eye_config.json") if config_dir else user_config_path()
         self.schema_path = self.config_dir / "eye_config_schema.json"
         self._schema: Optional[Dict[str, Any]] = None
     

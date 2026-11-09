@@ -35,6 +35,8 @@ DB_CANDIDATES: Dict[str, List[str]] = {
     # OUTPUT_DB_NAME beside case_artifacts_dir), the same place the timeline
     # module resolves it from.
     "browser": ["browser_analysis.db"],
+    # AI_Agent_Claw.py: Claude Code, Gemini CLI and Codex session records.
+    "ai_agents": ["ai_agents.db"],
 }
 
 # Tables whose row counts indicate "there is parsed data" for getStatus().
@@ -60,6 +62,7 @@ KEY_TABLES: Dict[str, List[str]] = {
     "browser": ["browser_history", "browser_downloads", "browser_cookies",
                 "browser_extensions", "browser_sessions",
                 "browser_gecko_history"],
+    "ai_agents": ["ai_agent_sessions", "ai_agent_steps"],
 }
 
 

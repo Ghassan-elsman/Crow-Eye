@@ -69,6 +69,14 @@ How to weigh the rules:
   per volume (`_volume`) when widespread. Fresh rows on a delta parse are the interesting ones.
 - D3, D9, D10 BAAD and fixup mismatches, D29 on an image: high. D29 on a live volume is low (the
   on-disk bitmap can lag its record by minutes).
+- D2 `semantic_changed_lsn_same` (high): a record's content changed since the last parse while its
+  LSN did not - written round NTFS (offline, or with raw disk access). Needs a previous parse.
+- D4 `usn_journal_deleted` / `usn_journal_recreated` (high): the USN journal the last parse saw is
+  gone, or was deleted and created again (a new journal ID) - every change in between is lost from it.
+- D6 (high), one row per event, never one per record: `volume_rollback` (the same journal's next USN
+  went back - a VM snapshot reverted, an image restored), `logfile_lsn_backwards` ($LogFile went back
+  while the journal did not - an offline mount reset the log), `records_lsn_backwards` (records hold
+  an older LSN with the same sequence number). `evidence` lists how many records went back.
 - Absence of findings is not a clean result when a check was off: check the custody ledger for
   "integrity check disabled".
 

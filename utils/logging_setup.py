@@ -43,7 +43,8 @@ from logging.handlers import RotatingFileHandler
 # no `Artifacts_Collectors.` in front of it. Listed so parsers.log takes them
 # either way; test_case_logging checks the list against the folders.
 PARSER_MODULES = (
-    "A_CJL_LNK_Claw", "Browser_Claw", "Prefetch_claw", "Regclaw", "SRUM_Claw",
+    "A_CJL_LNK_Claw", "AI_Agent_Claw", "ai_agent_claude_extras", "ai_agent_more",
+    "ai_agent_paths", "ai_agent_programs", "Browser_Claw", "Prefetch_claw", "Regclaw", "SRUM_Claw",
     "WinLog_Claw", "amcacheparser", "browser_paths", "live_hive_access",
     "partition_analyzer", "recyclebin_claw", "registry_binary_parser",
     "registry_extra_keys", "registry_hive_cache", "registry_hive_walk", "registry_transaction_log",

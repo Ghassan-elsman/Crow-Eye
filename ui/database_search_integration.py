@@ -139,6 +139,10 @@ class DatabaseSearchIntegration:
             'security_logs': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SecurityLogs': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp', 'source']),
             'SecurityLogs_table': ('Event Logs', 'SecurityLogs_table', None, 'id', ['event_id', 'timestamp']),
+            # Device evidence channels (Log_Claw.db)
+            'partition_diagnostic': ('Event Logs', 'PartitionDiagnostic_table', None, 'id', ['SerialNumber', 'Model']),
+            'driver_frameworks_usermode': ('Event Logs', 'DriverFrameworks_table', None, 'id', ['InstanceId', 'SerialNumber']),
+            'setupapi_dev_log': ('Event Logs', 'SetupAPI_table', None, 'id', ['section_title', 'serial_number']),
             
             # USB tables
             'usb_devices': ('USB', 'USBDevices_table', None, 'id', ['device_id', 'serial_number', 'vendor_id']),
@@ -166,6 +170,13 @@ class DatabaseSearchIntegration:
             'srum_network_data_usage': ('SRUM', 'SRUM_network_data_table', None, 'id', ['app_name', 'app_path', 'timestamp', 'user_name']),
             'srum_energy_usage': ('SRUM', 'SRUM_energy_usage_table', None, 'id', ['app_name', 'app_path', 'timestamp', 'user_name']),
             'srum_app_timeline': ('SRUM', 'SRUM_app_timeline_table', None, 'id', ['app_name', 'app_path', 'hosted_services', 'timestamp', 'user_name']),
+
+            # AI agents - main_tab -> AI Agents -> sub-tabs (paged)
+            'ai_agent_sessions': ('AI Agents', 'AIAgents_sessions_table', None, 'id', ['title', 'project_path']),
+            'ai_agent_steps': ('AI Agents', 'AIAgents_steps_table', None, 'id', ['command', 'target', 'text']),
+            'ai_agent_file_versions': ('AI Agents', 'AIAgents_file_versions_table', None, 'id', ['file_path', 'sha1']),
+            'ai_agent_processes': ('AI Agents', 'AIAgents_processes_table', None, 'id', ['pid', 'session_id']),
+            'ai_agent_settings': ('AI Agents', 'AIAgents_settings_table', None, 'id', ['setting', 'value']),
         }
     
     def show_search_dialog(self, case_directory: str):
@@ -210,6 +221,9 @@ class DatabaseSearchIntegration:
                 self.logger.info("Creating database search dialog...")
                 self.search_dialog = DatabaseSearchDialog(parent_widget, self.unified_search_engine)
                 self.search_dialog.navigate_to_result.connect(self._on_navigate_to_result)
+                # Its result details offer "Show in table" through the main
+                # window's InvestigatorTools.show_row.
+                self.search_dialog.main_ui = self.parent
                 self.logger.info("Database search dialog created successfully")
 
             # Show the dialog

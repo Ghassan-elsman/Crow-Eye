@@ -271,6 +271,17 @@ class ArtifactTypeRegistry:
                     "anchor_priority": 11,
                     "category": "contextual_evidence",
                     "forensic_strength": "low"
+                },
+                {
+                    "id": "AIAgents",
+                    "name": "AI Agents",
+                    "description": "What AI agents recorded doing: commands and the programs "
+                                   "they started, files changed, pages driven",
+                    "default_weight": 0.25,
+                    "default_tier": 1,
+                    "anchor_priority": 18,
+                    "category": "primary_evidence",
+                    "forensic_strength": "high"
                 }
             ]
         }
@@ -320,6 +331,7 @@ class ArtifactTypeRegistry:
             ("Registry", "Registry", 0.1, 3, 10, "contextual_evidence", "medium"),
             ("Browser", "Browser History", 0.1, 3, 11, "contextual_evidence", "low"),
             ("Behaviour", "Behaviour (UBA)", 0.15, 2, 12, "supporting_evidence", "medium"),
+            ("AIAgents", "AI Agents", 0.25, 1, 18, "primary_evidence", "high"),
         ]
 
         self._artifacts.clear()

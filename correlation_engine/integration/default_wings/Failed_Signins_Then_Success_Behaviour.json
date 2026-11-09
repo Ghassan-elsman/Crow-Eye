@@ -3,6 +3,7 @@
   "wing_name": "Failed Sign-ins, Then a Successful One (Behaviour)",
   "wing_id": "default_behaviour_failed_then_success_001",
   "wing_category": "behaviour",
+  "host_scope": "same_host",
   "description": "At least five failed sign-ins for one account, then a successful interactive sign-in or unlock by the same account within 30 minutes. UBA rules: failed_logon (Security 4625) then interactive_logon / workstation_unlock. A failed sign-in names the account it tried; only accounts with a profile on this computer have a SID, so guesses at names that do not exist here are counted as not evaluated, not dropped. A person who forgot a changed password produces the same sequence.",
   "proves": "An account signed in successfully after a run of failed attempts",
   "author": "Crow-Eye Team",

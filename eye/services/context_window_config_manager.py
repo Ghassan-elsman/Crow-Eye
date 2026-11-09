@@ -22,13 +22,18 @@ class ContextWindowConfigManager:
             config_dir: Directory containing configuration files
         """
         self.config_dir = Path(config_dir)
-        if config_dir == "configs":
+        shipped = config_dir == "configs"
+        if shipped:
             # The same folder Eye's ConfigManager reads, whatever the working
             # folder: otherwise the EXE saved the context window to a second
             # eye_config.json beside CrowEye.exe that Eye never reads.
             from eye.services.config_manager import _default_config_dir
             self.config_dir = _default_config_dir()
-        self.eye_config_path = self.config_dir / "eye_config.json"
+        if shipped:
+            from eye.services.config_manager import user_config_path
+            self.eye_config_path = user_config_path()      # presets stay with the app
+        else:
+            self.eye_config_path = self.config_dir / "eye_config.json"
         self.presets_path = self.config_dir / "context_window_presets.json"
         self.presets = self._load_presets()
     

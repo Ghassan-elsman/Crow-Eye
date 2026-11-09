@@ -18,7 +18,8 @@ const SOURCE_LABELS = {
   'srum_app': 'App Resource Usage (SRUM)',
   'srum_net': 'Network Data Usage (SRUM)',
   'mft_usn': 'MFT/USN Journal Ops',
-  'browser': 'Browser Activity'
+  'browser': 'Browser Activity',
+  'ai_agents': 'AI Agent Steps'
 };
 
 /**
@@ -258,7 +259,7 @@ function HeatmapView({ globalBounds, data, state, setLoading, setLoadingMessage 
             {(() => {
               const src = hoveredDay.sources || {};
 
-              const forensicKeys = ['prefetch', 'lnk', 'amcache', 'shimcache', 'recyclebin', 'registry_others', 'browser'];
+              const forensicKeys = ['prefetch', 'lnk', 'amcache', 'shimcache', 'recyclebin', 'registry_others', 'browser', 'ai_agents'];
               const systemKeys = ['SystemLogs', 'ApplicationLogs', 'SecurityLogs', 'srum_app', 'srum_net', 'mft_usn'];
 
               const renderGroup = (title, keys, color) => {

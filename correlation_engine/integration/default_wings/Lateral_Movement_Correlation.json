@@ -3,6 +3,7 @@
   "wing_name": "Lateral Movement Correlation",
   "wing_id": "default_wing_lateral_001",
   "wing_category": "identity",
+  "host_scope": "same_host",
   "description": "Detects evidence that activity on this host originated from or propagated to another machine. Uses a tiered approach with Security log network/RDP logons (4624 type 3/10) and remote-tool prefetch hits weighted highest, followed by UNC-target artefacts (LNK to \\\\server\\share, TypedPaths, mstsc jumplists), and admin-share file drops in MFT/USN as supporting context.",
   "proves": "Activity originated from or propagated to a remote system",
   "author": "Crow-Eye Team",

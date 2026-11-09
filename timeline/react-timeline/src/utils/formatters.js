@@ -32,7 +32,10 @@
  */
 function toUTCDisplayString(isoOrDate, level = 'full') {
   if (!isoOrDate) return '—';
-  const d = new Date(isoOrDate);
+  // A stored time with no zone is UTC. new Date() alone reads one as the
+  // examiner's local time, so every tooltip was off by the examiner's offset
+  // while the mark itself (parseForensicMs) sat at the right place.
+  const d = new Date(typeof isoOrDate === 'string' ? cleanForensicDate(isoOrDate) : isoOrDate);
   if (isNaN(d.getTime())) return String(isoOrDate);
 
   const pad = (n) => String(n).padStart(2, '0');
@@ -152,6 +155,10 @@ export const ARTIFACT_CONFIG = {
   // set in the product and would otherwise bury the eight types that share
   // the unified artifacts lane.
   browser:    { label: 'Browser',          color: '#38bdf8', icon: 'globe' },
+  // AI agent steps (Claude Code, Gemini CLI, Codex): the commands an agent
+  // ran, the files it wrote or edited, and the person's prompts. Its own lane:
+  // an agent's command is a different actor from a person's.
+  ai_agents:  { label: 'AI Agents',        color: '#a3e635', icon: 'terminal' },
   all_event_ids: { label: 'All event IDs', color: '#475569', icon: 'clipboard' },
 };
 
@@ -307,7 +314,9 @@ export const FORENSIC_TS_FIELDS = [
   'date_added', 'date_last_opened', 'last_seen', 'mtime',
   'first_site_storage_time', 'last_site_storage_time',
   'first_user_interaction_time', 'last_user_interaction_time',
-  'last_accessed', 'time_created', 'time_last_used', 'last_used'
+  'last_accessed', 'time_created', 'time_last_used', 'last_used',
+  // AI agent steps (ai_agent_steps.ts): when the agent took the step.
+  'ts'
 ];
 
 /**
@@ -345,6 +354,30 @@ export function cleanForensicDate(ts) {
 
   return cleaned;
 }
+
+/**
+ * new Date(cleanForensicDate(ts)).getTime(), with string times remembered.
+ *
+ * The lane layout reruns on every zoom step (it depends on pxPerHour) and
+ * parsed every item's time again each time - a regex, a string build and a
+ * Date parse, 63 ms per 100,000 against 6 ms looked up. The value is exactly
+ * the uncached one, including its quirks: a blank or 'N/A' time is 0 (Date of
+ * null), an unparsable one NaN. The memory is cleared past PARSE_CACHE_MAX
+ * entries, so a long session cannot grow it without bound.
+ */
+const PARSE_CACHE_MAX = 500000;
+const _parsed = new Map();
+export function parseForensicMs(ts) {
+  if (typeof ts !== 'string') return new Date(cleanForensicDate(ts)).getTime();
+  let ms = _parsed.get(ts);
+  if (ms === undefined) {
+    if (_parsed.size >= PARSE_CACHE_MAX) _parsed.clear();
+    ms = new Date(cleanForensicDate(ts)).getTime();
+    _parsed.set(ts, ms);
+  }
+  return ms;
+}
+
 
 /**
  * Extracts all available timestamps from a forensic object.
@@ -407,9 +440,24 @@ export function getPrimaryTimestamp(obj) {
     obj.date_last_used || obj.time_last_used || obj.time_created ||
     obj.date_added || obj.date_last_opened || obj.install_time ||
     obj.last_updated || obj.last_used || obj.use_date || obj.end_time ||
-    obj.last_user_interaction_time || obj.last_seen || obj.mtime;
+    obj.last_user_interaction_time || obj.last_seen || obj.mtime ||
+    // AI agent steps.
+    obj.ts;
 
   return cleanForensicDate(raw);
+}
+
+/**
+ * What an AI agent step is about: the command it ran, the file it wrote or
+ * edited, or the opening of the person's prompt. Read from the row's own
+ * columns (`command` is cut at 1,000 characters by the bridge; see
+ * `command_length`), so the bridge does not ship it twice.
+ */
+export function aiStepSubject(r) {
+  if (!r) return '';
+  if (r.kind === 'command') return r.command || '';
+  if (r.kind === 'prompt') return r.prompt_preview || '';
+  return r.target || '';
 }
 
 /**
@@ -436,7 +484,9 @@ export function getArtifactSources(data) {
   if (!data) return [];
   
   const allItems = [];
-  const processedKeys = new Set(['sessions', 'srum_app', 'srum_net', 'mft_usn', 'mft', 'aggregated', 'links']);
+  // `ai_agents` is its own lane and its own pill; scanned here it was
+  // counted again under Registry.
+  const processedKeys = new Set(['sessions', 'srum_app', 'srum_net', 'mft_usn', 'mft', 'aggregated', 'links', 'ai_agents', 'ai_links']);
   // Unique filter to prevent scanning the same array twice
   const seenArrays = new Set();
   

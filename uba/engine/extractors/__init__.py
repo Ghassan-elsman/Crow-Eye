@@ -5,11 +5,24 @@ from uba.engine.extractors import logs as _logs
 from uba.engine.extractors import artifacts as _artifacts
 from uba.engine.extractors import files as _files
 from uba.engine.extractors import browser as _browser
+from uba.engine.extractors import story_rules as _story
+from uba.engine.extractors import ai_agents as _ai
 
 # name -> callable(ctx, rules) -> list[BehaviorEvent]
 # 'rules' is the list of rule dicts sharing that extractor (most extractors
 # have exactly one; usn_file_activity serves five file-operation rules).
 EXTRACTORS = {
+    # 2026-11-03: printing, outbound Remote Desktop, cloud sync, USB copies and
+    # files gathered into one folder (story_rules.py).
+    "printer_added": _story.printer_added,
+    "rdp_outbound": _story.rdp_outbound,
+    "cloud_sync_client": _story.cloud_sync_client,
+    "usb_file_copy": _story.usb_file_copy,
+    "files_collected": _story.files_collected,
+    "input_activity": _story.input_activity,
+    # AI agent sessions (ai_agents.db): the session, and each request's commands.
+    "ai_agent_sessions": _ai.ai_agent_sessions,
+    "ai_agent_turns": _ai.ai_agent_turns,
     "sessions_logon": _logs.sessions_logon,
     "sessions_logoff": _logs.sessions_logoff,
     "sessions_unlock": _logs.sessions_unlock,

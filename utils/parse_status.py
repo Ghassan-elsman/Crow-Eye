@@ -152,6 +152,7 @@ ARTIFACTS: Dict[str, tuple] = {
     "recyclebin":          ("Recycle Bin", ("recyclebin_analysis.db",)),
     "srum":                ("SRUM", ("srum_data.db",)),
     "browser":             ("Browsers", ("browser_analysis.db",)),
+    "ai_agents":           ("AI Agents", ("ai_agents.db",)),
     "mft":                 ("MFT", ("mft_claw_analysis.db",)),
     "usn":                 ("USN Journal", ("USN_journal.db",)),
     "mft_usn_correlation": ("MFT-USN Correlation", ("mft_usn_correlated_analysis.db",)),
@@ -172,6 +173,7 @@ _TYPE_ALIASES = {
     "recyclebin": "recyclebin",
     "srum": "srum",
     "browser": "browser",
+    "ai_agents": "ai_agents", "aiagents": "ai_agents", "ai_agent": "ai_agents",
     "mft": "mft",
     "usn": "usn",
     "mft_usn_correlation": "mft_usn_correlation", "correlation": "mft_usn_correlation",
@@ -554,6 +556,36 @@ def db_table_counts(db_path: str) -> Dict[str, int]:
             except Exception:
                 pass
     return counts
+
+
+def table_row_count(db_path: str, table: str) -> Optional[int]:
+    """Rows in ONE table of a SQLite file, read-only; None when the file or
+    the table is not there.
+
+    For the empty-table "Why empty?" reason, which needs one table's count.
+    db_table_counts() counted every table of the database to answer it: an
+    empty MFT sub-tab cost 7.4 s on the GUI thread, counting mft_records,
+    mft_file_names and the rest, 17 million rows on a real case.
+    """
+    if not db_path or not os.path.isfile(db_path):
+        return None
+    conn = None
+    try:
+        uri = "file:%s?mode=ro" % db_path.replace("\\", "/")
+        conn = sqlite3.connect(uri, uri=True, timeout=5)
+        try:
+            return int(conn.execute('SELECT COUNT(*) FROM "%s"'
+                                    % table.replace('"', '""')).fetchone()[0])
+        except sqlite3.Error:
+            return None
+    except sqlite3.Error:
+        return None
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def db_has_rows(db_path: str) -> bool:
@@ -1013,6 +1045,11 @@ _BROWSER_ROOTS = (
 )
 
 
+# Where the AI agents keep their session records (Artifacts_Collectors/AI_Agent_Claw.py).
+_AI_AGENT_ROOTS = (os.path.join(".claude", "projects"), os.path.join(".gemini", "tmp"),
+                   os.path.join(".codex", "sessions"), os.path.join(".codex", "archived_sessions"))
+
+
 def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C:",
                   case_root: Optional[str] = None,
                   scanned_paths: Optional[Iterable[str]] = None) -> Dict[str, Any]:
@@ -1042,6 +1079,12 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
                 paths = [os.path.join(r, d) for r, ds, _f in os.walk(bdir)
                          if r.count(os.sep) - bdir.count(os.sep) < 3
                          for d in ds if os.path.basename(r).lower() == "users"]
+        if artifact == "ai_agents" and not paths and case_root:
+            # AI agent session trees likewise: AIAgents\<source>\Users\<name>\...
+            # (the folders offline_AIAgentClaw.users_roots_in_case parses).
+            adir = os.path.join(case_root, "live_acquisition", "AIAgents")
+            paths = sorted(p for p in glob.glob(os.path.join(adir, "*", "Users", "*"))
+                           if os.path.isdir(p))
         # Prefetch and SRUM can be switched off; the evidence's own SYSTEM
         # hive says so, the way EnablePrefetcher and DPS's Start say it live.
         # A running state cannot be read from a hive - only Start = 4.
@@ -1197,6 +1240,20 @@ def probe_sources(artifact: str, mode: str = "live", windows_partition: str = "C
             sources = [_src(os.path.join(root, "Users", "*", r"AppData\...\User Data"), False)]
             status = ParseStatus.SOURCE_NOT_FOUND
             message = "No Chromium or Firefox profile folders were found for any user."
+
+    elif artifact == "ai_agents":
+        found = []
+        for u in users:
+            for rel in _AI_AGENT_ROOTS:
+                p = os.path.join(u, rel)
+                if os.path.isdir(p):
+                    found.append(p)
+        sources = [_src(p, True) for p in found[:8]]
+        if not found:
+            sources = [_src(os.path.join(root, "Users", "*", r".claude\projects"), False)]
+            status = ParseStatus.SOURCE_NOT_FOUND
+            message = ("No AI agent session folders (Claude Code, Gemini CLI, Codex) were "
+                       "found for any user.")
 
     elif artifact in ("mft", "usn", "mft_usn_correlation"):
         fs = _filesystem_name(root)
@@ -1504,8 +1561,16 @@ def collect_live_outcome(artifact: str, case_root: str, windows_partition: str,
                          raw_result: Any = None, exc: Optional[BaseException] = None,
                          started: Optional[float] = None, probe: Optional[dict] = None,
                          cancelled: bool = False, rows_before: Optional[int] = None,
-                         log_excerpt: Optional[List[str]] = None) -> ArtifactOutcome:
+                         log_excerpt: Optional[List[str]] = None,
+                         db_records: Optional[int] = None,
+                         rows_after: Optional[int] = None,
+                         counted: bool = False) -> ArtifactOutcome:
     """classify_result with the live probe, fresh db counts and side files.
+
+    ``counted``: ``db_records`` and ``rows_after`` were taken already, on the
+    parse's worker thread, so they are used as given. Counted here they ran
+    on the GUI thread, a COUNT(*) of every table of the artifact's databases
+    twice over (seconds for an MFT database) while the window waited.
 
     ``rows_before``: the artifact's database total taken before the run
     (artifact_db_rowcount); with the total after, it says what the run added.
@@ -1516,7 +1581,8 @@ def collect_live_outcome(artifact: str, case_root: str, windows_partition: str,
             probe = probe_sources(artifact, "live", windows_partition)
         except Exception as e:  # a probe must never break a parse
             probe = {"sources": [], "status": None, "message": "probe failed: %s" % e}
-    db_records = artifact_db_records(case_root, artifact, since=started)
+    if not counted:
+        db_records = artifact_db_records(case_root, artifact, since=started)
     details = prefetch_failed_files(case_root, since=started) if artifact == "prefetch" else []
     if details and not db_records and exc is None and not cancelled:
         # Every .pf failed: an unsupported format, as the offline path says -
@@ -1524,7 +1590,9 @@ def collect_live_outcome(artifact: str, case_root: str, windows_partition: str,
         raw_result = {"status": ParseStatus.UNSUPPORTED_FORMAT,
                       "errors": ["%d prefetch file(s) use a version or format the parser does "
                                  "not support, or are corrupt" % len(details)]}
-    rows_after = artifact_db_rowcount(case_root, artifact) if rows_before is not None else None
+    if not counted:
+        rows_after = (artifact_db_rowcount(case_root, artifact)
+                      if rows_before is not None else None)
     last_activity = (artifact_last_activity(case_root, artifact)
                      if probe.get("switched_off") else None)
     return classify_result(artifact, raw_result, exc=exc, probe=probe, mode="live",

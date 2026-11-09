@@ -71,6 +71,8 @@ from visualizations.timeseries import (axis_range as _axis_range,
 CORR_DB = "mft_usn_correlated_analysis.db"
 USN_DB = "USN_journal.db"
 CORR_TABLE = "mft_usn_correlated"
+# Where the unfiltered opening answers are kept beside the case (_cached).
+_ANSWERS_FILE = ("Charts", "mftusn_answers.json")
 
 # reason-category -> colour, for the summary counts and the event chips
 REASON_CATS = ("create", "delete", "rename", "data", "meta")
@@ -340,48 +342,81 @@ class MftUsnBridge(AsyncBridge):
             parts.append(f"{tcol} < date(?, '+1 day')"); params.append(str(end)[:10])
         if args.get("volume") and "volume_letter" in cols:
             parts.append("volume_letter = ?"); params.append(args["volume"])
-        terms = [norm_term(t) for t in (args.get("terms") or []) if t and norm_term(t)]
-        scols = [c for c in SEARCH_FIELDS if c in cols]
-        if terms and scols:
-            per = []
-            for t in terms:
-                per.append("(" + " OR ".join(f"{c} LIKE ?" for c in scols) + ")")
-                params.extend([f"%{t}%"] * len(scols))
-            join = " AND " if (args.get("mode", "or").lower() == "and") else " OR "
-            parts.append("(" + join.join(per) + ")")
+        tsql, tparams = self._terms_sql(args)
+        if tsql:
+            parts.append(tsql)
+            params.extend(tparams)
         if extra:
             parts.append(extra)
         return ((" WHERE " + " AND ".join(parts)) if parts else "", params)
 
+    def _terms_sql(self, args: dict) -> Tuple[str, list]:
+        """The search terms as one SQL condition ('' with none): each term an
+        OR across the searchable columns, the terms joined by the mode. One
+        definition, used by _where and applied unchanged as the keyset walk's
+        residual test, so the walk and the GROUP BY agree on what matches."""
+        cols = self._cols()
+        terms = [norm_term(t) for t in (args.get("terms") or []) if t and norm_term(t)]
+        scols = [c for c in SEARCH_FIELDS if c in cols]
+        if not (terms and scols):
+            return "", []
+        per, params = [], []
+        for t in terms:
+            per.append("(" + " OR ".join(f"{c} LIKE ?" for c in scols) + ")")
+            params.extend([f"%{t}%"] * len(scols))
+        join = " AND " if (args.get("mode", "or").lower() == "and") else " OR "
+        return "(" + join.join(per) + ")", params
+
     def _has_data(self) -> bool:
         return self._has_table(CORR_DB, CORR_TABLE)
 
+    # The slots asked on every opening, with no filter set: their answers are
+    # also kept beside the case (utils/case_cache.py, the timeline's store, in
+    # <case>/Charts/mftusn_answers.json), so the first opening after a
+    # restart is answered too. Filtered answers are kept for the session only:
+    # a search's are many and short-lived.
+    _BESIDE_THE_CASE = ("bounds", "timelines", "overview")
+
+    @staticmethod
+    def _unfiltered(args):
+        return not any(args.get(k) for k in ("terms", "search", "start", "end", "volume"))
+
     def _cached(self, name, args_json, compute):
-        """A slot's answer, kept for the same filters while the database is
+        """A slot's answer, kept for the same filters while the databases are
         unchanged: on a complete MFT the strip and the overview are seconds of
-        SQL each, and they are asked again every time the view comes back to
-        the same filters. A re-correlation changes the file's time and with it
-        every key."""
-        stamps = []
-        for db in (CORR_DB, USN_DB):             # the overview reads both
-            path = self._get_db_path(db)
-            try:
-                stamps.append(os.path.getmtime(path) if path else None)
-            except OSError:
-                stamps.append(None)
-        key = (name, json.dumps(_loads(args_json), sort_keys=True), tuple(stamps))
-        # Slots run on worker threads now (AsyncBridge): the cache is read and
-        # written under a lock, and the answer is computed outside it.
-        with self._cache_lock:
-            cache = self.__dict__.setdefault("_result_cache", {})
-            hit = cache.get(key)
+        SQL each (9 s and 10 s on a 3.9 M-row case), asked again every time the
+        view comes back to the same filters and every time the dashboard
+        opens. Kept for the session (async_bridge's store, so a reopened
+        dashboard is answered at once) and, for the unfiltered opening
+        questions, beside the case. A re-correlation changes a database's
+        size or time, or its WAL's, and with it every key."""
+        from visualizations.async_bridge import db_state, shared_get, shared_put
+        args = _loads(args_json)
+        norm = json.dumps(args, sort_keys=True)
+        state = db_state([self._get_db_path(db) for db in (CORR_DB, USN_DB)])
+        key = ("MftUsnBridge", name, norm, state)
+        hit = shared_get(key)
         if hit is not None:
             return hit
+        beside = None
+        if name in self._BESIDE_THE_CASE and self._unfiltered(args):
+            try:
+                from utils import case_cache
+                beside = "%s|%s" % (name, norm)
+                sig = case_cache.signature(self.case_dir)
+                held = case_cache.get(self.case_dir, beside, *_ANSWERS_FILE)
+                if held is not None:
+                    shared_put(key, held)
+                    return held
+            except Exception:
+                beside = None
         value = compute(args_json)
-        with self._cache_lock:
-            if len(cache) >= 64:
-                cache.clear()
-            cache[key] = value
+        shared_put(key, value)
+        if beside:
+            try:
+                case_cache.put(self.case_dir, beside, value, *_ANSWERS_FILE, sig=sig)
+            except Exception:
+                pass
         return value
 
     # ---- names and paths ----------------------------------------------------
@@ -814,21 +849,150 @@ class MftUsnBridge(AsyncBridge):
 
     def _mft_files(self, where, params, col, offset, limit, order="ASC"):
         """{total, files} - distinct files (volume + record) matching `where`."""
-        n = self._query(CORR_DB, f"SELECT COUNT(DISTINCT {self._file_key()}) n FROM {CORR_TABLE}{where}",
-                        tuple(params))
         rows = self._query(CORR_DB,
             f"SELECT {self._vol()} vol, mft_record_number rec, {self._seq()} seq, "
             f"reconstructed_path path, fn_filename fn, {self._usn_name()} un, {col} t, "
             f"is_directory dir, is_deleted del, {self._size_expr()} sz FROM {CORR_TABLE}{where} "
-            f"GROUP BY vol, rec ORDER BY t {order}, rec LIMIT {int(limit)} OFFSET {int(offset)}",
+            f"GROUP BY vol, rec ORDER BY t {order}, vol {order}, rec {order} "
+            f"LIMIT {int(limit)} OFFSET {int(offset)}",
             tuple(params))
+        return {"total": self._files_total(where, params), "files": self._files_out(rows)}
+
+    def _files_total(self, where, params):
+        """How many distinct files match `where`. It does not change while the
+        reader pages: counted once per filters and database state (2.2 s of
+        every page over 3.3 M files)."""
+        from visualizations.async_bridge import db_state, shared_get, shared_put
+        count_sql = f"SELECT COUNT(DISTINCT {self._file_key()}) n FROM {CORR_TABLE}{where}"
+        count_key = ("MftUsnBridge", "files_total", count_sql, tuple(params),
+                     db_state([self._get_db_path(CORR_DB)]))
+        n = shared_get(count_key)
+        if n is None:
+            n = self._query(CORR_DB, count_sql, tuple(params))
+            shared_put(count_key, n)
+        return (n[0]["n"] if n else 0) or 0
+
+    def _files_out(self, rows):
         files = []
         for r in rows:
             name, path, _src = self._name_and_path(r, {})
             files.append({"id": file_id(r["vol"], r["rec"], r["seq"]), "name": name,
                           "path": path, "t": r["t"], "dir": r["dir"], "size": r["sz"],
                           "deleted": r["del"]})
-        return {"total": (n[0]["n"] if n else 0) or 0, "files": files}
+        return files
+
+    def _walk_state(self, args):
+        """(residual WHERE, its params, the cursors' session key, has_terms)
+        for the All-files walk: the date range and volume are ranges and tests
+        of the index itself, and the search terms ride along as a residual
+        test on each entry (the same _terms_sql the GROUP BY runs). Cursors
+        live under the whole filter plus the database state, so a changed
+        filter or a re-parse never resumes from another walk's cursor."""
+        from visualizations.async_bridge import db_state
+        flt, fparams = "", []
+        if args.get("start"):
+            flt += " AND si_modification_time >= ?"; fparams.append(str(args["start"])[:10])
+        if args.get("end"):
+            flt += " AND si_modification_time < date(?, '+1 day')"; fparams.append(str(args["end"])[:10])
+        if args.get("volume"):
+            flt += " AND volume_letter = ?"; fparams.append(args["volume"])
+        tsql, tparams = self._terms_sql(args)
+        if tsql:
+            flt += " AND " + tsql
+            fparams.extend(tparams)
+        state = (db_state([self._get_db_path(CORR_DB)]), tuple(fparams), flt)
+        return flt, fparams, state, bool(tsql)
+
+    def _plant_files_cursor(self, args, order, offset, files):
+        """After a GROUP BY page, remember where it ended, so the next page
+        (offset + its length, what "load more" asks) is walked from here
+        instead of grouped again. Page 0 of a SEARCH stays the GROUP BY -
+        with sparse matches the walk's residual scan can cost as much as one
+        grouping - and every page after it resumes from this cursor."""
+        if not files:
+            return
+        last = files[-1]
+        vol, rec, _seq = parse_file_id(last.get("id"))
+        if last.get("t") is None or rec is None:
+            return                            # a NULL breaks the row-value walk
+        from visualizations.async_bridge import shared_put
+        _flt, _p, state, _terms = self._walk_state(args)
+        shared_put(("MftUsnBridge", "files_cursor", order, offset + len(files), state),
+                   (last["t"], vol if vol is not None else "", rec))
+
+    def _all_files_keyset(self, offset, order, args=None):
+        """One page of every MFT file in the date range and volume asked for
+        (or all of them), newest or oldest
+        first, walked along idx_corr_si_modified from where the previous page
+        stopped - or None when that cannot be done (an older database, a jump
+        to a page no walk has reached), and the GROUP BY page answers instead.
+
+        The GROUP BY grouped all 3.3 M files again for every page: about 3 s a
+        page, 8 s for the first. The index already holds the files in
+        (modified, volume, record) order with a file's rows side by side - a
+        record has one $SI modified time, copied onto each of its rows - so a
+        page is the next rows after the last file shown, with repeats of the
+        same file dropped: about 0.1 s, at any depth. The cursor of each page's
+        end is kept with the database state, so the next page (offset + 500,
+        what "load more" asks) starts there.
+
+        The date range and volume are the same conditions _where writes, on
+        the same text: the range is a range of the index itself, the volume a
+        test on each entry it walks."""
+        cols = self._cols()
+        if not {"has_mft_record", "volume_letter", "si_modification_time"} <= cols:
+            return None
+        if getattr(self, "_si_mod_index", None) is None:
+            self._si_mod_index = bool(self._query(CORR_DB, "SELECT 1 FROM sqlite_master WHERE "
+                "type='index' AND name='idx_corr_si_modified'"))
+        if not self._si_mod_index:
+            return None                           # correlated before the index
+        from visualizations.async_bridge import shared_get, shared_put
+        args = args or {}
+        flt, fparams, state, has_terms = self._walk_state(args)
+        cursor = None
+        if offset:
+            cursor = shared_get(("MftUsnBridge", "files_cursor", order, offset, state))
+            if cursor is None:
+                return None
+        elif has_terms:
+            # Page 0 of a search is the GROUP BY page (one grouping can beat
+            # a sparse residual scan), and it plants this walk's first cursor.
+            return None
+        op = "<" if order == "DESC" else ">"
+        select = (f"SELECT volume_letter vol, mft_record_number rec, {self._seq()} seq, "
+                  f"reconstructed_path path, fn_filename fn, {self._usn_name()} un, "
+                  f"si_modification_time t, is_directory dir, is_deleted del, "
+                  f"{self._size_expr()} sz FROM {CORR_TABLE} INDEXED BY idx_corr_si_modified "
+                  f"WHERE has_mft_record = 1{flt}")
+        tail = (f" ORDER BY si_modification_time {order}, volume_letter {order}, "
+                f"mft_record_number {order} LIMIT ?")
+        out, last, batch = [], None, ALL_PAGE * 4
+        while len(out) < ALL_PAGE:
+            if cursor is None:
+                rows = self._query(CORR_DB, select + tail, tuple(fparams) + (batch,))
+            else:
+                rows = self._query(CORR_DB,
+                    select + f" AND (si_modification_time, volume_letter, mft_record_number) "
+                             f"{op} (?, ?, ?)" + tail, tuple(fparams) + tuple(cursor) + (batch,))
+            for r in rows:
+                key = (r["vol"], r["rec"])
+                if key == last:
+                    continue                  # the same file's next row
+                if None in (r["t"], r["vol"], r["rec"]):
+                    return None               # a NULL breaks the row-value walk
+                last = key
+                out.append(r)
+                if len(out) == ALL_PAGE:
+                    break
+            if len(rows) < batch or len(out) == ALL_PAGE:
+                break
+            cursor = (rows[-1]["t"], rows[-1]["vol"], rows[-1]["rec"])
+        if out:
+            end = out[-1]
+            shared_put(("MftUsnBridge", "files_cursor", order, offset + len(out), state),
+                       (end["t"], end["vol"], end["rec"]))
+        return out
 
     def _mft_day(self, day, args, only=None, page=0):
         """Files created / modified on `day` (Standard-Info): counted, one page
@@ -887,7 +1051,13 @@ class MftUsnBridge(AsyncBridge):
         if kind == "files":
             col = "si_modification_time"
             where, params = self._where(args, extra=f"{self._mft_only()}", tcol=col)
-            part = self._mft_files(where, params, col, offset, ALL_PAGE, order)
+            walked = self._all_files_keyset(offset, order, args)
+            if walked is not None:
+                part = {"total": self._files_total(where, params),
+                        "files": self._files_out(walked)}
+            else:
+                part = self._mft_files(where, params, col, offset, ALL_PAGE, order)
+                self._plant_files_cursor(args, order, offset, part["files"])
             return json.dumps({"kind": kind, "rows": part["files"], "total": part["total"],
                                "pageSize": ALL_PAGE})
         where, params = self._where(args, extra="has_usn_event=1")

@@ -1,5 +1,6 @@
 import React from 'react'
 import { ACTIVITIES, ACTIVITY_COLOR, ACTIVITY_LABEL, fmtInt, fmtBytes, fmtWhen, baseName, dangerLabel } from './format.js'
+import FlowBadge from './FlowBadge.jsx'
 
 // An insight is {count, subjects, truncated}; `n` also tolerates the bare
 // integer, so a stale bundle degrades to a read-only tile rather than
@@ -159,7 +160,7 @@ export default function OverviewPanel({ overview, onPickDomain, onOpenInsight })
         {downloads.length ? (
           <div className="ov-list">
             {downloads.map((d, i) => (
-              <div className="ov-dl" key={i} onClick={() => d.domain && onPickDomain(d.domain)}>
+              <div className="ov-dl flow-host" key={i} onClick={() => d.domain && onPickDomain(d.domain)}>
                 <div className="ov-dl-top">
                   <span className="ov-dl-name" title={d.targetPath}>{baseName(d.targetPath) || d.sourceUrl}</span>
                   {dangerLabel(d.dangerType) ? <span className="ov-flag">flagged</span> : null}
@@ -167,7 +168,8 @@ export default function OverviewPanel({ overview, onPickDomain, onOpenInsight })
                 </div>
                 <div className="ov-dl-sub">
                   <span>{d.domain}</span>
-                  <span>{fmtBytes(d.bytes)}</span>
+                  {/* A file landing on the machine: the network badge's down arrow. */}
+                  {Number(d.bytes) > 0 ? <FlowBadge dir="down" value={fmtBytes(d.bytes)} label="downloaded" /> : null}
                   <span>{fmtWhen(d.started)}</span>
                 </div>
               </div>

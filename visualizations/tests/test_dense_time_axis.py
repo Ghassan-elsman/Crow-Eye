@@ -40,10 +40,12 @@ STRIP_BRIDGES = {
     "shellitems_bridge.py": "getShellItemsTimeline",
     "lnkjl_bridge.py": "getLnkTimeline",
     "mftusn_bridge.py": "getMftUsnTimelines",
+    "aiagents_bridge.py": "getAiTimeline",
 }
 
 DASHBOARDS = ["react-viz", "react-mftusn", "react-lnkjl",
-              "react-prefetch", "react-shellitems", "react-browser"]
+              "react-prefetch", "react-shellitems", "react-browser",
+              "react-aiagents"]
 
 # dashboard -> the component that draws its strip
 STRIPS = {
@@ -53,6 +55,7 @@ STRIPS = {
     "react-shellitems": "SourceTimeline.jsx",
     "react-prefetch": "LocationTimeline.jsx",
     "react-mftusn": "TimelineStack.jsx",
+    "react-aiagents": "ActivityStrip.jsx",
 }
 
 

@@ -43,6 +43,7 @@ class ArtifactType(Enum):
     SHIMCACHE = "ShimCache"
     PARTITION_INFO = "PartitionInfo"
     BROWSER = "Browser"
+    AI_AGENTS = "AIAgents"
 
 
 @dataclass
@@ -365,8 +366,16 @@ def create_event_logs_artifact() -> Artifact:
             r"{PARTITION}\Windows\System32\winevt\Logs\System.evtx",
             r"{PARTITION}\Windows\System32\winevt\Logs\Application.evtx",
             r"{PARTITION}\Windows\System32\winevt\Logs\Security.evtx",
+            # Device evidence (Sentinel 12.20): when a disk arrived and left,
+            # with its model and serial. The DriverFrameworks channel is off by
+            # default, so on most machines that file is absent or empty.
+            r"{PARTITION}\Windows\System32\winevt\Logs\Microsoft-Windows-Partition%4Diagnostic.evtx",
+            r"{PARTITION}\Windows\System32\winevt\Logs\Microsoft-Windows-DriverFrameworks-UserMode%4Operational.evtx",
+            # The device-installation log and its rotated copies: when a
+            # device was first installed (setupapi_dev_log).
+            r"{PARTITION}\Windows\INF\setupapi.dev*.log",
         ],
-        description="Windows Event Logs (System, Application, Security) containing system events, warnings, errors, and security-relevant activities",
+        description="Windows Event Logs (System, Application, Security, and the Partition/Diagnostic and DriverFrameworks-UserMode device channels) containing system events, warnings, errors, security-relevant activities and storage devices connected",
         required_admin=True,
         estimated_size=150_000_000  # ~150 MB total
     )
@@ -459,6 +468,30 @@ def create_browser_artifact() -> Artifact:
     )
 
 
+def create_ai_agents_artifact() -> Artifact:
+    """Create the AI agent session records artifact (Claude Code, Gemini CLI, Codex).
+
+    Copied with the tree preserved, like browser profiles: the parser takes the
+    owner of each record from the profile folder it sits in. Inside these roots
+    only the records the parser reads are copied
+    (``ai_agent_paths.ai_agent_file_wanted``) - never a credential file.
+    """
+    try:
+        from Artifacts_Collectors.ai_agent_paths import AI_AGENT_ROOT_PATTERNS
+    except ImportError:
+        from ai_agent_paths import AI_AGENT_ROOT_PATTERNS
+    return Artifact(
+        name="AI Agent Sessions",
+        artifact_type=ArtifactType.AI_AGENTS,
+        default_paths=[r"{PARTITION}\Users\*" + p for p in AI_AGENT_ROOT_PATTERNS],
+        description="AI coding agent session records (Claude Code, Gemini CLI, Codex): prompts, "
+                    "commands run, files changed and tool calls, per user",
+        required_admin=False,
+        estimated_size=200_000_000,  # ~200 MB per heavy user (varies widely)
+        preserve_tree=True,
+    )
+
+
 def create_partition_info_artifact() -> Artifact:
     """Create Partition Information artifact configuration."""
     return Artifact(
@@ -489,6 +522,7 @@ DEFAULT_ARTIFACTS: List[Artifact] = [
     # Last: the largest and least bounded artifact (every user's profiles,
     # caches included) must not fill the drive before $MFT and $UsnJrnl.
     create_browser_artifact(),
+    create_ai_agents_artifact(),
 ]
 
 

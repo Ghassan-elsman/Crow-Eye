@@ -3889,6 +3889,11 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             sys.stdout.flush()
             with PhaseTimer(self.performance_monitor, ProcessingPhase.TIME_RANGE_DETERMINATION) as timer:
                 start_epoch, end_epoch = self._determine_time_range(result)
+                # Rows that all share one second span no time, and no window
+                # was made over them: one window holds them.
+                if start_epoch and end_epoch and end_epoch <= start_epoch:
+                    end_epoch = start_epoch + timedelta(seconds=1)
+                    logger.info("[Time-Window Engine] Every row shares one second: one window")
                 
                 # Requirement 6.1: Log time range at engine start
                 duration_hours = (end_epoch - start_epoch).total_seconds() / 3600
@@ -4076,8 +4081,9 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 self._finalize_streaming_mode(result)
                 
                 # Apply semantic mapping post-processing AFTER streaming is finalized
-                if hasattr(self, '_output_dir') and hasattr(self, '_execution_id'):
-                    db_path = Path(self._output_dir) / "correlation_results.db"
+                streamed_to = getattr(result, '_streaming_db_path', None)
+                if streamed_to and hasattr(self, '_execution_id'):
+                    db_path = Path(streamed_to)
                     if db_path.exists():
                         logger.info("\n[Time-Window Engine] Starting post-processing semantic mapping...")
                         semantic_result = self.apply_semantic_mapping_post_processing(
@@ -5401,13 +5407,56 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         raw = self._extract_raw_identity_from_record(record)
         return self._normalize_identity(raw) if raw else None
 
-    def _extract_raw_identity_from_record(self, record: Dict[str, Any]) -> Optional[str]:
-        """Extract the first non-empty identity field WITHOUT normalization.
+    def _preferred_identity_columns(self, feather_id: str) -> List[str]:
+        """The identity columns an execution-evidence feather's table
+        declares, in order (config/feather_schemas.json
+        identity_columns_preferred), or [].
+
+        BAM declares app_name (the program's file name) before name (the
+        registry value name, an NT device path such as
+        \\Device\\HarddiskVolume3\\Windows\\System32\\cmd.exe). The generic walk
+        took name first, and identity_key keeps a path whole, so BAM's
+        identity never equalled Prefetch's executable name and the two never
+        paired. The timeless side-join already honoured the declaration; the
+        time windows now do too."""
+        feather_queries = getattr(self, 'feather_queries', None) or {}
+        ofq = feather_queries.get(feather_id)
+        cache = self.__dict__.setdefault('_preferred_identity_cache', {})
+        key = (feather_id, id(ofq))
+        if key in cache:
+            return cache[key]
+        cols: List[str] = []
+        try:
+            table = getattr(getattr(ofq, 'loader', None), 'current_table', None)
+            if table:
+                from ..config import feather_schemas as _fs
+                # Execution evidence only: there the declared columns name the
+                # program, as Prefetch's do. Other kinds declare what groups
+                # their own rows (an event log's Source and EventID, RecentDocs'
+                # row_data) and would change every Wing that reads them.
+                if (_fs.get_schema(table) or {}).get('table_kind') == 'execution_evidence':
+                    cols = list(_fs.identity_columns_preferred(table))
+        except Exception:
+            cols = []
+        cache[key] = cols
+        return cols
+
+    def _extract_raw_identity_from_record(self, record: Dict[str, Any],
+                                          preferred: Optional[List[str]] = None) -> Optional[str]:
+        """Extract the first non-empty identity field WITHOUT normalization:
+        the feather's declared identity columns first (``preferred``), then
+        the generic CORE_IDENTITY_FIELDS walk.
 
         Used by the dedup signature so distinct raw identities (e.g. "foo.exe"
         vs "foo.dll") that collapse to the same normalized key do not get
         falsely deduplicated within the same feather + timestamp.
         """
+        for field in preferred or ():
+            value = record.get(field)
+            if value:
+                value = str(value).strip()
+                if value:
+                    return value
         for field in CORE_IDENTITY_FIELDS:
             if field in record and record[field]:
                 value = str(record[field]).strip()
@@ -5508,9 +5557,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                     entry[key].append(sample)
 
             for feather_id, records in filtered_records_by_feather.items():
+                preferred = self._preferred_identity_columns(feather_id)
                 for record in records:
                     total_records_in += 1
-                    raw_identity = self._extract_raw_identity_from_record(record)
+                    raw_identity = self._extract_raw_identity_from_record(record, preferred)
                     if not raw_identity:
                         total_records_no_identity += 1
                         _ledger_add('no_identity_field', feather_id)
@@ -6836,12 +6886,26 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
         
         # Check if streaming mode should be enabled
         should_stream, reason = self.memory_manager.should_enable_streaming_mode()
-        
+
+        # A stream needs a reader: the pipeline's results database in its output
+        # folder. With none (execute_wing called directly, no
+        # set_output_directory) the streamed matches went to
+        # <cwd>/streaming_results, a file nothing reads, and the run then failed
+        # on Path(None). Without a folder the matches stay on the result.
+        streaming_db_path = self._get_streaming_database_path(wing) if should_stream else None
+        if should_stream and streaming_db_path is None:
+            if not getattr(self, '_stream_refused_logged', False):
+                self._stream_refused_logged = True
+                logger.info("[Time-Window Engine] Memory is high but no output folder is set, "
+                            "so matches are kept in memory rather than streamed")
+                note = ("Memory was high but no output folder was set: matches were kept in "
+                        "memory, not streamed to a results database")
+                if note not in result.warnings:
+                    result.warnings.append(note)
+            should_stream = False
+
         if should_stream:
             logger.info(f"[Time-Window Engine] Streaming mode enabled")
-            
-            # Create streaming database path
-            streaming_db_path = self._get_streaming_database_path(wing)
             
             # Report memory warning to progress tracker
             self.progress_tracker.report_memory_warning(
@@ -6905,15 +6969,12 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
                 message=f"High memory usage: {memory_report.usage_percentage:.1f}%"
             )
     
-    def _get_streaming_database_path(self, wing: Wing) -> str:
+    def _get_streaming_database_path(self, wing: Wing) -> Optional[str]:
         """
-        Get path for streaming database.
-        
-        Args:
-            wing: Wing configuration
-            
-        Returns:
-            Path to streaming database file
+        The results database a stream is written to: correlation_results.db in
+        the pipeline's output folder (set_output_directory, or the pipeline
+        config's output_directory). None when there is no such folder - the
+        engine then does not stream (_check_memory_and_enable_streaming).
         """
         # Priority 1: Use pipeline-provided output directory (set via set_output_directory)
         if self._output_dir:
@@ -6931,31 +6992,10 @@ class TimeWindowScanningEngine(BaseCorrelationEngine):
             if self.debug_mode:
                 logger.info(f"[TimeWindow] Using pipeline config output directory: {output_dir}")
             return str(db_path)
-        
-        # Priority 3: Use wing path parent directory
-        elif hasattr(wing, 'wing_path') and wing.wing_path:
-            output_dir = Path(wing.wing_path).parent
-            if self.debug_mode:
-                logger.info(f"[TimeWindow] Using wing path parent directory: {output_dir}")
-        # Priority 4: Fall back to current working directory
-        else:
-            output_dir = Path.cwd()
-            if self.debug_mode:
-                logger.info(f"[TimeWindow] WARNING: Falling back to current working directory: {output_dir}")
-        
-        # Create streaming_results subdirectory (fallback mode only)
-        streaming_dir = output_dir / "streaming_results"
-        streaming_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create unique database name with timestamp
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        db_name = f"{wing.wing_id}_{timestamp}_streaming.db"
-        
-        db_path = streaming_dir / db_name
-        if self.debug_mode:
-            logger.info(f"[TimeWindow] Streaming database path: {db_path}")
-        
-        return str(db_path)
+
+        # No folder: no stream. (A wing file's folder or the current folder
+        # used to take an orphan streaming_results/*.db nothing ever read.)
+        return None
     
     def _cleanup_memory_between_windows(self, window_count: int, memory_report: Optional[Any] = None):
         """

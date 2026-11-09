@@ -30,6 +30,7 @@ ADMIN_NEEDS = {
     "registry": ("partial", "the SAM and SECURITY hives and other users' hives need elevation"),
     "browser": ("partial", "other users' browser profiles need elevation"),
     "recyclebin": ("partial", "other users' Recycle Bin folders need elevation"),
+    "ai_agents": ("partial", "other users' AI agent session records need elevation"),
 }
 
 ENV_NO_SELF_ELEVATE = "CROWEYE_NO_SELF_ELEVATE"

@@ -378,6 +378,22 @@ class RowDetailDialog(QtWidgets.QDialog):
         button_layout.addStretch()
         button_layout.addWidget(close_button)
         main_layout.addLayout(button_layout)
+        self._button_layout = button_layout
+
+    def add_action(self, text, tooltip, callback):
+        """A caller's own button beside Copy all / Export (the Timeline's
+        "Show in table"). Returns the button."""
+        button = QtWidgets.QPushButton(text)
+        button.setToolTip(tooltip)
+        button.setMinimumHeight(32)
+        if apply_theme:
+            set_variant(button, "ghost")
+        else:
+            button.setStyleSheet(CrowEyeStyles.BUTTON_STYLE)
+        button.clicked.connect(callback)
+        # after Export, before the stretch that pushes Close to the right
+        self._button_layout.insertWidget(2, button)
+        return button
 
     # ------------------------------------------------------------- populate
     def _value_label(self, field, text, split_lists=False):

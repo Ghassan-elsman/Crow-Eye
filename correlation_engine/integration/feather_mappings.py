@@ -203,6 +203,31 @@ ENHANCED_ARTIFACT_TYPES = {
         'parent_type': 'Jumplists',
         'description': 'Custom Windows Jump Lists',
         'forensic_value': 'Medium - Application-specific evidence'
+    },
+
+    # AI agents (AI_Agent_Claw.py -> ai_agents.db)
+    'AIAgentSteps': {
+        'parent_type': 'AIAgents',
+        'description': "Each step an AI agent took: the person's prompts, commands it ran "
+                       "(and the program each started), files it read, wrote or edited, "
+                       "pages it drove in a browser",
+        'forensic_value': "High - the agent's own record of what it did and when"
+    },
+    'AIAgentSessions': {
+        'parent_type': 'AIAgents',
+        'description': 'One row per AI agent session: agent, account, project, model, '
+                       'approval mode, process, first and last step',
+        'forensic_value': 'Medium - who ran which agent where'
+    },
+    'AIAgentFileVersions': {
+        'parent_type': 'AIAgents',
+        'description': 'The copy an AI agent saved of a file before changing it, hashed',
+        'forensic_value': 'High - the file as it was before the agent changed it'
+    },
+    'AIAgentProcesses': {
+        'parent_type': 'AIAgents',
+        'description': 'The processes (PID, start) that ran AI agent sessions',
+        'forensic_value': 'Medium - ties a session to a Windows process'
     }
 }
 
@@ -249,7 +274,8 @@ def detect_artifact_type_from_name(feather_name: str, table_name: str = None, db
             'mft': 'MFT',
             'lnk': 'LNK',
             'jumplist': 'Jumplists',
-            'recycle': 'RecycleBin'
+            'recycle': 'RecycleBin',
+            'ai_agent': 'AIAgents'
         }
         
         db_lower = db_name.lower()
@@ -777,7 +803,8 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('background_bytes_written', 'INTEGER'),
         ('background_num_read_operations', 'INTEGER'),
         ('background_num_write_operations', 'INTEGER'),
-        ('background_number_of_flushes', 'INTEGER')
+        ('background_number_of_flushes', 'INTEGER'),
+        ('auto_inc_id', 'INTEGER')
         ]
     },
     {
@@ -790,7 +817,8 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('id', 'INTEGER'), ('timestamp', 'TEXT'), ('app_name', 'TEXT'),
         ('app_path', 'TEXT'), ('user_sid', 'TEXT'), ('user_name', 'TEXT'),
         ('interface_luid', 'INTEGER'), ('l2_profile_id', 'INTEGER'),
-        ('bytes_sent', 'INTEGER'), ('bytes_received', 'INTEGER')
+        ('bytes_sent', 'INTEGER'), ('bytes_received', 'INTEGER'),
+        ('auto_inc_id', 'INTEGER')
         ]
     },
     
@@ -1025,7 +1053,82 @@ FEATHER_MAPPINGS: List[Dict] = [
         ('session_context', 'TEXT'), ('caveat', 'TEXT'), ('session_user', 'TEXT'),
         ('app_name', 'TEXT'), ('actor_sid', 'TEXT'), ('host', 'TEXT'),
         ('user_rule', 'INTEGER'), ('aggregate_count', 'INTEGER'),
-        ('details_json', 'TEXT'), ('evidence_json', 'TEXT')
+        ('details_json', 'TEXT'), ('evidence_json', 'TEXT'),
+        # Who drove it and foreground/background (uba/engine/who_drove.py).
+        ('operator', 'TEXT'), ('operator_kind', 'TEXT'), ('operator_basis', 'TEXT'),
+        ('app_state', 'TEXT'), ('app_state_basis', 'TEXT')
+        ]
+    },
+    # ========== AI agents (2 Feathers) ==========
+    # The steps an AI agent took that act on the machine - commands (with the
+    # program each started), files read, written and edited, pages driven, MCP
+    # and computer-use calls - and the person's prompts. Tool output and the
+    # agent's answers stay out (the filter): they are text, not acts, and are
+    # most of the table. timestamp / executable_name / file_path / file_name
+    # are derived so the Time and Identity engines find their fields:
+    # executable_name is the first program a command started (the rest are in
+    # `program`), file_path the file a file step touched.
+    {
+        'name': 'AIAgentSteps_CrowEyeFeather',
+        'source_db': 'ai_agents.db',
+        'source_table': 'ai_agent_steps',
+        'artifact_type': 'AIAgentSteps',
+        'parent_type': 'AIAgents',
+        # Prompts: the person's, and those that set the agent working with no
+        # person typing (a scheduled task, another agent session, claude -p) -
+        # `origin` says which. Not a main agent's instructions to its own
+        # sub-agents (is_sidechain = 1).
+        'filter': "kind IN ('command', 'file_read', 'file_write', 'file_edit', 'browser', 'computer', "
+                  "'web', 'mcp', 'subagent') OR (kind = 'prompt' AND (role = 'user' OR "
+                  "(role IN ('system', 'agent') AND is_sidechain = 0)))",
+        # A match is named by the first identity column a row fills
+        # (config/standard_fields/identities.json): `program` ("python, tail"),
+        # `user_name` (the account) and `source_path` (the transcript) came
+        # before the program the step started, so they are named for what
+        # they are here and executable_name / file_name lead.
+        # user_sid too (the profile owner's SID): a prompt row holds no program
+        # and no file, and would be named for the account it was typed in.
+        'column_mapping': {'program': 'programs_started', 'user_name': 'os_account',
+                           'session_id': 'agent_session', 'source_path': 'record_file',
+                           'user_sid': 'os_account_sid'},
+        'derived_columns': [
+            ('timestamp', 'TEXT', "ts"),
+            ('executable_name', 'TEXT',
+             "CASE WHEN kind = 'command' AND program IS NOT NULL AND program != '' THEN "
+             "CASE WHEN instr(program, ',') > 0 THEN substr(program, 1, instr(program, ',') - 1) "
+             "ELSE program END END"),
+            ('file_path', 'TEXT',
+             "CASE WHEN kind IN ('file_read', 'file_write', 'file_edit') THEN target END"),
+            ('file_name', 'TEXT',
+             "CASE WHEN kind IN ('file_read', 'file_write', 'file_edit') THEN "
+             "replace(target, rtrim(target, replace(replace(target, '\\', ''), '/', '')), '') END"),
+        ],
+        'fallback_columns': [
+        ('agent', 'TEXT'), ('user_name', 'TEXT'), ('session_id', 'TEXT'), ('step_id', 'TEXT'),
+        ('ts', 'TEXT'), ('role', 'TEXT'), ('kind', 'TEXT'), ('tool', 'TEXT'), ('command', 'TEXT'),
+        ('target', 'TEXT'), ('cwd', 'TEXT'), ('status', 'TEXT'), ('text', 'TEXT'),
+        ('text_length', 'INTEGER'), ('is_sidechain', 'INTEGER'), ('source_path', 'TEXT'),
+        ('parsed_at', 'TEXT'), ('program', 'TEXT'), ('exit_code', 'INTEGER'), ('duration_ms', 'INTEGER'),
+        ('output', 'TEXT'), ('approval', 'TEXT'), ('origin', 'TEXT'),
+        ('seq', 'INTEGER'), ('turn', 'INTEGER'), ('instruction', 'TEXT'), ('ordered_by', 'TEXT'),
+        ('session_name', 'TEXT'), ('user_sid', 'TEXT')
+        ]
+    },
+    {
+        'name': 'AIAgentFileVersions_CrowEyeFeather',
+        'source_db': 'ai_agents.db',
+        'source_table': 'ai_agent_file_versions',
+        'artifact_type': 'AIAgentFileVersions',
+        'parent_type': 'AIAgents',
+        'derived_columns': [
+            ('timestamp', 'TEXT', "saved_at"),
+            ('file_name', 'TEXT',
+             "replace(file_path, rtrim(file_path, replace(replace(file_path, '\\', ''), '/', '')), '')"),
+        ],
+        'fallback_columns': [
+        ('agent', 'TEXT'), ('user_name', 'TEXT'), ('session_id', 'TEXT'), ('file_path', 'TEXT'),
+        ('version', 'INTEGER'), ('saved_at', 'TEXT'), ('size', 'INTEGER'), ('sha1', 'TEXT'),
+        ('backup_path', 'TEXT'), ('in_case_path', 'TEXT'), ('parsed_at', 'TEXT'), ('user_sid', 'TEXT')
         ]
     }
 ]

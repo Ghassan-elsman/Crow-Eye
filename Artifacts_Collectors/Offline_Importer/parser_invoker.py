@@ -7,6 +7,7 @@ natively, this helper just calls them with appropriate parameters and captures
 results in a standardized format for GUI display.
 """
 
+import copy
 import os
 import time
 import sys
@@ -38,6 +39,12 @@ class ParserResult:
     artifact_id: Optional[str] = None
     # No parser for this file (Unknown): neither a success nor a failure.
     skipped: bool = False
+
+
+def _is_system_hive(path) -> bool:
+    """A SYSTEM hive file (SYSTEM, SYSTEM.sav, ...), not its .LOG1/.LOG2 transaction logs."""
+    name = os.path.basename(str(path or "")).upper()
+    return name.split(".")[0] == "SYSTEM" and ".LOG" not in name
 
 
 def pair_results(artifacts, results):
@@ -785,6 +792,9 @@ class ParserInvoker:
             elif artifact_type == 'Browser':
                 logger.info(f"[PARSER ROUTING] -> Invoking Browser parser")
                 return self._invoke_browser_parser(start_time, **kwargs)
+            elif artifact_type == 'AIAgents':
+                logger.info(f"[PARSER ROUTING] -> Invoking AI agents parser")
+                return self._invoke_ai_agents_parser(start_time, **kwargs)
             else:
                 logger.error(f"[PARSER ROUTING] -> Unknown artifact type: {artifact_type}")
                 return ParserResult(
@@ -1142,6 +1152,49 @@ class ParserInvoker:
             logger.error(f"Stack trace:\n{traceback.format_exc()}")
             sanitized_error = self._sanitize_dependency_error(str(e), error_type, str(artifact_path))
             return ParserResult(success=False, artifact_type='Browser', records_parsed=0, output_path="",
+                                errors=[sanitized_error], execution_time=time.time() - start_time)
+
+    def _invoke_ai_agents_parser(self, start_time: float, **kwargs) -> ParserResult:
+        """Invoke the AI agent session parser using offline_AIAgentClaw.
+
+        One call parses every collected AI agent tree in the case
+        (live_acquisition/AIAgents/<source>/Users/<name>/...), whichever
+        scan-index entry triggered it. The entry's own folder is not passed on:
+        a case usually sits under the analyst's C:/Users/<me>, and a Users
+        folder looked up from a path outside the collected tree would be the
+        analyst's own.
+        """
+        try:
+            from Artifacts_Collectors.offline_parsers.offline_AIAgentClaw import run_offline_ai_agents
+
+            result = run_offline_ai_agents(str(self.case_root),
+                                           target_artifacts_dir=str(self.target_artifacts_dir))
+            if not isinstance(result, dict):
+                result = {'success': False, 'records': 0,
+                          'error': f'Parser returned invalid format: {type(result).__name__}'}
+            warnings = []
+            if result.get('status') == 'source_not_found' and result.get('message'):
+                warnings.append(result['message'])
+            if result.get('errors'):
+                warnings.append(f"{result['errors']} session file(s) could not be read")
+            return ParserResult(
+                success=result.get('success', False),
+                artifact_type='AIAgents',
+                records_parsed=result.get('records', 0),
+                output_path=result.get('output_path') or os.path.join(self.target_artifacts_dir, 'ai_agents.db'),
+                errors=[result.get('error')] if result.get('error') else [],
+                warnings=warnings,
+                execution_time=time.time() - start_time
+            )
+        except Exception as e:
+            import traceback
+            error_type = type(e).__name__
+            artifact_path = kwargs.get('artifact_path', 'unknown')
+            logger.error(f"AI agents parser failed - Type: {error_type}, Path: {artifact_path}")
+            logger.error(f"Error message: {e}")
+            logger.error(f"Stack trace:\n{traceback.format_exc()}")
+            sanitized_error = self._sanitize_dependency_error(str(e), error_type, str(artifact_path))
+            return ParserResult(success=False, artifact_type='AIAgents', records_parsed=0, output_path="",
                                 errors=[sanitized_error], execution_time=time.time() - start_time)
 
     def _invoke_shimcache_parser(self, start_time: float, **kwargs) -> ParserResult:
@@ -1668,6 +1721,7 @@ class ParserInvoker:
             'RecycleBin',
             'SRUM',
             'Browser',
+            'AIAgents',
             'MFT',
             'USN'
         ]
@@ -1678,7 +1732,20 @@ class ParserInvoker:
             if artifact.artifact_type not in artifacts_by_type:
                 artifacts_by_type[artifact.artifact_type] = []
             artifacts_by_type[artifact.artifact_type].append(artifact)
-        
+
+        # ShimCache lives in the SYSTEM hive. The detector types a SYSTEM file
+        # 'ShimCache' only under a folder named ShimCache, so a hive collected
+        # from anywhere else (a KAPE tree, the Offline Importer's own
+        # Registry_Hives) was parsed for the registry and never for ShimCache.
+        if 'ShimCache' not in artifacts_by_type:
+            system = next((a for a in artifacts_by_type.get('Registry', [])
+                           if _is_system_hive(getattr(a, 'current_path', ''))), None)
+            if system is not None:
+                shim = copy.copy(system)
+                shim.artifact_type = 'ShimCache'
+                artifacts_by_type['ShimCache'] = [shim]
+                total += 1
+
         # Sort the artifact types based on canonical order, keeping unknown types at the end
         ordered_types = sorted(
             artifacts_by_type.keys(),
@@ -1715,7 +1782,7 @@ class ParserInvoker:
             # Determine if this is a directory-based parser (scans entire directory)
             # or file-based parser (processes individual files)
             is_directory_parser = artifact_type in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin', 'Browser',
-                                                    'AmCache']
+                                                    'AIAgents', 'AmCache']
             
             if is_directory_parser:
                 # For directory-based parsers, call once with the directory containing the files

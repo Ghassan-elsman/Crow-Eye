@@ -55,6 +55,12 @@ from eye.services.evidence_detector import EvidenceDetector
 from eye.services.truncation_auditor import TruncationAuditor
 from eye.services.evidence_seal import EvidenceSeal
 
+def _user_eye_config():
+    """The investigator's eye_config.json (per user, survives upgrades)."""
+    from eye.services.config_manager import user_config_path
+    return user_config_path()
+
+
 class ContextManager:
     """
     Main Orchestrator for Forensic Intelligence.
@@ -122,6 +128,14 @@ class ContextManager:
         "enable_summary_buffer": True,
         "enable_conversation_recall": True,
         "conversation_recall_top_k": 3,
+        # Earlier questions go to the model as question + one digest of their tool
+        # results + answer (the stored history keeps everything; recall_result reads
+        # a full result back). Off = every earlier message goes out whole.
+        "fold_earlier_questions": True,
+        # Within a question: once raw tool output passes this many characters, older
+        # results go out as digests; the newest `compact_keep_last` stay whole.
+        "compact_tool_results_over_chars": 120000,
+        "compact_keep_last": 2,
         # Global forensic search row cap (search_artifacts).
         "search_max_rows": 50,
     }
@@ -169,6 +183,20 @@ class ContextManager:
 
         # --- Specialized Sub-Services ---
         self.correlation_service = CorrelationService(case_directory) if case_directory else None
+        # The data source answers the correlation and search tools for this
+        # case (case_data_source.CaseDataSource). A source a host built already
+        # bound to its own scope keeps what it has.
+        if database_service is not None:
+            if getattr(database_service, "correlation_service", None) is None:
+                try:
+                    database_service.correlation_service = self.correlation_service
+                except Exception:
+                    pass
+            if getattr(database_service, "search_service", None) is None and search_service is not None:
+                try:
+                    database_service.search_service = search_service
+                except Exception:
+                    pass
         # Evidence semantic-discovery index (optional; reuses the RAG service's
         # embedding client). Enabled only when an embedding client exists AND the
         # investigator opted into indexing the forensic data (embedding.index_evidence);
@@ -176,8 +204,11 @@ class ContextManager:
         # filtered out / degrades cleanly. Embeddings can thus be enabled for KB
         # retrieval alone without indexing case data.
         _emb_client = getattr(rag_service, "embedding_client", None) if self._load_embedding_index_flag() else None
+        # The index is kept where the data source's scope keeps it (a server:
+        # one per scope), or beside the case (JSONL) when it names no store.
         self.evidence_index_service = EvidenceIndexService(
             case_directory, database_service, _emb_client,
+            index_store=getattr(database_service, "index_store", None),
         ) if case_directory else None
         # Structured result cache: read-only case DBs are static, so identical SQL
         # is reused instead of re-run (computation reuse + "reused prior result").
@@ -331,7 +362,7 @@ class ContextManager:
         False so embeddings can be used for the knowledge base alone."""
         try:
             app_root = Path(__file__).parent.parent.parent
-            config_path = app_root / "configs" / "eye_config.json"
+            config_path = _user_eye_config()
             if config_path.exists():
                 with open(config_path, "r", encoding="utf-8") as f:
                     cfg = json.load(f) or {}
@@ -382,7 +413,7 @@ class ContextManager:
         
         """
         app_root = Path(__file__).parent.parent.parent
-        config_path = app_root / "configs" / "eye_config.json"
+        config_path = _user_eye_config()
         
         # Default configuration
         default_config = {
@@ -445,7 +476,7 @@ class ContextManager:
         """
         cfg = dict(self.DEFAULT_REASONING_CONFIG)
         app_root = Path(__file__).parent.parent.parent
-        config_path = app_root / "configs" / "eye_config.json"
+        config_path = _user_eye_config()
         try:
             if config_path.exists():
                 with open(config_path, "r", encoding="utf-8") as f:
@@ -475,6 +506,9 @@ class ContextManager:
             cfg["auto_segment_question"] = bool(cfg["auto_segment_question"])
             cfg["enable_auto_map_reduce"] = bool(cfg["enable_auto_map_reduce"])
             cfg["auto_map_reduce_row_threshold"] = max(100, min(1_000_000, int(cfg["auto_map_reduce_row_threshold"])))
+            cfg["fold_earlier_questions"] = bool(cfg["fold_earlier_questions"])
+            cfg["compact_tool_results_over_chars"] = max(10_000, min(5_000_000, int(cfg["compact_tool_results_over_chars"])))
+            cfg["compact_keep_last"] = max(0, min(20, int(cfg["compact_keep_last"])))
         except (TypeError, ValueError):
             return dict(self.DEFAULT_REASONING_CONFIG)
         return cfg
@@ -1127,9 +1161,21 @@ class ContextManager:
                            "message": "Export declined by investigator; nothing was written. "
                                       "Do not request it again unless the investigator asks."}}
 
-    def _build_system_prompt(self, rag_context: str, history: List[Dict],
-                             recalled_conversation: str = "",
-                             subquestion_context: str = "") -> str:
+    def _source_dialect(self):
+        from eye.services.case_data_source import source_dialect
+        return source_dialect(getattr(self, "database_service", None))
+
+    def _build_system_prompt(self, *args, **kwargs) -> str:
+        """The system prompt in the words of the case's data source: exactly as
+        written for SQLite with rowid (the desktop), reworded for any other
+        dialect (case_data_source.dialect_text)."""
+        from eye.services.case_data_source import dialect_text
+        return dialect_text(self._build_system_prompt_text(*args, **kwargs),
+                            *self._source_dialect())
+
+    def _build_system_prompt_text(self, rag_context: str, history: List[Dict],
+                                  recalled_conversation: str = "",
+                                  subquestion_context: str = "") -> str:
         """
         Dynamically constructs the Master System Prompt with priority-based truncation.
         Ensures Core Identity and Tools are preserved while optional context is truncated.
@@ -1372,7 +1418,19 @@ class ContextManager:
         
         # A. Situation Awareness (Pinned Evidence & Report Summary)
         situation_awareness = ["\n## Forensic Situation Awareness"]
-        pinned = [m for m in history if m.get("metadata", {}).get("pinned") or m.get("metadata", {}).get("preserve_evidence")]
+        # Pinned by the investigator: always. Flagged as evidence by the detector:
+        # only the current question's, newest 12. Every flagged message of the whole
+        # conversation went in before, so this block grew with each question
+        # (2026-11-03 cost review); earlier evidence stays in the folded history.
+        try:
+            from eye.services.result_compaction import is_question
+            _q = max([i for i, m in enumerate(history) if is_question(m)] or [0])
+        except Exception:
+            _q = 0
+        _user_pinned = [m for m in history if (m.get("metadata") or {}).get("pinned")]
+        _flagged = [m for m in history[_q:] if (m.get("metadata") or {}).get("preserve_evidence")
+                    and not (m.get("metadata") or {}).get("pinned")][-12:]
+        pinned = _user_pinned + _flagged
         if pinned:
             situation_awareness.append("### CRITICAL PINNED EVIDENCE")
             for m in pinned:
@@ -1699,6 +1757,14 @@ class ContextManager:
         r"\b(wings?|semantic mappings?|mappings?|feathers?|correlation|correlate|pipelines?|anchor)\b", re.I)
 
     def _get_tool_definitions(self) -> List[Dict]:
+        """The tool definitions in the words of the case's data source: the
+        same list for SQLite with rowid (the desktop); for any other dialect the
+        descriptions reworded and the SQL tools told the dialect
+        (case_data_source.dialect_tools)."""
+        from eye.services.case_data_source import dialect_tools
+        return dialect_tools(self._tool_definitions_for_model(), *self._source_dialect())
+
+    def _tool_definitions_for_model(self) -> List[Dict]:
         """
         Returns the JSON tool definitions sent to the LLM.
         For constrained models, filters to only essential forensic tools.
@@ -1857,7 +1923,12 @@ class ContextManager:
         # Add audit trail status if available
         if self.truncation_auditor:
             try:
-                audit_summary = self.truncation_auditor.get_audit_summary()
+                # custody_status(), not get_audit_summary(): the two fields
+                # used here come from memory, and the summary read the whole
+                # audit log after every answer.
+                status = getattr(self.truncation_auditor, "custody_status", None)
+                audit_summary = (status() if callable(status)
+                                 else self.truncation_auditor.get_audit_summary())
                 stats["audit_trail_status"] = {
                     "chain_of_custody_at_risk": audit_summary.get("chain_of_custody_at_risk", False),
                     "failed_writes_count": audit_summary.get("failed_writes_count", 0)

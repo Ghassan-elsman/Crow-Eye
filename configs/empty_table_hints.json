@@ -13,7 +13,8 @@
     "shimcache": "ShimCache is held in memory and written to the SYSTEM hive at shutdown; a machine that has not shut down cleanly may show few entries.",
     "mft": "MFT tables require an NTFS volume.",
     "usn": "The USN Journal can be disabled (fsutil usn deletejournal) or be too small to retain older activity.",
-    "mft_usn_correlation": "Correlation needs both the MFT and the USN Journal to have been parsed in this case."
+    "mft_usn_correlation": "Correlation needs both the MFT and the USN Journal to have been parsed in this case.",
+    "ai_agents": "Empty when no Claude Code, Gemini CLI or Codex session folders exist in any user profile."
   },
   "tables": {
     "BAM": "BAM (Background Activity Moderator) exists on Windows 10 1709 and later; earlier builds and Windows Server Core may have no entries.",
@@ -72,6 +73,9 @@
     "srum_network_connectivity": "Empty when the network connectivity provider was disabled or no networks were connected.",
     "srum_app_timeline": "The App Timeline provider exists on Windows 10 and later only.",
     "SecurityLogs": "Reading the Security log requires Administrator rights; also empty if the log was cleared or auditing is off.",
+    "partition_diagnostic": "Microsoft-Windows-Partition/Diagnostic event 1006 is written when a disk arrives or leaves; the channel exists on Windows 10 1607 and later. Empty on older systems, when the channel was cleared, or when the .evtx was not collected.",
+    "setupapi_dev_log": "Read from %SystemRoot%\\INF\\setupapi.dev*.log. Empty when those files were not collected (offline) or not readable; Windows rotates the log, so the oldest installs may be gone. UTC is empty when the case holds no single SYSTEM hive to give the machine's time zone (time_basis says so).",
+    "driver_frameworks_usermode": "The Microsoft-Windows-DriverFrameworks-UserMode/Operational channel is OFF by default on Windows 10 and 11, so on most machines it holds nothing: an empty table here means the channel was off, not that no device was connected. Partition Diagnostic records disks either way.",
     "Custom_JumpLists": "Custom Jump Lists are written only by applications that pin or publish tasks/destinations.",
     "deleted_entries": "Empty when the journal recorded no deletions in its retained window.",
     "ntfs_integrity_findings": "Empty when the NTFS integrity checks found nothing on the volumes parsed, or when they are turned off in Settings -> Parsing; the case's custody ledger records which checks were off at each parse.",

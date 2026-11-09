@@ -385,10 +385,29 @@ Parses HTML forensic reports and extracts structured data into ReportBlock objec
 - `parse_reports_directory()` - Parse all reports in directory
 - `convert_to_report_blocks()` - Convert parsed data to ReportBlock objects
 
-#### DatabaseService
-**File**: `eye/services/database_service.py` (referenced)
+#### CaseDataSource (SqliteCaseDataSource)
+**Files**: `eye/services/case_data_source.py` (the protocol), `eye/services/database_service.py`
+(`SqliteCaseDataSource`, also still named `ForensicDatabaseService`)
 
-Provides read-only access to forensic artifact databases with automatic discovery and schema introspection.
+The one place Eye's tools reach a case's evidence: databases and tables, columns and schema,
+read-only queries, the full-text search, single rows, time windows and the correlation results.
+A data source is built for one scope (the desktop: the case) and no method takes an agent, a
+tenant or a case, so a server can hand the same tools its own source (Crow-Eye Sentinel: a
+PostgreSQL one bound to its role and row-level security). `query()` runs one read-only statement
+(more than one is refused), reports `dialect()`, takes `timeout_s`, and every failure carries an
+`error_kind` (`no_table`, `no_column`, `syntax`, `refused`, `timeout`, `other`) that the self-heal
+keys on. Evidence references (`database:table:row_id`) are built and read only through
+`row_ref` / `parse_row_ref`. The semantic index's store (`SemanticIndexStore`, JSONL beside the
+case by default) and the behaviour analysis (`BehaviorStore`) are injectable. Triage stays
+SQLite-only.
+
+What the model is told follows the source: `dialect()` and the optional `row_id_column()` (default
+`rowid`) reword the tool descriptions and the system prompt (`case_data_source.dialect_tools` /
+`dialect_text`). A SQLite source with `rowid` - the desktop - gets them exactly as
+`configs/llm_config.json` writes them; a PostgreSQL source gets its row-id column, `ILIKE`,
+`information_schema`, the JSON operators and timestamptz. The timeline's row filters are written in
+SQLite SQL; a source translates them with `translate_filter()`, and one it cannot translate is not run
+and is named in the result (`row_filters_not_applied`).
 
 **Capabilities**:
 - Discover SQLite databases in case directory

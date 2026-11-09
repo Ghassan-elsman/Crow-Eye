@@ -5203,12 +5203,28 @@ def _reg_Claw(case_root=None, offline_mode=False, windows_partition="C:"):
                          (_u, "MRU", str(vd), "", _TSC + r"\Default", _cov_stamp),
                          ["user_name", "entry_type", "server"])
             for s in _cov_subs(_nt, _TSC + r"\Servers"):
-                hint, _p = _cov_one(_nt, _TSC + r"\Servers\\" + s, "UsernameHint")
+                # One separator (the r"\Servers\\" spelling made two, and the
+                # hint was never found offline); and the row names the
+                # server's own key, so it is dated by that key's last write.
+                _srv = _TSC + "\\Servers\\" + s
+                hint, _p = _cov_one(_nt, _srv, "UsernameHint")
                 _cov_ins("RDPClientMRU",
                          ["user_name", "entry_type", "server", "username_hint",
                           "key_path", "parsed_at"],
-                         (_u, "Server", s, str(hint or ""), _TSC + r"\Servers", _cov_stamp),
+                         (_u, "Server", s, str(hint or ""), _srv, _cov_stamp),
                          ["user_name", "entry_type", "server"])
+                if hint:
+                    # A row an older build stored without the hint it could
+                    # not read (the doubled separator) gets it now.
+                    cursor.execute(
+                        "UPDATE RDPClientMRU SET username_hint = ? WHERE user_name = ? AND "
+                        "entry_type = 'Server' AND server = ? AND COALESCE(username_hint, '') = ''",
+                        (str(hint), _u, s))
+            # Rows stored by a build that named the Servers container.
+            cursor.execute(
+                "UPDATE RDPClientMRU SET key_path = key_path || ? || server "
+                "WHERE entry_type = 'Server' AND key_path LIKE ? AND user_name = ?",
+                ("\\", "%\\Servers", _u))
 
             _OFF = r"Software\Microsoft\Office"
             for ver in _cov_subs(_nt, _OFF):

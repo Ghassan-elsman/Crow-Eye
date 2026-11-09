@@ -1366,6 +1366,8 @@ class PipelineExecutor:
         wing.version = wing_config.version
         wing.created_date = wing_config.created_date
         wing.wing_category = wing_config.wing_category
+        # Where its rows may come from (14.2); a partitioned run reads it.
+        wing.host_scope = getattr(wing_config, 'host_scope', None)
         # The Wing's own rules. Dropped here, no production run ever evaluated
         # them: the five advanced Wings' absence / sequence / threshold rules
         # never fired.

@@ -18,6 +18,7 @@ import {
   isBridgeReady,
   getContextStats,
   getConversationHistory,
+  getRecentMessageIds,
   clearConversationHistory,
   onStatusUpdated,
   onDialogueUpdated,
@@ -571,7 +572,10 @@ const ChatInterface: React.FC = () => {
   const syncRecentMessageIds = useCallback(async () => {
     if (!isBridgeReady()) return;
     try {
-      const json = await getConversationHistory();
+      // The tail only: the ids to realign are the newest messages'. Pulling
+      // the whole history (every transcript) after each answer grew with the
+      // conversation and ran on Crow-Eye's GUI thread.
+      const json = await getRecentMessageIds(40);
       const r = JSON.parse(json);
       if (!r.success || !Array.isArray(r.data)) return;
       const pyHistory: any[] = r.data.filter((m: any) => m.role !== 'system' && !m.metadata?.internal);

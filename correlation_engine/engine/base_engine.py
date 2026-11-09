@@ -121,6 +121,18 @@ class BaseCorrelationEngine(ABC):
         raise NotImplementedError(
             f"{type(self).__name__} does not implement execute_wing()")
 
+    def execute_wing_partitioned(self, wing: Any, partitions: Dict[str, Dict[str, str]],
+                                 clock_skew_s: Optional[Dict[str, float]] = None,
+                                 max_workers: int = 1, pending: Optional[Dict[str, Any]] = None,
+                                 max_cost: Optional[float] = None, account: bool = True) -> Any:
+        """Run one Wing over several machines' feathers, ``{agent_id:
+        {feather_id: path}}``, by its host scope (Sentinel 14.4). See
+        engine/partitioned.py."""
+        from .partitioned import execute_wing_partitioned
+        return execute_wing_partitioned(self, wing, partitions, clock_skew_s=clock_skew_s,
+                                        max_workers=max_workers, pending=pending,
+                                        max_cost=max_cost, account=account)
+
     def set_output_directory(self, output_dir: str, execution_id: int = None):
         """Where (and under which execution) streamed matches are written."""
 

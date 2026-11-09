@@ -29,7 +29,8 @@ _here = os.path.dirname(os.path.abspath(__file__))
 if _here not in sys.path:
     sys.path.insert(0, _here)
 
-def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, correlate=True):
+def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, correlate=True,
+                    integrity=None):
     """
     Run MFT analysis in offline mode.
     
@@ -44,16 +45,24 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
         MFT parser operates on $MFT file and does not require registry context.
         The registry_hive_paths parameter is ignored.
         
+        integrity (dict, optional): a caller's NTFS integrity options
+                                    (ntfs_integrity.RUN_OPTIONS); None reads
+                                    Settings. Refused with ValueError before
+                                    anything is read when unknown or mistyped.
+
     Returns:
         dict: Parser results including record counts and status
     """
+    if integrity is not None:
+        from ntfs_integrity import check_options
+        integrity = check_options(integrity)
     print(f"[Offline MFT] Starting analysis for case: {case_path}")
     
     try:
         # Import MFT parser components
         from MFT_Claw import (MFTClawConfig, MFTParser, OutputFormat, LogLevel, DatabaseManager,
                               merge_extension_records, open_file_integrity_run,
-                              finish_file_integrity_run, mft_parse_workers,
+                              finish_file_integrity_run, integrity_result, mft_parse_workers,
                               parse_chunks_parallel)
         
         # Determine MFT file path
@@ -168,8 +177,10 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
 
         # NTFS integrity checks + delta parse: every record is digested; a
         # re-parse of the same $MFT in this case parses only what changed.
+        options = integrity
         integrity = open_file_integrity_run(volume_label, mft_file_path, record_size,
-                                            estimated_records, case_path, db.connection)
+                                            estimated_records, case_path, db.connection,
+                                            options=options)
         if integrity is not None:
             print(f"[Offline MFT] {integrity.mode} parse"
                   + (f" ({integrity.reason})" if integrity.reason else
@@ -270,6 +281,7 @@ def run_offline_mft(case_path, mft_file_path=None, registry_hive_paths=None, cor
                                      'unchanged_records': unchanged,
                                      'findings': sum(found.values()),
                                      'manifest_id': manifest.get('manifest_id')}
+                integrity_summary.update(integrity_result(integrity, manifest))
                 if integrity.mode == 'delta':
                     print(f"[Offline MFT] Delta parse: {unchanged:,} of {estimated_records:,} "
                           f"records unchanged since the last parse")

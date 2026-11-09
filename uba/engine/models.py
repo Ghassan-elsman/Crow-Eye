@@ -85,12 +85,28 @@ class BehaviorEvent:
     details: dict = field(default_factory=dict)   # small extras for the card
     evidence: List[EvidenceRef] = field(default_factory=list)
     event_id: str = ""            # stable hash, filled in __post_init__
+    # Who drove it (who_drove.py, after every rule): person | remote_person |
+    # program | automation | unknown, the kind of automation (script |
+    # ai_agent) and the facts behind it. Not part of event_id.
+    operator: str = ""
+    operator_kind: str = ""
+    operator_basis: str = ""
+    # Whether the program a program activity names was the window in front
+    # (foreground) or running behind (background) then, and why (who_drove.py).
+    app_state: str = ""
+    app_state_basis: str = ""
 
     def __post_init__(self):
         if not self.event_id:
+            # What the event IS, not how it is worded: the sentence used to be
+            # part of the id, so improving a sentence changed every id a
+            # Behaviour Wing or the Eye pointed at (2026-11-03). The facts the
+            # sentence is built from (details) stay in, so two events from the
+            # same rows that say different things still differ.
             basis = json.dumps([
                 self.rule_id, self.ts_start, self.ts_end, self.activity,
-                self.actor_name, self.description,
+                self.actor_name, self.actor_sid, self.app_name,
+                json.dumps(self.details, default=str, sort_keys=True),
                 [(e.db, e.table, e.rowids[:5], e.rowid_range) for e in self.evidence],
             ], default=str, sort_keys=True)
             self.event_id = hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]
@@ -120,4 +136,9 @@ class BehaviorEvent:
             "aggregate_count": self.aggregate_count,
             "details_json": json.dumps(self.details, default=str),
             "evidence_json": json.dumps([e.to_dict() for e in self.evidence]),
+            "operator": self.operator,
+            "operator_kind": self.operator_kind,
+            "operator_basis": self.operator_basis,
+            "app_state": self.app_state,
+            "app_state_basis": self.app_state_basis,
         }

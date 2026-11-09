@@ -40,6 +40,13 @@ const P = {
   userCog: <><circle cx="9" cy="7" r="4" /><path d="M3 21v-2a4 4 0 0 1 4-4h4" /><circle cx="18" cy="16" r="3" /><path d="M18 12v1M18 19v1M22 16h-1M15 16h-1M20.5 13.5l-.7.7M16.2 17.8l-.7.7M20.5 18.5l-.7-.7M16.2 14.2l-.7-.7" /></>,
   refresh: <><polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" /><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" /></>,
   eye: <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" /><circle cx="12" cy="12" r="3" /></>,
+  // Fact badges (FactBadges.jsx): what a number measures.
+  keyboard: <><rect x="2" y="6" width="20" height="12" rx="2" /><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10" /></>,
+  mouse: <><rect x="6" y="3" width="12" height="18" rx="6" /><path d="M12 7v4" /></>,
+  message: <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></>,
+  user: <><circle cx="12" cy="8" r="4" /><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1" /></>,
+  arrowUp: <><line x1="12" y1="19" x2="12" y2="5" /><polyline points="5 12 12 5 19 12" /></>,
+  arrowDown: <><line x1="12" y1="5" x2="12" y2="19" /><polyline points="19 12 12 19 5 12" /></>,
 }
 
 const ALIASES = {
@@ -52,6 +59,10 @@ const ALIASES = {
   web_search: 'search', site_visit: 'globe', file_upload: 'upload',
   communication_app: 'users', crypto_wallet: 'chip', open_tabs: 'appWindow',
   media_playback: 'play',
+  printer_added: 'chip', remote_desktop_out: 'appWindow', cloud_sync: 'refresh',
+  usb_copy: 'usb', files_collected: 'folder',
+  input: 'appWindow',
+  ai_agent_session: 'users', ai_agent_command: 'terminal',
   logon: 'login', logoff: 'logout', failed_logon: 'alert',
   app_launch: 'appWindow', program_run: 'run',
   process_created: 'terminal', app_usage: 'appWindow', program_presence: 'box',

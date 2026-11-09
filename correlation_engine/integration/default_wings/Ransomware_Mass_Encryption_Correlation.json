@@ -3,6 +3,7 @@
   "wing_name": "Ransomware Mass-Encryption Correlation",
   "wing_id": "default_wing_ransomware_001",
   "wing_category": "identity",
+  "host_scope": "same_host",
   "description": "Recovery-inhibition tooling (vssadmin, wbadmin, bcdedit, wmic, diskshadow) run on this host, with the file and service context around it. The mass-write burst thresholds moved to Behaviour Wings (see moved_rules): a burst spans many files, each its own identity, so the Identity engine could not count it.",
   "proves": "Files were mass-modified and recovery was inhibited, consistent with ransomware",
   "author": "Crow-Eye Team",

@@ -41,11 +41,17 @@ from eye.services.report_engine import is_triage_block
 # here and had already drifted from the router's copy; it was never called.
 
 
-# A forensic evidence reference: ``database:table:rowid``. The database segment is
-# matched greedily so imported-evidence DB names (which may contain spaces, dots, or
-# a subpath under Target_Artifacts/Imported_Evidence/) are captured whole; the table
-# is a SQL identifier and the rowid is an integer.
-_EVIDENCE_REF_RE = re.compile(r'^(?P<db>.+):(?P<table>[A-Za-z_]\w*):(?P<rowid>\d+)$')
+# A forensic evidence reference, ``database:table:rowid``, is built and read only
+# through the case's data source (case_data_source.row_ref / parse_row_ref), so a
+# server can change its form without touching the tools.
+from eye.services.case_data_source import parse_row_ref as _parse_row_ref
+
+
+def _row_source(ds, database, table, row_id) -> tuple:
+    """(database, the statement that reloads the row) through the data source."""
+    if ds is not None and hasattr(ds, "row_query"):
+        return str(database), ds.row_query(table, row_id)
+    return str(database), 'SELECT * FROM "%s" WHERE rowid = %d' % (table, int(row_id))
 
 # The short `data` field is the card's one-line label (kept small). `content` stores
 # the fuller captured text so evidence WITHOUT a reloadable DB source — e.g. from a
@@ -54,20 +60,21 @@ _EVIDENCE_REF_RE = re.compile(r'^(?P<db>.+):(?P<table>[A-Za-z_]\w*):(?P<rowid>\d
 _EVIDENCE_CONTENT_CAP = 6000
 
 
-def _source_from_ref(ref: str) -> tuple:
+def _source_from_ref(ref: str, ds=None) -> tuple:
     """Turn a ``database:table:rowid`` evidence ref into ``(database, query)`` so an
     evidence card can reload its real source row on demand — for BOTH native artifacts
     and imported evidence. Returns ``("", "")`` when ``ref`` is not a row pointer
     (e.g. it is just a tool name)."""
     if not ref:
         return "", ""
-    m = _EVIDENCE_REF_RE.match(ref.strip())
-    if not m:
+    parsed = (ds.parse_row_ref(ref) if ds is not None and hasattr(ds, "parse_row_ref")
+              else _parse_row_ref(ref))
+    if not parsed:
         return "", ""
-    return m.group("db").strip(), f'SELECT * FROM "{m.group("table")}" WHERE rowid = {m.group("rowid")}'
+    return _row_source(ds, *parsed)
 
 
-def _source_from_row(row) -> tuple:
+def _source_from_row(row, ds=None) -> tuple:
     """Turn one provenance row (as returned by search / imported-evidence
     correlation / semantic search — carrying ``database`` + ``table`` +
     ``row_id``/``rowid``/``__rid``) into ``(database, query)`` so the evidence card
@@ -79,13 +86,13 @@ def _source_from_row(row) -> tuple:
     rid = row.get("row_id", row.get("rowid", row.get("__rid")))
     if db and table and rid is not None:
         try:
-            return str(db), f'SELECT * FROM "{table}" WHERE rowid = {int(rid)}'
+            return _row_source(ds, db, table, int(rid))
         except (ValueError, TypeError):
             return "", ""
     return "", ""
 
 
-def _source_from_result(r: dict, inner: dict) -> tuple:
+def _source_from_result(r: dict, inner: dict, ds=None) -> tuple:
     """Best-effort reloadable source for a tool result that did NOT take raw SQL
     (search_artifacts, correlate_imported_evidence, semantic search). These tools
     still return ``database:table:row_id`` provenance, so derive a single-row query
@@ -98,7 +105,7 @@ def _source_from_result(r: dict, inner: dict) -> tuple:
             refs = [refs]
         if isinstance(refs, list):
             for ref in refs:
-                db, q = _source_from_ref(str(ref))
+                db, q = _source_from_ref(str(ref), ds)
                 if db and q:
                     return db, q
     # 2. Structured rows carrying provenance (list, or {value: [rows]} maps).
@@ -111,7 +118,7 @@ def _source_from_result(r: dict, inner: dict) -> tuple:
                 if isinstance(v, list):
                     rows.extend(v)
         for row in rows:
-            db, q = _source_from_row(row)
+            db, q = _source_from_row(row, ds)
             if db and q:
                 return db, q
     return "", ""
@@ -242,7 +249,8 @@ class QueryProcessor:
             # single-row query from the result's database:table:rowid provenance, so
             # the evidence card shows the REAL row — incl. imported evidence.
             if not (query and database):
-                db2, q2 = _source_from_result(r, inner)
+                db2, q2 = _source_from_result(r, inner,
+                                              getattr(self.cm, "database_service", None))
                 if db2 and q2:
                     database, query = db2, q2
             return tool, blob, query, database
@@ -321,7 +329,8 @@ class QueryProcessor:
                     continue
                 # If the ref is a database:table:rowid pointer, derive a reloadable
                 # source so the card shows the REAL row (native or imported evidence).
-                database, query = _source_from_ref(ref)
+                database, query = _source_from_ref(
+                    ref, getattr(self.cm, "database_service", None))
                 cards.append({
                     "kicker": ref or "evidence",
                     "data": note or ref,
@@ -1587,6 +1596,23 @@ class QueryProcessor:
                 return base_tokens + sum(tc.count_tokens(m.get("content") or "") for m in (hist or []))
 
             working = list(history or [])
+            # Earlier questions go out folded: question, one digest of their tool
+            # results, answer. Stored history keeps every message.
+            try:
+                _rcf = getattr(self.cm, "reasoning_config", None)
+                if not isinstance(_rcf, dict) or _rcf.get("fold_earlier_questions", True):
+                    from eye.services.result_compaction import fold_earlier_questions
+                    _before = len(working)
+                    working = fold_earlier_questions(working)
+                    _folded_now = _before - len(working)
+                    if _folded_now > 0 and _folded_now != getattr(self, "_last_fold", None):
+                        self._last_fold = _folded_now
+                        self._audit_event("FOLDED_EARLIER_QUESTIONS",
+                                          reason="earlier questions sent as question + tool-result "
+                                                 "digest + answer; the stored history keeps every message",
+                                          metadata={"messages_before": _before, "messages_after": len(working)})
+            except Exception as _fe:
+                self.logger.debug(f"Earlier-question fold skipped: {_fe}")
             # Older tool results go out as digests (full result: recall_result);
             # the stored history keeps them whole. See result_compaction.
             try:
@@ -1986,7 +2012,7 @@ class QueryProcessor:
                 }
 
             # Regular Query Path
-            self.cm.history_manager.add_message("user", user_query)
+            self.cm.history_manager.add_message("user", user_query, {"question_start": True})
             
             # --- STAGE 2: Forensic Keyword Analysis ---
             emit_step("thinking", "Scanning query for forensic intents ", "active")
@@ -2957,7 +2983,12 @@ class QueryProcessor:
                             else:
                                 ai_content += "How would you like to proceed?"
 
-                    self.cm.history_manager.add_message("user", synthesis_prompt, {"internal": True})
+                    # The synthesis prompt repeats up to 40K characters of results the
+                    # history already holds; the seal records the payload sent. A
+                    # marker keeps the order of the conversation (2026-11-03).
+                    self.cm.history_manager.add_message(
+                        "user", "[Write-up step: the evidence above was written up as the answer below.]",
+                        {"internal": True, "synthesis_marker": True, "synthesis_prompt_chars": len(synthesis_prompt)})
                     self.cm.history_manager.add_message("assistant", ai_content)
                     emit_step("synthesis", "Forensic synthesis complete ", "done")
                     check_report_sync(initial_report_state)
@@ -3333,7 +3364,8 @@ class QueryProcessor:
             from eye.services.result_compaction import ResultCompactor, DEFAULT_TRIGGER_CHARS
             cfg = getattr(self.cm, "reasoning_config", None) or {}
             comp = ResultCompactor(trigger_chars=int(cfg.get("compact_tool_results_over_chars",
-                                                             DEFAULT_TRIGGER_CHARS)))
+                                                             DEFAULT_TRIGGER_CHARS)),
+                                   keep_last=int(cfg.get("compact_keep_last", 2)))
             self._compactor = comp
         return comp
 

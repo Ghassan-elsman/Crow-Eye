@@ -341,6 +341,14 @@ class TruncationAuditor:
         output_path = self.logs_dir / "audit_trail.json"
         return self.export_audit_trail_json(str(output_path))
     
+    def custody_status(self) -> Dict[str, Any]:
+        """Whether the audit trail is at risk, from the failed-writes buffer
+        alone. The context stats the Eye window asks for after every answer
+        need only this; get_audit_summary() reads the whole audit log to
+        count its events, a cost that grows with every answer of a case."""
+        failed = len(self.failed_writes_buffer)
+        return {"failed_writes_count": failed, "chain_of_custody_at_risk": failed > 0}
+
     def get_audit_summary(self) -> Dict[str, Any]:
         """
         Get summary statistics of audit trail.

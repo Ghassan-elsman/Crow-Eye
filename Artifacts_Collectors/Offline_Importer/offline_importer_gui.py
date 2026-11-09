@@ -697,7 +697,7 @@ class OfflineImporterGUI(QMainWindow):
         self.artifact_type_combo.setMaximumWidth(220)
         artifact_types = ["All Types", "Registry Hives", "Prefetch Files", "Jump Lists", "Event Logs",
                           "MFT Files", "USN Journal", "Recycle Bin", "AmCache", "ShimCache", "SRUM",
-                          "Browsers"]
+                          "Browsers", "AI Agents"]
         self.artifact_type_combo.addItems(artifact_types)
         self.artifact_type_combo.currentTextChanged.connect(self._on_artifact_type_changed)
         self.artifact_type_combo.setCursor(Qt.PointingHandCursor)
@@ -1555,6 +1555,9 @@ class OfflineImporterGUI(QMainWindow):
         # Create log text area
         from PyQt5.QtWidgets import QTextEdit, QSizePolicy
         self.log_text_area = QTextEdit()
+        # A long scan logs without end; the oldest lines go, as in the
+        # parse dialog (Loading_dialog), or every append grows the cost.
+        self.log_text_area.document().setMaximumBlockCount(5000)
         self.log_text_area.setReadOnly(True)
         self.log_text_area.setMinimumHeight(150)
 
@@ -1658,6 +1661,7 @@ class OfflineImporterGUI(QMainWindow):
             "EVTX",
             "SRUM",
             "Browser",
+            "AIAgents",
             "Unknown"
         ])
         self.results_type_filter.currentTextChanged.connect(self._apply_results_filters)
@@ -1830,6 +1834,22 @@ class OfflineImporterGUI(QMainWindow):
             # Add row to table
             self._add_result_row(artifact)
 
+    # Rows arrive one by one as a scan finds them. Turning sorting back on
+    # after each one re-sorted the whole table every row; it is turned on
+    # once, a moment after the last row of a burst.
+    def _resort_later(self):
+        if getattr(self, "_resort_pending", False):
+            return
+        self._resort_pending = True
+        QTimer.singleShot(150, self._resort_now)
+
+    def _resort_now(self):
+        self._resort_pending = False
+        try:
+            self.results_table.setSortingEnabled(True)
+        except RuntimeError:
+            pass  # the window closed meanwhile
+
     def _add_result_row(self, artifact: dict):
         """Add a single result row to the table with collection status indicator"""
         try:
@@ -1875,7 +1895,7 @@ class OfflineImporterGUI(QMainWindow):
             self.results_table.setItem(row, 4, hash_item)
 
             # Re-enable sorting
-            self.results_table.setSortingEnabled(True)
+            self._resort_later()
 
         except Exception as e:
             # Log error but don't crash
@@ -1884,7 +1904,7 @@ class OfflineImporterGUI(QMainWindow):
             print(f"[GUI] Error in _add_result_row: {e}")
             # Re-enable sorting even on error
             try:
-                self.results_table.setSortingEnabled(True)
+                self._resort_later()
             except:
                 pass
 

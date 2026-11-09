@@ -1,24 +1,30 @@
 /**
  * TimelineView — Main 24H detail view rendering individual events as SVG.
  */
-import { memo, useMemo, useRef, useState, useEffect, useLayoutEffect } from 'react';
-import { normalizeForensicName, formatBytes, formatTime, formatCycleTime, formatDuration, getForensicName, getForensicTimestamps, getForensicId, getPrimaryTimestamp, cleanForensicDate } from '../utils/formatters';
-import { laneArtifactSources, laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart } from '../utils/laneSources';
+import { memo, useMemo, useRef, useState, useEffect, useLayoutEffect, useSyncExternalStore } from 'react';
+import { normalizeForensicName, formatBytes, formatTime, formatCycleTime, formatDuration, getForensicName, getForensicTimestamps, getForensicId, getPrimaryTimestamp, cleanForensicDate, parseForensicMs, aiStepSubject } from '../utils/formatters';
+import { laneArtifactSources, laneVisibleSources, laneSkipsTimestamp, laneSalvageSources, srumBandStart, srumPrevEnds } from '../utils/laneSources';
 import LaneDataModal from './LaneDataModal';
+import FlowBadge from './FlowBadge';
 import { heuristicFlatten } from '../utils/dataUtils';
+import { buildAiIndex, aiHitsFor, aiMarkId, AI_COLOR } from '../utils/aiLinks';
+import { createTooltipStore } from '../utils/tooltipStore';
 
 /** trackAllocator logic (now integrated) */
 function allocateTracks(items, minGapMs = 20000) {
   if (!items || items.length === 0) return [];
-  const sorted = [...items].sort((a, b) => {
-    const tA = new Date(cleanForensicDate(a.start || a.timestamp)).getTime();
-    const tB = new Date(cleanForensicDate(b.start || b.timestamp)).getTime();
-    return tA - tB;
-  });
+  // Each time parsed once. The sort parsed both sides of every comparison
+  // (about 2 n log n Date parses through cleanForensicDate), then every item
+  // again; the order and the tracks are the same.
+  const startOf = new Map();
+  for (const item of items) {
+    startOf.set(item, parseForensicMs(item.start || item.timestamp));
+  }
+  const sorted = [...items].sort((a, b) => startOf.get(a) - startOf.get(b));
   const trackEnds = [];
   for (const item of sorted) {
-    const startMs = new Date(cleanForensicDate(item.start || item.timestamp)).getTime();
-    const endMs = item.end ? new Date(cleanForensicDate(item.end)).getTime() : startMs + minGapMs;
+    const startMs = startOf.get(item);
+    const endMs = item.end ? parseForensicMs(item.end) : startMs + minGapMs;
     let assigned = -1;
     for (let t = 0; t < trackEnds.length; t++) {
       if (trackEnds[t] + minGapMs <= startMs) { assigned = t; break; }
@@ -43,6 +49,7 @@ const LANES_META = [
   { key: 'srum_net', label: 'SRUM Network', sub: 'Connectivity, Data Usage', color: 'var(--lane-srum-net)' },
   { key: 'mft_usn', label: 'MFT / USN', sub: 'File Creation, Deletion, Rename', color: 'var(--lane-mft-usn)' },
   { key: 'browser', label: 'Browser Activity', sub: 'Visits, Downloads, Cookies, Cache', color: 'var(--lane-browser)' },
+  { key: 'ai_agents', label: 'AI Agents', sub: 'Commands, File Writes, Prompts', color: 'var(--lane-ai-agents)' },
   { key: 'artifacts', label: 'Unified Artifacts', sub: 'LNK, PF, BAM, Reg, USB, Bin', color: 'var(--lane-cache)' },
 ];
 
@@ -50,8 +57,8 @@ const LANES_META = [
 function safeTimeToX(iso, rangeStart, pxPerHour) {
   if (!iso || !rangeStart) return 0;
 
-  const t = new Date(cleanForensicDate(iso)).getTime();
-  const s = new Date(cleanForensicDate(rangeStart)).getTime();
+  const t = parseForensicMs(iso);
+  const s = parseForensicMs(rangeStart);
   if (isNaN(t) || isNaN(s)) return 0;
   return ((t - s) / 3600000) * pxPerHour;
 }
@@ -60,11 +67,11 @@ function filterValid(items) {
   if (!items || !Array.isArray(items)) return [];
   return items.filter(item => {
     if (!item.timestamp) return false;
-    return !isNaN(new Date(cleanForensicDate(item.timestamp)).getTime());
+    return !isNaN(parseForensicMs(item.timestamp));
   });
 }
 
-function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
+function TimelineView({ data, state, links: laneLinks, callBridge, loadedTimeRange }) {
   const {
     timeRange, pxPerHour, activeArtifacts,
     laneHeights, selectedEvent, setSelectedEvent, setDetailEvent, setLaneHeight,
@@ -84,19 +91,25 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
   const lanesContentRef = useRef(null);
   const [laneScroll, setLaneScroll] = useState({});
   const [containerHeight, setContainerHeight] = useState(800);
-  const [tooltip, setTooltip] = useState(null);
+  // Hover state lives in a store only the tooltip reads (utils/tooltipStore.js):
+  // as state here, every hover re-rendered every lane.
+  const [tipStore] = useState(createTooltipStore);
+  const setTooltip = tipStore.set;
   const [selectedLaneModal, setSelectedLaneModal] = useState(null);
 
   // Search filtering helper
   const searchMatch = (item) => {
     if (!searchTerm || searchTerm.length < 2) return { match: false, hide: false };
     const lowerTerm = searchTerm.toLowerCase();
-    const name = (getName(item) || '').toLowerCase();
-    const eventName = (item.event_name || '').toLowerCase();
-    const type = (item.type || item.artifact_type || item._artifact_type || '').toLowerCase();
-    const source = (item.source_table || '').toLowerCase();
-    const path = (item.path || item.id || item.rowid || '').toLowerCase();
-    const regKey = (item.registry_key || item.key_path || '').toLowerCase();
+    // String() each: a row id is a number, and one .toLowerCase() on it took
+    // the whole timeline down to its crash screen on the first keystroke.
+    const low = (v) => String(v ?? '').toLowerCase();
+    const name = low(getName(item));
+    const eventName = low(item.event_name);
+    const type = low(item.type || item.artifact_type || item._artifact_type);
+    const source = low(item.source_table);
+    const path = low(item.path || item.id || item.rowid);
+    const regKey = low(item.registry_key || item.key_path);
     
     // Task 12.3: Forensic Deep Search - Keyword audits paths and registry keys
     const isMatch = name.includes(lowerTerm) || type.includes(lowerTerm) || 
@@ -274,8 +287,10 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     lastScale.current = pxPerHour;
   }, [pxPerHour]);
 
-  // --- Core Layout Memo (Restored and Optimized) ---
-  const { lanes, totalH, powerOnBands, posMap, totalWidth, activeKeys } = useMemo(() => {
+  // --- Core Layout, in two memos ---
+  // 1. The lanes' data: which lanes are active, their points and tracks. It
+  //    reads times, never pixels, so a zoom step does not rerun it.
+  const laneBuild = useMemo(() => {
     console.log('[DEBUG] TimelineView data state:', {
       sessions: !!data.sessions,
       srum: !!data.srum_app,
@@ -283,13 +298,10 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     });
     const s = timeRange.start;
     const e = timeRange.end;
-    if (!s || !e) return { lanes: [], totalH: 600, powerOnBands: [], posMap: new Map(), totalWidth: 800, activeKeys: [] };
+    if (!s || !e) return null;
 
     const sTime = new Date(cleanForensicDate(s)).getTime();
     const eTime = new Date(cleanForensicDate(e)).getTime();
-    const width = Math.max(800, ((eTime - sTime) / HOUR_MS) * pxPerHour);
-    const pm = new Map();
-    const pOnBands = [];
 
     // --- Master Forensic Discovery System ---
     // The lane's sources live in utils/laneSources.js, shared with useLinks:
@@ -309,7 +321,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       });
     };
 
-    const activeKeys = ['sessions', 'srum_app', 'srum_net', 'mft_usn', 'browser', 'artifacts'].filter(k => {
+    const activeKeys = ['sessions', 'srum_app', 'srum_net', 'mft_usn', 'browser', 'ai_agents', 'artifacts'].filter(k => {
       let isActive = true;
       if (activeArtifacts[k] === false && k !== 'artifacts') isActive = false;
 
@@ -324,13 +336,14 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         if (k === 'srum_net') return hasAnyInBounds(data.srum_net?.connectivity) || hasAnyInBounds(data.srum_net?.data_usage);
         if (k === 'mft_usn') return hasAnyInBounds(data.mft_usn);
         if (k === 'browser') return hasAnyInBounds(data.browser);
+        if (k === 'ai_agents') return hasAnyInBounds(data.ai_agents);
 
         if (k === 'artifacts') {
           const sources = laneArtifactSources(data);
           const hasManifestData = sources.some(src => hasAnyInBounds(src.items));
             
           const hasSalvaged = Object.keys(data).some(key => {
-            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'browser', 'aggregated', 'links'].includes(key)) {
+            if (!['sessions', 'srum_app', 'srum_net', 'mft_usn', 'prefetch', 'bam', 'dam', 'lnk', 'shimcache', 'recyclebin', 'amcache', 'registry', 'imported', 'browser', 'ai_agents', 'ai_links', 'aggregated', 'links'].includes(key)) {
               return hasAnyInBounds(data[key]);
             }
             return false;
@@ -343,47 +356,29 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     });
 
     const laneData = {};
-    const minGap = 20000;
 
-    // --- Recovery and Initialization ---
-    const laneHeightsActual = { ...laneHeights };
-    activeKeys.forEach((k) => {
-      const val = Number(laneHeightsActual[k]);
-      let minH = 60;
-      if (k === 'artifacts') minH = 150; // Expand minimal size for unified artifacts lane
-      if (k === 'browser') minH = 90;
-      const requestedH = (isNaN(val) || val <= 0) ? minH : val;
-      laneHeightsActual[k] = Math.max(requestedH, minH);
-    });
-
-    // 1. Sessions / Login
+    // 1. Sessions / Login - put on the axis by the visual pass.
     if (activeKeys.includes('sessions') && data.sessions) {
-      const sBands = Array.isArray(data.sessions.bands) ? data.sessions.bands.map(b => {
-        const x1 = safeTimeToX(b.start, s, pxPerHour);
-        const x2 = safeTimeToX(b.end, s, pxPerHour);
-        if (b.type === 'power') pOnBands.push({ startX: Math.max(0, x1), width: Math.max(2, x2 - Math.max(0, x1)) });
-        return { ...b, x1, x2, bw: Math.max(2, x2 - x1) };
-      }).filter(b => b.x1 > -100000 && b.x2 > -100000) : [];
-
+      const sBands = Array.isArray(data.sessions.bands) ? data.sessions.bands : [];
       const sEvents = Array.isArray(data.sessions.events) ? data.sessions.events.map(ev => {
-        const x = safeTimeToX(ev.timestamp, s, pxPerHour);
         const { match } = searchMatch(ev);
-        return { ...ev, x, isSearchMatch: match };
-      }).filter(ev => ev.x > -1000 && ev.x < width + 1000) : [];
+        return { ...ev, isSearchMatch: match };
+      }) : [];
 
       laneData['sessions'] = { items: { bands: sBands, events: sEvents }, numTracks: 1, innerH: 40 };
     }
 
     // 2. SRUM App
     if (activeKeys.includes('srum_app') && Array.isArray(data.srum_app)) {
+      const appPrev = srumPrevEnds(data.srum_app, r => r.app_name);
       const apps = data.srum_app.map((a, idx, arr) => {
         const cleaned = cleanForensicDate(a.timestamp);
         const ts = new Date(cleaned).getTime();
         const { match } = searchMatch(a);
         const bgCycleMs = a.background_cycle_time ? Number(a.background_cycle_time) * 1000 : 0;
         const faceMs = a.face_time ? Number(a.face_time) * 1000 : 0;
-        const bgStart = srumBandStart(arr, idx, bgCycleMs, r => r.app_name);
-        const fgStart = srumBandStart(arr, idx, faceMs, r => r.app_name);
+        const bgStart = srumBandStart(arr, idx, bgCycleMs, r => r.app_name, appPrev);
+        const fgStart = srumBandStart(arr, idx, faceMs, r => r.app_name, appPrev);
         return { ...a, start: fgStart, end: ts, bgStart, type: 'srum_app', isSearchMatch: match };
       });
       const tracked = allocateTracks(apps, 10000);
@@ -394,20 +389,20 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     // 3. SRUM Net
     if (activeKeys.includes('srum_net') && data.srum_net) {
       const connData = (data.srum_net && Array.isArray(data.srum_net.connectivity)) ? data.srum_net.connectivity : [];
+      const netPrev = srumPrevEnds(connData, r => r.app_name || r.app_id);
       const nets = connData.map((c, idx, arr) => {
         const cleaned = cleanForensicDate(c.timestamp);
         const ts = new Date(cleaned).getTime();
         const { match } = searchMatch(c);
         const start = srumBandStart(arr, idx, (parseFloat(c.connected_time) || 0) * 1000,
-                                    r => r.app_name || r.app_id);
+                                    r => r.app_name || r.app_id, netPrev);
         return { ...c, start, end: ts, type: 'srum_net', isSearchMatch: match };
       });
       
       const usageRaw = Array.isArray(data.srum_net.data_usage) ? data.srum_net.data_usage : [];
       const usageItems = usageRaw.map(u => {
-        const x = safeTimeToX(u.timestamp, s, pxPerHour);
         const { match } = searchMatch(u);
-        return { ...u, x, timestamp: u.timestamp, type: 'srum_net_usage', isSearchMatch: match };
+        return { ...u, timestamp: u.timestamp, type: 'srum_net_usage', isSearchMatch: match };
       });
 
       // Unified Track Allocation: Interleave bands and dots to save vertical space
@@ -490,6 +485,46 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       const tracked = allocateTracks(pts, 120000);
       const nTracks = Math.max(1, tracked.reduce((m, p) => Math.max(m, p.track), 0) + 1);
       laneData['browser'] = { items: tracked, numTracks: nTracks, innerH: nTracks * 30 };
+    }
+
+    // 6. AI agent steps
+    //
+    // One mark per step. The bridge has already cut the table down to the
+    // steps that place an actor at a moment (artifact_map.ROW_FILTERS):
+    // commands, file writes and edits, and the person's prompts. The shape
+    // and shade say which - an agent's command and a command the person typed
+    // with `!` are different actors, so they never share a style.
+    const aiRows = heuristicFlatten(data.ai_agents);
+    if (activeKeys.includes('ai_agents') && aiRows.length > 0) {
+      const pts = [];
+      aiRows.forEach(r => {
+        const ts = cleanForensicDate(r.ts);
+        if (!ts || !inBounds(ts)) return;
+        const kind = r.kind || '';
+        // A prompt only the person typed is 'ai_prompt'; one a scheduled
+        // task, another agent session or a program sent is not theirs.
+        const subType = kind === 'command' ? (r.role === 'user' ? 'ai_user_command' : 'ai_command')
+          : kind === 'file_write' ? 'ai_file_write'
+          : kind === 'file_edit' ? 'ai_file_edit'
+          : (kind === 'browser' || kind === 'computer' || kind === 'screenshot') ? 'ai_browser'
+          : kind === 'prompt' && r.role !== 'user' ? 'ai_sent_prompt'
+          : 'ai_prompt';
+        const label = r.ai_label || r.ai_what || 'AI agent step';
+        const subject = aiStepSubject(r);
+        // The row id makes the mark's id unique: two commands in one second
+        // with the same first word are two steps, not one.
+        const id = getForensicId('ai_agent', ts, 'ts', `step${r.row_id ?? r.id ?? label}`);
+        const { match } = searchMatch({ ...r, timestamp: ts, type: 'ai_agent', name: label, path: subject });
+        pts.push({
+          ...r, id, timestamp: ts, type: 'ai_agent', ai_subject: subject,
+          subType, tsType: kind,
+          _artifact_type: 'ai_agent_steps',
+          isSearchMatch: match,
+        });
+      });
+      const tracked = allocateTracks(pts, 30000);
+      const nTracks = Math.max(1, tracked.reduce((m, p) => Math.max(m, p.track), 0) + 1);
+      laneData['ai_agents'] = { items: tracked, numTracks: nTracks, innerH: nTracks * 30 };
     }
 
     // 5. Unified Forensic Artifacts (Consolidated Lane 5)
@@ -587,6 +622,32 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         numTracks: nTracks,
         innerH: nTracks * 38 
       };    }
+
+    return { activeKeys, laneData, sTime, eTime };
+  }, [data, timeRange, activeArtifacts, searchTerm]);
+
+  // 2. The layout: x from time, lane heights and tops, labels, the position
+  //    map links are drawn from. Each zoom step reruns this pass only. The
+  //    lanes' items are copied, never written: they belong to laneBuild.
+  const { lanes, totalH, powerOnBands, posMap, totalWidth, activeKeys } = useMemo(() => {
+    const s = timeRange.start;
+    if (!laneBuild || !s) return { lanes: [], totalH: 600, powerOnBands: [], posMap: new Map(), totalWidth: 800, activeKeys: [] };
+    const { activeKeys, laneData, sTime, eTime } = laneBuild;
+    const width = Math.max(800, ((eTime - sTime) / HOUR_MS) * pxPerHour);
+    const pm = new Map();
+    const pOnBands = [];
+
+    // --- Recovery and Initialization ---
+    const laneHeightsActual = { ...laneHeights };
+    activeKeys.forEach((k) => {
+      const val = Number(laneHeightsActual[k]);
+      let minH = 60;
+      if (k === 'artifacts') minH = 150; // Expand minimal size for unified artifacts lane
+      if (k === 'browser') minH = 90;
+      if (k === 'ai_agents') minH = 80;
+      const requestedH = (isNaN(val) || val <= 0) ? minH : val;
+      laneHeightsActual[k] = Math.max(requestedH, minH);
+    });
 
     // --- Final Assembly Logic (Recovery Phase) ---
     const gapH = 8;
@@ -694,14 +755,23 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       const oneSecPx = pxPerHour / 3600;
 
       if (k === 'sessions') {
-        visualItems.events = ld.items.events.map(e => {
+        const bands = ld.items.bands.map(b => {
+          const x1 = safeTimeToX(b.start, s, pxPerHour);
+          const x2 = safeTimeToX(b.end, s, pxPerHour);
+          if (b.type === 'power') pOnBands.push({ startX: Math.max(0, x1), width: Math.max(2, x2 - Math.max(0, x1)) });
+          return { ...b, x1, x2, bw: Math.max(2, x2 - x1) };
+        }).filter(b => b.x1 > -100000 && b.x2 > -100000);
+        const placed = ld.items.events
+          .map(ev => ({ ...ev, x: safeTimeToX(ev.timestamp, s, pxPerHour) }))
+          .filter(ev => ev.x > -1000 && ev.x < width + 1000);
+        visualItems = { bands };
+        visualItems.events = placed.map(e => {
           const localY = actualH / 2;
           const fullName = e.event_name || e.type || 'Session Artifact';
           const evId = getForensicId('session', e.timestamp, 'timestamp', fullName);
           pm.set(evId, { x: e.x, lane: 'sessions', localY, y: topY + localY });
           return { ...e, y: localY, id: evId, name: fullName };
         });
-        visualItems.bands = ld.items.bands; // Bands are already pre-calculated with x coords
       } else if (k === 'srum_app') {
         const scaledRH = Math.max(actualH, ld.innerH) / ld.numTracks;
         const bandH = Math.min(scaledRH * 0.7, 24);
@@ -727,6 +797,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
         const netBandH = Math.min(scaledRH * 0.7, 22);
         const netPad = (scaledRH - netBandH) / 2;
 
+        visualItems = { ...ld.items };
         visualItems.netItems = ld.items.netItems.map(c => {
           const x1 = safeTimeToX(c.start, s, pxPerHour);
           const x2 = safeTimeToX(c.end, s, pxPerHour);
@@ -747,10 +818,25 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           const track = (typeof u.track === 'number') ? u.track : (i % ld.numTracks);
           const localY = track * scaledRH + netPad + netBandH / 2;
           const id = getForensicId('srum_usage', u.timestamp, 'timestamp', getName(u));
-          pm.set(id, { x: u.x, lane: k, localY, y: topY + localY });
-          return { ...u, id, y: track * scaledRH + netPad, pad: netPad, bandH: netBandH, r: 6 };
+          const x = safeTimeToX(u.timestamp, s, pxPerHour);
+          pm.set(id, { x, lane: k, localY, y: topY + localY });
+          return { ...u, x, id, track, y: track * scaledRH + netPad, pad: netPad, bandH: netBandH, r: 6 };
         });
-      } else if (['mft_usn', 'execution', 'browser', 'artifacts'].includes(k)) {
+        // Room for each dot's label (name + sent / received badges) before the
+        // next mark on its track. SRUM writes one row per app per hour, so the
+        // marks crowd; a label is clipped to its room and never paints over the
+        // next one.
+        const nextOnTrack = new Map();
+        const marks = [
+          ...visualItems.usageItems.map(u => ({ x: u.x, track: u.track, u })),
+          ...visualItems.netItems.map(c => ({ x: c.x1, track: c.track })),
+        ].sort((a, b) => a.x - b.x);
+        for (const m of marks) {
+          const prev = nextOnTrack.get(m.track);
+          if (prev && prev.u) prev.u.labelRoom = m.x - prev.x;
+          nextOnTrack.set(m.track, m);
+        }
+      } else if (['mft_usn', 'execution', 'browser', 'ai_agents', 'artifacts'].includes(k)) {
         const sorted = [...ld.items].sort((a, b) => a.x - b.x);
         // WARNING: Critical label positioning algorithm - Prevents overlapping labels in dense clusters
         // Uses array-based history to check last 5 items within 110px proximity window
@@ -767,7 +853,10 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
 
         visualItems = sorted.map((p, i) => {
           const localY = trackToY(p.track, Math.max(actualH, ld.innerH), ld.numTracks, 10);
-          const fullName = getName(p);
+          // An AI step is labelled by the bridge (the command's first line,
+          // the file's name, the prompt's opening words); getName would cut a
+          // command at its last slash.
+          const fullName = p.ai_label || getName(p);
           const t = getPrimaryTimestamp(p);
           const id = p.id || getForensicId(p.type, t, 'timestamp', fullName);
           const x = safeTimeToX(t, s, pxPerHour);
@@ -796,7 +885,12 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           // unreadable wall. Label only a point with clear space on its track -
           // zooming in thins the crowd and the labels come back. A search hit
           // keeps its label whatever the density.
-          const hideLabel = k === 'browser' && proximityItems.length > 0 && !p.isSearchMatch;
+          // An AI step's label is a command line, up to 40 characters - wider
+          // than the 140px window - so it needs clear space for its own width.
+          const crowded = k === 'ai_agents'
+            ? history.some(item => x - item.x < 240)
+            : proximityItems.length > 0;
+          const hideLabel = (k === 'browser' || k === 'ai_agents') && crowded && !p.isSearchMatch;
 
           const item = { ...p, id, x, y: localY, name: fullName, labelPos, leaderLine, hideLabel };
 
@@ -815,7 +909,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
 
     const finalTotalH = activeKeys.length > 0 ? (currentY - gapH) : 0;
     return { lanes, totalH: finalTotalH, powerOnBands: pOnBands, posMap: pm, totalWidth: width, activeKeys };
-  }, [data, timeRange, pxPerHour, activeArtifacts, laneHeights, containerHeight]);
+  }, [laneBuild, timeRange, pxPerHour, laneHeights, containerHeight]);
 
   const handleShowInTimeline = (item) => {
     setSelectedLaneModal(null);
@@ -836,6 +930,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
     let laneKey = null;
     const laneKeyMap = {
       'SystemLogs': 'sessions', 'ApplicationLogs': 'sessions', 'SecurityLogs': 'sessions',
+      'ai_agent': 'ai_agents',
       'srum_app': 'srum_app', 'srum_net': 'srum_net', 'mft_usn': 'mft_usn', 'browser': 'browser',
       'prefetch': 'artifacts', 'bam': 'artifacts', 'lnk': 'artifacts', 'registry': 'artifacts',
       'shimcache': 'artifacts', 'recyclebin': 'artifacts', 'amcache': 'artifacts'
@@ -893,6 +988,49 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
       }, 50);
     }
   };
+
+  // --- What Windows recorded of what an AI agent did ---
+  // A mark on any lane that shows a Windows record linked to an AI step
+  // (data/ai_agent_links: Prefetch, BAM, 4688, USN, browser history) carries
+  // the AI badge, and a line joins it to the step's mark on the AI lane.
+  const { aiBadge, aiPairs } = useMemo(() => {
+    const badge = new Map();
+    const pairs = [];
+    const index = buildAiIndex(data?.ai_links);
+    if (index.size === 0) return { aiBadge: badge, aiPairs: pairs };
+    const seen = new Set();
+    lanes.forEach(lane => {
+      if (!Array.isArray(lane.items) || lane.key === 'ai_agents') return;
+      lane.items.forEach(p => {
+        const hits = aiHitsFor(p, index);
+        if (!hits) return;
+        badge.set(p.id, hits);
+        hits.forEach(l => {
+          const aiId = aiMarkId(l);
+          const key = `${aiId}::${p.id}`;
+          if (!posMap.has(aiId) || seen.has(key)) return;
+          seen.add(key);
+          pairs.push({ source: { id: aiId }, target: { id: p.id }, ai: true });
+        });
+      });
+    });
+    return { aiBadge: badge, aiPairs: pairs };
+  }, [data?.ai_links, lanes, posMap]);
+
+  // The lanes' own links plus the AI ones: drawn, highlighted and counted alike.
+  const links = useMemo(() => (laneLinks || []).concat(aiPairs), [laneLinks, aiPairs]);
+
+  // How many marks each mark is linked to: three or more is a row of many
+  // artifacts, and its mark carries the count.
+  const linkCount = useMemo(() => {
+    const n = new Map();
+    links.forEach(lk => {
+      const a = lk.source?.id, b = lk.target?.id;
+      if (a) n.set(a, (n.get(a) || 0) + 1);
+      if (b) n.set(b, (n.get(b) || 0) + 1);
+    });
+    return n;
+  }, [links]);
 
   // --- Auto-scroll and Linked Highlighting ---
   const linkedIds = useMemo(() => {
@@ -1106,7 +1244,8 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
               if (actualLaneB && (yb < actualLaneB.y || yb > actualLaneB.y + actualLaneB.actualHeight)) return null;
 
               const isSel = selectedEvent && (selectedEvent.id === lk.source?.id || selectedEvent.id === lk.target?.id);
-              return <path key={`link-${lk.source?.id}-${lk.target?.id}`} d={`M${pa.x},${ya} C${(pa.x + pb.x) / 2},${ya} ${(pa.x + pb.x) / 2},${yb} ${pb.x},${yb}`} fill="none" stroke={isSel ? 'var(--accent-cyan)' : 'var(--accent-blue)'} strokeDasharray={isSel ? 'none' : '5,4'} strokeWidth={isSel ? 2.5 : 1.2} opacity={isSel ? 0.9 : 0.15} clipPath="url(#mc)" style={{ transition: 'all 0.1s', zIndex: isSel ? 100 : 1 }} />;
+              const lineColor = lk.ai ? AI_COLOR : (isSel ? 'var(--accent-cyan)' : 'var(--accent-blue)');
+              return <path key={`link-${lk.source?.id}-${lk.target?.id}`} d={`M${pa.x},${ya} C${(pa.x + pb.x) / 2},${ya} ${(pa.x + pb.x) / 2},${yb} ${pb.x},${yb}`} fill="none" stroke={lineColor} strokeDasharray={isSel ? 'none' : '5,4'} strokeWidth={isSel ? 2.5 : 1.2} opacity={isSel ? 0.9 : (lk.ai ? 0.35 : 0.15)} clipPath="url(#mc)" style={{ transition: 'all 0.1s', zIndex: isSel ? 100 : 1 }} />;
             })}
           </svg>
 
@@ -1220,8 +1359,9 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                           const isSel = selectedEvent?.id === c.id;
                           const isLinked = linkedIds.has(c.id);
                           const name = getForensicName(c);
-                          const up = formatBytes(c.bytesSent || 0);
-                          const down = formatBytes(c.bytesRecv || 0);                          return (
+                          // A connectivity row records time on a network, not bytes - the
+                          // bytes live on the data-usage rows below.
+                          return (
                             <g key={`net-${i}`}
                               className={`${isSel ? 'event-dot--selected' : ''} ${isLinked ? 'event-dot--linked' : ''}`}
                               onClick={() => setSelectedEvent(c)}
@@ -1231,7 +1371,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                               style={{ cursor: 'pointer' }}>
                               <rect x={c.x1} y={c.y} width={c.width} height={c.bandH} rx="4" fill={c.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? 'var(--accent-cyan)' : 'var(--accent-blue)')} fillOpacity={isSel ? 0.5 : (c.isSearchMatch ? 0.4 : (isLinked ? 0.3 : 0.2))} stroke={c.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? 'var(--accent-cyan)' : "var(--accent-blue)")} strokeWidth={isSel || isLinked || c.isSearchMatch ? 2 : 1} style={{ filter: c.isSearchMatch ? 'drop-shadow(0 0 6px var(--accent-orange))' : (isLinked ? 'drop-shadow(0 0 5px var(--accent-cyan))' : 'none') }} />
                               <text x={c.x1 + 6} y={c.y + c.bandH / 2 + 4} fill={c.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#00FFFF")} fontSize="10" fontWeight={(c.isSearchMatch || isLinked) ? "700" : "600"} pointerEvents="none" style={{ textShadow: '1px 1px 2px #000' }}>
-                                {name} <tspan fill={c.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#4ADE80")}>↓{down}</tspan> <tspan fill={c.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#60A5FA")}>↑{up}</tspan>
+                                {name}
                               </text>
                             </g>
                           );
@@ -1241,27 +1381,37 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                           const isSel = selectedEvent?.id === u.id;
                           const isLinked = linkedIds.has(u.id);
                           const name = getForensicName(u);
-                          const up = formatBytes(u.bytesSent || 0);
-                          const down = formatBytes(u.bytesRecv || 0);                          return (
+                          // bytes_sent / bytes_received are what the bridge returns (the old
+                          // bytesSent / bytesRecv never existed, so every label read 0 B).
+                          const sent = Number(u.bytes_sent), recv = Number(u.bytes_received);
+                          return (
                             <g key={`usage-${i}`}
-                              className={`${isSel ? 'event-dot--selected' : ''} ${isLinked ? 'event-dot--linked' : ''}`}
+                              className={`flow-host ${isSel ? 'event-dot--selected' : ''} ${isLinked ? 'event-dot--linked' : ''}`}
                               onClick={() => setSelectedEvent(u)}
                               onDoubleClick={() => handleEventDblClick(u)}
                               onMouseEnter={(e) => handleEventMouseEnter(e, u)}
                               onMouseLeave={() => setTooltip(null)}
                               style={{ cursor: 'pointer' }}>
                               <circle cx={u.x} cy={u.y + u.bandH / 2} r={u.isSearchMatch ? 11 : (isLinked ? 9 : 7)} fill={u.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? 'var(--accent-cyan)' : "var(--accent-cyan)")} stroke={u.isSearchMatch ? 'var(--accent-orange)' : "#FFF"} strokeWidth={isSel || isLinked || u.isSearchMatch ? 2 : 0} style={{ filter: u.isSearchMatch ? 'drop-shadow(0 0 10px var(--accent-orange))' : (isLinked ? 'drop-shadow(0 0 8px var(--accent-cyan))' : 'none') }} />
-                              <text x={u.x + 15} y={u.y + u.bandH / 2 + 4} fill={u.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#00FFFF")} fontSize="10" fontWeight={(u.isSearchMatch || isLinked) ? "700" : "600"} pointerEvents="none" style={{ textShadow: '1px 1px 2px #000' }}>
-                                {name} <tspan fill={u.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#4ADE80")}>↓{down}</tspan> <tspan fill={u.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : "#60A5FA")}>↑{up}</tspan>
-                              </text>
+                              {/* The name, then the same sent / received badge as every other
+                                  network number (FlowBadge): no hue, told apart by the arrow. */}
+                              {(u.labelRoom == null || u.labelRoom > 110) && (
+                              <foreignObject x={u.x + 13} y={u.y + u.bandH / 2 - 12} width={Math.min(560, (u.labelRoom ?? 600) - 20)} height="24" pointerEvents="none" style={{ overflow: 'hidden' }}>
+                                <div className="net-lane-label">
+                                  <span style={{ color: u.isSearchMatch ? 'var(--accent-orange)' : (isLinked ? '#FFF' : '#00FFFF'), fontWeight: (u.isSearchMatch || isLinked) ? 700 : 600 }}>{name}</span>
+                                  {sent > 0 && <FlowBadge dir="up" value={formatBytes(sent)} label={false} />}
+                                  {recv > 0 && <FlowBadge dir="down" value={formatBytes(recv)} label={false} />}
+                                </div>
+                              </foreignObject>
+                              )}
                             </g>
                           );
                         })}
                       </>
                     )}
-                    {['mft_usn', 'execution', 'browser', 'artifacts'].includes(lane.key) && lane.items.map((p, i) => {
+                    {['mft_usn', 'execution', 'browser', 'ai_agents', 'artifacts'].includes(lane.key) && lane.items.map((p, i) => {
                       // Standardized naming and identification
-                      const fullName = getName(p);
+                      const fullName = p.ai_label || getName(p);
                       
                       // Viewport filter (Broad buffer to prevent flickering)
                       if (p.x < viewStart - 1000 || p.x > viewEnd + 1000) return null;
@@ -1300,7 +1450,18 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                         'key_times': { color: '#64748b', shape: 'circle' },
                         'event_logs': { color: '#0ea5e9', shape: 'diamond' },
                         'network_profiles': { color: '#3b82f6', shape: 'triangle' },
-                        'browser': { color: '#38bdf8', shape: 'circle' }
+                        'browser': { color: '#38bdf8', shape: 'circle' },
+                        // AI agents. Lime is the lane; the person's own
+                        // actions are a different shade, so "the agent did
+                        // it" and "the person did it" never look alike.
+                        'ai_command': { color: '#a3e635', shape: 'diamond' },
+                        'ai_user_command': { color: '#fde047', shape: 'diamond' },
+                        'ai_file_write': { color: '#4ade80', shape: 'triangle' },
+                        'ai_file_edit': { color: '#bef264', shape: 'square' },
+                        'ai_prompt': { color: '#e2e8f0', shape: 'circle' },
+                        'ai_browser': { color: '#84cc16', shape: 'circle' },
+                        // Automation's colour: nobody typed it.
+                        'ai_sent_prompt': { color: '#e879f9', shape: 'circle' }
                       };
 
                       const lookupType = (p.subType || p.tsType || '').toLowerCase();
@@ -1365,6 +1526,20 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
                           style={{ cursor: 'pointer' }}>
                           {p.leaderLine && showLabel && <line x1={p.x} y1={p.y} x2={labelX} y2={labelY} stroke={textColor} strokeWidth="0.5" strokeDasharray="2,2" opacity="0.5" />}
                           {dotShape}
+                          {aiBadge.has(p.id) && (
+                            // Windows recorded this act for an AI agent's step
+                            <g pointerEvents="none" className="ai-badge">
+                              <rect x={p.x + 4} y={p.y - 13} width={13} height={9} rx={2} fill="var(--bg-primary)" stroke={AI_COLOR} strokeWidth="1" />
+                              <text x={p.x + 10.5} y={p.y - 6.4} fontSize="6.5" fontWeight="800" fill={AI_COLOR} textAnchor="middle">AI</text>
+                            </g>
+                          )}
+                          {(linkCount.get(p.id) || 0) >= 3 && (
+                            // a row of many artifacts: linked to three or more other records
+                            <g pointerEvents="none" className="link-count-badge">
+                              <circle cx={p.x - 8} cy={p.y - 8} r={5} fill="var(--bg-primary)" stroke="var(--accent-cyan)" strokeWidth="1" />
+                              <text x={p.x - 8} y={p.y - 5.7} fontSize="6.5" fontWeight="700" fill="var(--accent-cyan)" textAnchor="middle">{linkCount.get(p.id) > 9 ? '9+' : linkCount.get(p.id)}</text>
+                            </g>
+                          )}
                           {showLabel && <text x={labelX} y={labelY} fill={textColor} textAnchor={(p.labelPos === 'right') ? 'start' : 'middle'} fontSize="10" fontWeight={(p.isSearchMatch || isLinked) ? "700" : "600"} pointerEvents="none" style={{ textShadow: (p.isSearchMatch || isLinked) ? '0 0 3px #000' : 'none' }}>{fullName}</text>}
                         </g>
                       );
@@ -1389,7 +1564,7 @@ function TimelineView({ data, state, links, callBridge, loadedTimeRange }) {
           onShowInTimeline={handleShowInTimeline}
         />
       )}
-      {tooltip && <Tooltip data={tooltip} />}
+      <TooltipHost store={tipStore} />
     </div>
   );
 }
@@ -1421,11 +1596,23 @@ const SUBTYPE_LABELS = {
   'driver_stamp': '▲ Driver Timestamp',
   'shimcache': '■ Shimcache Mod',
   'deleted': '✖ Deleted',
+  'ai_command': '◆ Agent ran a command',
+  'ai_user_command': '◆ Person ran a command (!)',
+  'ai_file_write': '▲ Agent wrote a file',
+  'ai_file_edit': '■ Agent edited a file',
+  'ai_prompt': "● Person's prompt",
+  'ai_browser': '● Agent drove the browser / screen',
+  'ai_sent_prompt': '● Prompt not typed by the person',
 };
+
+function TooltipHost({ store }) {
+  const data = useSyncExternalStore(store.subscribe, store.get);
+  return data ? <Tooltip data={data} /> : null;
+}
 
 function Tooltip({ data }) {
   const { ev, x, y } = data;
-  const name = ev.event_name || ev.app_name || ev.original_filename || ev.filename || ev.fn_filename || ev.Source_Name || ev.name || ev.executable_name || ev.app_path || 'Event';
+  const name = ev.ai_label || ev.event_name || ev.app_name || ev.original_filename || ev.filename || ev.fn_filename || ev.Source_Name || ev.name || ev.executable_name || ev.app_path || 'Event';
   const type = ev.type || ev.artifact_type || 'Forensic Artifact';
   const ts = formatTime(ev.timestamp || ev.start);
   const subTypeLabel = ev.subType ? SUBTYPE_LABELS[ev.subType] : null;
@@ -1461,6 +1648,76 @@ function Tooltip({ data }) {
           <span className="tooltip__value" style={{ color: 'var(--accent-cyan)' }}>{subTypeLabel}</span>
         </div>
       )}
+      {ev.type === 'ai_agent' && (
+        <>
+          <div className="tooltip__row">
+            <span className="tooltip__label">Agent:</span>
+            <span className="tooltip__value" style={{ color: 'var(--lane-ai-agents)' }}>{ev.agent || '—'}{ev.is_sidechain ? ' (sub-agent)' : ''}</span>
+          </div>
+          {ev.ai_subject && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">{ev.kind === 'command' ? 'Command:' : ev.kind === 'prompt' ? 'Prompt:' : 'File:'}</span>
+              <span className="tooltip__value" style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all', whiteSpace: 'pre-wrap' }}>
+                {ev.ai_subject.length > 240 ? `${ev.ai_subject.slice(0, 237)}...` : ev.ai_subject}
+              </span>
+            </div>
+          )}
+          {ev.session_name && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Session:</span>
+              <span className="tooltip__value">{ev.session_name}{ev.seq ? ` - step ${ev.seq}` : ''}</span>
+            </div>
+          )}
+          {ev.kind !== 'prompt' && ev.instruction && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Ordered:</span>
+              <span className="tooltip__value">{ev.ordered_by ? `${ev.ordered_by}: ` : ''}"{ev.instruction.length > 160 ? `${ev.instruction.slice(0, 157)}...` : ev.instruction}"</span>
+            </div>
+          )}
+          {ev.origin && ev.kind === 'prompt' && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Sent by:</span>
+              <span className="tooltip__value">{ev.origin}</span>
+            </div>
+          )}
+          {ev.program && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Started:</span>
+              <span className="tooltip__value" style={{ fontFamily: 'var(--font-mono)' }}>{ev.program}</span>
+            </div>
+          )}
+          {(ev.exit_code !== null && ev.exit_code !== undefined) || ev.status === 'rejected' ? (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Result:</span>
+              <span className="tooltip__value">{ev.status === 'rejected' ? 'refused - it did not run' : `exit code ${ev.exit_code}`}</span>
+            </div>
+          ) : null}
+          {ev.approval && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Allowed:</span>
+              <span className="tooltip__value">{ev.approval}</span>
+            </div>
+          )}
+          {ev.cwd && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Folder:</span>
+              <span className="tooltip__value" style={{ wordBreak: 'break-all' }}>{ev.cwd}</span>
+            </div>
+          )}
+          {ev.user_name && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">User:</span>
+              <span className="tooltip__value" style={{ color: 'var(--accent-orange)' }}>{ev.user_name}</span>
+            </div>
+          )}
+          {ev.session_id && !ev.session_name && (
+            <div className="tooltip__row">
+              <span className="tooltip__label">Session:</span>
+              <span className="tooltip__value" style={{ fontFamily: 'var(--font-mono)' }}>{ev.session_id}</span>
+            </div>
+          )}
+        </>
+      )}
       {ev.user && (
         <div className="tooltip__row">
           <span className="tooltip__label">User:</span>
@@ -1473,16 +1730,10 @@ function Tooltip({ data }) {
           <span className="tooltip__value" style={{ color: 'var(--accent-cyan)' }}>{logonTypeDesc}</span>
         </div>
       )}
-      {ev.bytes_sent != null && (
-        <div className="tooltip__row">
-          <span className="tooltip__label">Upload:</span>
-          <span className="tooltip__value" style={{ color: 'var(--accent-blue)' }}>{formatBytes(ev.bytes_sent)}</span>
-        </div>
-      )}
-      {ev.bytes_received != null && (
-        <div className="tooltip__row">
-          <span className="tooltip__label">Download:</span>
-          <span className="tooltip__value" style={{ color: 'var(--accent-green)' }}>{formatBytes(ev.bytes_received)}</span>
+      {(ev.bytes_sent != null || ev.bytes_received != null) && (
+        <div className="tooltip__row tooltip__flow">
+          {ev.bytes_sent != null && <FlowBadge dir="up" value={formatBytes(Number(ev.bytes_sent))} />}
+          {ev.bytes_received != null && <FlowBadge dir="down" value={formatBytes(Number(ev.bytes_received))} />}
         </div>
       )}
       {ev.face_time != null && (

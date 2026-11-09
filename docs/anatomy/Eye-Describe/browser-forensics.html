@@ -144,10 +144,30 @@
 
     <!-- anatomy.css is linked LAST so it wins the cascade by source order. -->
     <link rel="stylesheet" href="anatomy.css">
+  <!-- CFR centrepiece: takes the galaxy's place, same fixed full-viewport layer as #particles-canvas -->
+  <style>
+    .cp-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100vh;
+      height: 100lvh;
+      z-index: -1;
+      pointer-events: none;
+      display: block;
+    }
+    @media print {
+      .cp-canvas {
+        display: none;
+      }
+    }
+  </style>
 </head>
 
 <body>
-  <canvas id="particles-canvas" aria-hidden="true"></canvas>
+  <canvas id="particles-canvas" data-no-galaxy aria-hidden="true"></canvas>
+  <canvas class="cp-canvas" data-centerpiece data-cp-x="0.5" data-cp-y="0.9" data-cp-s="1" data-cp-fade="top" aria-hidden="true"></canvas>
 
 
     <!-- NAV -->
@@ -156,10 +176,11 @@
         <div class="nav-links-wrap">
             <a href="https://crow-eye.com/">Home</a>
             <a href="https://crow-eye.com/sentinel">Sentinel</a>
-            <a href="https://crow-eye.com/eye-describe">Eye Describe</a>
+            <a href="https://crow-eye.com/eye-describe">Eye-Describe</a>
             <a href="https://crow-eye.com/eye-ai">Eye AI</a>
             <a href="https://crow-eye.com/user-guide">User Guide</a>
             <a href="https://crow-eye.com/documentation">Docs</a>
+            <a href="https://crow-eye.com/#support">Support</a>
             <a href="https://crow-eye.com/download" class="nav-cta">Download</a>
         </div>
         <button class="nav-toggle" aria-label="Toggle Menu">
@@ -172,7 +193,7 @@
 
         <div class="hero-badge">
             <span class="pulse"></span>
-            Eye Describe Anatomy
+            Eye-Describe Anatomy
         </div>
         <h1 class="hero-title"><i class="fas fa-compass"></i> Browser forensics, end to end</h1>
         <p class="hero-sub">Every artifact a browser leaves behind — how it works, where it lives, and what it proves</p>
@@ -1269,7 +1290,7 @@
 
     </main>
 
-    <footer style="border-top: 1px solid var(--border); padding: 4rem 2rem; background: rgba(10, 12, 16, 0.8);">
+    <footer style="border-top: 1px solid var(--border); padding: 4rem 2rem;">
         <nav class="footer-links" aria-label="Site links" style="max-width:1100px;margin:0 auto 1.5rem;padding:0 1.5rem;display:flex;flex-wrap:wrap;gap:0.5rem 1.25rem;justify-content:center;font-size:0.9rem;opacity:0.85;position:static;transform:none;inset:auto;z-index:auto;background:none;border:none;border-radius:0;box-shadow:none;">
             <a href="https://crow-eye.com/eye-ai">Eye AI — Digital Forensics AI Assistant</a>
             <a href="https://crow-eye.com/correlation-engine">Windows Correlation Engine</a>
@@ -1281,7 +1302,7 @@
             <a href="https://crow-eye.com/download">Download</a>
         </nav>
         <div class="container" style="text-align: center; color: var(--muted); font-size: 0.9rem;">
-            <p>© 2026 Crow Eye by <a href="https://www.linkedin.com/in/ghassan-elsman-3b8357222/" target="_blank" style="color: var(--indigo); text-decoration: none;">Ghassan Elsman</a>. All rights reserved.</p>
+            <p>© 2026 Crow-Eye by <a href="https://www.linkedin.com/in/ghassan-elsman-3b8357222/" target="_blank" style="color: var(--indigo); text-decoration: none;">Ghassan Elsman</a>. All rights reserved.</p>
         </div>
     </footer>
 
@@ -2542,6 +2563,7 @@ window.BYTEMAP_DATA = {
     });
     </script>
     <script src="../main.js"></script>
+    <script src="../cp-cfr.js"></script>
 </body>
 
 </html>

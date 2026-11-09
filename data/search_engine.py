@@ -195,7 +195,9 @@ class DatabaseSearchEngine:
         exact_match: bool = False,
         max_results: int = 1000,
         timeout_seconds: float = 30.0,
-        use_cache: bool = True
+        use_cache: bool = True,
+        rowid_range: Optional[Tuple[int, int]] = None,
+        use_regex: bool = False
     ) -> SearchResults:
         """
         Perform a synchronous search across specified tables.
@@ -209,6 +211,9 @@ class DatabaseSearchEngine:
             max_results: Maximum total results to return
             timeout_seconds: Maximum time to spend searching
             use_cache: Whether to use cached results if available
+            rowid_range: (lo, hi) - search only that slice of the one table
+                in `tables` (unified_search_engine's parallel slices); never
+                cached, the cache key does not name a slice
             
         Returns:
             SearchResults object containing all matches
@@ -220,10 +225,13 @@ class DatabaseSearchEngine:
             columns=columns,
             case_sensitive=case_sensitive,
             exact_match=exact_match,
+            use_regex=use_regex,
             max_results=max_results,
             timeout_seconds=timeout_seconds
         )
-        
+
+        if rowid_range is not None:
+            use_cache = False
         # Check cache first
         if use_cache and self.enable_cache:
             cached_results = self.cache.get(config)
@@ -274,8 +282,13 @@ class DatabaseSearchEngine:
                     columns=table_columns,
                     case_sensitive=case_sensitive,
                     exact_match=exact_match,
+                    use_regex=use_regex,
                     page=1,
-                    page_size=max_per_table
+                    page_size=max_per_table,
+                    rowid_range=rowid_range,
+                    # Only "any match?" is read below: an overflowing page
+                    # needs no second scan to count the rest.
+                    exact_total=False
                 )
                 
                 # Convert to SearchResult objects

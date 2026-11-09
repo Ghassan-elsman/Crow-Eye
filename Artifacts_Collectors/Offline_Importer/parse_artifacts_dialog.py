@@ -1195,9 +1195,11 @@ class ParseArtifactsDialog(QDialog):
             if artifact_name == "Complete":
                 self.loading_dialog.show_completion("ARTIFACT PARSING COMPLETE")
         
-        # Process events to keep UI responsive and ensure visibility
-        from PyQt5.QtWidgets import QApplication
-        QApplication.processEvents()
+        # No processEvents() here: this handler already runs inside the parse's
+        # event loop (loop.exec_()), which repaints on its own. Pumping again
+        # from inside a handler re-entered it with the next progress signal,
+        # several times a second, the pattern Crow Eye.py removed from its
+        # own parse loop.
 
     def on_parsing_complete(self, results):
         """Handle parsing completion (runs on main thread)."""
@@ -1210,12 +1212,11 @@ class ParseArtifactsDialog(QDialog):
         self.worker_finished = True
 
     def on_heartbeat(self):
-        """Process events to keep animation smooth during long parsing operations (runs on main thread)."""
-        try:
-            from PyQt5.QtWidgets import QApplication
-            QApplication.processEvents()
-        except Exception as e:
-            logger.error(f"Error processing events in heartbeat: {e}", exc_info=True)
+        """The worker's heartbeat (runs on the main thread). Nothing to do: the
+        parse's event loop keeps the animation running, and pumping events
+        from inside this handler, four times a second, only re-entered the
+        progress handlers while they were still drawing."""
+        return None
 
     def parse_selected_artifacts_with_progress(self) -> tuple[bool, bool, int, int, list, object]:
         """
@@ -1252,7 +1253,7 @@ class ParseArtifactsDialog(QDialog):
             # Requirement 2: Group and order steps by artifact type (same as live parsers)
             canonical_order = [
                 'link_jumplist', 'Registry', 'Prefetch', 'EVTX', 'ShimCache', 
-                'AmCache', 'RecycleBin', 'SRUM', 'Browser', 'MFT', 'USN'
+                'AmCache', 'RecycleBin', 'SRUM', 'Browser', 'AIAgents', 'MFT', 'USN'
             ]
             
             # Get unique artifact types from selected artifacts
@@ -1324,7 +1325,8 @@ class ParseArtifactsDialog(QDialog):
                     current_idx += n_files
                     continue
                 
-                is_directory_parser = t in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin', 'Browser']
+                is_directory_parser = t in ['Prefetch', 'EVTX', 'SRUM', 'Registry', 'link_jumplist', 'RecycleBin', 'Browser',
+                                             'AIAgents', 'AmCache']
                 self.step_ranges[t] = {
                     'start': current_idx,
                     'count': n_files,

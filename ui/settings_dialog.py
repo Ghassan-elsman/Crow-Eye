@@ -1646,6 +1646,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         layout.addWidget(auto_group)
         layout.addWidget(self._create_ntfs_integrity_group(group.styleSheet()))
+        layout.addWidget(self._create_ai_agents_group(group.styleSheet()))
         layout.addStretch()
 
         # Three groups no longer fit a short window: scroll, as the Eye page does.
@@ -1664,12 +1665,14 @@ class SettingsDialog(QtWidgets.QDialog):
     NTFS_INTEGRITY_CHECKS = (
         ('ntfs_integrity_digest_map', 'D1',
          "What changed between parses: deleted and reused records"),
-        ('ntfs_integrity_lsn_checks', 'D3',
-         "A record LSN above every LSN in $LogFile"),
+        ('ntfs_integrity_lsn_checks', 'D2, D3',
+         "A record changed with its LSN unchanged, or an LSN above every LSN in $LogFile"),
         ('ntfs_integrity_usn_continuity', 'D4',
-         "USN journal deleted, being deleted, or not active"),
+         "USN journal deleted, recreated, being deleted, or not active"),
         ('ntfs_integrity_logfile_continuity', 'D5',
          "$LogFile restart pages that disagree, or an emptied log"),
+        ('ntfs_integrity_offline_detect', 'D6',
+         "The volume rolled back, or $LogFile reset, since the last parse"),
         ('ntfs_integrity_timestomp', 'D7',
          "Timestomping: $STANDARD_INFORMATION earlier than $FILE_NAME"),
         ('ntfs_integrity_wipe_detect', 'D9',
@@ -1732,6 +1735,36 @@ class SettingsDialog(QtWidgets.QDialog):
             "empty result from a silenced check is never mistaken for a clean one.")
         explain.setWordWrap(True)
         explain.setStyleSheet(help_style)
+        lay.addWidget(explain)
+        return box
+
+    def _create_ai_agents_group(self, frame_style):
+        """AI agents: whether every file copy an agent saved is copied into
+        the case at parse time (off: listed and hashed, saved on request)."""
+        box = QtWidgets.QGroupBox("AI agents")
+        box.setStyleSheet(frame_style)
+        lay = QtWidgets.QVBoxLayout(box)
+        lay.setSpacing(10)
+        self.ai_copy_versions_checkbox = QtWidgets.QCheckBox(
+            "Copy every file version an AI agent saved into the case")
+        self.ai_copy_versions_checkbox.setStyleSheet(
+            "QCheckBox { color: #E2E8F0; font-size: 13px; font-weight: 600; }")
+        try:
+            from config.case_history_manager import read_global_setting
+            self.ai_copy_versions_checkbox.setChecked(
+                bool(read_global_setting("ai_agents_copy_file_versions", False)))
+        except Exception:
+            pass
+        lay.addWidget(self.ai_copy_versions_checkbox)
+        explain = QtWidgets.QLabel(
+            "Claude Code keeps a copy of each file before its agent edits it. Every parse "
+            "lists them (path, version, time, size, SHA-1) in the AI Agents tab's File "
+            "Versions table; on, each parse also copies them into the case's "
+            "AI_Agents\\file_versions folder and checks every copy against its hash, so "
+            "they survive a wiped profile. That can add hundreds of megabytes. Off, the "
+            "table's \"Save selected into the case\" button copies the ones you choose.")
+        explain.setWordWrap(True)
+        explain.setStyleSheet("QLabel { color: #94A3B8; font-size: 12px; }")
         lay.addWidget(explain)
         return box
 
@@ -3949,6 +3982,13 @@ class SettingsDialog(QtWidgets.QDialog):
                 **self._ntfs_integrity_values()
             )
 
+            # A setting GlobalConfig does not model: written on its own, so no
+            # later save of the manager can put an older value back.
+            if hasattr(self, "ai_copy_versions_checkbox"):
+                from config.case_history_manager import write_global_setting
+                write_global_setting("ai_agents_copy_file_versions",
+                                     self.ai_copy_versions_checkbox.isChecked())
+
             # Settings -> User Behavior: only the switches flipped on that page,
             # applied onto uba_disabled_rules as it is now (rule_switches).
             if getattr(self, "user_behavior_panel", None) is not None:
@@ -4213,8 +4253,13 @@ class SimpleSemanticMappingDialog(QtWidgets.QDialog):
         }
 
 
+# Open, non-modal Settings windows (kept so they are not garbage-collected, and
+# so a second request reuses the one already open).
+_OPEN_SETTINGS = []
+
+
 def show_settings_dialog(case_history_manager, current_case_path=None, parent=None,
-                         clone_case_callback=None, app_version=None):
+                         clone_case_callback=None, app_version=None, start_panel=None):
     """
     Show the settings dialog.
 
@@ -4228,19 +4273,51 @@ def show_settings_dialog(case_history_manager, current_case_path=None, parent=No
     Returns:
         True if settings were saved, False if cancelled
     """
+    # Non-modal, so the rest of the app stays usable while Settings is open
+    # (it was modal, which froze everything for the life of the window). One
+    # window at a time: a second request raises the open one.
+    for w in list(_OPEN_SETTINGS):
+        try:
+            if w.isVisible():
+                if start_panel == "logs":
+                    w.switch_panel(w.content_stack.indexOf(w.logs_panel))
+                w.showNormal()
+                w.raise_()
+                w.activateWindow()
+                return w
+        except RuntimeError:                 # its C++ object is gone
+            try:
+                _OPEN_SETTINGS.remove(w)
+            except ValueError:
+                pass
+
     dialog = SettingsDialog(case_history_manager, current_case_path, parent,
                             clone_case_callback=clone_case_callback,
                             app_version=app_version)
-    result = dialog.exec_()
-    # Run the clone flow AFTER Settings has closed so its file pickers / loading
-    # dialog don't stack on top of a modal.
-    if getattr(dialog, '_clone_requested', False) and clone_case_callback:
+    dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose, True)
+    if start_panel == "logs":
+        # Ctrl+L: the Logs page, which had no way in but through Settings' sidebar.
+        dialog.switch_panel(dialog.content_stack.indexOf(dialog.logs_panel))
+    _OPEN_SETTINGS.append(dialog)
+
+    def _on_finished(_result, _d=dialog, _cb=clone_case_callback):
         try:
-            clone_case_callback()
-        except Exception as e:
-            print(f"[Settings] Clone-case callback failed: {e}")
-        return False
-    return result == QtWidgets.QDialog.Accepted
+            _OPEN_SETTINGS.remove(_d)
+        except ValueError:
+            pass
+        # Run the clone flow AFTER Settings has closed so its file pickers /
+        # loading dialog don't stack on top of it.
+        if getattr(_d, '_clone_requested', False) and _cb:
+            try:
+                _cb()
+            except Exception as e:
+                print(f"[Settings] Clone-case callback failed: {e}")
+
+    dialog.finished.connect(_on_finished)
+    dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+    return dialog
 
 
 if __name__ == "__main__":

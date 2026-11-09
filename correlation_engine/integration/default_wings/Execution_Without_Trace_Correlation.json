@@ -3,6 +3,7 @@
   "wing_name": "Execution Without Trace Correlation",
   "wing_id": "default_wing_exec_no_trace_001",
   "wing_category": "identity",
+  "host_scope": "same_host",
   "description": "Flags programs with execution-related artifacts (AmCache/ShimCache) that lack a matching Prefetch entry, and $SI-before-$FN timestamp anomalies. Uses Crow-Eye's advanced rule types: an ABSENCE rule fires when AmCache/ShimCache record a program but no matching Prefetch entry exists, and a cross-feather timestomp rule flags $STANDARD_INFORMATION times that predate $FILE_NAME times. Absence of Prefetch is consistent with, but does not prove, trace suppression (Prefetch may be disabled, e.g. on servers or SSDs, aged out, or the binary never ran). Prefetch is loaded only for the absence check and never adds to the score; when a matching Prefetch entry is present the match is capped at the Weak band, because the program's execution trace exists. Complements Execution Proof Correlation.",
   "proves": "Indicators consistent with a missing or altered execution trace (requires analyst verification)",
   "author": "Crow-Eye Team",
@@ -87,6 +88,7 @@
       "description": "AmCache records the program at a path outside the operating system's own trees (Windows other than Windows\\Temp, Program Files, Program Files (x86), ProgramData\\Microsoft, ProgramData\\Packages), and no matching Prefetch entry exists — consistent with Prefetch being disabled, aged out, or scrubbed. AmCache's file inventory lists every installed binary, run or not, so in the OS and Program Files trees a missing Prefetch entry mostly means 'installed, never run'; a binary in a user profile, ProgramData, Windows\\Temp, another drive or a removable volume is where a dropped tool lives.",
       "rule_type": "absence",
       "absence": {
+        "scope": "absent_on_host",
         "expect_present": [
           { "feather_id": "amcache", "field_name": "lower_case_long_path", "operator": "regex",
             "value": "^(?![a-z]:[\\\\/](windows[\\\\/](?!temp[\\\\/])|program files( \\(x86\\))?[\\\\/]|programdata[\\\\/](microsoft|packages)[\\\\/]))." }
@@ -138,6 +140,7 @@
       "description": "AmCache and ShimCache both record the program at a path outside the operating system's own trees (the same exclusion as ewt_exec_no_prefetch), but no Prefetch trace exists — warrants review for trace suppression. Without the path condition this critical rule fired on Windows and Program Files binaries such as spoolsv.exe and Defender, which are inventoried but not necessarily run.",
       "rule_type": "absence",
       "absence": {
+        "scope": "absent_on_host",
         "expect_present": [
           { "feather_id": "amcache", "field_name": "lower_case_long_path", "operator": "regex",
             "value": "^(?![a-z]:[\\\\/](windows[\\\\/](?!temp[\\\\/])|program files( \\(x86\\))?[\\\\/]|programdata[\\\\/](microsoft|packages)[\\\\/]))." },

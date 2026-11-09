@@ -76,7 +76,8 @@ from utils.time_utils import (format_forensic_timestamp, get_current_forensic_ti
 # Shared with the live parser so both split an AppId and decode an Int64
 # timestamp identically.
 from Artifacts_Collectors import registry_transaction_log
-from Artifacts_Collectors.SRUM_Claw import (parse_srum_app_id, srum_filetime,
+from Artifacts_Collectors.SRUM_Claw import (auto_inc_id_of, ensure_auto_inc_id_columns,
+                                            parse_srum_app_id, srum_filetime,
                                             decode_binary_sid, SRUM_EXTRA_COLUMNS,
                                             dedupe_exact, _custody_sha256,
                                             _custody_repair_note, insert_srum_rows,
@@ -359,6 +360,19 @@ SRUM_KNOWN_COLUMNS = {
 # EXCEPTION CLASSES
 # ============================================================================
 
+
+def _auto_inc_id(record):
+    """SRUDB.dat's AutoIncId of one ESE record (dissect or pyesedb), or None."""
+    try:
+        if hasattr(record, "get"):
+            return auto_inc_id_of(record.get("AutoIncId"))
+        for i in range(record.get_number_of_values()):
+            if record.get_column_name(i) == "AutoIncId":
+                return auto_inc_id_of(record.get_value_data_as_integer(i))
+    except Exception:
+        pass
+    return None
+
 class SRUMParsingError(Exception):
     """Base exception for SRUM parsing errors."""
     pass
@@ -419,6 +433,7 @@ def create_database(case_path: Optional[str] = None) -> Tuple[sqlite3.Connection
         cursor.execute(SCHEMA_METADATA)
         # A timeline table from before the build columns gets them in place.
         ensure_timeline_build_columns(cursor)
+        ensure_auto_inc_id_columns(cursor)
 
         # Bring a pre-recovery srum_metadata up to the current column set.
         try:
@@ -1173,6 +1188,7 @@ class ESEDatabaseParser:
                             'background_number_of_flushes': record.get('BackgroundNumberOfFlushes')
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
                         record_count += 1
 
@@ -1249,6 +1265,7 @@ class ESEDatabaseParser:
                             'background_number_of_flushes': background_num_flushes
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
 
                     except Exception as e:
@@ -1327,6 +1344,7 @@ class ESEDatabaseParser:
                             'connect_start_time': format_forensic_timestamp(connect_start_time) if connect_start_time else None
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
                         record_count += 1
 
@@ -1384,6 +1402,7 @@ class ESEDatabaseParser:
                             'connect_start_time': format_forensic_timestamp(connect_start_time) if connect_start_time else None
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
 
                     except Exception as e:
@@ -1562,6 +1581,7 @@ class ESEDatabaseParser:
                             _v = record.get(_native)
                             parsed_record[_sql] = _v if _v is not None else 0
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
                         record_count += 1
 
@@ -1616,6 +1636,7 @@ class ESEDatabaseParser:
                             'bytes_received': bytes_received
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
 
                     except Exception as e:
@@ -1696,6 +1717,7 @@ class ESEDatabaseParser:
                             _v = record.get(_native)
                             parsed_record[_sql] = _v if _v is not None else 0
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
                         record_count += 1
 
@@ -1752,6 +1774,7 @@ class ESEDatabaseParser:
                             'cycle_count': cycle_count if cycle_count is not None else 0
                         }
 
+                        parsed_record['auto_inc_id'] = _auto_inc_id(record)
                         records.append(parsed_record)
 
                     except Exception as e:
@@ -1875,6 +1898,7 @@ class ESEDatabaseParser:
                         value = value_of(record, source)
                         parsed_record[column] = value if value is not None else 0
 
+                    parsed_record['auto_inc_id'] = _auto_inc_id(record)
                     records.append(parsed_record)
 
                 except Exception as e:
@@ -2064,8 +2088,9 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                     record['background_num_read_operations'],
                     record['background_num_write_operations'],
                     record['background_number_of_flushes'],
+                    record.get('auto_inc_id'),
                 ) for record in app_usage_records]
-                rows, removed = dedupe_exact(rows)
+                rows, removed = dedupe_exact(rows, ignore_last=True)
                 if removed:
                     logger.info("[SRUM] application_usage: removed %d exact-duplicate rows", removed)
                 stats['errors'] += _save_rows("""
@@ -2077,8 +2102,9 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                                 foreground_num_read_operations, foreground_num_write_operations,
                                 foreground_number_of_flushes, background_bytes_read,
                                 background_bytes_written, background_num_read_operations,
-                                background_num_write_operations, background_number_of_flushes
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                background_num_write_operations, background_number_of_flushes,
+                                auto_inc_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, rows)
 
                 conn.commit()
@@ -2104,16 +2130,17 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                     record['l2_profile_flags'],
                     record['connected_time'],
                     record['connect_start_time'],
+                    record.get('auto_inc_id'),
                 ) for record in network_conn_records]
-                rows, removed = dedupe_exact(rows)
+                rows, removed = dedupe_exact(rows, ignore_last=True)
                 if removed:
                     logger.info("[SRUM] network_connectivity: removed %d exact-duplicate rows", removed)
                 stats['errors'] += _save_rows("""
                             INSERT INTO srum_network_connectivity (
                                 timestamp, app_name, app_path, user_sid, user_name,
                                 interface_luid, l2_profile_id, l2_profile_flags,
-                                connected_time, connect_start_time
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                connected_time, connect_start_time, auto_inc_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, rows)
 
                 conn.commit()
@@ -2130,11 +2157,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 logger.info(f"Inserting {len(network_data_records)} Network Data Usage records into database...")
                 nd_columns = ['timestamp', 'app_name', 'app_path', 'user_sid', 'user_name',
                               'interface_luid', 'l2_profile_id', 'bytes_sent', 'bytes_received'] + \
-                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('NETWORK_DATA_USAGE', ())]
+                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('NETWORK_DATA_USAGE', ())] + \
+                             ['auto_inc_id']
                 nd_stmt = "INSERT INTO srum_network_data_usage (%s) VALUES (%s)" % (
                     ", ".join(nd_columns), ", ".join("?" * len(nd_columns)))
-                rows = [tuple(record.get(c, 0) for c in nd_columns) for record in network_data_records]
-                rows, removed = dedupe_exact(rows)
+                rows = [tuple(record.get(c, 0) for c in nd_columns[:-1]) + (record.get('auto_inc_id'),)
+                        for record in network_data_records]
+                rows, removed = dedupe_exact(rows, ignore_last=True)
                 if removed:
                     logger.info("[SRUM] network_data_usage: removed %d exact-duplicate rows", removed)
                 stats['errors'] += _save_rows(nd_stmt, rows)
@@ -2153,11 +2182,13 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 logger.info(f"Inserting {len(energy_records)} Energy Usage records into database...")
                 en_columns = ['timestamp', 'app_name', 'app_path', 'user_sid', 'user_name',
                               'event_timestamp', 'state_transition', 'charge_level', 'cycle_count'] + \
-                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('ENERGY_USAGE', ())]
+                             [sql for _n, sql in SRUM_EXTRA_COLUMNS.get('ENERGY_USAGE', ())] + \
+                             ['auto_inc_id']
                 en_stmt = "INSERT INTO srum_energy_usage (%s) VALUES (%s)" % (
                     ", ".join(en_columns), ", ".join("?" * len(en_columns)))
-                rows = [tuple(record.get(c, 0) for c in en_columns) for record in energy_records]
-                rows, removed = dedupe_exact(rows)
+                rows = [tuple(record.get(c, 0) for c in en_columns[:-1]) + (record.get('auto_inc_id'),)
+                        for record in energy_records]
+                rows, removed = dedupe_exact(rows, ignore_last=True)
                 if removed:
                     logger.info("[SRUM] energy_usage: removed %d exact-duplicate rows", removed)
                 stats['errors'] += _save_rows(en_stmt, rows)
@@ -2175,11 +2206,12 @@ def main(srudb_path: str = None, case_path: str = None, registry_hives: List[str
                 columns = ['timestamp', 'app_name', 'app_path', 'hosted_services',
                            'user_sid', 'user_name', 'end_time'] + \
                           [column for column, _source in parser.APP_TIMELINE_FIELDS] + \
-                          ['pe_link_time', 'pe_checksum']
+                          ['pe_link_time', 'pe_checksum', 'auto_inc_id']
                 statement = "INSERT INTO srum_app_timeline (%s) VALUES (%s)" % (
                     ", ".join(columns), ", ".join("?" * len(columns)))
-                rows = [tuple(record[c] for c in columns) for record in timeline_records]
-                rows, removed = dedupe_exact(rows)
+                rows = [tuple(record.get(c) if c == 'auto_inc_id' else record[c] for c in columns)
+                        for record in timeline_records]
+                rows, removed = dedupe_exact(rows, ignore_last=True)
                 if removed:
                     logger.info("[SRUM] app_timeline: removed %d exact-duplicate rows", removed)
                 stats['errors'] += _save_rows(statement, rows)
